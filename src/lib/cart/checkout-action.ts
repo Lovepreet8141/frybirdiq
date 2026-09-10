@@ -19,6 +19,12 @@ export async function submitCheckout(_previous: CheckoutState, formData: FormDat
     name: String(formData.get("name") ?? ""),
     phone: String(formData.get("phone") ?? ""),
     notes: String(formData.get("notes") ?? "") || undefined,
+    fulfilment: String(formData.get("fulfilment") ?? "TAKEAWAY"),
+    // Left as strings; the schema coerces them. Empty means no pin.
+    lat: String(formData.get("lat") ?? "") || undefined,
+    lng: String(formData.get("lng") ?? "") || undefined,
+    addressLine1: String(formData.get("addressLine1") ?? "") || undefined,
+    landmark: String(formData.get("landmark") ?? "") || undefined,
     // Minted when the page rendered. A double-tap sends the same key twice and
     // the second returns the first order rather than creating another. §17.
     idempotencyKey: String(formData.get("idempotencyKey") ?? ""),

@@ -106,8 +106,27 @@ export function priceLine(input: LineInput, context: PricingContext): PricedLine
   return { ...breakdown, listed, discount };
 }
 
+/**
+ * A charge that is not a menu line — delivery, packaging.
+ *
+ * Taxed, because a delivery charge made by the restaurant is part of the same
+ * composite supply as the food and carries the same rate. Treating it as
+ * tax-free would understate GST on every delivery order.
+ *
+ * It follows the organization's basis like everything else: under inclusive
+ * pricing a ₹30 delivery fee takes ₹30 and contains its own tax, so the figure
+ * quoted at checkout is the figure paid.
+ */
+export interface FeeInput {
+  readonly label: string;
+  readonly amount: Paise;
+  readonly rateBps: Bps;
+}
+
 export interface OrderInput {
   readonly lines: readonly LineInput[];
+  /** Delivery, packaging. Discounts never apply to these. */
+  readonly fees?: readonly FeeInput[];
   /**
    * A discount on the whole order — a promo code.
    *
@@ -119,10 +138,18 @@ export interface OrderInput {
   readonly orderDiscount?: Paise;
 }
 
+export interface PricedFee extends GstBreakdown {
+  readonly label: string;
+}
+
 export interface PricedOrder extends GstBreakdown {
   readonly lines: readonly PricedLine[];
+  readonly fees: readonly PricedFee[];
+  /** Menu value before discount. Excludes fees. */
   readonly listed: Paise;
   readonly discount: Paise;
+  /** What the fees add, tax included. */
+  readonly feeTotal: Paise;
 }
 
 export function priceOrder(input: OrderInput, context: PricingContext): PricedOrder {
@@ -144,10 +171,18 @@ export function priceOrder(input: OrderInput, context: PricingContext): PricedOr
     priceLine({ ...line, discount: add(line.discount ?? ZERO, allocated[index] ?? ZERO) }, context),
   );
 
-  const totals = sumGst(lines);
-  const discount = add(...lines.map((line) => line.discount));
+  const fees = (input.fees ?? []).map((fee) => ({
+    label: fee.label,
+    ...gst(fee.amount, fee.rateBps, { basis: context.basis, place: context.place }),
+  }));
 
-  return { ...totals, lines, listed, discount };
+  // Fees are summed alongside the lines, so taxable + tax === gross still holds
+  // across the whole order rather than only across the food.
+  const totals = sumGst([...lines, ...fees]);
+  const discount = add(...lines.map((line) => line.discount));
+  const feeTotal = add(...fees.map((fee) => fee.gross));
+
+  return { ...totals, lines, fees, listed, discount, feeTotal };
 }
 
 export interface Margin {

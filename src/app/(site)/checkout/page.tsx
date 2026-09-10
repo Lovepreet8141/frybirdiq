@@ -5,6 +5,8 @@ import { ArrowLeft, Store, Wallet } from "lucide-react";
 import { randomUUID } from "node:crypto";
 import { CheckoutForm } from "@/components/cart/checkout-form";
 import { availableMethods } from "@/lib/payments";
+import { getDeliverySettings } from "@/lib/repositories/delivery";
+import { toLatLng } from "@/lib/delivery";
 import { OrderSummary } from "@/components/cart/summary";
 import { getPricedCart } from "@/lib/cart";
 
@@ -17,6 +19,8 @@ export default async function CheckoutPage() {
   // Minted per render. Resubmitting the same page cannot create a second order.
   const idempotencyKey = randomUUID();
   const methods = availableMethods();
+  const delivery = await getDeliverySettings();
+  const shop = delivery?.shop ? toLatLng(delivery.shop) : null;
 
   return (
     <div className="mx-auto w-full max-w-4xl px-[var(--gutter)] py-10 sm:py-14">
@@ -44,10 +48,12 @@ export default async function CheckoutPage() {
           <section aria-labelledby="collection" className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-5">
             <h2 id="collection" className="flex items-center gap-2 font-heading text-lg font-semibold">
               <Store className="size-4 text-primary" aria-hidden="true" />
-              Collection
+              {delivery?.enabled ? "Collection or delivery" : "Collection"}
             </h2>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              Collect from Sector 9, Ambala City. We&rsquo;ll call when it&rsquo;s ready.
+              {delivery?.enabled
+                ? "Collect from Sector 9, Ambala City, or have it delivered. We'll call when it's on its way."
+                : "Collect from Sector 9, Ambala City. We'll call when it's ready."}
             </p>
           </section>
 
@@ -80,7 +86,7 @@ export default async function CheckoutPage() {
             <h2 id="details" className="font-heading text-lg font-semibold">
               Your details
             </h2>
-            <CheckoutForm idempotencyKey={idempotencyKey} />
+            <CheckoutForm idempotencyKey={idempotencyKey} shop={shop} deliveryEnabled={delivery?.enabled ?? false} />
           </section>
         </div>
 

@@ -43,6 +43,7 @@ export default async function StaffOrdersPage() {
                 {
                   ...order,
                   placedAt: order.placedAt?.toISOString() ?? null,
+                  delivery: order.delivery ? { ...order.delivery } : null,
                   items: [...order.items].map((item) => ({ ...item, modifiers: [...item.modifiers] })),
                 } as StaffOrder
               }

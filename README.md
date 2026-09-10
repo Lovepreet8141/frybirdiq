@@ -68,6 +68,9 @@ that has already taken orders unless you pass `--force`.
 | `pnpm order:settle` | Take cash on the most recent unpaid order |
 | `pnpm staff:grant <email> <role>` | Give a Supabase user a role in the org |
 | `pnpm staff:check <email>` | Check a granted role will resolve at sign-in |
+| `pnpm delivery:show` | Show the outlet's location and delivery rates |
+| `pnpm delivery:set` | Set them (km and rupees) |
+| `pnpm delivery:quote` | What each distance costs, against live settings |
 | `python3 scripts/check-contrast.py` | WCAG check on the brand palette |
 
 ## Where things are
@@ -102,11 +105,11 @@ Tick an item when the real value is in the repo, not when the answer is known.
 
 ### Blocking
 
-- [ ] **Delivery fee and radius** — *blocks delivery.* Checkout is collection
-      only. Delivery needs a fee and a radius, and inventing a fee would put a
-      number in front of a customer that nobody agreed to. The order lifecycle
-      and the `ONLINE` channel already support delivery; only the fee is
-      missing.
+- [ ] **Confirm the delivery rates.** Delivery is switched on with *example*
+      numbers so the flow could be tested end to end — ₹30 base, 2 km included,
+      ₹10 per km after, 8 km maximum. These are not FRYBIRD's rates. Replace
+      them with `pnpm delivery:set` before anyone can order, or switch delivery
+      back off with `--max 0`.
 - [ ] **Drink SKUs and MRPs** — *blocks the POS.* The board says only "Drinks
       Available at MRP Price Only". No SKUs, no sizes, no brands. Three combos
       contain a cola that has no product to point at; they price correctly but

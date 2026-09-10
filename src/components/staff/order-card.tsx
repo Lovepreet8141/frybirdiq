@@ -7,6 +7,7 @@ import { type Paise, formatINR } from "@/lib/money";
 import { advanceOrderAction, markPaidAction } from "@/lib/auth/staff-actions";
 import type { OrderStatus } from "@/domain/order-status";
 import { cn } from "@/lib/utils";
+import { DeliveryPanel } from "./delivery-panel";
 
 export interface StaffOrder {
   id: string;
@@ -19,6 +20,14 @@ export interface StaffOrder {
   placedAt: string | null;
   notes: string | null;
   items: { name: string; quantity: number; modifiers: string[] }[];
+  delivery: {
+    line1: string;
+    landmark: string;
+    lat: number;
+    lng: number;
+    distanceMetres: number | null;
+    fee: Paise;
+  } | null;
 }
 
 /**
@@ -108,6 +117,8 @@ export function OrderCard({
           </li>
         ))}
       </ul>
+
+      {order.delivery && <DeliveryPanel {...order.delivery} />}
 
       {order.notes && <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">{order.notes}</p>}
 

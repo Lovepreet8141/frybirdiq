@@ -19,7 +19,11 @@ import { locations, orderEvents, orderItemModifiers, orderItems, orders, organiz
 import { assertChannelFulfilment } from "@/domain/order-channel";
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition } from "@/domain/order-status";
 import { isSupabaseConfigured } from "@/lib/env";
-import { type Paise, paise } from "@/lib/money";
+import { type Paise, ZERO, paise } from "@/lib/money";
+import { priceOrder } from "@/lib/pricing";
+import { fromMicro, toPoint } from "@/lib/delivery";
+import { quoteForPin } from "./delivery";
+import { resolvePricingContext } from "./org";
 import { getPricedCart } from "@/lib/cart";
 import { createPendingPayment } from "./payments";
 import { IdempotencyConflict, withIdempotency } from "./idempotency";
@@ -41,6 +45,13 @@ export const checkoutSchema = z.object({
     .trim()
     .regex(/^[6-9]\d{9}$/, "Enter a 10-digit mobile number."),
   notes: z.string().trim().max(500).optional(),
+
+  fulfilment: z.enum(["TAKEAWAY", "DELIVERY"]).default("TAKEAWAY"),
+  /** Required for delivery. Ignored for collection. */
+  lat: z.coerce.number().min(-90).max(90).optional(),
+  lng: z.coerce.number().min(-180).max(180).optional(),
+  addressLine1: z.string().trim().max(200).optional(),
+  landmark: z.string().trim().max(200).optional(),
   /**
    * Minted when the checkout page renders and sent back with the submission.
    *
@@ -83,7 +94,15 @@ async function nextOrderNumber(orgId: string): Promise<string> {
  * goes straight to PAID only when money is taken at the counter, so it is
  * created PENDING_PAYMENT and the counter moves it.
  */
-export async function placeOrder(input: CheckoutInput): Promise<PlaceOrderResult> {
+/**
+ * Places an order.
+ *
+ * Takes `unknown` and validates. This is reached from a Server Action, which
+ * is a public HTTP endpoint however it looks in the source — typing the
+ * parameter as the already-parsed shape would be asserting something about
+ * data that has not been checked yet.
+ */
+export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   if (!isSupabaseConfigured()) {
     return {
       ok: false,
@@ -104,6 +123,21 @@ export async function placeOrder(input: CheckoutInput): Promise<PlaceOrderResult
 
   const details = parsed.data;
 
+  // Delivery needs a pin and something for the rider to look for. Checked here
+  // rather than only in the browser: a form can be submitted without ever
+  // loading the page that shows these fields.
+  if (details.fulfilment === "DELIVERY") {
+    const fieldErrors: Record<string, string> = {};
+    if (details.lat === undefined || details.lng === undefined) {
+      fieldErrors.lat = "Drop a pin so we know where to bring it.";
+    }
+    if (!details.addressLine1) fieldErrors.addressLine1 = "Tell us the house, flat or shop.";
+    if (!details.landmark) fieldErrors.landmark = "Give the rider something to look for.";
+    if (Object.keys(fieldErrors).length > 0) {
+      return { ok: false, error: "We need a bit more to deliver this.", fieldErrors };
+    }
+  }
+
   // Priced here, on the server, from the cart cookie's contents only.
   const cart = await getPricedCart();
   if (cart.lines.length === 0) {
@@ -121,11 +155,50 @@ export async function placeOrder(input: CheckoutInput): Promise<PlaceOrderResult
   const { id: orgId } = org;
   const { id: locationId } = location;
 
-  // An online order collected from the counter. The pair is checked here and
-  // again by a constraint on the table.
+  // Ordered on the website; collected or delivered. The pair is checked here
+  // and again by a constraint on the table.
   const channel = "ONLINE" as const;
-  const fulfilment = "TAKEAWAY" as const;
+  const fulfilment = details.fulfilment;
   assertChannelFulfilment(channel, fulfilment);
+
+  /*
+   * The delivery fee is recomputed from the pin, right now, on the server.
+   *
+   * Nothing trusts the quote the browser was last shown: it may be stale, the
+   * rates may have changed since the page loaded, and the figure in the form
+   * is attacker-controlled like everything else the client sends.
+   */
+  let deliveryFee = ZERO;
+  let deliveryDistance: number | null = null;
+  let pin: { latMicro: number; lngMicro: number } | null = null;
+
+  if (fulfilment === "DELIVERY") {
+    pin = toPoint({ lat: details.lat!, lng: details.lng! });
+    const quote = await quoteForPin({ to: pin, orderValue: cart.totals.gross });
+    if (!quote.available) {
+      return { ok: false, error: quote.reason };
+    }
+    deliveryFee = quote.fee;
+    deliveryDistance = quote.chargeableMetres;
+  }
+
+  // Totals including the fee, priced by the same function the cart uses.
+  const context = await resolvePricingContext();
+  const totals = priceOrder(
+    {
+      lines: cart.lines.map((line) => ({
+        unitPrice: line.product.price,
+        quantity: line.quantity,
+        modifierDeltas: line.modifiers.map((modifier) => modifier.priceDelta),
+        rateBps: line.product.taxRateBps,
+      })),
+      fees:
+        deliveryFee > ZERO
+          ? [{ label: "Delivery", amount: deliveryFee, rateBps: cart.lines[0]?.product.taxRateBps ?? 500 }]
+          : [],
+    },
+    context,
+  );
 
   try {
     const { result } = await withIdempotency(
@@ -133,7 +206,7 @@ export async function placeOrder(input: CheckoutInput): Promise<PlaceOrderResult
         key: details.idempotencyKey,
         operation: "placeOrder",
         orgId: org.id,
-        request: { phone: details.phone, total: cart.totals.gross.toString(), lines: cart.lines.length },
+        request: { phone: details.phone, total: totals.gross.toString(), lines: cart.lines.length },
       },
       () => writeOrder(),
     );
@@ -161,14 +234,22 @@ export async function placeOrder(input: CheckoutInput): Promise<PlaceOrderResult
       customerName: details.name,
       customerPhone: details.phone,
       notes: details.notes,
+      deliveryAddress:
+        fulfilment === "DELIVERY"
+          ? { line1: details.addressLine1 ?? "", landmark: details.landmark ?? "" }
+          : null,
+      deliveryLatMicro: pin?.latMicro ?? null,
+      deliveryLngMicro: pin?.lngMicro ?? null,
+      deliveryDistanceMetres: deliveryDistance,
+      deliveryFee,
       subtotal: cart.totals.listed,
       discountTotal: cart.totals.discount,
-      taxableTotal: cart.totals.taxable,
-      cgstTotal: cart.totals.cgst,
-      sgstTotal: cart.totals.sgst,
-      igstTotal: cart.totals.igst,
-      taxTotal: cart.totals.total,
-      grandTotal: cart.totals.gross,
+      taxableTotal: totals.taxable,
+      cgstTotal: totals.cgst,
+      sgstTotal: totals.sgst,
+      igstTotal: totals.igst,
+      taxTotal: totals.total,
+      grandTotal: totals.gross,
       placedAt: now,
     })
     .returning();
@@ -216,12 +297,12 @@ export async function placeOrder(input: CheckoutInput): Promise<PlaceOrderResult
     orderId: order.id,
     fromStatus: "DRAFT",
     toStatus: "PENDING_PAYMENT",
-    reason: "Placed on the website for collection",
+    reason: `Placed on the website for ${fulfilment === "DELIVERY" ? "delivery" : "collection"}`,
   });
 
   // What the order is waiting on. Cash at the counter, recorded now so the
   // till has a row to settle against rather than an implicit expectation.
-  await createPendingPayment({ orgId, orderId: order.id, amount: cart.totals.gross });
+  await createPendingPayment({ orgId, orderId: order.id, amount: totals.gross });
 
   return { ok: true, orderId: order.id, orderNumber };
   }
@@ -286,6 +367,15 @@ export interface StaffOrderView {
   readonly placedAt: Date | null;
   readonly notes: string | null;
   readonly items: readonly { name: string; quantity: number; modifiers: string[] }[];
+  /** Set only on a delivery order. */
+  readonly delivery: {
+    readonly line1: string;
+    readonly landmark: string;
+    readonly lat: number;
+    readonly lng: number;
+    readonly distanceMetres: number | null;
+    readonly fee: Paise;
+  } | null;
 }
 
 /**
@@ -332,6 +422,17 @@ export async function listActiveOrders(orgId: string): Promise<readonly StaffOrd
     isPaid: paidOrderIds.has(row.id),
     placedAt: row.placedAt,
     notes: row.notes,
+    delivery:
+      row.fulfilment === "DELIVERY" && row.deliveryLatMicro !== null && row.deliveryLngMicro !== null
+        ? {
+            line1: row.deliveryAddress?.line1 ?? "",
+            landmark: row.deliveryAddress?.landmark ?? "",
+            lat: fromMicro(row.deliveryLatMicro),
+            lng: fromMicro(row.deliveryLngMicro),
+            distanceMetres: row.deliveryDistanceMetres,
+            fee: paise(row.deliveryFee),
+          }
+        : null,
     items: items
       .filter((item) => item.orderId === row.id)
       .map((item) => ({

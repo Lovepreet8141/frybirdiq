@@ -230,3 +230,57 @@ describe("margin follows the switch", () => {
     expect(nothing.foodCostBps).toBe(0);
   });
 });
+
+describe("fees", () => {
+  const line = { unitPrice: fromRupees("199"), quantity: 1, rateBps: GST_5 };
+
+  it.each(BOTH)("keeps taxable + tax = gross across food and fees in %s mode", (_name, context) => {
+    const order = priceOrder(
+      { lines: [line], fees: [{ label: "Delivery", amount: fromRupees("30"), rateBps: GST_5 }] },
+      context,
+    );
+    expect(add(order.taxable, order.total)).toBe(order.gross);
+    expect(add(order.cgst, order.sgst, order.igst)).toBe(order.total);
+  });
+
+  it("taxes the delivery fee rather than treating it as tax-free", () => {
+    // A delivery charge by the restaurant is part of the same composite supply
+    // as the food. Untaxed, it would understate GST on every delivery order.
+    const withFee = priceOrder(
+      { lines: [line], fees: [{ label: "Delivery", amount: fromRupees("30"), rateBps: GST_5 }] },
+      INCLUSIVE,
+    );
+    const withoutFee = priceOrder({ lines: [line] }, INCLUSIVE);
+    expect(withFee.total).toBeGreaterThan(withoutFee.total);
+  });
+
+  it("charges exactly the quoted fee under inclusive pricing", () => {
+    // ₹30 quoted at checkout must be ₹30 paid, with the tax inside it.
+    const order = priceOrder(
+      { lines: [line], fees: [{ label: "Delivery", amount: fromRupees("30"), rateBps: GST_5 }] },
+      INCLUSIVE,
+    );
+    expect(order.feeTotal).toBe(fromRupees("30"));
+    expect(order.gross).toBe(fromRupees("229")); // 199 + 30
+  });
+
+  it("does not let an order discount eat into a fee", () => {
+    // A promo code discounts the food, not the rider's petrol.
+    const order = priceOrder(
+      {
+        lines: [line],
+        fees: [{ label: "Delivery", amount: fromRupees("30"), rateBps: GST_5 }],
+        orderDiscount: fromRupees("50"),
+      },
+      INCLUSIVE,
+    );
+    expect(order.discount).toBe(fromRupees("50"));
+    expect(order.feeTotal).toBe(fromRupees("30"));
+  });
+
+  it("has no fees and a zero fee total when none are passed", () => {
+    const order = priceOrder({ lines: [line] }, INCLUSIVE);
+    expect(order.fees).toEqual([]);
+    expect(order.feeTotal).toBe(ZERO);
+  });
+});

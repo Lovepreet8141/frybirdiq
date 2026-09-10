@@ -1,9 +1,12 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
-import { Loader2 } from "lucide-react";
+import { Bike, Loader2, Store } from "lucide-react";
 import { type CheckoutState, submitCheckout } from "@/lib/cart/checkout-action";
+import { DeliveryFields } from "@/components/delivery/delivery-fields";
+import type { Point } from "@/components/delivery/map";
+import { cn } from "@/lib/utils";
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -35,13 +38,67 @@ function SubmitButton() {
  * Labels are visible, never placeholders — a placeholder disappears exactly
  * when the customer needs it. Errors sit beside the field they belong to.
  */
-export function CheckoutForm({ idempotencyKey }: { idempotencyKey: string }) {
+export function CheckoutForm({
+  idempotencyKey,
+  shop,
+  deliveryEnabled,
+}: {
+  idempotencyKey: string;
+  /** Where the outlet is. Null when it has not been placed on the map. */
+  shop: Point | null;
+  deliveryEnabled: boolean;
+}) {
+  const [fulfilment, setFulfilment] = useState<"TAKEAWAY" | "DELIVERY">("TAKEAWAY");
   const [state, action] = useActionState<CheckoutState, FormData>(submitCheckout, { status: "idle" });
   const fieldErrors = state.status === "error" ? (state.fieldErrors ?? {}) : {};
 
   return (
     <form action={action} className="flex flex-col gap-5">
       <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+      <input type="hidden" name="fulfilment" value={fulfilment} />
+
+      {/*
+        Collection or delivery. Rendered as a choice only when delivery is
+        actually configured — offering it and then refusing every pin would be
+        worse than not offering it.
+      */}
+      {deliveryEnabled && shop && (
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-2 text-sm font-semibold">How would you like it?</legend>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {[
+              { value: "TAKEAWAY" as const, icon: Store, label: "Collect", detail: "From Sector 9" },
+              { value: "DELIVERY" as const, icon: Bike, label: "Deliver", detail: "Charged by distance" },
+            ].map((option) => (
+              <label
+                key={option.value}
+                className={cn(
+                  "flex min-h-[56px] cursor-pointer items-center gap-3 rounded-md border px-4 py-3 transition-colors duration-[var(--duration-micro)]",
+                  fulfilment === option.value
+                    ? "border-primary bg-primary/10"
+                    : "border-border bg-surface hover:border-border-strong",
+                )}
+              >
+                <input
+                  type="radio"
+                  name="fulfilmentChoice"
+                  value={option.value}
+                  checked={fulfilment === option.value}
+                  onChange={() => setFulfilment(option.value)}
+                  className="size-4 accent-[var(--primary)]"
+                />
+                <option.icon className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                <span className="flex flex-col">
+                  <span className="font-semibold">{option.label}</span>
+                  <span className="text-sm text-muted-foreground">{option.detail}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+
+      {fulfilment === "DELIVERY" && shop && <DeliveryFields shop={shop} />}
       {state.status === "error" && !state.fieldErrors && (
         <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm leading-relaxed">
           {state.message}
