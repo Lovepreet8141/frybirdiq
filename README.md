@@ -1,36 +1,85 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# FRYBIRD IQ
 
-## Getting Started
+Restaurant operating platform for FRYBIRD — a QSR fried-chicken brand in
+Sector 9, Ambala City. Customer ordering, web POS, kitchen display, inventory
+and food costing, owner analytics, and an AI layer over all of it.
 
-First, run the development server:
+Specification: [`BUILD-PLAN.md`](BUILD-PLAN.md).
+Working agreement: [`CLAUDE.md`](CLAUDE.md).
+Design source of truth: [`design-system/MASTER.md`](design-system/MASTER.md).
+
+## Getting started
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
+pnpm install
+cp .env.example .env.local   # then fill in your Supabase keys
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The app runs without Supabase — the foundation page reports that the database
+is not connected rather than crashing. Ordering needs a real project.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Once `.env.local` has `DATABASE_URL`:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+pnpm db:migrate
+pnpm db:seed
+```
 
-## Learn More
+`db:seed` loads the real menu — 33 products, 6 combos, 7 sauces, and the
+chicken size/heat modifiers — transcribed in
+[`src/db/menu-data.ts`](src/db/menu-data.ts). It refuses to run against an org
+that has already taken orders unless you pass `--force`.
 
-To learn more about Next.js, take a look at the following resources:
+## Commands
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Command | Does |
+|---|---|
+| `pnpm dev` | Dev server on :3000 |
+| `pnpm build` | Production build |
+| `pnpm typecheck` | `tsc --noEmit` |
+| `pnpm lint` | ESLint |
+| `pnpm test` | Vitest over `src/lib` and `src/domain` |
+| `pnpm db:generate` | Generate a migration after a schema change |
+| `pnpm db:migrate` | Apply migrations |
+| `pnpm db:seed` | Seed FRYBIRD's real menu from the printed boards |
+| `python3 scripts/check-contrast.py` | WCAG check on the brand palette |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Where things are
 
-## Deploy on Vercel
+```
+src/domain/     order lifecycle, order sources, roles and permissions
+src/lib/money/  integer-paise arithmetic and INR formatting
+src/lib/tax/    GST — CGST/SGST split, inclusive and exclusive pricing
+src/db/schema/  42 tables, split by domain
+supabase/       migrations, including hand-written row-level security
+design-system/  tokens, motion, interaction, accessibility, content
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Two things that will bite you
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+**Money is never a float.** Amounts are integer paise in a `bigint`. Use
+`src/lib/money`; nothing else formats currency, and `formatINR` is the only
+thing that produces a `₹`.
+
+**Currency is rupees, not euros.** `BUILD-PLAN.md` quotes `€` throughout — it
+was drafted from a template. Every figure in it means INR.
+
+## What the menu does not include
+
+`src/db/menu-data.ts` exports `KNOWN_GAPS`. Nothing in it is guessed — where
+the boards do not state a figure, the field is absent. Two of them block later
+phases:
+
+**Drink prices.** The board says only "Drinks Available at MRP Price Only".
+No SKUs, no sizes. The POS cannot ring up a drink until these exist, and three
+combos contain a cola that has no product to point at.
+
+**Whether menu prices include GST.** Seeded as exclusive, matching standard QSR
+billing where 5% is added at the till. If FRYBIRD's printed prices are already
+GST-inclusive, every total is wrong by 5% — confirm before Phase 2.
+
+## Status
+
+Phase 0 complete: design foundation, financial core, domain model, schema.
+Phase 1 next: the customer ordering slice, per `BUILD-PLAN.md` §73.
