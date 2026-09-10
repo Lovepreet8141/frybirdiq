@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Check, Circle } from "lucide-react";
+import { Check, Circle, FileText } from "lucide-react";
 import { formatINR } from "@/lib/money";
 import { type Paise } from "@/lib/money";
 import { getOrder } from "@/lib/repositories/orders";
-import type { OrderStatus } from "@/domain/order-status";
+import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
 
 export const metadata: Metadata = { title: "Your order" };
 
@@ -20,13 +20,40 @@ export const metadata: Metadata = { title: "Your order" };
  * Realtime status updates are Phase 3. Until then the page reflects the status
  * at load, which is honest rather than stale-pretending-to-be-live.
  */
-const STEPS = [
-  { key: "received", label: "Order received", reached: ["PENDING_PAYMENT", "PAID", "ACCEPTED", "PREPARING", "READY", "COMPLETED"] },
-  { key: "accepted", label: "Kitchen accepted", reached: ["ACCEPTED", "PREPARING", "READY", "COMPLETED"] },
-  { key: "preparing", label: "Preparing", reached: ["PREPARING", "READY", "COMPLETED"] },
-  { key: "ready", label: "Ready to collect", reached: ["READY", "COMPLETED"] },
-  { key: "collected", label: "Collected", reached: ["COMPLETED"] },
-] as const;
+/**
+ * The steps an order actually passes through, which differ by how it is going
+ * out. A delivery order is never "ready to collect" and is never "collected" —
+ * showing those to someone waiting at home is telling them the wrong thing
+ * about their own order.
+ */
+function stepsFor(fulfilment: FulfilmentType) {
+  const delivery = fulfilment === "DELIVERY";
+
+  return [
+    {
+      key: "received",
+      label: "Order received",
+      reached: ["PENDING_PAYMENT", "PAID", "ACCEPTED", "PREPARING", "READY", "OUT_FOR_DELIVERY", "COMPLETED"],
+    },
+    {
+      key: "accepted",
+      label: "Kitchen accepted",
+      reached: ["ACCEPTED", "PREPARING", "READY", "OUT_FOR_DELIVERY", "COMPLETED"],
+    },
+    {
+      key: "preparing",
+      label: "Preparing",
+      reached: ["PREPARING", "READY", "OUT_FOR_DELIVERY", "COMPLETED"],
+    },
+    delivery
+      ? { key: "ready", label: "Ready, waiting for a rider", reached: ["READY", "OUT_FOR_DELIVERY", "COMPLETED"] }
+      : { key: "ready", label: "Ready to collect", reached: ["READY", "COMPLETED"] },
+    ...(delivery
+      ? [{ key: "out", label: "On its way", reached: ["OUT_FOR_DELIVERY", "COMPLETED"] }]
+      : []),
+    { key: "done", label: delivery ? "Delivered" : "Collected", reached: ["COMPLETED"] },
+  ] as const;
+}
 
 export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -34,6 +61,8 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
   if (!order) notFound();
 
   const status = order.status as OrderStatus;
+  const isDelivery = order.fulfilment === "DELIVERY";
+  const STEPS = stepsFor(order.fulfilment);
   const cancelled = status === "CANCELLED" || status === "FAILED" || status === "REFUNDED";
   const currentIndex = STEPS.findIndex((step) => !(step.reached as readonly string[]).includes(status));
   const activeIndex = currentIndex === -1 ? STEPS.length - 1 : Math.max(0, currentIndex - 1);
@@ -45,7 +74,8 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         <span className="tabular">#{order.orderNumber}</span>
       </h1>
       <p className="mt-3 text-lg leading-relaxed text-muted-foreground">
-        Thanks{order.customerName ? `, ${order.customerName}` : ""}. We&rsquo;ll call when it&rsquo;s ready to collect.
+        Thanks{order.customerName ? `, ${order.customerName}` : ""}.{" "}
+        {isDelivery ? "We'll call when it's on its way." : "We'll call when it's ready to collect."}
       </p>
 
       {cancelled ? (
@@ -102,18 +132,31 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         </ul>
 
         <div className="mt-4 flex items-baseline justify-between gap-4">
-          <span className="font-heading text-lg font-semibold">To pay at the counter</span>
+          <span className="font-heading text-lg font-semibold">
+            {isDelivery ? "To pay on delivery" : "To pay at the counter"}
+          </span>
           <span className="tabular text-2xl font-bold">{formatINR(order.grandTotal as Paise)}</span>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">Includes GST. Cash, UPI or card.</p>
       </section>
 
-      <Link
-        href="/menu"
-        className="mt-10 inline-flex min-h-[48px] items-center rounded-md border border-border-strong px-5 font-semibold transition-colors hover:bg-surface"
-      >
-        Order something else
-      </Link>
+      <div className="mt-10 flex flex-wrap items-center gap-3">
+        <Link
+          href="/menu"
+          className="inline-flex min-h-[48px] items-center rounded-md border border-border-strong px-5 font-semibold transition-colors hover:bg-surface"
+        >
+          Order something else
+        </Link>
+
+        <Link
+          href={`/order/${order.id}/invoice`}
+          className="inline-flex min-h-[48px] items-center gap-2 rounded-md border border-border px-5 font-semibold transition-colors hover:bg-surface"
+        >
+          <FileText className="size-4" aria-hidden="true" />
+          {/* An invoice number only exists once the order is paid. */}
+          {order.invoiceNumber ? "Invoice" : "Receipt"}
+        </Link>
+      </div>
     </div>
   );
 }

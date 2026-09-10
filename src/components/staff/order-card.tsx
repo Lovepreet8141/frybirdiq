@@ -2,12 +2,14 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { Check, FileText, Loader2 } from "lucide-react";
 import { type Paise, formatINR } from "@/lib/money";
 import { advanceOrderAction, markPaidAction } from "@/lib/auth/staff-actions";
 import type { OrderStatus } from "@/domain/order-status";
 import { cn } from "@/lib/utils";
 import { DeliveryPanel } from "./delivery-panel";
+import { WhatsAppButton } from "@/components/order/whatsapp-button";
 
 export interface StaffOrder {
   id: string;
@@ -21,6 +23,7 @@ export interface StaffOrder {
   placedAt: string | null;
   notes: string | null;
   items: { name: string; quantity: number; modifiers: string[] }[];
+  invoiceNumber: string | null;
   delivery: {
     line1: string;
     landmark: string;
@@ -201,6 +204,17 @@ export function OrderCard({
               {isDelivery ? `Cash in ${formatINR(order.grandTotal)}` : `Take ${formatINR(order.grandTotal)}`}
             </button>
           )}
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <WhatsAppButton orderId={order.id} phone={order.customerPhone} />
+          <Link
+            href={`/order/${order.id}/invoice`}
+            className="inline-flex min-h-[44px] items-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition-colors hover:bg-surface-muted"
+          >
+            <FileText className="size-4" aria-hidden="true" />
+            {order.invoiceNumber ?? "Receipt"}
+          </Link>
         </div>
 
         {/* Said before it is pressed, rather than as an error afterwards. */}

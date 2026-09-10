@@ -369,6 +369,8 @@ export interface OrderView {
   readonly id: string;
   readonly orderNumber: string;
   readonly status: string;
+  readonly fulfilment: FulfilmentType;
+  readonly invoiceNumber: string | null;
   readonly customerName: string | null;
   readonly grandTotal: bigint;
   readonly placedAt: Date | null;
@@ -394,6 +396,8 @@ export async function getOrder(id: string): Promise<OrderView | null> {
     id: order.id,
     orderNumber: order.orderNumber,
     status: order.status,
+    fulfilment: order.fulfilment,
+    invoiceNumber: order.invoiceNumber,
     customerName: order.customerName,
     grandTotal: order.grandTotal,
     placedAt: order.placedAt,
@@ -421,6 +425,7 @@ export interface StaffOrderView {
   readonly customerPhone: string | null;
   readonly grandTotal: Paise;
   readonly isPaid: boolean;
+  readonly invoiceNumber: string | null;
   readonly placedAt: Date | null;
   readonly notes: string | null;
   readonly items: readonly { name: string; quantity: number; modifiers: string[] }[];
@@ -477,6 +482,7 @@ export async function listActiveOrders(orgId: string): Promise<readonly StaffOrd
     customerPhone: row.customerPhone,
     grandTotal: paise(row.grandTotal),
     isPaid: paidOrderIds.has(row.id),
+    invoiceNumber: row.invoiceNumber,
     placedAt: row.placedAt,
     notes: row.notes,
     delivery:

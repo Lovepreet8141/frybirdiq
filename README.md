@@ -135,6 +135,14 @@ Tick an item when the real value is in the repo, not when the answer is known.
       real margin per product.
 - [ ] **Packaging cost per item.**
 
+### Before issuing a tax invoice
+
+- [ ] **GSTIN and registered legal name on the organization.** Without a GSTIN
+      the document is a receipt, not a tax invoice, and it says so on its face —
+      calling it one would be a false statement on a document a customer may
+      present for a claim. Nothing sets these yet; they need a column update on
+      `organizations`.
+
 ### Before sending any marketing
 
 - [ ] **DLT registration for SMS.** Commercial SMS in India goes through DLT —
@@ -145,6 +153,9 @@ Tick an item when the real value is in the repo, not when the answer is known.
       record has `marketing_consent` and `deletion_requested_at`; nothing yet
       reads them except the export, and nothing lets a customer change their
       mind without ringing the shop.
+- [ ] **WhatsApp Business API**, if sending should ever be automatic. Today the
+      button opens WhatsApp with the message written and a person presses send,
+      which needs no API and no template approval. Automating it does.
 - [ ] **A privacy notice** saying what is collected and why. Email is now
       required to order; using it to advertise is a separate purpose and the
       consent box is what makes that lawful.
@@ -172,6 +183,9 @@ Tick an item when the real value is in the repo, not when the answer is known.
       `inclusive`; both modes remain covered by tests, and `gst()` now requires
       the basis rather than defaulting, so no caller can silently fall back to
       the wrong one.
+- [x] **Invoices.** Numbered per financial year, issued on payment, with the
+      GST breakdown per line. Printable; `Send on WhatsApp` opens the app with
+      the order details written.
 - [x] **Customer accounts.** Self-serve sign-up, order history, and a points
       balance. Guest checkout still works — §61 says not to force an account
       before a first order.

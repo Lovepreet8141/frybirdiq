@@ -93,6 +93,20 @@ export const orders = pgTable(
     pointsRedeemed: integer("points_redeemed").notNull().default(0),
     pointsEarned: integer("points_earned").notNull().default(0),
 
+    /**
+     * Tax invoice number. Unique and sequential within the financial year.
+     *
+     * Separate from `orderNumber`, which resets daily so the counter can call
+     * it out — "#004" is said aloud, not filed. A GST invoice number has to be
+     * unique across the year and gapless, which a daily counter is not.
+     *
+     * Issued when the order is paid, not when it is placed: an invoice records
+     * a completed sale, and numbering unpaid orders leaves gaps in a sequence
+     * that is supposed to have none.
+     */
+    invoiceNumber: text("invoice_number"),
+    invoicedAt: timestamp("invoiced_at", { withTimezone: true }),
+
     promotionCode: text("promotion_code"),
     notes: text("notes"),
 
@@ -106,6 +120,7 @@ export const orders = pgTable(
   },
   (table) => [
     unique("orders_org_number_unique").on(table.orgId, table.orderNumber),
+    unique("orders_org_invoice_unique").on(table.orgId, table.invoiceNumber),
     index("orders_org_status_idx").on(table.orgId, table.status),
     index("orders_location_placed_idx").on(table.locationId, table.placedAt),
     // Revenue split by channel is the reporting question this column exists

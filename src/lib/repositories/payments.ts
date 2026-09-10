@@ -8,7 +8,7 @@ import "server-only";
  * only the movement of money. §32's shape, applied to payments.
  */
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, like, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, loyaltyAccounts, loyaltyTransactions, orderEvents, orders, payments } from "@/db/schema";
 import { assertTransition } from "@/domain/order-status";
@@ -16,6 +16,7 @@ import { type Role, authorize } from "@/domain/permissions";
 import { type Paise, formatINR, paise, subtract } from "@/lib/money";
 import { pointsEarned } from "@/lib/loyalty";
 import { getLoyaltyConfig } from "@/lib/loyalty/config";
+import { financialYear, invoiceNumber, parseInvoiceNumber } from "@/lib/invoice";
 import { CASH_PROVIDER, getProvider } from "@/lib/payments";
 import { withIdempotency } from "./idempotency";
 
@@ -147,9 +148,40 @@ export async function recordCashPayment(input: {
               .returning()
           )[0]?.id;
 
+      /*
+       * Issue the tax invoice number.
+       *
+       * On payment, not on placement: an invoice records a completed sale, and
+       * numbering unpaid orders would leave gaps in a sequence that GST
+       * requires to have none.
+       *
+       * The sequence is per financial year and per organization, found by
+       * counting what has already been issued this year. Under real
+       * concurrency this wants a database sequence rather than a count — two
+       * simultaneous settlements could read the same number — but the unique
+       * constraint on (org_id, invoice_number) turns that into a failed write
+       * rather than a duplicate invoice, and one counter serves one queue.
+       */
+      const issuedAt = new Date();
+      const year = financialYear(issuedAt);
+      const issuedThisYear = await database
+        .select({ invoiceNumber: orders.invoiceNumber })
+        .from(orders)
+        .where(and(eq(orders.orgId, order.orgId), like(orders.invoiceNumber, `${year}/%`)));
+
+      const highest = issuedThisYear.reduce((max, row) => {
+        const parsed = row.invoiceNumber ? parseInvoiceNumber(row.invoiceNumber) : null;
+        return parsed && parsed.sequence > max ? parsed.sequence : max;
+      }, 0);
+
       await database
         .update(orders)
-        .set({ status: "PAID", updatedAt: new Date() })
+        .set({
+          status: "PAID",
+          invoiceNumber: order.invoiceNumber ?? invoiceNumber(issuedAt, highest + 1),
+          invoicedAt: order.invoicedAt ?? issuedAt,
+          updatedAt: issuedAt,
+        })
         .where(eq(orders.id, order.id));
 
       /*
