@@ -81,6 +81,7 @@ that has already taken orders unless you pass `--force`.
 | `pnpm loyalty:balances` | Balances and the movements behind them |
 | `pnpm business:show` / `business:set` | Legal name, GSTIN, phone on documents |
 | `pnpm iq:report [today\|7d\|30d]` | The dashboard figures, from the terminal |
+| `pnpm promo:list` / `promo:set` | Promotion codes |
 | `python3 scripts/check-contrast.py` | WCAG check on the brand palette |
 
 ## Where things are
@@ -215,6 +216,13 @@ Tick an item when the real value is in the repo, not when the answer is known.
 - [x] **Details are not asked twice.** A signed-in customer sees "Ordering as
       …" with the fields collapsed behind Change; a returning guest sees the
       same from a cookie on their own device. Never looked up by phone number.
+- [x] **Promotion codes.** Percentage or flat, with a minimum, a cap and a
+      usage limit. Every refusal says which one bit.
+- [x] **Points at checkout.** One toggle. Points are tender rather than a
+      discount, so they come off what is payable and can pay for delivery.
+- [x] **Shorter checkout.** A confirmation rather than a form: for a returning
+      customer it is two lines to glance at and one button. A code, a note and
+      points sit behind a word rather than taking a field from everyone.
 - [x] **Saved addresses.** A returning customer picks a doorstep they have used
       before instead of retyping it. From the account when signed in; from a
       cookie on their own device when not — never looked up by phone number,

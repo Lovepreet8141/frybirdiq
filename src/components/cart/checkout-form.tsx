@@ -45,6 +45,7 @@ export function CheckoutForm({
   savedAddresses,
   contact,
   fromAccount,
+  extras,
 }: {
   idempotencyKey: string;
   /** Where the outlet is. Null when it has not been placed on the map. */
@@ -56,6 +57,8 @@ export function CheckoutForm({
   contact: { name: string; phone: string; email: string } | null;
   /** True when those details come from a signed-in account. */
   fromAccount: boolean;
+  /** Code, points and note — rendered by the page, kept out of this form's job. */
+  extras: React.ReactNode;
 }) {
   const [fulfilment, setFulfilment] = useState<"TAKEAWAY" | "DELIVERY">("TAKEAWAY");
   /*
@@ -234,32 +237,14 @@ export function CheckoutForm({
         different purpose and needs its own consent. A pre-ticked box is the
         dark pattern §30 rules out, and it would not be consent anyway.
       */}
-      <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface px-4 py-3">
-        <input
-          type="checkbox"
-          name="marketingConsent"
-          className="mt-0.5 size-4 shrink-0 accent-[var(--primary)]"
-        />
-        <span className="flex flex-col gap-0.5">
-          <span className="text-sm font-semibold">Send me FRYBIRD offers</span>
-          <span className="text-sm text-muted-foreground">
-            Occasional deals by email or SMS. Not needed to order, and you can stop any time.
-          </span>
+      <label className="flex cursor-pointer items-center gap-3 text-sm">
+        <input type="checkbox" name="marketingConsent" className="size-4 shrink-0 accent-[var(--primary)]" />
+        <span className="text-muted-foreground">
+          Send me FRYBIRD offers. Not needed to order.
         </span>
       </label>
 
-      <div className="flex flex-col gap-2">
-        <label htmlFor="notes" className="text-sm font-semibold">
-          Anything else <span className="font-normal text-muted-foreground">(optional)</span>
-        </label>
-        <textarea
-          id="notes"
-          name="notes"
-          rows={3}
-          maxLength={500}
-          className="rounded-md border border-border bg-surface px-4 py-3 text-base focus-visible:border-border-strong"
-        />
-      </div>
+      {extras}
 
       <SubmitButton />
     </form>

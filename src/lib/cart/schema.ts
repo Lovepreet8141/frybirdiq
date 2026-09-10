@@ -22,6 +22,16 @@ export const cartSchema = z.object({
   // A cart is capped so a hostile cookie cannot make the server price ten
   // thousand lines on every render.
   lines: z.array(cartLineSchema).max(50).default([]),
+  /**
+   * A code the customer typed, not a discount they claimed.
+   *
+   * The server looks it up and decides what it is worth. Putting the amount
+   * here would make the discount forgeable, which is the same reason no price
+   * appears in this schema.
+   */
+  promoCode: z.string().max(40).optional(),
+  /** Points the customer asked to spend. Capped and priced on the server. */
+  points: z.number().int().min(0).max(1_000_000).optional(),
 });
 
 export type CartLine = z.infer<typeof cartLineSchema>;

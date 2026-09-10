@@ -2,24 +2,17 @@ import { formatINR } from "@/lib/money";
 import type { PricedCart } from "@/lib/cart";
 
 /**
- * Order totals.
+ * What the customer pays.
  *
- * When prices carry GST, the headline figure is what the customer pays and the
- * tax is shown as contained within it — "including ₹X GST", never added as a
- * line beneath. Presenting inclusive tax as an addition would make the total
- * look higher than the menu board.
- *
- * When there is no GST to carry — the business is not registered — the line is
- * not rendered at all. "Includes ₹0 GST" is noise at best and a claim about a
- * tax nobody collected at worst.
+ * Lines appear only when they carry a figure. "Includes ₹0 GST", "− ₹0
+ * discount" and an empty points row are noise at best, and a claim about a tax
+ * nobody collected at worst.
  */
 export function OrderSummary({ cart }: { cart: PricedCart }) {
   const { totals } = cart;
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-5">
-      <h2 className="font-heading text-lg font-semibold">Order total</h2>
-
+    <div className="flex flex-col gap-2.5 rounded-lg border border-border bg-surface p-5">
       <dl className="flex flex-col gap-2 text-sm">
         <div className="flex items-baseline justify-between gap-4">
           <dt className="text-muted-foreground">
@@ -28,17 +21,31 @@ export function OrderSummary({ cart }: { cart: PricedCart }) {
           <dd className="tabular">{formatINR(totals.listed)}</dd>
         </div>
 
-        {totals.discount !== 0n && (
+        {cart.promotion && (
+          <div className="flex items-baseline justify-between gap-4 text-[var(--success,inherit)]">
+            <dt className="text-muted-foreground">{cart.promotion.name}</dt>
+            <dd className="tabular">−{formatINR(cart.promotion.discount)}</dd>
+          </div>
+        )}
+
+        {totals.feeTotal > 0n && (
           <div className="flex items-baseline justify-between gap-4">
-            <dt className="text-muted-foreground">Discount</dt>
-            <dd className="tabular">−{formatINR(totals.discount)}</dd>
+            <dt className="text-muted-foreground">Delivery</dt>
+            <dd className="tabular">{formatINR(totals.feeTotal)}</dd>
+          </div>
+        )}
+
+        {cart.points && (
+          <div className="flex items-baseline justify-between gap-4">
+            <dt className="text-muted-foreground">{cart.points.points} points</dt>
+            <dd className="tabular">−{formatINR(cart.points.discount)}</dd>
           </div>
         )}
       </dl>
 
       <div className="flex items-baseline justify-between gap-4 border-t border-border pt-3">
         <span className="font-heading text-lg font-semibold">To pay</span>
-        <span className="tabular text-2xl font-bold">{formatINR(totals.gross)}</span>
+        <span className="tabular text-2xl font-bold">{formatINR(cart.payable)}</span>
       </div>
 
       {totals.total > 0n && (

@@ -15,7 +15,7 @@ import "server-only";
 import { and, desc, eq, gte, inArray, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { addresses, customers, locations, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
+import { addresses, customers, locations, loyaltyAccounts, loyaltyTransactions, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
 import { assertChannelFulfilment } from "@/domain/order-channel";
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition } from "@/domain/order-status";
 import type { Role } from "@/domain/permissions";
@@ -25,6 +25,7 @@ import { type Paise, ZERO, paise } from "@/lib/money";
 import { priceOrder } from "@/lib/pricing";
 import { fromMicro, toPoint } from "@/lib/delivery";
 import { quoteForPin } from "./delivery";
+import { countPromotionUse } from "./promotions";
 import { resolvePricingContext } from "./org";
 import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
@@ -303,12 +304,17 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       deliveryFee,
       subtotal: cart.totals.listed,
       discountTotal: cart.totals.discount,
+      promotionCode: cart.promotion?.code,
+      pointsRedeemed: cart.points?.points ?? 0,
       taxableTotal: totals.taxable,
       cgstTotal: totals.cgst,
       sgstTotal: totals.sgst,
       igstTotal: totals.igst,
       taxTotal: totals.total,
-      grandTotal: totals.gross,
+      // What is actually charged: the order total less any points spent.
+      // Points are tender rather than a discount, so the payment row and this
+      // figure agree with the cash that changes hands.
+      grandTotal: cart.payable,
       placedAt: now,
     })
     .returning();
@@ -399,7 +405,40 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
 
   // What the order is waiting on. Cash at the counter, recorded now so the
   // till has a row to settle against rather than an implicit expectation.
-  await createPendingPayment({ orgId, orderId: order.id, amount: totals.gross });
+  await createPendingPayment({ orgId, orderId: order.id, amount: cart.payable });
+
+  /*
+   * Spend the points, and count the code.
+   *
+   * Both happen only once the order row exists. Deducting a balance for an
+   * order that then failed to write would take points for food nobody ordered.
+   */
+  if (cart.points && customer) {
+    const [account] = await database
+      .select()
+      .from(loyaltyAccounts)
+      .where(eq(loyaltyAccounts.customerId, customer.id))
+      .limit(1);
+
+    if (account) {
+      await database
+        .update(loyaltyAccounts)
+        .set({ pointsBalance: account.pointsBalance - cart.points.points, updatedAt: now })
+        .where(eq(loyaltyAccounts.id, account.id));
+
+      await database.insert(loyaltyTransactions).values({
+        orgId,
+        accountId: account.id,
+        points: -cart.points.points,
+        reason: `Spent on order #${orderNumber}`,
+        orderId: order.id,
+      });
+    }
+  }
+
+  if (cart.promotion) {
+    await countPromotionUse(orgId, cart.promotion.code);
+  }
 
   return { ok: true, orderId: order.id, orderNumber };
   }

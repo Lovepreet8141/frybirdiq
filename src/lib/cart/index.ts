@@ -13,7 +13,13 @@ import "server-only";
  */
 
 import { cookies } from "next/headers";
-import { type Paise, add } from "@/lib/money";
+import { type Paise, ZERO, add, multiply, subtract } from "@/lib/money";
+import { applyPromotion } from "@/lib/promotions";
+import { findPromotion } from "@/lib/repositories/promotions";
+import { redeem } from "@/lib/loyalty";
+import { getLoyaltyConfig } from "@/lib/loyalty/config";
+import { getCustomer } from "@/lib/customer";
+import { getOrg } from "@/lib/repositories/org";
 import { type PricedLine, type PricedOrder, priceLine, priceOrder } from "@/lib/pricing";
 import { resolvePricingContext } from "@/lib/repositories/org";
 import { type MenuModifier, type MenuProduct, getMenu } from "@/lib/repositories/menu";
@@ -64,10 +70,30 @@ export interface PricedCartLine {
   readonly priced: PricedLine;
 }
 
+export interface AppliedPromotion {
+  readonly code: string;
+  readonly name: string;
+  readonly discount: Paise;
+}
+
+export interface AppliedPoints {
+  readonly points: number;
+  readonly discount: Paise;
+  readonly balance: number;
+}
+
 export interface PricedCart {
   readonly lines: readonly PricedCartLine[];
   readonly totals: PricedOrder;
   readonly itemCount: number;
+  /** The code that was accepted, if any. */
+  readonly promotion: AppliedPromotion | null;
+  /** Why a code was refused. Specific, so the customer knows what to do. */
+  readonly promotionError: string | null;
+  /** Points actually spendable on this order. */
+  readonly points: AppliedPoints | null;
+  /** What is left to pay after points. This is the figure that gets charged. */
+  readonly payable: Paise;
   /**
    * Lines that could not be honoured — a product pulled from the menu, or a
    * modifier that no longer exists.
@@ -159,12 +185,63 @@ export async function priceCart(cart: Cart): Promise<PricedCart> {
     });
   }
 
-  const totals = priceOrder({ lines: forPricing }, context);
+  /*
+   * A promotion discounts the food, not the delivery fee — the shop giving
+   * away margin on what it sells, not paying a rider's petrol on the
+   * customer's behalf. It goes through priceOrder as an order-level discount
+   * so it is allocated across lines and taxed correctly.
+   */
+  const foodValue = add(...forPricing.map((line) => multiply(line.unitPrice, line.quantity)));
+
+  let promotion: AppliedPromotion | null = null;
+  let promotionError: string | null = null;
+
+  if (cart.promoCode) {
+    const org = await getOrg();
+    const found = org ? await findPromotion(org.id, cart.promoCode) : null;
+    const result = applyPromotion({ promotion: found, orderValue: foodValue });
+    if (result.ok) {
+      promotion = { code: result.code, name: result.name, discount: result.discount };
+    } else {
+      promotionError = result.message;
+    }
+  }
+
+  const totals = priceOrder({ lines: forPricing, orderDiscount: promotion?.discount }, context);
+
+  /*
+   * Points are tender, not a discount.
+   *
+   * Redeeming them is closer to handing over cash than to knocking money off a
+   * price, so they come off what is payable rather than off the order value —
+   * and they can pay for delivery, which a promotion cannot.
+   */
+  let points: AppliedPoints | null = null;
+  const customer = await getCustomer();
+
+  if (customer && cart.points && cart.points > 0) {
+    const config = await getLoyaltyConfig();
+    const redemption = redeem({
+      requestedPoints: cart.points,
+      balance: customer.points,
+      orderTotal: totals.gross,
+      config,
+    });
+    if (redemption.points > 0) {
+      points = { points: redemption.points, discount: redemption.discount, balance: customer.points };
+    }
+  }
+
+  const payable = subtract(totals.gross, points?.discount ?? ZERO);
 
   return {
     lines: resolved.map((line, index) => ({ ...line, priced: totals.lines[index] ?? line.priced })),
     totals,
     itemCount: resolved.reduce((count, line) => count + line.quantity, 0),
+    promotion,
+    promotionError,
+    points,
+    payable,
     rejected,
   };
 }

@@ -27,7 +27,9 @@
     "loyalty:balances": "tsx scripts/check-points.ts",
     "business:show": "tsx scripts/configure-business.ts --show",
     "business:set": "tsx scripts/configure-business.ts",
-    "iq:report": "tsx --conditions=react-server scripts/iq-report.ts"
+    "iq:report": "tsx --conditions=react-server scripts/iq-report.ts",
+    "promo:set": "tsx scripts/promo.ts",
+    "promo:list": "tsx scripts/promo.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

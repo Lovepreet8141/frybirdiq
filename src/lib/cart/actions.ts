@@ -14,6 +14,7 @@ import { z } from "zod";
 import { getProduct } from "@/lib/repositories/menu";
 import { readCart, writeCart } from "./index";
 import { type CartLine, cartLineSchema, lineKey } from "./schema";
+import { normaliseCode } from "@/lib/promotions";
 
 export interface CartActionResult {
   readonly ok: boolean;
@@ -67,7 +68,7 @@ export async function addToCart(input: unknown): Promise<CartActionResult> {
 
   if (lines.length > 50) return { ok: false, error: "That is as much as one order can hold." };
 
-  await writeCart({ lines });
+  await writeCart({ ...cart, lines });
   revalidatePath("/", "layout");
   return { ok: true, itemCount: countItems(lines) };
 }
@@ -84,7 +85,7 @@ export async function setQuantity(input: unknown): Promise<CartActionResult> {
     .map((line) => (lineKey(line) === parsed.data.key ? { ...line, quantity: parsed.data.quantity } : line))
     .filter((line) => line.quantity > 0);
 
-  await writeCart({ lines });
+  await writeCart({ ...cart, lines });
   revalidatePath("/", "layout");
   return { ok: true, itemCount: countItems(lines) };
 }
@@ -96,7 +97,7 @@ export async function removeLine(input: unknown): Promise<CartActionResult> {
   const cart = await readCart();
   const lines = cart.lines.filter((line) => lineKey(line) !== parsed.data.key);
 
-  await writeCart({ lines });
+  await writeCart({ ...cart, lines });
   revalidatePath("/", "layout");
   return { ok: true, itemCount: countItems(lines) };
 }
@@ -105,4 +106,45 @@ export async function clearCart(): Promise<CartActionResult> {
   await writeCart({ lines: [] });
   revalidatePath("/", "layout");
   return { ok: true, itemCount: 0 };
+}
+
+/**
+ * Applies a promotion code.
+ *
+ * Stores only the code. What it is worth is decided by the server every time
+ * the cart is priced, so a code that expires between adding it and checking
+ * out stops applying by itself.
+ */
+export async function applyPromoCode(input: unknown): Promise<CartActionResult> {
+  const parsed = z.object({ code: z.string().max(40) }).safeParse(input);
+  if (!parsed.success) return { ok: false, error: "That code could not be applied." };
+
+  const cart = await readCart();
+  await writeCart({ ...cart, promoCode: normaliseCode(parsed.data.code) || undefined });
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
+export async function clearPromoCode(): Promise<CartActionResult> {
+  const cart = await readCart();
+  await writeCart({ ...cart, promoCode: undefined });
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
+/**
+ * Sets how many points to spend.
+ *
+ * The number is an intent, not a discount: the server caps it at the balance
+ * and at the order total when it prices the cart, so a tampered cookie asking
+ * for a million points spends whatever is actually there and no more.
+ */
+export async function setPointsToSpend(input: unknown): Promise<CartActionResult> {
+  const parsed = z.object({ points: z.number().int().min(0).max(1_000_000) }).safeParse(input);
+  if (!parsed.success) return { ok: false, error: "That could not be applied." };
+
+  const cart = await readCart();
+  await writeCart({ ...cart, points: parsed.data.points || undefined });
+  revalidatePath("/", "layout");
+  return { ok: true };
 }
