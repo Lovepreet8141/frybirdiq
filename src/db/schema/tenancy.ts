@@ -25,8 +25,11 @@ export const organizations = pgTable("organizations", {
    * `exclusive` means a ₹99 burger rings up at ₹103.95 and earns ₹99.
    * `inclusive` means it rings up at ₹99 and earns ₹94.29. Getting this wrong
    * misstates revenue by the tax rate on every order ever taken.
+   *
+   * FRYBIRD is `inclusive`, confirmed against a counter bill: the board price
+   * is the final price.
    */
-  priceBasis: priceBasisEnum("price_basis").notNull().default("exclusive"),
+  priceBasis: priceBasisEnum("price_basis").notNull().default("inclusive"),
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
   ...timestamps,
 });

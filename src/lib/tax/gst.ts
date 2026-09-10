@@ -60,16 +60,20 @@ export function splitTax(
  * Computes GST on an amount.
  *
  * With `exclusive` basis the amount is the taxable value and tax is added on
- * top — how a QSR bill is normally built. With `inclusive` basis the amount is
- * what the customer pays and the tax is extracted from within it, which is how
- * a menu board reads when the printed price is the final price. The two are
- * not interchangeable: 5% added to ₹100 is ₹105, but ₹100 inclusive of 5% is
- * ₹95.24 + ₹4.76.
+ * top. With `inclusive` basis the amount is what the customer pays and the tax
+ * is extracted from within it — how FRYBIRD's boards read, where the printed
+ * price is the final price. The two are not interchangeable: 5% added to ₹100
+ * is ₹105, but ₹100 inclusive of 5% is ₹95.24 + ₹4.76.
+ *
+ * `basis` is required and deliberately has no default. It is decided once, on
+ * the organization, and read through `src/lib/pricing`. A default here would
+ * be a second answer to the same question, and a caller that forgot to pass it
+ * would silently get the wrong one on every line.
  */
 export function gst(
   amount: Paise,
   rate: Bps,
-  { place = "intra-state", basis = "exclusive" }: { place?: PlaceOfSupply; basis?: PriceBasis } = {},
+  { basis, place = "intra-state" }: { basis: PriceBasis; place?: PlaceOfSupply },
 ): GstBreakdown {
   const taxable =
     basis === "exclusive"

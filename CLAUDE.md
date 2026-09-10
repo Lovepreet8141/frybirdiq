@@ -50,6 +50,10 @@ stay in step.
 rate, carries an HSN/SAC code, and prints the org's GSTIN. `src/lib/tax/gst`
 owns this. Tax is never computed once on an order total.
 
+**Prices are GST-inclusive.** Confirmed against a counter bill: the menu board
+price is what the customer pays, and GST is extracted from within it. A ₹99
+burger takes ₹99 and earns ₹94.29.
+
 **Whether prices include GST is one value.** `organizations.price_basis`. Every
 price, invoice line and margin figure reads it through `src/lib/pricing` and
 none of them decide for themselves. Do not add a basis column, prop, argument

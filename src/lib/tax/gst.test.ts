@@ -30,7 +30,7 @@ describe("splitTax", () => {
 describe("gst on an exclusive price", () => {
   it("adds tax on top", () => {
     // A ₹249 order, restaurant service at 5%.
-    const line = gst(fromRupees("249"), bps(5));
+    const line = gst(fromRupees("249"), bps(5), { basis: "exclusive" });
     expect(line.taxable).toBe(fromRupees("249"));
     expect(line.total).toBe(fromRupees("12.45"));
     expect(line.cgst).toBe(fromRupees("6.23"));
@@ -39,7 +39,7 @@ describe("gst on an exclusive price", () => {
   });
 
   it("keeps the components summing to the total", () => {
-    const line = gst(fromRupees("249"), bps(5));
+    const line = gst(fromRupees("249"), bps(5), { basis: "exclusive" });
     expect(add(line.cgst, line.sgst, line.igst)).toBe(line.total);
     expect(add(line.taxable, line.total)).toBe(line.gross);
   });
@@ -90,8 +90,8 @@ describe("gst on an inclusive price", () => {
 describe("sumGst", () => {
   it("taxes each line at its own rate instead of blending them", () => {
     // A burger taxed as restaurant service at 5%, a bottled drink at 12%.
-    const burger = gst(fromRupees("199"), bps(5));
-    const drink = gst(fromRupees("60"), bps(12));
+    const burger = gst(fromRupees("199"), bps(5), { basis: "exclusive" });
+    const drink = gst(fromRupees("60"), bps(12), { basis: "exclusive" });
     const order = sumGst([burger, drink]);
 
     expect(order.taxable).toBe(fromRupees("259"));

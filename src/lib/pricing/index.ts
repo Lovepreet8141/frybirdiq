@@ -39,11 +39,16 @@ export type { PriceBasis, PlaceOfSupply };
 /**
  * The basis a new organization starts on.
  *
- * `exclusive` matches standard QSR billing, where the board price is what the
- * item costs and 5% is added at the till. It is a default, not a finding —
- * confirm against a real counter bill before it decides anything that matters.
+ * `inclusive` — confirmed against a real FRYBIRD counter bill. The price on
+ * the menu board is the price the customer pays; GST is inside it, not added
+ * at the till. A ₹99 burger takes ₹99 and books ₹94.29 of revenue against
+ * ₹4.71 of GST payable.
+ *
+ * This is a finding, not an assumption. It was `exclusive` until the bill was
+ * checked, and that assumption overstated revenue by the tax rate on every
+ * order.
  */
-export const DEFAULT_PRICE_BASIS: PriceBasis = "exclusive";
+export const DEFAULT_PRICE_BASIS: PriceBasis = "inclusive";
 
 /** Everything the pricing functions need to know about the seller. */
 export interface PricingContext {

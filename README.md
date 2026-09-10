@@ -77,13 +77,6 @@ Tick an item when the real value is in the repo, not when the answer is known.
 
 ### Blocking
 
-- [ ] **Do menu prices include GST?** — *blocks Phase 1 and 2.* Seeded as
-      `exclusive`, matching standard QSR billing where 5% is added at the till.
-      A ₹99 burger rings up at ₹103.95 and earns ₹99. If FRYBIRD's printed
-      prices are already GST-inclusive it rings up at ₹99 and earns ₹94.29 —
-      a difference of the tax rate on every order, moving revenue, food cost
-      percentage and margin together. One value to change:
-      `organizations.price_basis`. Both modes are covered by tests.
 - [ ] **Drink SKUs and MRPs** — *blocks the POS.* The board says only "Drinks
       Available at MRP Price Only". No SKUs, no sizes, no brands. Three combos
       contain a cola that has no product to point at; they price correctly but
@@ -113,6 +106,12 @@ Tick an item when the real value is in the repo, not when the answer is known.
       price matrix.
 - [x] GST basis made a single configurable value on the organization rather
       than a per-product column.
+- [x] **Menu prices are GST-inclusive.** Confirmed against a real counter bill.
+      The board price is the final price: a ₹99 burger takes ₹99 and books
+      ₹94.29 of revenue against ₹4.71 of GST payable. `price_basis` is
+      `inclusive`; both modes remain covered by tests, and `gst()` now requires
+      the basis rather than defaulting, so no caller can silently fall back to
+      the wrong one.
 - [x] **Direct orders only.** No Swiggy, no Zomato, no commission, no
       settlement. `orders.channel` records dine-in, takeaway or online for the
       revenue split, and `margin()` is revenue net of tax minus cost. A

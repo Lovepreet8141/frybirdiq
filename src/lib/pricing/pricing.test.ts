@@ -26,8 +26,18 @@ describe("the switch", () => {
     expect(pricingContext({ priceBasis: "exclusive" })).toEqual({ basis: "exclusive", place: "intra-state" });
   });
 
-  it("defaults a new organization to exclusive", () => {
-    expect(DEFAULT_PRICE_BASIS).toBe("exclusive");
+  it("defaults a new organization to inclusive, per FRYBIRD's counter bill", () => {
+    expect(DEFAULT_PRICE_BASIS).toBe("inclusive");
+  });
+
+  it("prices a ₹99 burger at ₹99 on the confirmed default", () => {
+    // The whole point of the confirmed basis: the board price is the final
+    // price. If this ever fails, the till and the menu board disagree.
+    const line = priceLine(
+      { unitPrice: fromRupees("99"), quantity: 1, rateBps: GST_5 },
+      pricingContext({ priceBasis: DEFAULT_PRICE_BASIS }),
+    );
+    expect(formatINR(line.gross)).toBe("₹99");
   });
 
   it("switches an inter-state supply to IGST without touching the basis", () => {
