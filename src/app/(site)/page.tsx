@@ -93,10 +93,10 @@ export default async function HomePage() {
             Start here
           </h2>
           <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {signatures.map((product) => (
+            {signatures.map((product, index) => (
               <li key={product.slug} className="flex">
                 <div className="flex w-full">
-                  <ProductCard product={product} />
+                  <ProductCard product={product} priority={index < 4} />
                 </div>
               </li>
             ))}

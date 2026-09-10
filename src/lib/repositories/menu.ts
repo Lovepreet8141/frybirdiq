@@ -69,6 +69,8 @@ export interface MenuProduct {
   readonly categoryName: string;
   readonly taxRateBps: number;
   readonly hsnCode: string | null;
+  /** The first photograph, or null. Products without one render typographically. */
+  readonly image: { readonly url: string; readonly alt: string } | null;
   readonly modifierGroups: readonly MenuModifierGroup[];
 }
 
@@ -137,6 +139,10 @@ function buildFromTranscription(): MenuCategory[] {
       categoryName: category.name,
       taxRateBps: DEFAULT_RATE_BPS,
       hsnCode: DEFAULT_HSN,
+      // This branch runs only when the database is unreachable. Photos live in
+      // the database, so there are none here — the card is built to look
+      // finished without one, which is exactly what this fallback needs.
+      image: null,
       modifierGroups: [],
     })),
   }));
@@ -155,6 +161,7 @@ function buildFromTranscription(): MenuCategory[] {
       categoryName: "Chicken",
       taxRateBps: DEFAULT_RATE_BPS,
       hsnCode: DEFAULT_HSN,
+      image: null,
       modifierGroups: chickenGroups(cut),
     })),
   };
@@ -173,6 +180,7 @@ function buildFromTranscription(): MenuCategory[] {
       categoryName: "Combos & Party Boxes",
       taxRateBps: DEFAULT_RATE_BPS,
       hsnCode: DEFAULT_HSN,
+      image: null,
       modifierGroups: [],
     })),
   };
@@ -191,6 +199,7 @@ function buildFromTranscription(): MenuCategory[] {
       categoryName: "Sauces",
       taxRateBps: DEFAULT_RATE_BPS,
       hsnCode: DEFAULT_HSN,
+      image: null,
       modifierGroups: [],
     })),
   };
@@ -221,6 +230,7 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
   const rows = await database
     .select({
       productSlug: products.slug,
+      images: products.images,
       productName: products.name,
       description: products.description,
       price: products.basePrice,
@@ -302,6 +312,9 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
        * stamps a classification code onto a line that was never taxed.
        */
       hsnCode: row.taxRateId === null ? DEFAULT_HSN : row.hsnCode,
+      // Only the first. A card shows one photo, and carrying the rest into
+      // every menu render is bytes nothing on screen will use.
+      image: row.images?.[0] ? { url: row.images[0].url, alt: row.images[0].alt } : null,
       modifierGroups: [...(groupsByProduct.get(row.productSlug)?.values() ?? [])],
     };
 

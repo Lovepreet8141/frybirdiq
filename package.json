@@ -31,7 +31,8 @@
     "promo:set": "tsx scripts/promo.ts",
     "promo:list": "tsx scripts/promo.ts",
     "iq:categories": "tsx --conditions=react-server scripts/iq-seed-categories.ts",
-    "iq:pnl": "tsx --conditions=react-server scripts/iq-pnl-check.ts"
+    "iq:pnl": "tsx --conditions=react-server scripts/iq-pnl-check.ts",
+    "images:import": "tsx --conditions=react-server scripts/import-product-images.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

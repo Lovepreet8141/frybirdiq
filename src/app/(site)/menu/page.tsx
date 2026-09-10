@@ -146,7 +146,7 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
         />
       ) : (
         <div className="mt-10 flex flex-col gap-12">
-          {filtered.map((category) => (
+          {filtered.map((category, categoryIndex) => (
             <section key={category.slug} id={category.slug} aria-labelledby={`${category.slug}-heading`}>
               <h2
                 id={`${category.slug}-heading`}
@@ -155,10 +155,16 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
                 {category.name}
               </h2>
               <ul className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {category.products.map((product) => (
+                {category.products.map((product, index) => (
                   <li key={product.slug} className="flex">
                     <div className="flex w-full">
-                      <ProductCard product={product} />
+                      {/* Only the first row of the first category is above the
+                          fold. Marking more than that as priority defeats the
+                          point — everything urgent means nothing is. */}
+                      <ProductCard
+                        product={product}
+                        priority={categoryIndex === 0 && index < 3}
+                      />
                     </div>
                   </li>
                 ))}
