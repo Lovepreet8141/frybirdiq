@@ -8,7 +8,13 @@ import {
   isTerminal,
   nextStatuses,
 } from "./order-status";
-import { ORDER_SOURCES, isAggregator, isDirect } from "./order-source";
+import {
+  InvalidChannelFulfilment,
+  ORDER_CHANNELS,
+  assertChannelFulfilment,
+  fulfilmentsFor,
+  isFulfilmentValid,
+} from "./order-channel";
 import { ROLES, authorize, can, permissionsFor } from "./permissions";
 
 describe("order lifecycle", () => {
@@ -90,21 +96,61 @@ describe("order lifecycle", () => {
   });
 });
 
-describe("order sources", () => {
-  it("keeps Swiggy and Zomato apart", () => {
-    expect(isAggregator("SWIGGY")).toBe(true);
-    expect(isAggregator("ZOMATO")).toBe(true);
-    expect(isAggregator("WEBSITE")).toBe(false);
+describe("order channels", () => {
+  it("offers exactly three, all direct", () => {
+    // No aggregators in this build. Widening this enum is not how one comes
+    // back — see the note in order-channel.ts.
+    expect(ORDER_CHANNELS).toEqual(["DINE_IN", "TAKEAWAY", "ONLINE"]);
   });
 
-  it("counts website, counter, phone and kiosk as direct", () => {
-    expect(ORDER_SOURCES.filter(isDirect)).toEqual(["WEBSITE", "POS", "PHONE", "KIOSK"]);
+  it("pins fulfilment for the two channels that determine it", () => {
+    expect(fulfilmentsFor("DINE_IN")).toEqual(["DINE_IN"]);
+    expect(fulfilmentsFor("TAKEAWAY")).toEqual(["TAKEAWAY"]);
   });
 
-  it("does not count an import as a direct order", () => {
-    // Imported history is someone else's order that we are recording, and
-    // counting it as direct would inflate the metric that matters most.
-    expect(isDirect("IMPORT")).toBe(false);
+  it("lets an online order be collected or delivered", () => {
+    expect(fulfilmentsFor("ONLINE")).toEqual(["TAKEAWAY", "DELIVERY"]);
+  });
+
+  it("refuses to deliver a dine-in or counter order", () => {
+    expect(isFulfilmentValid("DINE_IN", "DELIVERY")).toBe(false);
+    expect(isFulfilmentValid("TAKEAWAY", "DELIVERY")).toBe(false);
+    expect(isFulfilmentValid("ONLINE", "DELIVERY")).toBe(true);
+  });
+
+  it("refuses to seat a takeaway order", () => {
+    expect(isFulfilmentValid("TAKEAWAY", "DINE_IN")).toBe(false);
+    expect(isFulfilmentValid("ONLINE", "DINE_IN")).toBe(false);
+  });
+
+  it("throws with both values named, so the log says what was attempted", () => {
+    expect(() => assertChannelFulfilment("DINE_IN", "DELIVERY")).toThrow(InvalidChannelFulfilment);
+    expect(() => assertChannelFulfilment("DINE_IN", "DELIVERY")).toThrow(
+      /a DINE_IN order cannot be fulfilled as DELIVERY/,
+    );
+  });
+
+  it("passes silently on a coherent pair", () => {
+    expect(() => assertChannelFulfilment("ONLINE", "DELIVERY")).not.toThrow();
+    expect(() => assertChannelFulfilment("DINE_IN", "DINE_IN")).not.toThrow();
+  });
+
+  it("allows at least one fulfilment for every channel", () => {
+    for (const channel of ORDER_CHANNELS) {
+      expect(fulfilmentsFor(channel).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("only reaches OUT_FOR_DELIVERY on a channel that can deliver", () => {
+    // Ties the channel rule to the lifecycle: the one channel whose orders can
+    // enter OUT_FOR_DELIVERY is the one whose fulfilment list contains it.
+    for (const channel of ORDER_CHANNELS) {
+      const deliverable = fulfilmentsFor(channel).includes("DELIVERY");
+      const reachesDelivery = fulfilmentsFor(channel).some((fulfilment) =>
+        nextStatuses("READY", fulfilment).includes("OUT_FOR_DELIVERY"),
+      );
+      expect(reachesDelivery).toBe(deliverable);
+    }
   });
 });
 

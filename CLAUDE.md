@@ -31,9 +31,20 @@ Hiding a button is not authorization (§41).
 **Every mutation that matters is idempotent.** A retried request must not
 create a second order or a second charge. §17.
 
-**Channel is a first-class dimension.** Dine-in, takeaway, Swiggy and Zomato
-have different prices, different commissions and different true margins on the
-same product. A calculation that ignores `orders.source` is wrong.
+**Direct orders only.** Dine-in, takeaway, and FRYBIRD's own website. There are
+no aggregators in this build — no Swiggy, no Zomato, no commission, no
+settlement reconciliation. This is a deliberate departure from BUILD-PLAN.md
+§43 and §75, which assume a delivery partner exists. Do not add one back by
+widening `orders.channel`; an aggregator needs a commission model and a revisit
+of every revenue figure.
+
+**Channel and fulfilment are different questions.** `orders.channel` is where
+the order came from and drives the revenue split. `orders.fulfilment` is how it
+is handed over and gates the lifecycle — only a DELIVERY order reaches
+OUT_FOR_DELIVERY. Dine-in and takeaway determine their fulfilment; only an
+online order is free to be collected or delivered. The pair is enforced in
+`src/domain/order-channel.ts` and again by a check constraint, and the two must
+stay in step.
 
 **GST is not optional.** Every sale computes CGST/SGST per line at that line's
 rate, carries an HSN/SAC code, and prints the org's GSTIN. `src/lib/tax/gst`

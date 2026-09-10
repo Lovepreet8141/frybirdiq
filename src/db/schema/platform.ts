@@ -161,7 +161,7 @@ export const integrations = pgTable(
     orgId: uuid("org_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
-    /** "razorpay", "swiggy", "zomato", "whatsapp". */
+    /** "razorpay", "whatsapp". */
     provider: text("provider").notNull(),
     /** Never a secret. Credentials belong in the secret store, not a table. */
     config: jsonb("config").$type<Record<string, unknown>>(),

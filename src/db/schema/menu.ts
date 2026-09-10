@@ -116,11 +116,13 @@ export const productAvailability = pgTable(
 );
 
 /**
- * Price per order source.
+ * Price per order channel.
  *
- * An aggregator listing is marked up to absorb commission, so the same burger
- * genuinely has a different price on Zomato than at the counter. Without this
- * table, per-channel margin is unanswerable.
+ * Empty for now: FRYBIRD charges one price across dine-in, counter and the
+ * website, so a product's `basePrice` applies everywhere. The table stays
+ * because online orders may later need their own price to absorb delivery
+ * packaging, and because reporting already groups by channel — but nothing
+ * seeds it, and an absent row means "use the base price".
  */
 export const productChannelPrices = pgTable(
   "product_channel_prices",
@@ -132,13 +134,13 @@ export const productChannelPrices = pgTable(
     productId: uuid("product_id")
       .notNull()
       .references(() => products.id, { onDelete: "cascade" }),
-    /** An `OrderSource` value. */
-    source: text("source").notNull(),
+    /** An `OrderChannel` value. */
+    channel: text("channel").notNull(),
     price: money("price").notNull(),
     ...timestamps,
   },
   (table) => [
-    unique("product_channel_prices_unique").on(table.productId, table.source),
+    unique("product_channel_prices_unique").on(table.productId, table.channel),
     index("product_channel_prices_product_idx").on(table.productId),
   ],
 );

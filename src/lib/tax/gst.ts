@@ -62,8 +62,9 @@ export function splitTax(
  * With `exclusive` basis the amount is the taxable value and tax is added on
  * top — how a QSR bill is normally built. With `inclusive` basis the amount is
  * what the customer pays and the tax is extracted from within it, which is how
- * an aggregator's listed price usually works. The two are not interchangeable:
- * 5% added to ₹100 is ₹105, but ₹100 inclusive of 5% is ₹95.24 + ₹4.76.
+ * a menu board reads when the printed price is the final price. The two are
+ * not interchangeable: 5% added to ₹100 is ₹105, but ₹100 inclusive of 5% is
+ * ₹95.24 + ₹4.76.
  */
 export function gst(
   amount: Paise,

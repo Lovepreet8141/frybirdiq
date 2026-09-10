@@ -114,7 +114,7 @@ describe("percentages", () => {
   it("applies a rate", () => {
     // GST at 5% on a ₹249 order.
     expect(percentOf(fromRupees("249"), bps(5))).toBe(1_245n);
-    // Zomato commission at 22.5%.
+    // A rate with a fractional percentage, to prove basis points hold it.
     expect(percentOf(fromRupees("400"), bps(22.5))).toBe(9_000n);
   });
 

@@ -1,15 +1,16 @@
 /** Orders, items, events, payments, refunds. BUILD-PLAN.md §16, §17, §43, §51. */
 
-import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { check, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { FULFILMENT_TYPES, ORDER_STATUSES } from "@/domain/order-status";
-import { ORDER_SOURCES } from "@/domain/order-source";
+import { ORDER_CHANNELS } from "@/domain/order-channel";
 import { customers } from "./customers";
 import { modifiers, products } from "./menu";
 import { locations, organizations } from "./tenancy";
 import { ZERO_MONEY, money, primaryId, timestamps } from "./_shared";
 
 export const orderStatusEnum = pgEnum("order_status", ORDER_STATUSES);
-export const orderSourceEnum = pgEnum("order_source", ORDER_SOURCES);
+export const orderChannelEnum = pgEnum("order_channel", ORDER_CHANNELS);
 export const fulfilmentTypeEnum = pgEnum("fulfilment_type", FULFILMENT_TYPES);
 export const paymentStatusEnum = pgEnum("payment_status", [
   "PENDING",
@@ -27,7 +28,6 @@ export const paymentMethodEnum = pgEnum("payment_method", [
   "CARD",
   "NETBANKING",
   "WALLET",
-  "AGGREGATOR",
   "OTHER",
 ]);
 
@@ -46,7 +46,15 @@ export const orders = pgTable(
     orderNumber: text("order_number").notNull(),
 
     status: orderStatusEnum("status").notNull().default("DRAFT"),
-    source: orderSourceEnum("source").notNull(),
+    /**
+     * Where the order came from. Drives the revenue split.
+     *
+     * Direct only — dine-in, counter, and FRYBIRD's own website. Distinct from
+     * `fulfilment`, which is how the order is handed over: an online order may
+     * be collected or delivered, and only `fulfilment` tells the kitchen
+     * which. The two are constrained against each other below.
+     */
+    channel: orderChannelEnum("channel").notNull(),
     fulfilment: fulfilmentTypeEnum("fulfilment").notNull(),
 
     customerId: uuid("customer_id").references(() => customers.id, { onDelete: "set null" }),
@@ -71,16 +79,8 @@ export const orders = pgTable(
     tipAmount: money("tip_amount").notNull().default(ZERO_MONEY),
     grandTotal: money("grand_total").notNull().default(ZERO_MONEY),
 
-    /* What the aggregator keeps. Recorded on the order because the difference
-       between gross and net payout is the margin story for this business. */
-    commissionAmount: money("commission_amount").notNull().default(ZERO_MONEY),
-    /** What actually lands in the bank for this order. */
-    netPayout: money("net_payout"),
-
     promotionCode: text("promotion_code"),
     notes: text("notes"),
-    /** The aggregator's own id, so an imported order can be reconciled. */
-    externalRef: text("external_ref"),
 
     placedAt: timestamp("placed_at", { withTimezone: true }),
     acceptedAt: timestamp("accepted_at", { withTimezone: true }),
@@ -92,11 +92,23 @@ export const orders = pgTable(
   },
   (table) => [
     unique("orders_org_number_unique").on(table.orgId, table.orderNumber),
-    unique("orders_source_external_ref_unique").on(table.source, table.externalRef),
     index("orders_org_status_idx").on(table.orgId, table.status),
     index("orders_location_placed_idx").on(table.locationId, table.placedAt),
-    index("orders_source_idx").on(table.orgId, table.source),
+    // Revenue split by channel is the reporting question this column exists
+    // to answer, so it is indexed with the date it will be grouped by.
+    index("orders_channel_placed_idx").on(table.orgId, table.channel, table.placedAt),
     index("orders_customer_idx").on(table.customerId),
+    // Mirrors assertChannelFulfilment in src/domain/order-channel.ts. A
+    // service that forgets to call it still cannot write an incoherent pair —
+    // a dine-in order that is out for delivery is not a state to recover from.
+    check(
+      "orders_channel_fulfilment_coherent",
+      sql`(
+        (${table.channel} = 'DINE_IN' AND ${table.fulfilment} = 'DINE_IN')
+        OR (${table.channel} = 'TAKEAWAY' AND ${table.fulfilment} = 'TAKEAWAY')
+        OR (${table.channel} = 'ONLINE' AND ${table.fulfilment} IN ('TAKEAWAY', 'DELIVERY'))
+      )`,
+    ),
   ],
 );
 
@@ -202,10 +214,10 @@ export const payments = pgTable(
     status: paymentStatusEnum("status").notNull().default("PENDING"),
     method: paymentMethodEnum("method").notNull(),
     amount: money("amount").notNull(),
-    /** Kept separate from the amount so a settlement report reconciles. */
+    /** The payment gateway's cut. Kept separate so a payout reconciles. */
     feeAmount: money("fee_amount").notNull().default(ZERO_MONEY),
 
-    /** "razorpay", "cash", "swiggy". Never a provider-specific column. §3. */
+    /** "razorpay", "cash". Never a provider-specific column. §3. */
     provider: text("provider").notNull(),
     providerPaymentId: text("provider_payment_id"),
     providerOrderId: text("provider_order_id"),

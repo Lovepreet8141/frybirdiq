@@ -1,5 +1,5 @@
 {
-  "id": "45e780b4-e909-4f55-96f7-61fd1fb48a75",
+  "id": "eb3f8314-bb5a-4f41-9726-a5dbf2afaf10",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -420,6 +420,14 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'INR'"
+        },
+        "price_basis": {
+          "name": "price_basis",
+          "type": "price_basis",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'exclusive'"
         },
         "timezone": {
           "name": "timezone",
@@ -1027,8 +1035,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "source": {
-          "name": "source",
+        "channel": {
+          "name": "channel",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -1106,7 +1114,7 @@
           "nullsNotDistinct": false,
           "columns": [
             "product_id",
-            "source"
+            "channel"
           ]
         }
       },
@@ -1253,14 +1261,6 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
-        },
-        "price_basis": {
-          "name": "price_basis",
-          "type": "price_basis",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'exclusive'"
         },
         "spice_level": {
           "name": "spice_level",
@@ -2603,9 +2603,9 @@
           "notNull": true,
           "default": "'DRAFT'"
         },
-        "source": {
-          "name": "source",
-          "type": "order_source",
+        "channel": {
+          "name": "channel",
+          "type": "order_channel",
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
@@ -2724,19 +2724,6 @@
           "notNull": true,
           "default": "0"
         },
-        "commission_amount": {
-          "name": "commission_amount",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "0"
-        },
-        "net_payout": {
-          "name": "net_payout",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
         "promotion_code": {
           "name": "promotion_code",
           "type": "text",
@@ -2745,12 +2732,6 @@
         },
         "notes": {
           "name": "notes",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "external_ref": {
-          "name": "external_ref",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -2843,8 +2824,8 @@
           "method": "btree",
           "with": {}
         },
-        "orders_source_idx": {
-          "name": "orders_source_idx",
+        "orders_channel_placed_idx": {
+          "name": "orders_channel_placed_idx",
           "columns": [
             {
               "expression": "org_id",
@@ -2853,7 +2834,13 @@
               "nulls": "last"
             },
             {
-              "expression": "source",
+              "expression": "channel",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "placed_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2930,18 +2917,15 @@
             "org_id",
             "order_number"
           ]
-        },
-        "orders_source_external_ref_unique": {
-          "name": "orders_source_external_ref_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "source",
-            "external_ref"
-          ]
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "orders_channel_fulfilment_coherent": {
+          "name": "orders_channel_fulfilment_coherent",
+          "value": "(\n        (\"orders\".\"channel\" = 'DINE_IN' AND \"orders\".\"fulfilment\" = 'DINE_IN')\n        OR (\"orders\".\"channel\" = 'TAKEAWAY' AND \"orders\".\"fulfilment\" = 'TAKEAWAY')\n        OR (\"orders\".\"channel\" = 'ONLINE' AND \"orders\".\"fulfilment\" IN ('TAKEAWAY', 'DELIVERY'))\n      )"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.payments": {
@@ -5413,6 +5397,14 @@
     }
   },
   "enums": {
+    "public.price_basis": {
+      "name": "price_basis",
+      "schema": "public",
+      "values": [
+        "exclusive",
+        "inclusive"
+      ]
+    },
     "public.role": {
       "name": "role",
       "schema": "public",
@@ -5426,14 +5418,6 @@
         "ANALYST"
       ]
     },
-    "public.price_basis": {
-      "name": "price_basis",
-      "schema": "public",
-      "values": [
-        "exclusive",
-        "inclusive"
-      ]
-    },
     "public.fulfilment_type": {
       "name": "fulfilment_type",
       "schema": "public",
@@ -5443,17 +5427,13 @@
         "DELIVERY"
       ]
     },
-    "public.order_source": {
-      "name": "order_source",
+    "public.order_channel": {
+      "name": "order_channel",
       "schema": "public",
       "values": [
-        "WEBSITE",
-        "POS",
-        "PHONE",
-        "KIOSK",
-        "SWIGGY",
-        "ZOMATO",
-        "IMPORT"
+        "DINE_IN",
+        "TAKEAWAY",
+        "ONLINE"
       ]
     },
     "public.order_status": {
@@ -5482,7 +5462,6 @@
         "CARD",
         "NETBANKING",
         "WALLET",
-        "AGGREGATOR",
         "OTHER"
       ]
     },

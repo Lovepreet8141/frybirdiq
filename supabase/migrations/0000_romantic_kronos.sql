@@ -1,9 +1,9 @@
-CREATE TYPE "public"."role" AS ENUM('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'KITCHEN', 'INVENTORY', 'ANALYST');--> statement-breakpoint
 CREATE TYPE "public"."price_basis" AS ENUM('exclusive', 'inclusive');--> statement-breakpoint
+CREATE TYPE "public"."role" AS ENUM('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'KITCHEN', 'INVENTORY', 'ANALYST');--> statement-breakpoint
 CREATE TYPE "public"."fulfilment_type" AS ENUM('DINE_IN', 'TAKEAWAY', 'DELIVERY');--> statement-breakpoint
-CREATE TYPE "public"."order_source" AS ENUM('WEBSITE', 'POS', 'PHONE', 'KIOSK', 'SWIGGY', 'ZOMATO', 'IMPORT');--> statement-breakpoint
+CREATE TYPE "public"."order_channel" AS ENUM('DINE_IN', 'TAKEAWAY', 'ONLINE');--> statement-breakpoint
 CREATE TYPE "public"."order_status" AS ENUM('DRAFT', 'PENDING_PAYMENT', 'PAID', 'ACCEPTED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY', 'COMPLETED', 'CANCELLED', 'FAILED', 'REFUNDED');--> statement-breakpoint
-CREATE TYPE "public"."payment_method" AS ENUM('UPI', 'CASH', 'CARD', 'NETBANKING', 'WALLET', 'AGGREGATOR', 'OTHER');--> statement-breakpoint
+CREATE TYPE "public"."payment_method" AS ENUM('UPI', 'CASH', 'CARD', 'NETBANKING', 'WALLET', 'OTHER');--> statement-breakpoint
 CREATE TYPE "public"."payment_status" AS ENUM('PENDING', 'AUTHORIZED', 'CAPTURED', 'FAILED', 'REFUNDED', 'PARTIALLY_REFUNDED');--> statement-breakpoint
 CREATE TYPE "public"."movement_type" AS ENUM('PURCHASE', 'SALE', 'WASTE', 'ADJUSTMENT', 'TRANSFER', 'RETURN');--> statement-breakpoint
 CREATE TYPE "public"."unit" AS ENUM('G', 'KG', 'ML', 'L', 'PIECE', 'PACK');--> statement-breakpoint
@@ -59,6 +59,7 @@ CREATE TABLE "organizations" (
 	"gstin" text,
 	"legal_name" text,
 	"currency" text DEFAULT 'INR' NOT NULL,
+	"price_basis" "price_basis" DEFAULT 'exclusive' NOT NULL,
 	"timezone" text DEFAULT 'Asia/Kolkata' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -128,11 +129,11 @@ CREATE TABLE "product_channel_prices" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"org_id" uuid NOT NULL,
 	"product_id" uuid NOT NULL,
-	"source" text NOT NULL,
+	"channel" text NOT NULL,
 	"price" bigint NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "product_channel_prices_unique" UNIQUE("product_id","source")
+	CONSTRAINT "product_channel_prices_unique" UNIQUE("product_id","channel")
 );
 --> statement-breakpoint
 CREATE TABLE "product_modifier_groups" (
@@ -154,7 +155,6 @@ CREATE TABLE "products" (
 	"name_hi" text,
 	"base_price" bigint NOT NULL,
 	"tax_rate_id" uuid,
-	"price_basis" "price_basis" DEFAULT 'exclusive' NOT NULL,
 	"spice_level" integer DEFAULT 0 NOT NULL,
 	"is_vegetarian" boolean DEFAULT false NOT NULL,
 	"allergens" jsonb DEFAULT '[]'::jsonb NOT NULL,
@@ -304,7 +304,7 @@ CREATE TABLE "orders" (
 	"location_id" uuid NOT NULL,
 	"order_number" text NOT NULL,
 	"status" "order_status" DEFAULT 'DRAFT' NOT NULL,
-	"source" "order_source" NOT NULL,
+	"channel" "order_channel" NOT NULL,
 	"fulfilment" "fulfilment_type" NOT NULL,
 	"customer_id" uuid,
 	"customer_name" text,
@@ -322,11 +322,8 @@ CREATE TABLE "orders" (
 	"packaging_fee" bigint DEFAULT 0 NOT NULL,
 	"tip_amount" bigint DEFAULT 0 NOT NULL,
 	"grand_total" bigint DEFAULT 0 NOT NULL,
-	"commission_amount" bigint DEFAULT 0 NOT NULL,
-	"net_payout" bigint,
 	"promotion_code" text,
 	"notes" text,
-	"external_ref" text,
 	"placed_at" timestamp with time zone,
 	"accepted_at" timestamp with time zone,
 	"ready_at" timestamp with time zone,
@@ -335,7 +332,11 @@ CREATE TABLE "orders" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "orders_org_number_unique" UNIQUE("org_id","order_number"),
-	CONSTRAINT "orders_source_external_ref_unique" UNIQUE("source","external_ref")
+	CONSTRAINT "orders_channel_fulfilment_coherent" CHECK ((
+        ("orders"."channel" = 'DINE_IN' AND "orders"."fulfilment" = 'DINE_IN')
+        OR ("orders"."channel" = 'TAKEAWAY' AND "orders"."fulfilment" = 'TAKEAWAY')
+        OR ("orders"."channel" = 'ONLINE' AND "orders"."fulfilment" IN ('TAKEAWAY', 'DELIVERY'))
+      ))
 );
 --> statement-breakpoint
 CREATE TABLE "payments" (
@@ -704,7 +705,7 @@ CREATE INDEX "order_items_order_idx" ON "order_items" USING btree ("order_id");-
 CREATE INDEX "order_items_product_idx" ON "order_items" USING btree ("product_id");--> statement-breakpoint
 CREATE INDEX "orders_org_status_idx" ON "orders" USING btree ("org_id","status");--> statement-breakpoint
 CREATE INDEX "orders_location_placed_idx" ON "orders" USING btree ("location_id","placed_at");--> statement-breakpoint
-CREATE INDEX "orders_source_idx" ON "orders" USING btree ("org_id","source");--> statement-breakpoint
+CREATE INDEX "orders_channel_placed_idx" ON "orders" USING btree ("org_id","channel","placed_at");--> statement-breakpoint
 CREATE INDEX "orders_customer_idx" ON "orders" USING btree ("customer_id");--> statement-breakpoint
 CREATE INDEX "payments_order_idx" ON "payments" USING btree ("order_id");--> statement-breakpoint
 CREATE INDEX "refunds_order_idx" ON "refunds" USING btree ("order_id");--> statement-breakpoint

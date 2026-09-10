@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ZERO, add, bps, formatBps, formatINR, fromRupees } from "@/lib/money";
+import { ZERO, add, bps, formatBps, formatINR, fromRupees, subtract } from "@/lib/money";
 import {
   DEFAULT_PRICE_BASIS,
   type PricingContext,
@@ -191,27 +191,21 @@ describe("margin follows the switch", () => {
     expect(formatBps(inclusive.foodCostBps)).toBe("35.5%");
   });
 
-  it("subtracts aggregator commission from contribution", () => {
+  it("is revenue net of tax minus cost, and nothing else", () => {
+    // No commission term. FRYBIRD sells direct, so contribution is exactly the
+    // gap between what it earns and what the food costs.
     const direct = productMargin({ listedPrice: fromRupees("99"), rateBps: GST_5, cost }, EXCLUSIVE);
-    const zomato = productMargin(
-      { listedPrice: fromRupees("99"), rateBps: GST_5, cost, commissionBps: bps(22.5) },
-      EXCLUSIVE,
-    );
-
-    expect(zomato.commission).toBeGreaterThan(ZERO);
-    expect(zomato.contribution).toBeLessThan(direct.contribution);
-    expect(zomato.netRevenue).toBe(direct.netRevenue);
+    expect(direct.contribution).toBe(subtract(direct.netRevenue, direct.cost));
+    expect(direct.contribution).toBe(fromRupees("65.50"));
   });
 
-  it("charges commission on the gross, not the taxable value", () => {
-    // Aggregators bill on what the customer paid, tax included. Taking it on
-    // the net understates the commission on every aggregator order.
-    const line = productMargin(
-      { listedPrice: fromRupees("100"), rateBps: GST_5, cost, commissionBps: bps(20) },
-      EXCLUSIVE,
-    );
-    expect(line.priced.gross).toBe(fromRupees("105"));
-    expect(line.commission).toBe(fromRupees("21"));
+  it("scales cost with quantity", () => {
+    const three = productMargin({ listedPrice: fromRupees("99"), rateBps: GST_5, cost, quantity: 3 }, EXCLUSIVE);
+    expect(three.cost).toBe(fromRupees("100.50"));
+    expect(three.netRevenue).toBe(fromRupees("297"));
+    // Margin per unit is unchanged by ordering three of them.
+    const one = productMargin({ listedPrice: fromRupees("99"), rateBps: GST_5, cost }, EXCLUSIVE);
+    expect(three.marginBps).toBe(one.marginBps);
   });
 
   it("reports a negative contribution rather than hiding it", () => {

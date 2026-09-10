@@ -56,8 +56,8 @@ describe("gst on an inclusive price", () => {
   });
 
   it("never leaves the customer paying a different number than the listed price", () => {
-    // Any listed price must survive the round trip exactly, or the aggregator
-    // menu and the receipt disagree.
+    // Any listed price must survive the round trip exactly, or the menu board
+    // and the receipt disagree.
     for (const listed of ["99", "149", "199.99", "249.50", "1", "0.01"]) {
       const line = gst(fromRupees(listed), bps(5), { basis: "inclusive" });
       expect(line.gross).toBe(fromRupees(listed));

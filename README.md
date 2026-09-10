@@ -48,7 +48,7 @@ that has already taken orders unless you pass `--force`.
 ## Where things are
 
 ```
-src/domain/     order lifecycle, order sources, roles and permissions
+src/domain/     order lifecycle, channels, roles and permissions
 src/lib/money/  integer-paise arithmetic and INR formatting
 src/lib/tax/    GST — CGST/SGST split, inclusive and exclusive pricing
 src/lib/pricing/ the one path from a menu price to totals and margin
@@ -91,13 +91,9 @@ Tick an item when the real value is in the repo, not when the answer is known.
 
 ### Before Phase 9 (food cost and margin)
 
-- [ ] **Swiggy and Zomato listed prices.** Aggregator listings are marked up to
-      absorb commission; the boards are the in-store price. Per-channel margin
-      is unanswerable until these are entered.
-- [ ] **Swiggy and Zomato commission rates.** The gap between a ₹300 dine-in
-      order and a ₹300 aggregator order is the margin story for this business.
 - [ ] **Ingredient costs, recipes and yields.** The recipe PDFs in Downloads are
-      the likely source.
+      the likely source. This is the last thing standing between the menu and a
+      real margin per product.
 - [ ] **Packaging cost per item.**
 
 ### Before the menu is public
@@ -117,6 +113,12 @@ Tick an item when the real value is in the repo, not when the answer is known.
       price matrix.
 - [x] GST basis made a single configurable value on the organization rather
       than a per-product column.
+- [x] **Direct orders only.** No Swiggy, no Zomato, no commission, no
+      settlement. `orders.channel` records dine-in, takeaway or online for the
+      revenue split, and `margin()` is revenue net of tax minus cost. A
+      deliberate departure from BUILD-PLAN.md §43 and §75 — adding an
+      aggregator later means a commission model and a revisit of every revenue
+      figure, not a wider enum.
 
 ## Status
 

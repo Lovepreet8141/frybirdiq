@@ -23,19 +23,15 @@
  * GST is never revenue. It is collected on the government's behalf, so every
  * margin figure here works from `taxable` — the net-of-tax amount — and never
  * from `gross`.
+ *
+ * There is no commission model here. FRYBIRD sells direct — dine-in, counter
+ * and its own website — so margin is revenue net of tax, minus cost, and
+ * nothing else. Adding an aggregator later means adding a commission term and
+ * revisiting every revenue figure; it does not mean quietly threading an
+ * optional argument back through these functions.
  */
 
-import {
-  type Bps,
-  type Paise,
-  ZERO,
-  add,
-  allocate,
-  multiply,
-  percentOf,
-  ratioBps,
-  subtract,
-} from "@/lib/money";
+import { type Bps, type Paise, ZERO, add, allocate, multiply, ratioBps, subtract } from "@/lib/money";
 import { type GstBreakdown, type PlaceOfSupply, type PriceBasis, gst, sumGst } from "@/lib/tax/gst";
 
 export type { PriceBasis, PlaceOfSupply };
@@ -153,9 +149,7 @@ export interface Margin {
   /** Net of tax. What the business actually earns. */
   readonly netRevenue: Paise;
   readonly cost: Paise;
-  /** What an aggregator keeps. Zero on a direct order. */
-  readonly commission: Paise;
-  /** netRevenue − cost − commission. */
+  /** netRevenue − cost. */
   readonly contribution: Paise;
   /** Contribution as a share of net revenue. */
   readonly marginBps: Bps;
@@ -172,21 +166,12 @@ export interface Margin {
  * mistake overstates revenue by the tax rate and flatters every margin on the
  * dashboard.
  */
-export function margin({
-  netRevenue,
-  cost,
-  commission = ZERO,
-}: {
-  netRevenue: Paise;
-  cost: Paise;
-  commission?: Paise;
-}): Margin {
-  const contribution = subtract(subtract(netRevenue, cost), commission);
+export function margin({ netRevenue, cost }: { netRevenue: Paise; cost: Paise }): Margin {
+  const contribution = subtract(netRevenue, cost);
 
   return {
     netRevenue,
     cost,
-    commission,
     contribution,
     marginBps: ratioBps(contribution, netRevenue),
     foodCostBps: ratioBps(cost, netRevenue),
@@ -196,32 +181,28 @@ export function margin({
 /**
  * Margin on a single product at its listed price.
  *
- * `commissionBps` is charged on the gross order value, which is how Swiggy and
- * Zomato bill — the commission is taken on what the customer paid including
- * tax, while the revenue the business keeps excludes it. Getting those two
- * bases the wrong way round understates aggregator commission.
+ * Prices the line first and takes margin from its `taxable` value, so the
+ * result moves with the organization's GST basis without the caller having to
+ * think about it.
  */
 export function productMargin(
   {
     listedPrice,
     rateBps,
     cost,
-    commissionBps = 0,
     quantity = 1,
   }: {
     listedPrice: Paise;
     rateBps: Bps;
     cost: Paise;
-    commissionBps?: Bps;
     quantity?: number;
   },
   context: PricingContext,
 ): Margin & { readonly priced: PricedLine } {
   const priced = priceLine({ unitPrice: listedPrice, quantity, rateBps }, context);
-  const commission = percentOf(priced.gross, commissionBps);
 
   return {
-    ...margin({ netRevenue: priced.taxable, cost: multiply(cost, quantity), commission }),
+    ...margin({ netRevenue: priced.taxable, cost: multiply(cost, quantity) }),
     priced,
   };
 }

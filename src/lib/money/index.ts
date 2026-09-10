@@ -135,9 +135,9 @@ export function bps(percent: number): Bps {
 }
 
 /**
- * Expresses `part / whole` in basis points — food cost %, margin %, commission
- * share. Returns 0 when the whole is zero rather than throwing, because a day
- * with no sales is a real state the dashboard has to render.
+ * Expresses `part / whole` in basis points — food cost %, margin %, channel
+ * share of revenue. Returns 0 when the whole is zero rather than throwing,
+ * because a day with no sales is a real state the dashboard has to render.
  */
 export function ratioBps(part: Paise, whole: Paise): Bps {
   if (whole === 0n) return 0;

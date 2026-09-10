@@ -10,8 +10,8 @@
  * into money.
  *
  * Nothing here is estimated. Where the board does not state a figure — drink
- * prices, aggregator prices, ingredient costs — the field is absent and the
- * gap is listed at the bottom of this file rather than filled with a guess.
+ * prices, ingredient costs — the field is absent and the gap is tracked in the
+ * README rather than filled with a guess.
  */
 
 export type VegClass = "VEG" | "NON_VEG";
