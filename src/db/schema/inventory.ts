@@ -1,12 +1,14 @@
 /** Ingredients, recipes, stock, waste, purchasing. BUILD-PLAN.md §24–§28. */
 
-import { boolean, index, integer, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, integer, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { products } from "./menu";
 import { locations, organizations } from "./tenancy";
 import { ZERO_MONEY, money, primaryId, timestamps } from "./_shared";
 
 /** Base units. Everything converts to one of these before it is costed. */
 export const unitEnum = pgEnum("unit", ["G", "KG", "ML", "L", "PIECE", "PACK"]);
+
+export type Unit = (typeof unitEnum.enumValues)[number];
 
 export const movementTypeEnum = pgEnum("movement_type", [
   "PURCHASE",
@@ -66,6 +68,30 @@ export const ingredients = pgTable(
     costPerBaseUnit: money("cost_per_base_unit").notNull().default(ZERO_MONEY),
     /** Basis points. 8000 means 80% of what is bought is usable. */
     yieldBps: integer("yield_bps").notNull().default(10_000),
+
+    /**
+     * Basis points lost after prep, to spoilage and spillage. 300 means 3%.
+     *
+     * Kept separate from yield because they are different facts about the
+     * ingredient and change for different reasons: yield is what the knife
+     * takes off and is stable, waste is what the fridge takes and moves with
+     * the season. Folding them into one number means a correction to either
+     * looks like a correction to the other.
+     */
+    wasteBps: integer("waste_bps").notNull().default(0),
+
+    /**
+     * Usable cost of one base unit in millipaise — thousandths of a paisa.
+     *
+     * `costPerBaseUnit` above is the same figure rounded to paise, kept for
+     * display. Bulk ingredients genuinely cost fractions of a paisa per gram
+     * (a 50 kg sack of salt is half a paisa), and rounding that to a whole
+     * paisa either zeroes the cost or doubles it. Recipe costing reads this
+     * column; nothing but a screen reads the rounded one.
+     */
+    costPerBaseUnitMilli: bigint("cost_per_base_unit_milli", { mode: "bigint" })
+      .notNull()
+      .default(ZERO_MONEY),
 
     supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
     /** True for cups, boxes and bags — costed into a product, never eaten. */

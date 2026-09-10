@@ -42,3 +42,7 @@ next-env.d.ts
 
 # Exported contact lists are personal data.
 *.csv
+
+# The uploaded Frybird IQ repo, kept for reference while its costing engine
+# is ported into src/. Not part of this build.
+frybird-iq/
