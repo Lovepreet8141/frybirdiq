@@ -43,6 +43,13 @@
       "when": 1789064096776,
       "tag": "0005_delivery_bands",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789067218499,
+      "tag": "0006_loyalty",
+      "breakpoints": true
     }
   ]
 }

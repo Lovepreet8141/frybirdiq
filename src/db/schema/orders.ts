@@ -89,6 +89,10 @@ export const orders = pgTable(
     tipAmount: money("tip_amount").notNull().default(ZERO_MONEY),
     grandTotal: money("grand_total").notNull().default(ZERO_MONEY),
 
+    /** Points spent on this order, and what they took off. */
+    pointsRedeemed: integer("points_redeemed").notNull().default(0),
+    pointsEarned: integer("points_earned").notNull().default(0),
+
     promotionCode: text("promotion_code"),
     notes: text("notes"),
 

@@ -1,11 +1,9 @@
 import Link from "next/link";
-import { ShoppingBag } from "lucide-react";
+import { ShoppingBag, User } from "lucide-react";
 import { getPricedCart } from "@/lib/cart";
+import { getCustomer } from "@/lib/customer";
 
-const LINKS = [
-  { href: "/menu", label: "Menu" },
-  { href: "/#visit", label: "Visit" },
-];
+const LINKS = [{ href: "/menu", label: "Menu" }];
 
 /**
  * Site header.
@@ -15,7 +13,7 @@ const LINKS = [
  * client-side cart state to fall out of step.
  */
 export async function Header() {
-  const cart = await getPricedCart();
+  const [cart, customer] = await Promise.all([getPricedCart(), getCustomer()]);
 
   return (
     <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
@@ -38,6 +36,15 @@ export async function Header() {
               {link.label}
             </Link>
           ))}
+
+          <Link
+            href={customer ? "/account" : "/account/sign-in"}
+            className="flex min-h-[44px] items-center gap-2 rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors duration-[var(--duration-standard)] hover:text-foreground"
+          >
+            <User className="size-4" aria-hidden="true" />
+            <span className="hidden sm:inline">{customer ? (customer.name ?? "Account") : "Sign in"}</span>
+            <span className="sr-only sm:hidden">{customer ? "Your account" : "Sign in"}</span>
+          </Link>
 
           <Link
             href="/cart"

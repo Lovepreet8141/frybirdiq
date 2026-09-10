@@ -8,12 +8,14 @@ import "server-only";
  * only the movement of money. §32's shape, applied to payments.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLogs, orderEvents, orders, payments } from "@/db/schema";
+import { auditLogs, loyaltyAccounts, loyaltyTransactions, orderEvents, orders, payments } from "@/db/schema";
 import { assertTransition } from "@/domain/order-status";
 import { type Role, authorize } from "@/domain/permissions";
-import { type Paise, formatINR, paise } from "@/lib/money";
+import { type Paise, formatINR, paise, subtract } from "@/lib/money";
+import { pointsEarned } from "@/lib/loyalty";
+import { getLoyaltyConfig } from "@/lib/loyalty/config";
 import { CASH_PROVIDER, getProvider } from "@/lib/payments";
 import { withIdempotency } from "./idempotency";
 
@@ -149,6 +151,48 @@ export async function recordCashPayment(input: {
         .update(orders)
         .set({ status: "PAID", updatedAt: new Date() })
         .where(eq(orders.id, order.id));
+
+      /*
+       * Points are awarded when the money actually arrives, not when the order
+       * is placed.
+       *
+       * An order that is never paid for — abandoned at the counter, refused at
+       * the door — must not leave points behind. Awarding on payment means the
+       * balance only ever reflects money that came in.
+       *
+       * Earned on the food, not the delivery fee: paying 5% back on a rider's
+       * petrol is giving away money on a cost rather than rewarding a purchase.
+       */
+      if (order.customerId) {
+        const config = await getLoyaltyConfig();
+        const qualifying = subtract(paise(order.grandTotal), paise(order.deliveryFee));
+        const earned = pointsEarned(qualifying, config);
+
+        if (earned > 0) {
+          const [account] = await database
+            .insert(loyaltyAccounts)
+            .values({ orgId: order.orgId, customerId: order.customerId, pointsBalance: earned })
+            .onConflictDoUpdate({
+              target: loyaltyAccounts.customerId,
+              set: { pointsBalance: sql`${loyaltyAccounts.pointsBalance} + ${earned}`, updatedAt: new Date() },
+            })
+            .returning();
+
+          // Every movement is recorded, never a bare balance update — the same
+          // principle as inventory in §24. A disputed balance can be explained.
+          if (account) {
+            await database.insert(loyaltyTransactions).values({
+              orgId: order.orgId,
+              accountId: account.id,
+              points: earned,
+              reason: `Order #${order.orderNumber}`,
+              orderId: order.id,
+            });
+          }
+
+          await database.update(orders).set({ pointsEarned: earned }).where(eq(orders.id, order.id));
+        }
+      }
 
       await database.insert(orderEvents).values({
         orgId: order.orgId,

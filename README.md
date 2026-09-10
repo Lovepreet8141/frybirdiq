@@ -72,6 +72,8 @@ that has already taken orders unless you pass `--force`.
 | `pnpm delivery:set` | Set them (km and rupees) |
 | `pnpm delivery:quote` | What each distance costs, against live settings |
 | `pnpm customers:export` | Export the opted-in marketing list as CSV |
+| `pnpm loyalty:show` / `loyalty:set` | The points scheme |
+| `pnpm loyalty:balances` | Balances and the movements behind them |
 | `python3 scripts/check-contrast.py` | WCAG check on the brand palette |
 
 ## Where things are
@@ -105,6 +107,15 @@ plausible number.
 Tick an item when the real value is in the repo, not when the answer is known.
 
 ### Blocking
+
+- [ ] **Verify a phone number before linking an account to it.** Sign-up links
+      an unclaimed guest customer record by phone, which is how someone gets
+      their past orders. "Unclaimed" currently means "nobody has signed up with
+      it yet", not "belongs to the person typing it" — so someone who knows
+      another customer's number could sign up with it first and see that
+      person's order history and delivery addresses. An OTP on sign-up closes
+      this. It needs an SMS provider and DLT registration, the same dependency
+      as marketing SMS.
 
 - [ ] **Confirm the road factor.** The bands are FRYBIRD's own, but they are
       charged on *estimated road distance* — straight-line × 1.3 — not on what
@@ -161,6 +172,12 @@ Tick an item when the real value is in the repo, not when the answer is known.
       `inclusive`; both modes remain covered by tests, and `gst()` now requires
       the basis rather than defaulting, so no caller can silently fall back to
       the wrong one.
+- [x] **Customer accounts.** Self-serve sign-up, order history, and a points
+      balance. Guest checkout still works — §61 says not to force an account
+      before a first order.
+- [x] **Loyalty.** 5% back as points, one point is ₹1, no minimum to spend.
+      Points are awarded when payment arrives, not when an order is placed, and
+      earned on the food rather than the delivery fee.
 - [x] **Staff sign-in.** Email and password via Supabase Auth, no public
       sign-up — a counter account is not something a stranger should be able to
       mint. `/app/*` is gated in a Server Component, and every action re-checks

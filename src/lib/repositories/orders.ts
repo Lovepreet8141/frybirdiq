@@ -25,6 +25,7 @@ import { fromMicro, toPoint } from "@/lib/delivery";
 import { quoteForPin } from "./delivery";
 import { resolvePricingContext } from "./org";
 import { getPricedCart } from "@/lib/cart";
+import { getCustomer } from "@/lib/customer";
 import { createPendingPayment } from "./payments";
 import { IdempotencyConflict, withIdempotency } from "./idempotency";
 
@@ -244,7 +245,19 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
    * they just did not tick a box. Withdrawal is a deliberate act and belongs
    * on its own screen, not as a side effect of ordering dinner.
    */
-  const [customer] = await database
+  // If the customer is signed in, the order belongs to their account rather
+  // than to whatever phone number they typed. Guest checkout still works and
+  // still creates a record — §61 says not to force an account before a first
+  // order.
+  const signedIn = await getCustomer();
+
+  const [customer] = signedIn
+    ? await database
+        .update(customers)
+        .set({ name: details.name, email: details.email, updatedAt: now })
+        .where(eq(customers.id, signedIn.id))
+        .returning()
+    : await database
     .insert(customers)
     .values({
       orgId,
@@ -564,4 +577,67 @@ export async function advanceOrder(input: {
   });
 
   return { ok: true };
+}
+
+/* ------------------------------------------------------------------ */
+/* Customer                                                            */
+/* ------------------------------------------------------------------ */
+
+export interface CustomerOrderView {
+  readonly id: string;
+  readonly orderNumber: string;
+  readonly status: OrderStatus;
+  readonly fulfilment: FulfilmentType;
+  readonly grandTotal: Paise;
+  readonly pointsEarned: number;
+  readonly placedAt: Date | null;
+  readonly itemSummary: string;
+}
+
+/**
+ * One customer's orders, newest first.
+ *
+ * Scoped by both customer and org. The customer id comes from the session, but
+ * scoping by org as well means a stray id from another tenant cannot return
+ * anything — the app queries as `postgres` and bypasses row-level security, so
+ * this filter is the boundary rather than a second opinion on one.
+ */
+export async function listCustomerOrders(input: {
+  customerId: string;
+  orgId: string;
+  limit?: number;
+}): Promise<readonly CustomerOrderView[]> {
+  const database = db();
+
+  const rows = await database
+    .select()
+    .from(orders)
+    .where(and(eq(orders.customerId, input.customerId), eq(orders.orgId, input.orgId)))
+    .orderBy(desc(orders.createdAt))
+    .limit(input.limit ?? 50);
+
+  if (rows.length === 0) return [];
+
+  const items = await database
+    .select()
+    .from(orderItems)
+    .where(inArray(orderItems.orderId, rows.map((row) => row.id)));
+
+  return rows.map((row) => {
+    const mine = items.filter((item) => item.orderId === row.id);
+    const names = mine.map((item) => `${item.quantity}× ${item.productName}`);
+
+    return {
+      id: row.id,
+      orderNumber: row.orderNumber,
+      status: row.status,
+      fulfilment: row.fulfilment,
+      grandTotal: paise(row.grandTotal),
+      pointsEarned: row.pointsEarned,
+      placedAt: row.placedAt,
+      // Two items then a count, so a long order does not wrap a card.
+      itemSummary:
+        names.length <= 2 ? names.join(", ") : `${names.slice(0, 2).join(", ")} +${names.length - 2} more`,
+    };
+  });
 }

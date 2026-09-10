@@ -30,6 +30,17 @@ export const organizations = pgTable("organizations", {
    * is the final price.
    */
   priceBasis: priceBasisEnum("price_basis").notNull().default("inclusive"),
+
+  /*
+   * Loyalty. Zero earn rate means the scheme is off, which is the state a
+   * shop that has not decided its economics should ship in.
+   */
+  /** Share of qualifying spend returned as points. 500 bps is 5%. */
+  loyaltyEarnBps: integer("loyalty_earn_bps").notNull().default(0),
+  /** What one point is worth when spent. 100 paise is ₹1. */
+  loyaltyPointValue: money("loyalty_point_value").notNull().default(ZERO_MONEY),
+  /** Points needed before any can be spent. Zero means no minimum. */
+  loyaltyMinRedeemPoints: integer("loyalty_min_redeem_points").notNull().default(0),
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
   ...timestamps,
 });
