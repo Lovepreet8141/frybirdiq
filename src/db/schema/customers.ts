@@ -49,6 +49,16 @@ export const addresses = pgTable(
     city: text("city").notNull(),
     state: text("state"),
     pincode: text("pincode"),
+    /**
+     * The pin the customer dropped, in microdegrees.
+     *
+     * More useful to a rider than the address text. Street addresses in Ambala
+     * are informal — "near the water tank, behind Sharma Sweets" — and
+     * geocoding them is unreliable, so the pin is what navigates and the text
+     * is what gets read out on the phone.
+     */
+    latMicro: integer("lat_micro"),
+    lngMicro: integer("lng_micro"),
     isDefault: boolean("is_default").notNull().default(false),
     ...timestamps,
   },

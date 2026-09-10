@@ -2,7 +2,7 @@
 
 import { boolean, index, integer, pgEnum, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
 import { ROLES } from "@/domain/permissions";
-import { primaryId, priceBasisEnum, timestamps } from "./_shared";
+import { ZERO_MONEY, money, primaryId, priceBasisEnum, timestamps } from "./_shared";
 
 export const roleEnum = pgEnum("role", ROLES);
 
@@ -52,6 +52,39 @@ export const locations = pgTable(
     stateCode: text("state_code"),
     pincode: text("pincode"),
     phone: text("phone"),
+
+    /**
+     * Where the outlet is, in microdegrees (degrees × 1e-6).
+     *
+     * Integers, not floats: these are compared and stored, and an integer
+     * removes the "is this the same point?" question entirely. Trigonometry
+     * happens on decimal degrees inside src/lib/delivery.
+     *
+     * Null means the shop has not been placed on the map, and delivery cannot
+     * be priced.
+     */
+    latMicro: integer("lat_micro"),
+    lngMicro: integer("lng_micro"),
+
+    /*
+     * Delivery pricing. Every number is configured, none assumed.
+     *
+     * `deliveryMaxMetres` at 0 means this outlet does not deliver — which is
+     * the correct state for a shop that has not decided what it charges, and
+     * the state it ships in.
+     */
+    deliveryBaseFee: money("delivery_base_fee").notNull().default(ZERO_MONEY),
+    /** Distance the base fee already covers. */
+    deliveryIncludedMetres: integer("delivery_included_metres").notNull().default(0),
+    /** Charged per started kilometre beyond the included distance. */
+    deliveryPerKmFee: money("delivery_per_km_fee").notNull().default(ZERO_MONEY),
+    /** Beyond this, no delivery. Zero disables it. */
+    deliveryMaxMetres: integer("delivery_max_metres").notNull().default(0),
+    /** Order value at or above which delivery is free. Null means never. */
+    deliveryFreeAbove: money("delivery_free_above"),
+    /** Straight-line × this ≈ road distance. 13000 bps is 1.3×. */
+    deliveryRoadFactorBps: integer("delivery_road_factor_bps").notNull().default(13_000),
+
     isActive: boolean("is_active").notNull().default(true),
     ...timestamps,
   },

@@ -17,7 +17,9 @@
     "order:verify": "tsx scripts/verify-order.ts",
     "order:settle": "tsx --conditions=react-server scripts/settle-cash.ts",
     "staff:grant": "tsx --conditions=react-server scripts/grant-role.ts",
-    "staff:check": "tsx --conditions=react-server scripts/check-staff.ts"
+    "staff:check": "tsx --conditions=react-server scripts/check-staff.ts",
+    "delivery:show": "tsx scripts/configure-delivery.ts --show",
+    "delivery:set": "tsx scripts/configure-delivery.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

@@ -62,6 +62,16 @@ export const orders = pgTable(
     customerName: text("customer_name"),
     customerPhone: text("customer_phone"),
     deliveryAddress: jsonb("delivery_address").$type<Record<string, string>>(),
+    /** The pin, in microdegrees. What the rider navigates to. */
+    deliveryLatMicro: integer("delivery_lat_micro"),
+    deliveryLngMicro: integer("delivery_lng_micro"),
+    /**
+     * The distance the delivery fee was charged on, after the road factor.
+     *
+     * Stored so a fee can be explained months later without re-deriving it
+     * from a pin and a rate table that may both have changed since.
+     */
+    deliveryDistanceMetres: integer("delivery_distance_metres"),
     tableLabel: text("table_label"),
 
     /* Money. Every figure is the server's own calculation — §13: "Never trust
