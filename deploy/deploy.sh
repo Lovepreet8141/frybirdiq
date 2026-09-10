@@ -2,7 +2,11 @@
 #
 # Builds locally and ships the standalone output to the VPS.
 #
-#   ./deploy/deploy.sh frybird@203.0.113.10
+#   ./deploy/deploy.sh root@194.238.16.200
+#
+# Deploys as root, not as the service user: `frybird` is a --system account
+# with no shell and no password, so it cannot receive an ssh session. Files
+# land root-owned and are chowned to frybird on arrival.
 #
 # Builds here rather than on the server on purpose. `next build` wants 1–2 GB
 # of RAM and the full dependency tree; a small VPS will either swap itself into
@@ -47,6 +51,26 @@ rsync -az --delete \
   "$STAGE/" "$TARGET:$REMOTE_DIR/"
 
 echo "==> Restart"
-ssh "$TARGET" "sudo systemctl restart frybird && sleep 2 && systemctl is-active frybird"
+# `sudo` only when the target is not already root, so this works either way.
+ssh "$TARGET" '
+  set -e
+  if [ "$(id -u)" -ne 0 ]; then SUDO=sudo; else SUDO=""; fi
+  $SUDO chown -R frybird:frybird '"'$REMOTE_DIR'"'
+  $SUDO systemctl restart frybird
+  sleep 2
+  $SUDO systemctl is-active frybird
+'
+
+# A unit that is "active" can still be crash-looping five seconds later, and a
+# deploy that reports success on a broken build is worse than one that fails.
+echo "==> Smoke test"
+sleep 3
+code="$(ssh "$TARGET" "curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:3000/ || true")"
+if [[ "$code" != "200" ]]; then
+  echo "FAILED: the app answered HTTP $code on 127.0.0.1:3000" >&2
+  echo "  ssh $TARGET journalctl -u frybird -n 50 --no-pager" >&2
+  exit 1
+fi
+echo "    HTTP 200"
 
 echo "==> Done"
