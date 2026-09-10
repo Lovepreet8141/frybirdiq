@@ -77,6 +77,11 @@ Tick an item when the real value is in the repo, not when the answer is known.
 
 ### Blocking
 
+- [ ] **Delivery fee and radius** — *blocks delivery.* Checkout is collection
+      only. Delivery needs a fee and a radius, and inventing a fee would put a
+      number in front of a customer that nobody agreed to. The order lifecycle
+      and the `ONLINE` channel already support delivery; only the fee is
+      missing.
 - [ ] **Drink SKUs and MRPs** — *blocks the POS.* The board says only "Drinks
       Available at MRP Price Only". No SKUs, no sizes, no brands. Three combos
       contain a cola that has no product to point at; they price correctly but
@@ -121,5 +126,17 @@ Tick an item when the real value is in the repo, not when the answer is known.
 
 ## Status
 
-Phase 0 complete: design foundation, financial core, domain model, schema.
-Phase 1 next: the customer ordering slice, per `BUILD-PLAN.md` §73.
+**Phase 0 complete** — design foundation, financial core, domain model, schema.
+
+**Phase 1 in progress** — the customer ordering slice. Home, menu, product
+customization, cart and checkout are built and walk end to end in the browser.
+
+Two things are not finished, both waiting on something outside the code:
+
+- **Orders are not written yet.** `placeOrder` is complete but has never run,
+  because there is no Supabase project. Checkout says so plainly rather than
+  faking a confirmation, and the cart survives the failure. This is the first
+  thing to verify once keys exist.
+- **Payment is Phase 2.** Checkout is pay-at-counter — a real QSR flow that
+  completes the loop without a fake "payment successful" step, which §73
+  forbids before Phase 2 builds it.
