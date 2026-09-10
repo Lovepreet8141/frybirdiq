@@ -1,7 +1,7 @@
 # Deploying to a Hostinger VPS
 
-WordPress on the apex domain, the ordering app on `order.frybird.in`, both on
-one box. The database stays on Supabase — nothing about this puts Postgres on
+The ordering app and FRYBIRD IQ on `frybirdiq.tech`, on a Hostinger VPS at
+194.238.16.200. WordPress can join it later on its own domain. The database stays on Supabase — nothing about this puts Postgres on
 the VPS.
 
 Everything here is written to be run by you, on your server. I have no access
@@ -113,7 +113,7 @@ SUPABASE_SERVICE_ROLE_KEY=<service role key>
 
 # The public address of this site. Links inside WhatsApp messages use it, so a
 # wrong value here sends customers a link that goes nowhere.
-SITE_URL=https://order.frybird.in
+SITE_URL=https://frybirdiq.tech
 
 # The SESSION POOLER string. See the warning above.
 DATABASE_URL=postgresql://postgres.shbmprmarlubyhaklmpr:PASSWORD%40HERE@aws-0-<region>.pooler.supabase.com:5432/postgres
@@ -197,15 +197,14 @@ DNS, at your registrar:
 
 | Record | Name | Value |
 |---|---|---|
-| A | `@` | your server IP |
-| A | `www` | your server IP |
-| A | `order` | your server IP |
+| A | `@` | 194.238.16.200 |
+| A | `www` | 194.238.16.200 |
 
 Then certificates:
 
 ```bash
 apt install -y certbot python3-certbot-nginx
-certbot --nginx -d frybird.in -d www.frybird.in -d order.frybird.in
+certbot --nginx -d frybirdiq.tech -d www.frybirdiq.tech
 ```
 
 certbot rewrites the server blocks to add TLS and redirect port 80. Renewal is
