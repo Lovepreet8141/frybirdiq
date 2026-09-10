@@ -15,8 +15,9 @@
  * product rows reports join against would not.
  */
 
+import { config } from "dotenv";
 import { eq, inArray } from "drizzle-orm";
-import { db } from "./index";
+import { closeDb, db } from "./connection";
 import {
   categories,
   comboItems,
@@ -31,6 +32,9 @@ import {
 } from "./schema";
 import { CATEGORIES, CHICKEN_CUTS, CHICKEN_HEAT, COMBOS, SAUCES, TAX_RATES } from "./menu-data";
 import { fromRupees } from "@/lib/money";
+
+// tsx does not load .env.local either. Loaded before anything reads env.
+config({ path: ".env.local", quiet: true });
 import { DEFAULT_PRICE_BASIS } from "@/lib/pricing";
 
 const ORG_SLUG = "frybird";
@@ -180,12 +184,12 @@ async function seed() {
     // order "wings" without saying how many and how hot.
     const [sizeGroup] = await database
       .insert(modifierGroups)
-      .values({ orgId: org.id, name: `${cut.name} size`, minSelections: 1, maxSelections: 1, position: 0 })
+      .values({ orgId: org.id, slug: `${cut.slug}-size`, name: "Size", minSelections: 1, maxSelections: 1, position: 0 })
       .returning();
 
     const [heatGroup] = await database
       .insert(modifierGroups)
-      .values({ orgId: org.id, name: `${cut.name} heat`, minSelections: 1, maxSelections: 1, position: 1 })
+      .values({ orgId: org.id, slug: `${cut.slug}-heat`, name: "Heat", minSelections: 1, maxSelections: 1, position: 1 })
       .returning();
 
     if (sizeGroup) {
@@ -193,6 +197,7 @@ async function seed() {
         cut.sizes.map((size, index) => ({
           orgId: org.id,
           groupId: sizeGroup.id,
+          slug: size.slug,
           name: size.name,
           priceDelta: fromRupees(size.delta),
           isDefault: index === 0,
@@ -207,6 +212,7 @@ async function seed() {
         CHICKEN_HEAT.map((heat, index) => ({
           orgId: org.id,
           groupId: heatGroup.id,
+          slug: heat.slug,
           name: heat.name,
           priceDelta: fromRupees(heat.delta),
           isDefault: index === 0,
@@ -225,7 +231,7 @@ async function seed() {
 
   const [dipGroup] = await database
     .insert(modifierGroups)
-    .values({ orgId: org.id, name: "Add a dip", minSelections: 0, maxSelections: null, position: 0 })
+    .values({ orgId: org.id, slug: "add-a-dip", name: "Add a dip", minSelections: 0, maxSelections: null, position: 0 })
     .returning();
 
   for (const [index, sauce] of SAUCES.entries()) {
@@ -248,6 +254,7 @@ async function seed() {
       await database.insert(modifiers).values({
         orgId: org.id,
         groupId: dipGroup.id,
+        slug: sauce.slug,
         name: sauce.name,
         priceDelta: fromRupees(sauce.price),
         position: index,
@@ -319,8 +326,12 @@ async function seed() {
 }
 
 seed()
-  .then(() => process.exit(0))
-  .catch((error) => {
+  .then(async () => {
+    await closeDb();
+    process.exit(0);
+  })
+  .catch(async (error) => {
     console.error(error instanceof Error ? error.message : error);
+    await closeDb();
     process.exit(1);
   });

@@ -28,6 +28,20 @@ them means rupees here.
 not totals. The server recalculates every figure and checks every permission.
 Hiding a button is not authorization (§41).
 
+**Every repository query scopes by `org_id` itself.** The app connects to
+Postgres as the `postgres` role through `DATABASE_URL`, and that role
+**bypasses row-level security**. The policies in `supabase/migrations/0001`
+guard the Supabase client paths, where a request carries an anon or
+authenticated key — they do nothing for Drizzle. An unscoped repository query
+returns every organization's rows. Resolve the org through
+`src/lib/repositories/org.ts` and filter on it.
+
+**Identity is stored, never derived from a display name.** Carts and orders
+reference products and modifiers by slug, and slugs live in columns. Deriving
+one from a name means renaming "8 pc" silently invalidates every saved cart —
+the modifier is dropped at pricing time and the customer is undercharged with
+no error anywhere. This has already happened once.
+
 **Every mutation that matters is idempotent.** A retried request must not
 create a second order or a second charge. §17.
 

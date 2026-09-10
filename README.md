@@ -131,12 +131,15 @@ Tick an item when the real value is in the repo, not when the answer is known.
 **Phase 1 in progress** — the customer ordering slice. Home, menu, product
 customization, cart and checkout are built and walk end to end in the browser.
 
-Two things are not finished, both waiting on something outside the code:
+**Connected and verified against a live database.** Migrations applied, menu
+seeded, and order #001 placed end to end — ₹299 for Nashville wings at 8 pc,
+matching the printed board, stored with ₹284.76 revenue and ₹14.24 GST that
+reconcile exactly.
 
-- **Orders are not written yet.** `placeOrder` is complete but has never run,
-  because there is no Supabase project. Checkout says so plainly rather than
-  faking a confirmation, and the cart survives the failure. This is the first
-  thing to verify once keys exist.
+Still outstanding:
+
 - **Payment is Phase 2.** Checkout is pay-at-counter — a real QSR flow that
   completes the loop without a fake "payment successful" step, which §73
   forbids before Phase 2 builds it.
+- **Realtime is Phase 3.** The tracking page reflects status at page load. It
+  does not pretend to be live.

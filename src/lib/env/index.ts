@@ -19,13 +19,27 @@ const clientSchema = z.object({
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
 });
 
+/**
+ * An optional secret.
+ *
+ * A variable that is present but empty means "not set". `.env.example` ships
+ * every later-phase key blank, so a bare `.optional()` would never apply —
+ * the key exists, the value is "", and the length check fails. Anyone copying
+ * the template would be told their Razorpay keys were malformed before
+ * Razorpay was even part of the build.
+ */
+const optionalSecret = z.preprocess(
+  (value) => (value === "" ? undefined : value),
+  z.string().min(1).optional(),
+);
+
 const serverSchema = z.object({
   DATABASE_URL: z.string().min(1),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
-  ANTHROPIC_API_KEY: z.string().min(1).optional(),
-  RAZORPAY_KEY_ID: z.string().min(1).optional(),
-  RAZORPAY_KEY_SECRET: z.string().min(1).optional(),
-  RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
+  ANTHROPIC_API_KEY: optionalSecret,
+  RAZORPAY_KEY_ID: optionalSecret,
+  RAZORPAY_KEY_SECRET: optionalSecret,
+  RAZORPAY_WEBHOOK_SECRET: optionalSecret,
 });
 
 export type ClientEnv = z.infer<typeof clientSchema>;

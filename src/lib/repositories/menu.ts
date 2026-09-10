@@ -23,10 +23,11 @@ import "server-only";
  * does.
  */
 
-import { eq, asc } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { type Paise, fromRupees } from "@/lib/money";
 import { isSupabaseConfigured } from "@/lib/env";
 import { db } from "@/db";
+import { requireOrg } from "./org";
 import { categories, modifierGroups, modifiers, productModifierGroups, products, taxRates } from "@/db/schema";
 import {
   CATEGORIES,
@@ -212,6 +213,10 @@ function buildFromTranscription(): MenuCategory[] {
  */
 async function readFromDatabase(): Promise<MenuCategory[]> {
   const database = db();
+  // Scoped explicitly. The app connects as `postgres`, which bypasses
+  // row-level security, so this filter is the tenant boundary — not a
+  // secondary check on top of one. See ./org.
+  const org = await requireOrg();
 
   const rows = await database
     .select({
@@ -231,18 +236,20 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
     .from(products)
     .innerJoin(categories, eq(products.categoryId, categories.id))
     .leftJoin(taxRates, eq(products.taxRateId, taxRates.id))
-    .where(eq(products.isActive, true))
+    .where(and(eq(products.orgId, org.id), eq(products.isActive, true)))
     .orderBy(asc(categories.position), asc(products.position));
 
   const groupRows = await database
     .select({
       productSlug: products.slug,
       groupId: modifierGroups.id,
+      groupSlug: modifierGroups.slug,
       groupName: modifierGroups.name,
       minSelections: modifierGroups.minSelections,
       maxSelections: modifierGroups.maxSelections,
       groupPosition: productModifierGroups.position,
       modifierId: modifiers.id,
+      modifierSlug: modifiers.slug,
       modifierName: modifiers.name,
       priceDelta: modifiers.priceDelta,
       isDefault: modifiers.isDefault,
@@ -252,7 +259,7 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
     .innerJoin(products, eq(productModifierGroups.productId, products.id))
     .innerJoin(modifierGroups, eq(productModifierGroups.groupId, modifierGroups.id))
     .innerJoin(modifiers, eq(modifiers.groupId, modifierGroups.id))
-    .where(eq(modifiers.isAvailable, true))
+    .where(and(eq(products.orgId, org.id), eq(modifiers.isAvailable, true)))
     .orderBy(asc(productModifierGroups.position), asc(modifiers.position));
 
   const groupsByProduct = new Map<string, Map<string, MenuModifierGroup>>();
@@ -260,13 +267,13 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
     const forProduct = groupsByProduct.get(row.productSlug) ?? new Map();
     const existing = forProduct.get(row.groupId);
     const modifier: MenuModifier = {
-      slug: slugify(row.modifierName),
+      slug: row.modifierSlug,
       name: row.modifierName,
       priceDelta: row.priceDelta as Paise,
       isDefault: row.isDefault,
     };
     forProduct.set(row.groupId, {
-      slug: slugify(row.groupName),
+      slug: row.groupSlug,
       name: row.groupName,
       minSelections: row.minSelections,
       maxSelections: row.maxSelections,
@@ -300,14 +307,6 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
   }
 
   return [...byCategory.values()];
-}
-
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/&/g, "and")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
 }
 
 /* ------------------------------------------------------------------ */

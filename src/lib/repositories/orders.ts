@@ -19,7 +19,6 @@ import { locations, orderEvents, orderItemModifiers, orderItems, orders, organiz
 import { assertChannelFulfilment } from "@/domain/order-channel";
 import { isSupabaseConfigured } from "@/lib/env";
 import { getPricedCart } from "@/lib/cart";
-import { pricingContext } from "@/lib/pricing";
 
 const ORG_SLUG = "frybird";
 
@@ -111,10 +110,6 @@ export async function placeOrder(input: CheckoutInput): Promise<PlaceOrderResult
   const channel = "ONLINE" as const;
   const fulfilment = "TAKEAWAY" as const;
   assertChannelFulfilment(channel, fulfilment);
-
-  // Re-priced against the organization's own basis rather than the default,
-  // so the figures stored are the ones this business actually charges.
-  void pricingContext(org);
 
   const orderNumber = await nextOrderNumber(org.id);
   const now = new Date();

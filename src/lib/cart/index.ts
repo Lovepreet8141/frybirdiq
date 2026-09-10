@@ -14,8 +14,8 @@ import "server-only";
 
 import { cookies } from "next/headers";
 import { type Paise, add } from "@/lib/money";
-import { type PricedLine, type PricedOrder, priceLine, priceOrder, pricingContext } from "@/lib/pricing";
-import { DEFAULT_PRICE_BASIS } from "@/lib/pricing";
+import { type PricedLine, type PricedOrder, priceLine, priceOrder } from "@/lib/pricing";
+import { resolvePricingContext } from "@/lib/repositories/org";
 import { type MenuModifier, type MenuProduct, getMenu } from "@/lib/repositories/menu";
 import { type Cart, EMPTY_CART, cartSchema, lineKey } from "./schema";
 
@@ -111,9 +111,8 @@ function resolveModifiers(
 /**
  * Prices a whole cart.
  *
- * The GST basis comes from the organization. Until Supabase exists there is no
- * organization row to read, so the confirmed default is used — the same value
- * the seed writes. See src/lib/pricing.
+ * The GST basis comes from the organization row, so changing it there changes
+ * every figure the customer sees without touching this function.
  */
 export async function priceCart(cart: Cart): Promise<PricedCart> {
   const menu = await getMenu();
@@ -121,7 +120,7 @@ export async function priceCart(cart: Cart): Promise<PricedCart> {
 
   const resolved: PricedCartLine[] = [];
   const rejected: { slug: string; reason: string }[] = [];
-  const context = pricingContext({ priceBasis: DEFAULT_PRICE_BASIS });
+  const context = await resolvePricingContext();
 
   const forPricing: { unitPrice: Paise; quantity: number; modifierDeltas: Paise[]; rateBps: number }[] = [];
 

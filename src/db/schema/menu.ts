@@ -152,6 +152,15 @@ export const modifierGroups = pgTable(
     orgId: uuid("org_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
+    /**
+     * Stable identity, independent of the display name.
+     *
+     * Carts reference modifiers by slug. Deriving that slug from the name
+     * means renaming "8 pc" to "8 pieces" silently invalidates every saved
+     * cart — the modifier is dropped at pricing time and the customer is
+     * undercharged with no error anywhere.
+     */
+    slug: text("slug").notNull(),
     name: text("name").notNull(),
     description: text("description"),
     /** §12: required selection, min and max quantity. */
@@ -160,7 +169,10 @@ export const modifierGroups = pgTable(
     position: integer("position").notNull().default(0),
     ...timestamps,
   },
-  (table) => [index("modifier_groups_org_idx").on(table.orgId)],
+  (table) => [
+    unique("modifier_groups_org_slug_unique").on(table.orgId, table.slug),
+    index("modifier_groups_org_idx").on(table.orgId),
+  ],
 );
 
 export const modifiers = pgTable(
@@ -173,6 +185,8 @@ export const modifiers = pgTable(
     groupId: uuid("group_id")
       .notNull()
       .references(() => modifierGroups.id, { onDelete: "cascade" }),
+    /** Stable identity. See `modifierGroups.slug`. */
+    slug: text("slug").notNull(),
     name: text("name").notNull(),
     /** Added to the line price. Can be zero, or negative for a removal. */
     priceDelta: money("price_delta").notNull().default(ZERO_MONEY),
@@ -181,7 +195,10 @@ export const modifiers = pgTable(
     position: integer("position").notNull().default(0),
     ...timestamps,
   },
-  (table) => [index("modifiers_group_idx").on(table.groupId)],
+  (table) => [
+    unique("modifiers_group_slug_unique").on(table.groupId, table.slug),
+    index("modifiers_group_idx").on(table.groupId),
+  ],
 );
 
 /** Which modifier groups a product offers, and in what order. */
