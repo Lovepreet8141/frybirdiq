@@ -7,6 +7,8 @@ and food costing, owner analytics, and an AI layer over all of it.
 Specification: [`BUILD-PLAN.md`](BUILD-PLAN.md).
 Working agreement: [`CLAUDE.md`](CLAUDE.md).
 Design source of truth: [`design-system/MASTER.md`](design-system/MASTER.md).
+Deployment: [`docs/DEPLOY.md`](docs/DEPLOY.md) — Hostinger VPS, WordPress on the
+apex domain and the ordering app on `order.frybird.in`.
 
 ## Setting up staff access
 

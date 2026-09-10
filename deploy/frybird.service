@@ -1,0 +1,52 @@
+# systemd unit for the FRYBIRD ordering app.
+#
+#   sudo cp deploy/frybird.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now frybird
+#
+# systemd rather than pm2: it is already on the box, it restarts the app on
+# boot and on crash without another daemon to keep alive, and its logs go to
+# journalctl with everything else.
+
+[Unit]
+Description=FRYBIRD ordering app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=frybird
+WorkingDirectory=/var/www/frybird
+
+# The standalone build runs plain node. No pnpm, no next CLI, no dev
+# dependencies on the server at all.
+ExecStart=/usr/bin/node server.js
+
+# Secrets live in a root-owned file the service user can read, never in this
+# unit — a unit file is world-readable and ends up in git.
+EnvironmentFile=/etc/frybird/env
+
+Environment=NODE_ENV=production
+Environment=PORT=3000
+# Bind to loopback only. nginx is the only thing that should reach it; a
+# process listening on 0.0.0.0 is reachable directly on the public IP,
+# bypassing TLS and every header nginx sets.
+Environment=HOSTNAME=127.0.0.1
+
+Restart=always
+RestartSec=5
+
+# Hardening. The app writes nothing to disk — uploads go to Supabase Storage —
+# so it has no business writing anywhere on this filesystem.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=frybird
+
+[Install]
+WantedBy=multi-user.target

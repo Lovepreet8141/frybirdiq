@@ -114,6 +114,7 @@ yesterday's order. §51.
 | Payments | Cash via `PaymentProvider`; Razorpay slots in behind the same interface |
 | Tests | Vitest |
 | Package manager | pnpm |
+| Deploy | Hostinger VPS, systemd + nginx. See `docs/DEPLOY.md` |
 
 `tsconfig` runs `strict` plus `noUncheckedIndexedAccess`. Both stay on.
 
