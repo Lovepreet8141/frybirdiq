@@ -71,6 +71,7 @@ that has already taken orders unless you pass `--force`.
 | `pnpm delivery:show` | Show the outlet's location and delivery rates |
 | `pnpm delivery:set` | Set them (km and rupees) |
 | `pnpm delivery:quote` | What each distance costs, against live settings |
+| `pnpm customers:export` | Export the opted-in marketing list as CSV |
 | `python3 scripts/check-contrast.py` | WCAG check on the brand palette |
 
 ## Where things are
@@ -122,6 +123,20 @@ Tick an item when the real value is in the repo, not when the answer is known.
       the likely source. This is the last thing standing between the menu and a
       real margin per product.
 - [ ] **Packaging cost per item.**
+
+### Before sending any marketing
+
+- [ ] **DLT registration for SMS.** Commercial SMS in India goes through DLT —
+      the sender header and message template must be registered, and
+      unregistered commercial SMS is blocked by the operators rather than
+      merely discouraged.
+- [ ] **A working way to opt out**, and something that honours it. The customer
+      record has `marketing_consent` and `deletion_requested_at`; nothing yet
+      reads them except the export, and nothing lets a customer change their
+      mind without ringing the shop.
+- [ ] **A privacy notice** saying what is collected and why. Email is now
+      required to order; using it to advertise is a separate purpose and the
+      consent box is what makes that lawful.
 
 ### Before the menu is public
 

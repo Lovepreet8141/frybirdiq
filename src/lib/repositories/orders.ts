@@ -15,7 +15,7 @@ import "server-only";
 import { and, desc, eq, gte, inArray, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { locations, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
+import { customers, locations, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
 import { assertChannelFulfilment } from "@/domain/order-channel";
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition } from "@/domain/order-status";
 import { isSupabaseConfigured } from "@/lib/env";
@@ -44,6 +44,16 @@ export const checkoutSchema = z.object({
     .string()
     .trim()
     .regex(/^[6-9]\d{9}$/, "Enter a 10-digit mobile number."),
+  email: z.email("Enter a valid email address.").max(160),
+  /**
+   * Consent to marketing. Separate from placing the order, and false unless
+   * the customer actively ticked it.
+   *
+   * An order is permission to fulfil an order. Under the DPDP Act, using the
+   * same details to advertise later is a different purpose and needs its own
+   * consent — and §30 rules out dark patterns, which a pre-ticked box is.
+   */
+  marketingConsent: z.coerce.boolean().default(false),
   notes: z.string().trim().max(500).optional(),
 
   fulfilment: z.enum(["TAKEAWAY", "DELIVERY"]).default("TAKEAWAY"),
@@ -222,12 +232,46 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   const orderNumber = await nextOrderNumber(orgId);
   const now = new Date();
 
+  /*
+   * The customer record.
+   *
+   * Keyed on phone, which is the identity that matters here — people change
+   * email addresses and spell their names differently, but the number the shop
+   * calls stays put.
+   *
+   * Consent is only ever turned on, never off, by an order: someone who opted
+   * in last month and left the box unticked today has not withdrawn consent,
+   * they just did not tick a box. Withdrawal is a deliberate act and belongs
+   * on its own screen, not as a side effect of ordering dinner.
+   */
+  const [customer] = await database
+    .insert(customers)
+    .values({
+      orgId,
+      name: details.name,
+      phone: details.phone,
+      email: details.email,
+      marketingConsent: details.marketingConsent,
+      marketingConsentAt: details.marketingConsent ? now : null,
+    })
+    .onConflictDoUpdate({
+      target: [customers.orgId, customers.phone],
+      set: {
+        name: details.name,
+        email: details.email,
+        updatedAt: now,
+        ...(details.marketingConsent ? { marketingConsent: true, marketingConsentAt: now } : {}),
+      },
+    })
+    .returning();
+
   const [order] = await database
     .insert(orders)
     .values({
       orgId,
       locationId,
       orderNumber,
+      customerId: customer?.id,
       status: "PENDING_PAYMENT",
       channel,
       fulfilment,

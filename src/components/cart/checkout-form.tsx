@@ -153,6 +153,52 @@ export function CheckoutForm({
       </div>
 
       <div className="flex flex-col gap-2">
+        <label htmlFor="email" className="text-sm font-semibold">
+          Email
+        </label>
+        <input
+          id="email"
+          name="email"
+          required
+          type="email"
+          autoComplete="email"
+          autoCapitalize="none"
+          aria-invalid={Boolean(fieldErrors.email)}
+          aria-describedby={fieldErrors.email ? "email-error" : "email-hint"}
+          className="h-[52px] rounded-md border border-border bg-surface px-4 text-base focus-visible:border-border-strong"
+        />
+        {fieldErrors.email ? (
+          <p id="email-error" role="alert" className="text-sm text-foreground">
+            {fieldErrors.email}
+          </p>
+        ) : (
+          <p id="email-hint" className="text-sm text-muted-foreground">
+            For your receipt.
+          </p>
+        )}
+      </div>
+
+      {/*
+        Marketing consent. Unticked, and separate from placing the order.
+        An order is permission to fulfil an order; advertising later is a
+        different purpose and needs its own consent. A pre-ticked box is the
+        dark pattern §30 rules out, and it would not be consent anyway.
+      */}
+      <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface px-4 py-3">
+        <input
+          type="checkbox"
+          name="marketingConsent"
+          className="mt-0.5 size-4 shrink-0 accent-[var(--primary)]"
+        />
+        <span className="flex flex-col gap-0.5">
+          <span className="text-sm font-semibold">Send me FRYBIRD offers</span>
+          <span className="text-sm text-muted-foreground">
+            Occasional deals by email or SMS. Not needed to order, and you can stop any time.
+          </span>
+        </span>
+      </label>
+
+      <div className="flex flex-col gap-2">
         <label htmlFor="notes" className="text-sm font-semibold">
           Anything else <span className="font-normal text-muted-foreground">(optional)</span>
         </label>

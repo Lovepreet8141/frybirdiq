@@ -20,7 +20,8 @@
     "staff:check": "tsx --conditions=react-server scripts/check-staff.ts",
     "delivery:show": "tsx scripts/configure-delivery.ts --show",
     "delivery:set": "tsx scripts/configure-delivery.ts",
-    "delivery:quote": "tsx --conditions=react-server scripts/quote-delivery.ts"
+    "delivery:quote": "tsx --conditions=react-server scripts/quote-delivery.ts",
+    "customers:export": "tsx scripts/export-customers.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

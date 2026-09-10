@@ -18,6 +18,8 @@ export async function submitCheckout(_previous: CheckoutState, formData: FormDat
   const result: PlaceOrderResult = await placeOrder({
     name: String(formData.get("name") ?? ""),
     phone: String(formData.get("phone") ?? ""),
+    email: String(formData.get("email") ?? "").trim(),
+    marketingConsent: formData.get("marketingConsent") === "on",
     notes: String(formData.get("notes") ?? "") || undefined,
     fulfilment: String(formData.get("fulfilment") ?? "TAKEAWAY"),
     // Left as strings; the schema coerces them. Empty means no pin.
