@@ -137,7 +137,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
           </span>
           <span className="tabular text-2xl font-bold">{formatINR(order.grandTotal as Paise)}</span>
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">Includes GST. Cash, UPI or card.</p>
+        <p className="mt-1 text-xs text-muted-foreground">Cash, UPI or card.</p>
       </section>
 
       <div className="mt-10 flex flex-wrap items-center gap-3">

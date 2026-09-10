@@ -67,7 +67,9 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
         <Customizer product={product} />
       </div>
 
-      <p className="mt-6 text-xs text-muted-foreground">Price includes GST.</p>
+      <p className="mt-6 text-xs text-muted-foreground">
+        {product.taxRateBps > 0 ? "Price includes GST." : "Price is what you pay."}
+      </p>
     </div>
   );
 }

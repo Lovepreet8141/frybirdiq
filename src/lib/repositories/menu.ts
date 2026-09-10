@@ -230,6 +230,7 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
       categoryName: categories.name,
       categoryPosition: categories.position,
       productPosition: products.position,
+      taxRateId: products.taxRateId,
       rateBps: taxRates.rateBps,
       hsnCode: taxRates.hsnCode,
     })
@@ -294,7 +295,13 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
       categorySlug: row.categorySlug,
       categoryName: row.categoryName,
       taxRateBps: row.rateBps ?? DEFAULT_RATE_BPS,
-      hsnCode: row.hsnCode ?? DEFAULT_HSN,
+      /*
+       * Only fall back when the product has no tax rate at all. A rate that
+       * exists and carries no HSN is a deliberate state — a zero-rated line
+       * has nothing to classify — and substituting the seeded default there
+       * stamps a classification code onto a line that was never taxed.
+       */
+      hsnCode: row.taxRateId === null ? DEFAULT_HSN : row.hsnCode,
       modifierGroups: [...(groupsByProduct.get(row.productSlug)?.values() ?? [])],
     };
 

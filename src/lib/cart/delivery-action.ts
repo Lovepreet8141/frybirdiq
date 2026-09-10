@@ -21,7 +21,8 @@ export type DeliveryQuoteResult =
       fee: string;
       distance: string;
       orderTotal: string;
-      taxTotal: string;
+      /** Null when the business charges no GST. */
+      taxTotal: string | null;
       waived: boolean;
     }
   | { available: false; reason: string };
@@ -74,7 +75,7 @@ export async function quoteDeliveryAction(input: unknown): Promise<DeliveryQuote
     fee: formatINR(quote.fee),
     distance: formatDistance(quote.chargeableMetres),
     orderTotal: formatINR(withFee.gross),
-    taxTotal: formatINR(withFee.total),
+    taxTotal: withFee.total > 0n ? formatINR(withFee.total) : null,
     waived: quote.waived,
   };
 }

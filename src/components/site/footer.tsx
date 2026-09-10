@@ -1,7 +1,9 @@
 import Image from "next/image";
 import Link from "next/link";
+import { getOrg } from "@/lib/repositories/org";
 
-export function Footer() {
+export async function Footer() {
+  const org = await getOrg();
   return (
     <footer className="mt-auto border-t border-border">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-[var(--gutter)] py-12 sm:flex-row sm:justify-between">
@@ -38,7 +40,7 @@ export function Footer() {
 
       <div className="border-t border-border">
         <p className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-4 text-xs text-muted-foreground">
-          Prices include GST.
+          {org?.gstin ? "Prices include GST." : "Prices are what you pay."}
         </p>
       </div>
     </footer>

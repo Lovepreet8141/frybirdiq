@@ -144,6 +144,7 @@ Tick an item when the real value is in the repo, not when the answer is known.
       Adding one with `pnpm business:set --gstin ...` turns every future
       document into a full tax invoice with no code change. The tax figures are
       already computed and stored on each order; only printing them waits.
+      Turning the rate back on is the same command.
 
 ### Before sending any marketing
 
@@ -179,7 +180,11 @@ Tick an item when the real value is in the repo, not when the answer is known.
       price matrix.
 - [x] GST basis made a single configurable value on the organization rather
       than a per-product column.
-- [x] **Menu prices are GST-inclusive.** Confirmed against a real counter bill.
+- [x] **No GST is charged.** FRYBIRD is not GST registered, so products are
+      zero-rated and nothing computes, prints or claims a tax. A ₹89 item is
+      ₹89 of revenue. `pnpm business:set --gst 5 --gstin <GSTIN>` turns it back
+      on if that changes; the machinery and its tests are untouched.
+- [x] **Menu prices were GST-inclusive.** Confirmed against a real counter bill.
       The board price is the final price: a ₹99 burger takes ₹99 and books
       ₹94.29 of revenue against ₹4.71 of GST payable. `price_basis` is
       `inclusive`; both modes remain covered by tests, and `gst()` now requires

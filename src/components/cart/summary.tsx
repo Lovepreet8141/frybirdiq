@@ -4,11 +4,14 @@ import type { PricedCart } from "@/lib/cart";
 /**
  * Order totals.
  *
- * Prices are GST-inclusive, so the headline figure is what the customer pays
- * and the tax is shown as contained within it — "including ₹X GST", never
- * added as a line beneath. Presenting inclusive tax as an addition would make
- * the total look higher than the menu board and is the exact confusion the
- * confirmed basis exists to avoid.
+ * When prices carry GST, the headline figure is what the customer pays and the
+ * tax is shown as contained within it — "including ₹X GST", never added as a
+ * line beneath. Presenting inclusive tax as an addition would make the total
+ * look higher than the menu board.
+ *
+ * When there is no GST to carry — the business is not registered — the line is
+ * not rendered at all. "Includes ₹0 GST" is noise at best and a claim about a
+ * tax nobody collected at worst.
  */
 export function OrderSummary({ cart }: { cart: PricedCart }) {
   const { totals } = cart;
@@ -38,9 +41,11 @@ export function OrderSummary({ cart }: { cart: PricedCart }) {
         <span className="tabular text-2xl font-bold">{formatINR(totals.gross)}</span>
       </div>
 
-      <p className="tabular text-xs text-muted-foreground">
-        Includes {formatINR(totals.total)} GST ({formatINR(totals.cgst)} CGST + {formatINR(totals.sgst)} SGST)
-      </p>
+      {totals.total > 0n && (
+        <p className="tabular text-xs text-muted-foreground">
+          Includes {formatINR(totals.total)} GST ({formatINR(totals.cgst)} CGST + {formatINR(totals.sgst)} SGST)
+        </p>
+      )}
     </div>
   );
 }

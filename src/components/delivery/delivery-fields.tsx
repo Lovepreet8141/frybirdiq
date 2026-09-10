@@ -98,7 +98,9 @@ export function DeliveryFields({ shop }: { shop: Point }) {
                 <span className="font-semibold">To pay</span>
                 <span className="tabular text-lg font-bold">{quote.orderTotal}</span>
               </div>
-              <p className="tabular text-xs text-muted-foreground">Includes {quote.taxTotal} GST</p>
+              {quote.taxTotal !== null && (
+                <p className="tabular text-xs text-muted-foreground">Includes {quote.taxTotal} GST</p>
+              )}
             </div>
           ) : (
             <p className="text-sm">{quote.reason}</p>
