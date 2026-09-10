@@ -7,6 +7,10 @@ import { CheckoutForm } from "@/components/cart/checkout-form";
 import { availableMethods } from "@/lib/payments";
 import { getDeliverySettings } from "@/lib/repositories/delivery";
 import { toLatLng } from "@/lib/delivery";
+import { getCustomer } from "@/lib/customer";
+import { listSavedAddresses } from "@/lib/repositories/addresses";
+import { readRememberedAddress } from "@/lib/cart/remembered-address";
+import type { SavedAddressOption } from "@/components/delivery/delivery-fields";
 import { OrderSummary } from "@/components/cart/summary";
 import { getPricedCart } from "@/lib/cart";
 
@@ -21,6 +25,27 @@ export default async function CheckoutPage() {
   const methods = availableMethods();
   const delivery = await getDeliverySettings();
   const shop = delivery?.shop ? toLatLng(delivery.shop) : null;
+
+  /*
+   * Saved addresses come from the account when there is one.
+   *
+   * For a guest, from a cookie on their own device instead — looking them up
+   * by a typed phone number would hand one customer's doorstep to anyone who
+   * knows their number. A cookie cannot leak across people because it never
+   * leaves the browser that wrote it.
+   */
+  const customer = await getCustomer();
+  const savedAddresses: SavedAddressOption[] = customer
+    ? (await listSavedAddresses(customer.id)).map((address) => ({
+        id: address.id,
+        line1: address.line1,
+        landmark: address.landmark,
+        lat: address.lat,
+        lng: address.lng,
+      }))
+    : ((remembered) => (remembered ? [{ ...remembered, id: "remembered", onThisDevice: true }] : []))(
+        await readRememberedAddress(),
+      );
 
   return (
     <div className="mx-auto w-full max-w-4xl px-[var(--gutter)] py-10 sm:py-14">
@@ -86,7 +111,12 @@ export default async function CheckoutPage() {
             <h2 id="details" className="font-heading text-lg font-semibold">
               Your details
             </h2>
-            <CheckoutForm idempotencyKey={idempotencyKey} shop={shop} deliveryEnabled={delivery?.enabled ?? false} />
+            <CheckoutForm
+            idempotencyKey={idempotencyKey}
+            shop={shop}
+            deliveryEnabled={delivery?.enabled ?? false}
+            savedAddresses={savedAddresses}
+          />
           </section>
         </div>
 

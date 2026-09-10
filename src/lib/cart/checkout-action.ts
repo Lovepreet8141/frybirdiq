@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { type PlaceOrderResult, placeOrder } from "@/lib/repositories/orders";
 import { writeCart } from "./index";
+import { rememberAddress } from "./remembered-address";
 
 export type CheckoutState = { status: "idle" } | { status: "error"; message: string; fieldErrors?: Record<string, string> };
 
@@ -34,6 +35,19 @@ export async function submitCheckout(_previous: CheckoutState, formData: FormDat
 
   if (!result.ok) {
     return { status: "error", message: result.error, fieldErrors: result.fieldErrors };
+  }
+
+  // Remembered only once the order actually went through, so a failed attempt
+  // does not leave a device claiming an address nobody ordered to.
+  const lat = Number(formData.get("lat"));
+  const lng = Number(formData.get("lng"));
+  if (Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0) {
+    await rememberAddress({
+      line1: String(formData.get("addressLine1") ?? ""),
+      landmark: String(formData.get("landmark") ?? "") || null,
+      lat,
+      lng,
+    });
   }
 
   await writeCart({ lines: [] });

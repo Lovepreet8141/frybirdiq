@@ -204,6 +204,10 @@ Tick an item when the real value is in the repo, not when the answer is known.
 - [x] **Invoices.** Numbered per financial year, issued on payment, with the
       GST breakdown per line. Printable; `Send on WhatsApp` opens the app with
       the order details written.
+- [x] **Saved addresses.** A returning customer picks a doorstep they have used
+      before instead of retyping it. From the account when signed in; from a
+      cookie on their own device when not — never looked up by phone number,
+      which would hand one customer's address to anyone who knows their number.
 - [x] **Customer accounts.** Self-serve sign-up, order history, and a points
       balance. Guest checkout still works — §61 says not to force an account
       before a first order.

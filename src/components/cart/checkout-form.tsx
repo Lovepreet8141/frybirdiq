@@ -4,7 +4,7 @@ import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Bike, Loader2, Store } from "lucide-react";
 import { type CheckoutState, submitCheckout } from "@/lib/cart/checkout-action";
-import { DeliveryFields } from "@/components/delivery/delivery-fields";
+import { DeliveryFields, type SavedAddressOption } from "@/components/delivery/delivery-fields";
 import type { Point } from "@/components/delivery/map";
 import { cn } from "@/lib/utils";
 
@@ -42,11 +42,14 @@ export function CheckoutForm({
   idempotencyKey,
   shop,
   deliveryEnabled,
+  savedAddresses,
 }: {
   idempotencyKey: string;
   /** Where the outlet is. Null when it has not been placed on the map. */
   shop: Point | null;
   deliveryEnabled: boolean;
+  /** Addresses this customer has used before. */
+  savedAddresses: SavedAddressOption[];
 }) {
   const [fulfilment, setFulfilment] = useState<"TAKEAWAY" | "DELIVERY">("TAKEAWAY");
   const [state, action] = useActionState<CheckoutState, FormData>(submitCheckout, { status: "idle" });
@@ -98,7 +101,7 @@ export function CheckoutForm({
         </fieldset>
       )}
 
-      {fulfilment === "DELIVERY" && shop && <DeliveryFields shop={shop} />}
+      {fulfilment === "DELIVERY" && shop && <DeliveryFields shop={shop} saved={savedAddresses} />}
       {state.status === "error" && !state.fieldErrors && (
         <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm leading-relaxed">
           {state.message}

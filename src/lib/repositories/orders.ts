@@ -15,7 +15,7 @@ import "server-only";
 import { and, desc, eq, gte, inArray, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { customers, locations, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
+import { addresses, customers, locations, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
 import { assertChannelFulfilment } from "@/domain/order-channel";
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition } from "@/domain/order-status";
 import type { Role } from "@/domain/permissions";
@@ -357,6 +357,44 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     toStatus: "PENDING_PAYMENT",
     reason: `Placed on the website for ${fulfilment === "DELIVERY" ? "delivery" : "collection"}`,
   });
+
+  /*
+   * Remember the address, so it never has to be typed twice.
+   *
+   * Matched on the pin and the first line rather than inserted every time: the
+   * same doorstep ordered from twice is one address, and a list that grows a
+   * duplicate on every order is a list nobody will scroll.
+   */
+  if (fulfilment === "DELIVERY" && pin && customer) {
+    const [existing] = await database
+      .select()
+      .from(addresses)
+      .where(
+        and(
+          eq(addresses.customerId, customer.id),
+          eq(addresses.latMicro, pin.latMicro),
+          eq(addresses.lngMicro, pin.lngMicro),
+        ),
+      )
+      .limit(1);
+
+    if (existing) {
+      await database
+        .update(addresses)
+        .set({ line1: details.addressLine1 ?? existing.line1, landmark: details.landmark, updatedAt: now })
+        .where(eq(addresses.id, existing.id));
+    } else {
+      await database.insert(addresses).values({
+        orgId,
+        customerId: customer.id,
+        line1: details.addressLine1 ?? "",
+        landmark: details.landmark,
+        city: "Ambala City",
+        latMicro: pin.latMicro,
+        lngMicro: pin.lngMicro,
+      });
+    }
+  }
 
   // What the order is waiting on. Cash at the counter, recorded now so the
   // till has a row to settle against rather than an implicit expectation.
