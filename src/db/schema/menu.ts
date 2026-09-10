@@ -1,11 +1,8 @@
 /** Categories, products, variants, modifiers, combos, tax. BUILD-PLAN.md §11, §12, §23, §58. */
 
-import { boolean, index, integer, jsonb, pgEnum, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
 import { locations, organizations } from "./tenancy";
 import { ZERO_MONEY, money, primaryId, timestamps } from "./_shared";
-
-/** How a listed price relates to tax. See `lib/tax/gst`. */
-export const priceBasisEnum = pgEnum("price_basis", ["exclusive", "inclusive"]);
 
 /**
  * A GST rate with its HSN/SAC code.
@@ -69,7 +66,6 @@ export const products = pgTable(
     /** The default listed price in paise. Channel prices override it. */
     basePrice: money("base_price").notNull(),
     taxRateId: uuid("tax_rate_id").references(() => taxRates.id, { onDelete: "set null" }),
-    priceBasis: priceBasisEnum("price_basis").notNull().default("exclusive"),
 
     /** 0–5, where 0 is not spicy. Drives the heat selector and AI filtering. */
     spiceLevel: integer("spice_level").notNull().default(0),

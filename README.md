@@ -51,6 +51,7 @@ that has already taken orders unless you pass `--force`.
 src/domain/     order lifecycle, order sources, roles and permissions
 src/lib/money/  integer-paise arithmetic and INR formatting
 src/lib/tax/    GST — CGST/SGST split, inclusive and exclusive pricing
+src/lib/pricing/ the one path from a menu price to totals and margin
 src/db/schema/  42 tables, split by domain
 supabase/       migrations, including hand-written row-level security
 design-system/  tokens, motion, interaction, accessibility, content
@@ -65,19 +66,57 @@ thing that produces a `₹`.
 **Currency is rupees, not euros.** `BUILD-PLAN.md` quotes `€` throughout — it
 was drafted from a template. Every figure in it means INR.
 
-## What the menu does not include
+## Open questions
 
-`src/db/menu-data.ts` exports `KNOWN_GAPS`. Nothing in it is guessed — where
-the boards do not state a figure, the field is absent. Two of them block later
-phases:
+Open decisions that block later phases. Nothing on this list is guessed —
+where the menu boards do not state a figure, the field is absent from
+[`src/db/menu-data.ts`](src/db/menu-data.ts) rather than filled with a
+plausible number.
 
-**Drink prices.** The board says only "Drinks Available at MRP Price Only".
-No SKUs, no sizes. The POS cannot ring up a drink until these exist, and three
-combos contain a cola that has no product to point at.
+Tick an item when the real value is in the repo, not when the answer is known.
 
-**Whether menu prices include GST.** Seeded as exclusive, matching standard QSR
-billing where 5% is added at the till. If FRYBIRD's printed prices are already
-GST-inclusive, every total is wrong by 5% — confirm before Phase 2.
+### Blocking
+
+- [ ] **Do menu prices include GST?** — *blocks Phase 1 and 2.* Seeded as
+      `exclusive`, matching standard QSR billing where 5% is added at the till.
+      A ₹99 burger rings up at ₹103.95 and earns ₹99. If FRYBIRD's printed
+      prices are already GST-inclusive it rings up at ₹99 and earns ₹94.29 —
+      a difference of the tax rate on every order, moving revenue, food cost
+      percentage and margin together. One value to change:
+      `organizations.price_basis`. Both modes are covered by tests.
+- [ ] **Drink SKUs and MRPs** — *blocks the POS.* The board says only "Drinks
+      Available at MRP Price Only". No SKUs, no sizes, no brands. Three combos
+      contain a cola that has no product to point at; they price correctly but
+      their food cost is short by the drink. Being collected from the outlet.
+
+### Before Phase 9 (food cost and margin)
+
+- [ ] **Swiggy and Zomato listed prices.** Aggregator listings are marked up to
+      absorb commission; the boards are the in-store price. Per-channel margin
+      is unanswerable until these are entered.
+- [ ] **Swiggy and Zomato commission rates.** The gap between a ₹300 dine-in
+      order and a ₹300 aggregator order is the margin story for this business.
+- [ ] **Ingredient costs, recipes and yields.** The recipe PDFs in Downloads are
+      the likely source.
+- [ ] **Packaging cost per item.**
+
+### Before the menu is public
+
+- [ ] **Allergen data per product.** §33 requires allergen answers to be
+      grounded in restaurant-managed data. Guessing these is a safety issue,
+      not a data-quality one.
+- [ ] **GSTIN and registered legal name.** Required on every tax invoice.
+      Currently null on the organization.
+- [ ] **Food photography.** The single largest gap in how the brand reads, and
+      no amount of code closes it.
+
+### Settled
+
+- [x] Menu transcribed from the four printed boards — 33 products, 6 combos,
+      7 sauces, and chicken size/heat modifiers verified against the printed
+      price matrix.
+- [x] GST basis made a single configurable value on the organization rather
+      than a per-product column.
 
 ## Status
 

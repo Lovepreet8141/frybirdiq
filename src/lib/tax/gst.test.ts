@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { add, bps, formatINR, fromRupees } from "@/lib/money";
+import { add, bps, formatINR, fromRupees, percentOf } from "@/lib/money";
 import { gst, splitTax, sumGst } from "./gst";
 
 describe("splitTax", () => {
@@ -50,8 +50,8 @@ describe("gst on an inclusive price", () => {
     // ₹100 inclusive of 5% is not ₹95 + ₹5.
     const line = gst(fromRupees("100"), bps(5), { basis: "inclusive" });
     expect(line.gross).toBe(fromRupees("100"));
-    expect(line.taxable).toBe(fromRupees("95.23"));
-    expect(line.total).toBe(fromRupees("4.77"));
+    expect(line.taxable).toBe(fromRupees("95.24"));
+    expect(line.total).toBe(fromRupees("4.76"));
     expect(add(line.taxable, line.total)).toBe(fromRupees("100"));
   });
 
@@ -62,6 +62,19 @@ describe("gst on an inclusive price", () => {
       const line = gst(fromRupees(listed), bps(5), { basis: "inclusive" });
       expect(line.gross).toBe(fromRupees(listed));
       expect(add(line.taxable, line.total)).toBe(fromRupees(listed));
+    }
+  });
+
+  it("books an amount of tax that reconciles against its own rate", () => {
+    // The invariant that catches truncation. If the taxable value is floored
+    // rather than rounded, the tax booked on the line can exceed the tax the
+    // rate actually implies for that taxable value, and the line stops
+    // agreeing with itself.
+    for (const listed of ["59", "79", "99", "109", "129", "149", "199", "249", "279", "319", "399"]) {
+      const line = gst(fromRupees(listed), bps(5), { basis: "inclusive" });
+      const implied = percentOf(line.taxable, bps(5));
+      const drift = line.total - implied;
+      expect(drift >= -1n && drift <= 1n, `${listed}: booked ${line.total}, rate implies ${implied}`).toBe(true);
     }
   });
 

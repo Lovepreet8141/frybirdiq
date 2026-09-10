@@ -15,7 +15,7 @@
  */
 
 import { sql } from "drizzle-orm";
-import { bigint, timestamp, uuid } from "drizzle-orm/pg-core";
+import { bigint, pgEnum, timestamp, uuid } from "drizzle-orm/pg-core";
 
 /** An amount in paise. The only way money enters the schema. */
 export const money = (name: string) => bigint(name, { mode: "bigint" });
@@ -38,3 +38,15 @@ export const timestamps = {
  * SQL literal produces the same `DEFAULT 0` without going through JSON.
  */
 export const ZERO_MONEY = sql`0`;
+
+/**
+ * Whether a listed price already contains GST.
+ *
+ * This is one decision for the whole business, so it lives on `organizations`
+ * and nowhere else. It was previously a column on `products`, which meant the
+ * answer could drift item by item — and the difference between the two modes
+ * is 5% of every total, so drift here is silent revenue error.
+ *
+ * See src/lib/pricing.
+ */
+export const priceBasisEnum = pgEnum("price_basis", ["exclusive", "inclusive"]);

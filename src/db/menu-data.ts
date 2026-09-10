@@ -274,20 +274,15 @@ export const COMBOS = [
 ];
 
 /**
- * What the boards do not say.
+ * What the boards do not say is tracked as an open checklist in README.md,
+ * under "Open questions".
  *
- * Listed rather than filled in. §33 forbids the AI inventing prices, and the
- * same rule applies to seed data — a plausible number in the database is
+ * Deliberately not a constant in this file. A list of unresolved decisions
+ * belongs where someone opening the repo will read it, not buried in a data
+ * module that only gets opened when the menu changes.
+ *
+ * The rule it follows: where the boards do not state a figure, the field above
+ * is absent. Nothing here is estimated. §33 forbids the AI inventing a price,
+ * and the same applies to seed data — a plausible number in the database is
  * indistinguishable from a real one three months later.
- *
- * Every item here needs a decision from the owner before the relevant phase.
  */
-export const KNOWN_GAPS = [
-  'Drink prices. The board says only "Drinks Available at MRP Price Only". No SKUs, no sizes, no brands — the POS cannot ring up a drink until these exist.',
-  "Whether menu prices include GST. Seeded as exclusive, matching standard QSR billing where 5% is added at the till. If FRYBIRD's printed prices are GST-inclusive, every total on every channel is wrong by 5% and this must be corrected before Phase 2.",
-  "Swiggy and Zomato prices. Aggregator listings are marked up to absorb commission, but the boards are the in-store price. Per-channel margin is unanswerable until these are entered.",
-  "Commission rates for Swiggy and Zomato.",
-  "Ingredient costs, recipes and yields. Phase 8 and 9. The recipe PDFs in Downloads are the likely source.",
-  "Allergen data per product. §33 requires allergen answers to be grounded in restaurant-managed data; guessing them is a safety issue, not a data-quality one.",
-  "Packaging costs per item.",
-] as const;

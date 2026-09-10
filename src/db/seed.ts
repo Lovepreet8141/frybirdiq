@@ -29,16 +29,9 @@ import {
   products,
   taxRates,
 } from "./schema";
-import {
-  CATEGORIES,
-  CHICKEN_CUTS,
-  CHICKEN_HEAT,
-  COMBOS,
-  KNOWN_GAPS,
-  SAUCES,
-  TAX_RATES,
-} from "./menu-data";
+import { CATEGORIES, CHICKEN_CUTS, CHICKEN_HEAT, COMBOS, SAUCES, TAX_RATES } from "./menu-data";
 import { fromRupees } from "@/lib/money";
+import { DEFAULT_PRICE_BASIS } from "@/lib/pricing";
 
 const ORG_SLUG = "frybird";
 
@@ -57,8 +50,17 @@ async function seed() {
       slug: ORG_SLUG,
       currency: "INR",
       timezone: "Asia/Kolkata",
+      // The single switch. Flipping this one value moves every price, invoice
+      // line and margin figure, because all of them read it through
+      // src/lib/pricing. See the open questions checklist in README.md.
+      priceBasis: DEFAULT_PRICE_BASIS,
     })
-    .onConflictDoUpdate({ target: organizations.slug, set: { name: "FRYBIRD", updatedAt: new Date() } })
+    .onConflictDoUpdate({
+      target: organizations.slug,
+      // Deliberately does not overwrite priceBasis: once the owner has set it
+      // from a real counter bill, a re-seed must not quietly reset it.
+      set: { name: "FRYBIRD", updatedAt: new Date() },
+    })
     .returning();
 
   if (!org) throw new Error("seed: could not create the FRYBIRD organization");
@@ -142,10 +144,6 @@ async function seed() {
           description: product.description,
           basePrice: fromRupees(product.price),
           taxRateId: defaultTaxRateId,
-          // Seeded as exclusive: standard QSR billing adds 5% at the till.
-          // If FRYBIRD's printed prices are GST-inclusive this is wrong by 5%
-          // on every order — see KNOWN_GAPS.
-          priceBasis: "exclusive",
           spiceLevel: product.spice ?? 0,
           isVegetarian: product.veg === "VEG",
           position: itemPosition++,
@@ -171,7 +169,6 @@ async function seed() {
         slug: cut.slug,
         basePrice: fromRupees(cut.basePrice),
         taxRateId: defaultTaxRateId,
-        priceBasis: "exclusive",
         isVegetarian: false,
         spiceLevel: 1,
       })
@@ -241,7 +238,6 @@ async function seed() {
         slug: sauce.slug,
         basePrice: fromRupees(sauce.price),
         taxRateId: defaultTaxRateId,
-        priceBasis: "exclusive",
         isVegetarian: true,
         position: index,
       })
@@ -276,7 +272,6 @@ async function seed() {
         description: combo.description,
         basePrice: fromRupees(combo.price),
         taxRateId: defaultTaxRateId,
-        priceBasis: "exclusive",
         isVegetarian: combo.veg === "VEG",
         position: index,
       })
@@ -317,8 +312,10 @@ async function seed() {
   console.log(`  ${SAUCES.length} sauces, also offered as dips`);
   console.log(`  ${COMBOS.length} combos and party boxes`);
   console.log("");
-  console.log("Not seeded — these need a decision before the phases that use them:");
-  for (const gap of KNOWN_GAPS) console.log(`  · ${gap}`);
+  console.log(`  Price basis: ${org.priceBasis} — the single switch, on the organization.`);
+  console.log("");
+  console.log("Drinks are not seeded, and several figures are still open.");
+  console.log('See the "Open questions" checklist in README.md.');
 }
 
 seed()

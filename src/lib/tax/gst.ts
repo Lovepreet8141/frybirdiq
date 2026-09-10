@@ -17,7 +17,7 @@
  * taxed differently and only the menu knows which is which.
  */
 
-import { type Bps, type Paise, ZERO, allocate, percentOf, subtract } from "@/lib/money";
+import { type Bps, type Paise, ZERO, allocate, percentOf, scale, subtract } from "@/lib/money";
 
 /** Where the customer is relative to the outlet. Decides the tax split. */
 export type PlaceOfSupply = "intra-state" | "inter-state";
@@ -73,8 +73,17 @@ export function gst(
   const taxable =
     basis === "exclusive"
       ? amount
-      : // taxable = gross × 10000 / (10000 + rate), so taxable + tax === gross exactly.
-        (((amount * 10_000n) / BigInt(10_000 + rate)) as Paise);
+      : // taxable = gross × 10000 / (10000 + rate).
+        //
+        // Rounded, not truncated. Flooring biases the taxable value down by up
+        // to a paise on every inclusive line, which then fails to reconcile
+        // against its own rate: ₹99 inclusive of 5% floors to a taxable ₹94.28
+        // and books ₹4.72 of tax, but 5% of ₹94.28 is ₹4.71. Rounding gives
+        // ₹94.29 and ₹4.71, which agrees with itself.
+        //
+        // `scale` rounds half away from zero, and tax is taken as the
+        // remainder, so taxable + tax still equals gross exactly.
+        scale(amount, 10_000, 10_000 + rate);
 
   const total = basis === "exclusive" ? percentOf(taxable, rate) : subtract(amount, taxable);
   const gross = basis === "exclusive" ? ((taxable + total) as Paise) : amount;

@@ -39,6 +39,14 @@ same product. A calculation that ignores `orders.source` is wrong.
 rate, carries an HSN/SAC code, and prints the org's GSTIN. `src/lib/tax/gst`
 owns this. Tax is never computed once on an order total.
 
+**Whether prices include GST is one value.** `organizations.price_basis`. Every
+price, invoice line and margin figure reads it through `src/lib/pricing` and
+none of them decide for themselves. Do not add a basis column, prop, argument
+or constant anywhere else — the two modes differ by the tax rate on every
+total, so a second source of truth is silent revenue error. Anything that
+computes a margin takes net-of-tax revenue: GST is collected for the
+government and is never revenue.
+
 **The AI never invents a number.** Prices, availability, allergens, hours and
 order status come from stored rows through server-side tools. If the data is
 missing, it says so. §33.
@@ -80,6 +88,7 @@ src/
   lib/
     money/        paise arithmetic + INR formatting — single source of truth
     tax/          GST
+    pricing/      listed price → what the customer pays and what we earn
     env/          Zod-validated environment
     supabase/     browser, server and admin clients
   db/

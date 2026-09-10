@@ -2,7 +2,7 @@
 
 import { boolean, index, integer, pgEnum, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
 import { ROLES } from "@/domain/permissions";
-import { primaryId, timestamps } from "./_shared";
+import { primaryId, priceBasisEnum, timestamps } from "./_shared";
 
 export const roleEnum = pgEnum("role", ROLES);
 
@@ -15,6 +15,18 @@ export const organizations = pgTable("organizations", {
   /** Legal name as registered, which is often not the brand name. */
   legalName: text("legal_name"),
   currency: text("currency").notNull().default("INR"),
+  /**
+   * Whether the prices on the menu board already include GST.
+   *
+   * The single switch. Flip it here and every price, invoice line and margin
+   * calculation follows, because all of them read it through
+   * `src/lib/pricing` rather than deciding for themselves.
+   *
+   * `exclusive` means a ₹99 burger rings up at ₹103.95 and earns ₹99.
+   * `inclusive` means it rings up at ₹99 and earns ₹94.29. Getting this wrong
+   * misstates revenue by the tax rate on every order ever taken.
+   */
+  priceBasis: priceBasisEnum("price_basis").notNull().default("exclusive"),
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
   ...timestamps,
 });

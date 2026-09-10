@@ -15,6 +15,13 @@
       "when": 1789046308779,
       "tag": "0001_row_level_security",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789047975491,
+      "tag": "0002_noisy_luminals",
+      "breakpoints": true
     }
   ]
 }
