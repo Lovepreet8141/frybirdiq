@@ -202,7 +202,9 @@ Tick an item when the real value is in the repo, not when the answer is known.
 - [x] **New-order pop-up.** Any order still waiting on a yes or a no appears as
       a dialog with Accept, Turn down and Later — including ones that arrived
       before the screen was opened. Accepting asks how long it will take, and
-      the customer is told a clock time. It does not close on Escape or a click outside — both are how
+      the customer is told a clock time. The alarm repeats every 1.8 seconds
+      until the order is dealt with; "Test alarm" in the header checks it is
+      audible before a shift rather than during one. It does not close on Escape or a click outside — both are how
       a dialog is dismissed by accident, and an order dismissed by accident is
       one nobody cooks. Turning it down needs a reason from a fixed list, so
       "why do we reject orders" is a question that can be counted. Realtime is

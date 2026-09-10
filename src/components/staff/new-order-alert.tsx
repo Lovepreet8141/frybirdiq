@@ -10,8 +10,16 @@ import { useChime } from "./use-chime";
 import { cn } from "@/lib/utils";
 
 const POLL_MS = 12_000;
-/** Gap between chimes while an order is still unanswered. */
-const CHIME_MS = 20_000;
+/**
+ * Gap between bursts while an order is in front of someone.
+ *
+ * Short enough to be a nuisance, which is the point: it stops the moment the
+ * order is dealt with, and every second it keeps going is a second a customer
+ * is waiting on a kitchen that has not looked up.
+ */
+const URGENT_MS = 1_800;
+/** Slower once it has been deferred — still nagging, no longer shouting. */
+const DEFERRED_MS = 8_000;
 
 /**
  * Puts a new order in front of whoever is at the counter, and keeps it there.
@@ -86,10 +94,20 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
     };
   }, [chime, router]);
 
-  // Keep chiming while anything is unanswered.
+  /*
+   * Keep sounding until it is dealt with.
+   *
+   * Urgently while the dialog is up, more slowly once it has been deferred.
+   * Both stop the instant the order is accepted or turned down — an alarm that
+   * outlasts the thing it was about is one people learn to ignore.
+   */
   useEffect(() => {
-    if (queue.length === 0 && deferred.length === 0) return;
-    const timer = setInterval(chime, CHIME_MS);
+    const pending = queue.length > 0;
+    if (!pending && deferred.length === 0) return;
+
+    const every = pending ? URGENT_MS : DEFERRED_MS;
+    chime();
+    const timer = setInterval(chime, every);
     return () => clearInterval(timer);
   }, [queue.length, deferred.length, chime]);
 
@@ -340,9 +358,19 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
                 {soundOn ? "Sound on" : "Sound off"}
               </button>
 
-              {/* Said plainly rather than failing silently. */}
-              {soundOn && !soundReady && (
-                <p className="text-xs text-muted-foreground">Tap anywhere once to allow sound</p>
+              {soundOn && (
+                soundReady ? (
+                  <button
+                    type="button"
+                    onClick={play}
+                    className="flex min-h-[44px] items-center rounded-md border border-border px-3 text-sm font-semibold"
+                  >
+                    Test
+                  </button>
+                ) : (
+                  /* Said plainly rather than failing silently. */
+                  <p className="text-xs text-muted-foreground">Tap anywhere once to allow sound</p>
+                )
               )}
             </div>
           </div>

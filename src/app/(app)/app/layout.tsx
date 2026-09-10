@@ -4,6 +4,7 @@ import { LogOut } from "lucide-react";
 import { getStaff, staffCan } from "@/lib/auth";
 import { signOut } from "@/lib/auth/actions";
 import { NewOrderAlert } from "@/components/staff/new-order-alert";
+import { SoundCheck } from "@/components/staff/sound-check";
 import { resolveHome } from "@/lib/auth/route-home";
 
 /**
@@ -81,6 +82,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               {staff.displayName}
               <span className="ml-2 text-xs uppercase tracking-[0.08em]">{staff.roles.join(" · ")}</span>
             </span>
+            {canSeeOrders && <SoundCheck />}
+
             <form action={signOut}>
               <button
                 type="submit"
