@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
-import { advanceOrder, completeDelivery, rejectOrder } from "@/lib/repositories/orders";
+import { acceptOrder, advanceOrder, completeDelivery, rejectOrder } from "@/lib/repositories/orders";
 import { recordCashPayment } from "@/lib/repositories/payments";
 import { ORDER_STATUSES } from "@/domain/order-status";
 import { REJECTION_REASONS } from "@/domain/rejection";
@@ -102,6 +102,31 @@ export async function completeDeliveryAction(input: unknown): Promise<StaffActio
       cashCollected: parsed.data.cashCollected,
     });
     revalidatePath("/app/deliveries");
+    revalidatePath("/app/orders");
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  } catch (error) {
+    return explain(error);
+  }
+}
+
+const acceptSchema = z.object({
+  orderId: z.uuid(),
+  prepMinutes: z.number().int().min(1).max(240),
+});
+
+/** Accepts an order and records when the kitchen said it would be ready. */
+export async function acceptOrderAction(input: unknown): Promise<StaffActionResult> {
+  const parsed = acceptSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Pick how long this will take." };
+
+  try {
+    const staff = await requirePermission("kitchen.update");
+    const result = await acceptOrder({
+      orderId: parsed.data.orderId,
+      prepMinutes: parsed.data.prepMinutes,
+      actorUserId: staff.userId,
+      orgId: staff.orgId,
+    });
     revalidatePath("/app/orders");
     return result.ok ? { ok: true } : { ok: false, error: result.error };
   } catch (error) {

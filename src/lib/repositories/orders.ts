@@ -412,6 +412,15 @@ export interface OrderView {
   readonly fulfilment: FulfilmentType;
   readonly invoiceNumber: string | null;
   readonly customerName: string | null;
+  /**
+   * When the kitchen said it would be ready, and whether that moment has
+   * passed.
+   *
+   * The comparison happens here rather than in the page because reading the
+   * clock is not a pure operation, and a component that does it mid-render can
+   * give two different answers in one pass.
+   */
+  readonly readyEta: { at: Date; passed: boolean } | null;
   readonly grandTotal: bigint;
   readonly placedAt: Date | null;
   readonly items: readonly { name: string; quantity: number; total: bigint; modifiers: string[] }[];
@@ -439,6 +448,9 @@ export async function getOrder(id: string): Promise<OrderView | null> {
     fulfilment: order.fulfilment,
     invoiceNumber: order.invoiceNumber,
     customerName: order.customerName,
+    readyEta: order.estimatedReadyAt
+      ? { at: order.estimatedReadyAt, passed: order.estimatedReadyAt.getTime() <= Date.now() }
+      : null,
     grandTotal: order.grandTotal,
     placedAt: order.placedAt,
     items: items.map((item) => ({
@@ -466,6 +478,7 @@ export interface StaffOrderView {
   readonly grandTotal: Paise;
   readonly isPaid: boolean;
   readonly invoiceNumber: string | null;
+  readonly estimatedReadyAt: Date | null;
   readonly placedAt: Date | null;
   readonly notes: string | null;
   readonly items: readonly { name: string; quantity: number; modifiers: string[] }[];
@@ -523,6 +536,7 @@ export async function listActiveOrders(orgId: string): Promise<readonly StaffOrd
     grandTotal: paise(row.grandTotal),
     isPaid: paidOrderIds.has(row.id),
     invoiceNumber: row.invoiceNumber,
+    estimatedReadyAt: row.estimatedReadyAt,
     placedAt: row.placedAt,
     notes: row.notes,
     delivery:
@@ -760,6 +774,40 @@ export async function completeDelivery(input: {
     actorUserId: input.actorUserId,
     orgId: input.orgId,
   });
+}
+
+/**
+ * Accepts an order and says when it will be ready.
+ *
+ * The estimate is stored as an instant rather than a number of minutes.
+ * "Twenty minutes" is only true at the moment it is said; a customer who
+ * reloads ten minutes later should see ten, not twenty again.
+ */
+export async function acceptOrder(input: {
+  orderId: string;
+  prepMinutes: number;
+  actorUserId: string;
+  orgId: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const minutes = Math.round(input.prepMinutes);
+  if (!Number.isFinite(minutes) || minutes < 1 || minutes > 240) {
+    return { ok: false, error: "That is not a sensible preparation time." };
+  }
+
+  const advanced = await advanceOrder({
+    orderId: input.orderId,
+    to: "ACCEPTED",
+    actorUserId: input.actorUserId,
+    orgId: input.orgId,
+  });
+  if (!advanced.ok) return advanced;
+
+  await db()
+    .update(orders)
+    .set({ estimatedReadyAt: new Date(Date.now() + minutes * 60_000), updatedAt: new Date() })
+    .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)));
+
+  return { ok: true };
 }
 
 /**

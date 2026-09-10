@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Check, FileText, Loader2 } from "lucide-react";
+import { Check, Clock, FileText, Loader2 } from "lucide-react";
 import { type Paise, formatINR } from "@/lib/money";
 import { advanceOrderAction, markPaidAction } from "@/lib/auth/staff-actions";
 import type { OrderStatus } from "@/domain/order-status";
@@ -24,6 +24,7 @@ export interface StaffOrder {
   notes: string | null;
   items: { name: string; quantity: number; modifiers: string[] }[];
   invoiceNumber: string | null;
+  estimatedReadyAt: string | null;
   delivery: {
     line1: string;
     landmark: string;
@@ -150,6 +151,18 @@ export function OrderCard({
           </span>
         </div>
       </div>
+
+      {order.estimatedReadyAt && order.status !== "COMPLETED" && (
+        <p className="tabular flex items-center gap-1.5 text-sm font-semibold">
+          <Clock className="size-4 text-primary" aria-hidden="true" />
+          Promised for{" "}
+          {new Date(order.estimatedReadyAt).toLocaleTimeString("en-IN", {
+            timeZone: "Asia/Kolkata",
+            hour: "numeric",
+            minute: "2-digit",
+          })}
+        </p>
+      )}
 
       <ul className="flex flex-col gap-1 border-t border-border pt-3 text-sm">
         {order.items.map((item, index) => (

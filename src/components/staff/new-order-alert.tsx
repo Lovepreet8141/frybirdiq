@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, BellOff, Bike, Check, Loader2, Store, X } from "lucide-react";
+import { Bell, BellOff, Bike, Check, Clock, Loader2, Store, X } from "lucide-react";
 import { type NewOrder, pollNewOrders } from "@/lib/auth/order-alert-action";
-import { advanceOrderAction, rejectOrderAction } from "@/lib/auth/staff-actions";
+import { acceptOrderAction, rejectOrderAction } from "@/lib/auth/staff-actions";
 import { REJECTION_LABELS, REJECTION_REASONS, type RejectionReason } from "@/domain/rejection";
 import { useChime } from "./use-chime";
 import { cn } from "@/lib/utils";
@@ -37,8 +37,18 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /*
+   * How long the kitchen says it will take.
+   *
+   * Offered as a few realistic choices rather than a free number: during a
+   * rush nobody types, and a list of taps is faster than a spinner. Twenty is
+   * preselected so the common case is one press, and whatever is chosen is
+   * what the customer is told — nothing here invents a time on the kitchen's
+   * behalf.
+   */
+  const [prepMinutes, setPrepMinutes] = useState(20);
 
-  const since = useRef(new Date().toISOString());
+  /** Orders the counter pressed Later on. Kept out of the dialog, not lost. */
   const seen = useRef(new Set<string>());
   const acceptRef = useRef<HTMLButtonElement>(null);
 
@@ -53,10 +63,12 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
     let stopped = false;
 
     const tick = async () => {
-      const result = await pollNewOrders({ since: since.current });
+      const result = await pollNewOrders();
       if (stopped) return;
-      since.current = result.checkedAt;
 
+      // Everything still awaiting a decision, minus anything already in front
+      // of us or deferred. Asking the question this way means opening the
+      // screen with undecided orders prompts straight away.
       const fresh = result.orders.filter((order) => !seen.current.has(order.id));
       if (fresh.length === 0) return;
 
@@ -100,7 +112,7 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
     if (!current) return;
     setBusy(true);
     setError(null);
-    const result = await advanceOrderAction({ orderId: current.id, to: "ACCEPTED" });
+    const result = await acceptOrderAction({ orderId: current.id, prepMinutes });
     setBusy(false);
     if (!result.ok) return setError(result.error ?? "That didn't work.");
     done();
@@ -186,6 +198,11 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
                 )}
               </span>
               {current.customerName && <span className="text-muted-foreground">{current.customerName}</span>}
+              {current.waitingMinutes > 0 && (
+                <span className="tabular ml-auto font-semibold text-destructive">
+                  waiting {current.waitingMinutes} min
+                </span>
+              )}
             </div>
 
             {error && (
@@ -249,7 +266,32 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
                 </div>
               </fieldset>
             ) : (
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-3">
+                <fieldset>
+                  <legend className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
+                    <Clock className="size-4 text-primary" aria-hidden="true" />
+                    Ready in
+                  </legend>
+                  <div className="flex flex-wrap gap-2">
+                    {[10, 15, 20, 30, 45].map((minutes) => (
+                      <button
+                        key={minutes}
+                        type="button"
+                        onClick={() => setPrepMinutes(minutes)}
+                        aria-pressed={prepMinutes === minutes}
+                        className={cn(
+                          "min-h-[48px] flex-1 rounded-md border px-3 text-sm font-semibold transition-colors",
+                          prepMinutes === minutes
+                            ? "border-primary bg-primary/10"
+                            : "border-border hover:border-border-strong",
+                        )}
+                      >
+                        {minutes} min
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+
                 <button
                   ref={acceptRef}
                   type="button"
@@ -258,7 +300,7 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
                   className="flex min-h-[64px] items-center justify-center gap-3 rounded-md bg-primary px-6 text-lg font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
                 >
                   {busy ? <Loader2 className="size-5 animate-spin" aria-hidden="true" /> : <Check className="size-5" aria-hidden="true" />}
-                  Accept
+                  Accept · ready in {prepMinutes} min
                 </button>
 
                 <div className="flex gap-2">

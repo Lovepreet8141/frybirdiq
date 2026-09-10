@@ -18,7 +18,6 @@ import { db } from "@/db";
 import { orderItems, orders, payments } from "@/db/schema";
 import { type Paise, ZERO, add, paise, ratioBps } from "@/lib/money";
 import { type DateRange, businessDate, daysInRange, previousPeriod } from "@/lib/dates";
-import { TERMINAL_STATUSES } from "@/domain/order-status";
 
 export interface Metric {
   readonly value: Paise;
@@ -178,8 +177,18 @@ export async function getDashboard(orgId: string, range: DateRange): Promise<Das
   };
 }
 
-/** Orders placed since a moment. Drives the new-order alert. */
-export async function ordersSince(orgId: string, since: Date) {
+/**
+ * Orders still waiting on a yes or a no.
+ *
+ * Deliberately not "orders since a moment". The alert used to ask what had
+ * arrived since the page loaded, which meant opening the counter screen with
+ * three undecided orders on it showed nothing at all — the one moment the
+ * prompt is most needed.
+ *
+ * An order needs a decision until the kitchen has accepted it. After that it
+ * is on the board and the counter screen is the right place to follow it.
+ */
+export async function ordersAwaitingDecision(orgId: string) {
   return db()
     .select({
       id: orders.id,
@@ -193,8 +202,7 @@ export async function ordersSince(orgId: string, since: Date) {
     .where(
       and(
         eq(orders.orgId, orgId),
-        gte(orders.createdAt, since),
-        sql`${orders.status} NOT IN (${sql.join([...TERMINAL_STATUSES].map((s) => sql`${s}`), sql`, `)})`,
+        sql`${orders.status} IN ('PENDING_PAYMENT', 'PAID')`,
       ),
     )
     .orderBy(orders.createdAt);

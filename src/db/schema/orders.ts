@@ -123,6 +123,14 @@ export const orders = pgTable(
     placedAt: timestamp("placed_at", { withTimezone: true }),
     acceptedAt: timestamp("accepted_at", { withTimezone: true }),
     readyAt: timestamp("ready_at", { withTimezone: true }),
+    /**
+     * When the kitchen said it would be ready, chosen at accept time.
+     *
+     * An instant rather than a number of minutes: "20 minutes" is only true at
+     * the moment it is said, and a customer who reloads ten minutes later
+     * should see ten minutes, not twenty again.
+     */
+    estimatedReadyAt: timestamp("estimated_ready_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
 

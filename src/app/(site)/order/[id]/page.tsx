@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Check, Circle, FileText } from "lucide-react";
+import { Check, Circle, Clock, FileText } from "lucide-react";
 import { formatINR } from "@/lib/money";
 import { type Paise } from "@/lib/money";
 import { getOrder } from "@/lib/repositories/orders";
@@ -63,6 +63,18 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
   const status = order.status as OrderStatus;
   const isDelivery = order.fulfilment === "DELIVERY";
   const STEPS = stepsFor(order.fulfilment);
+
+  // The repository already decided whether the promised time has passed; this
+  // only phrases it.
+  const readyLabel = order.readyEta
+    ? order.readyEta.passed
+      ? `Should be ${isDelivery ? "on its way" : "ready"} now.`
+      : `${isDelivery ? "Leaving" : "Ready"} at about ${order.readyEta.at.toLocaleTimeString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          hour: "numeric",
+          minute: "2-digit",
+        })}`
+    : null;
   const cancelled = status === "CANCELLED" || status === "FAILED" || status === "REFUNDED";
   const currentIndex = STEPS.findIndex((step) => !(step.reached as readonly string[]).includes(status));
   const activeIndex = currentIndex === -1 ? STEPS.length - 1 : Math.max(0, currentIndex - 1);
@@ -77,6 +89,19 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         Thanks{order.customerName ? `, ${order.customerName}` : ""}.{" "}
         {isDelivery ? "We'll call when it's on its way." : "We'll call when it's ready to collect."}
       </p>
+
+      {/*
+        When the kitchen said it would be ready.
+        Shown as a clock time rather than "in 20 minutes": this page does not
+        refresh itself, so a relative figure would quietly become a lie while
+        somebody sat looking at it.
+      */}
+      {!cancelled && readyLabel && status !== "COMPLETED" && (
+        <p className="mt-4 flex items-center gap-2 rounded-lg border border-border bg-surface px-4 py-3 font-semibold">
+          <Clock className="size-4 shrink-0 text-primary" aria-hidden="true" />
+          {readyLabel}
+        </p>
+      )}
 
       {cancelled ? (
         <div role="alert" className="mt-8 rounded-lg border border-border bg-surface p-5">

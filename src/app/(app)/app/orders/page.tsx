@@ -45,6 +45,7 @@ export default async function StaffOrdersPage() {
                   placedAt: order.placedAt?.toISOString() ?? null,
                   fulfilment: order.fulfilment,
                   invoiceNumber: order.invoiceNumber,
+                  estimatedReadyAt: order.estimatedReadyAt?.toISOString() ?? null,
                   delivery: order.delivery ? { ...order.delivery } : null,
                   items: [...order.items].map((item) => ({ ...item, modifiers: [...item.modifiers] })),
                 } as StaffOrder
