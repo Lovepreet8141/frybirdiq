@@ -199,8 +199,12 @@ Tick an item when the real value is in the repo, not when the answer is known.
 - [x] **FRYBIRD IQ.** Revenue, orders, average order and open balance with
       period-over-period deltas; revenue by day; collection versus delivery;
       top sellers by revenue. Light-themed, scoped to the staff area.
-- [x] **New-order alert.** Polls every 12 seconds and keeps chiming for three
-      minutes or until acknowledged. Realtime is still Phase 3.
+- [x] **New-order pop-up.** An order arrives as a dialog with Accept, Turn down
+      and Later. It does not close on Escape or a click outside — both are how
+      a dialog is dismissed by accident, and an order dismissed by accident is
+      one nobody cooks. Turning it down needs a reason from a fixed list, so
+      "why do we reject orders" is a question that can be counted. Realtime is
+      still Phase 3; this polls every 12 seconds.
 - [x] **Invoices.** Numbered per financial year, issued on payment, with the
       GST breakdown per line. Printable; `Send on WhatsApp` opens the app with
       the order details written.

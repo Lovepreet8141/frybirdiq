@@ -19,6 +19,7 @@ import { addresses, customers, locations, orderEvents, orderItemModifiers, order
 import { assertChannelFulfilment } from "@/domain/order-channel";
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition } from "@/domain/order-status";
 import type { Role } from "@/domain/permissions";
+import { REJECTION_LABELS, type RejectionReason } from "@/domain/rejection";
 import { isSupabaseConfigured } from "@/lib/env";
 import { type Paise, ZERO, paise } from "@/lib/money";
 import { priceOrder } from "@/lib/pricing";
@@ -759,4 +760,66 @@ export async function completeDelivery(input: {
     actorUserId: input.actorUserId,
     orgId: input.orgId,
   });
+}
+
+/**
+ * Turns an order down, with a reason.
+ *
+ * The reason is stored on the order as well as on the event, because "why do
+ * we reject orders" is a question worth being able to count — refusing four
+ * orders for being out of area is a radius problem, refusing four for sold-out
+ * is a prep problem, and only a structured value tells them apart.
+ */
+export async function rejectOrder(input: {
+  orderId: string;
+  reason: RejectionReason;
+  note?: string;
+  actorUserId: string;
+  orgId: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const database = db();
+  const [order] = await database
+    .select()
+    .from(orders)
+    .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
+    .limit(1);
+
+  if (!order) return { ok: false, error: "That order does not exist." };
+
+  const captured = await database
+    .select({ id: payments.id })
+    .from(payments)
+    .where(and(eq(payments.orderId, order.id), eq(payments.status, "CAPTURED")))
+    .limit(1);
+
+  // Refusing an order that has already been paid for means money has to go
+  // back, and that is a refund with its own permission and its own trail —
+  // not something to do silently from a pop-up.
+  if (captured.length > 0) {
+    return { ok: false, error: "This order has been paid for. It needs a refund rather than a rejection." };
+  }
+
+  try {
+    assertTransition(order.status, "CANCELLED", order.fulfilment);
+  } catch {
+    return { ok: false, error: `An order that is ${order.status.toLowerCase()} cannot be turned down.` };
+  }
+
+  const detail = input.note?.trim() ? `${REJECTION_LABELS[input.reason]} — ${input.note.trim()}` : REJECTION_LABELS[input.reason];
+
+  await database
+    .update(orders)
+    .set({ status: "CANCELLED", cancellationReason: detail, updatedAt: new Date() })
+    .where(eq(orders.id, order.id));
+
+  await database.insert(orderEvents).values({
+    orgId: input.orgId,
+    orderId: order.id,
+    fromStatus: order.status,
+    toStatus: "CANCELLED",
+    actorUserId: input.actorUserId,
+    reason: detail,
+  });
+
+  return { ok: true };
 }

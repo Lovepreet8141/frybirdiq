@@ -54,7 +54,11 @@ const TRANSITIONS: Readonly<Record<OrderStatus, readonly OrderStatus[]>> = {
   PAID: ["ACCEPTED", "CANCELLED", "REFUNDED"],
   ACCEPTED: ["PREPARING", "CANCELLED", "REFUNDED"],
   PREPARING: ["READY", "CANCELLED", "REFUNDED"],
-  READY: ["OUT_FOR_DELIVERY", "COMPLETED", "REFUNDED"],
+  // Cancellable even once cooked: a customer who never turns up to collect is
+  // a real outcome, and the food being wasted does not make the order
+  // completed. A delivery that cannot be completed becomes FAILED instead —
+  // see below.
+  READY: ["OUT_FOR_DELIVERY", "COMPLETED", "CANCELLED", "REFUNDED"],
   OUT_FOR_DELIVERY: ["COMPLETED", "FAILED", "REFUNDED"],
   // A completed order can still be refunded — a customer comes back the next
   // day with a complaint and that has to be expressible.

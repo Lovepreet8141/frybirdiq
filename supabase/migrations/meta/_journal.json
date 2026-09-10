@@ -64,6 +64,13 @@
       "when": 1789070430406,
       "tag": "0008_rider_role",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789073301202,
+      "tag": "0009_rejection_reason",
+      "breakpoints": true
     }
   ]
 }

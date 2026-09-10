@@ -16,6 +16,7 @@ import {
   isFulfilmentValid,
 } from "./order-channel";
 import { ROLES, authorize, can, permissionsFor } from "./permissions";
+import { REJECTION_LABELS, REJECTION_MESSAGE, REJECTION_REASONS, isRejectionReason } from "./rejection";
 
 describe("order lifecycle", () => {
   it("walks the happy path for a delivery order", () => {
@@ -246,5 +247,55 @@ describe("permissions", () => {
     for (const role of ROLES) {
       expect(permissionsFor(role).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("turning an order down", () => {
+  it("lets the counter decline a new order", () => {
+    // Saying "we've sold out" is the counter's decision. A shop where only a
+    // manager can decline leaves customers waiting for food never coming.
+    expect(can(["CASHIER"], "orders.cancel")).toBe(true);
+    expect(can(["MANAGER"], "orders.cancel")).toBe(true);
+  });
+
+  it("still keeps refunds away from a cashier", () => {
+    // Declining an unpaid order and giving money back are different acts.
+    expect(can(["CASHIER"], "orders.refund")).toBe(false);
+  });
+
+  it("keeps the kitchen and riders out of it", () => {
+    expect(can(["KITCHEN"], "orders.cancel")).toBe(false);
+    expect(can(["RIDER"], "orders.cancel")).toBe(false);
+  });
+
+  it("allows CANCELLED from every stage before handover", () => {
+    for (const from of ["PENDING_PAYMENT", "PAID", "ACCEPTED", "PREPARING", "READY"] as const) {
+      expect(canTransition(from, "CANCELLED", "TAKEAWAY"), from).toBe(true);
+    }
+  });
+
+  it("refuses to cancel an order that is already finished", () => {
+    expect(canTransition("COMPLETED", "CANCELLED", "TAKEAWAY")).toBe(false);
+  });
+
+  it("uses FAILED, not CANCELLED, for a delivery that could not be made", () => {
+    // A rider who cannot find the door has a different outcome from a shop
+    // that declined the order, and the two should not collapse into one.
+    expect(canTransition("OUT_FOR_DELIVERY", "FAILED", "DELIVERY")).toBe(true);
+    expect(canTransition("OUT_FOR_DELIVERY", "CANCELLED", "DELIVERY")).toBe(false);
+  });
+
+  it("gives every reason a customer-facing message", () => {
+    for (const reason of REJECTION_REASONS) {
+      expect(REJECTION_LABELS[reason]).toBeTruthy();
+      // What the customer is told is never the internal label.
+      expect(REJECTION_MESSAGE[reason]).toMatch(/\w/);
+    }
+  });
+
+  it("rejects anything that is not a known reason", () => {
+    expect(isRejectionReason("SOLD_OUT")).toBe(true);
+    expect(isRejectionReason("BECAUSE")).toBe(false);
+    expect(isRejectionReason(null)).toBe(false);
   });
 });

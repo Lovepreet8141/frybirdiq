@@ -3,9 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
-import { advanceOrder, completeDelivery } from "@/lib/repositories/orders";
+import { advanceOrder, completeDelivery, rejectOrder } from "@/lib/repositories/orders";
 import { recordCashPayment } from "@/lib/repositories/payments";
 import { ORDER_STATUSES } from "@/domain/order-status";
+import { REJECTION_REASONS } from "@/domain/rejection";
 
 export interface StaffActionResult {
   readonly ok: boolean;
@@ -101,6 +102,33 @@ export async function completeDeliveryAction(input: unknown): Promise<StaffActio
       cashCollected: parsed.data.cashCollected,
     });
     revalidatePath("/app/deliveries");
+    revalidatePath("/app/orders");
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  } catch (error) {
+    return explain(error);
+  }
+}
+
+const rejectSchema = z.object({
+  orderId: z.uuid(),
+  reason: z.enum(REJECTION_REASONS),
+  note: z.string().trim().max(200).optional(),
+});
+
+/** Turns an order down. Needs `orders.cancel`, which a cashier does not hold. */
+export async function rejectOrderAction(input: unknown): Promise<StaffActionResult> {
+  const parsed = rejectSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Pick a reason before turning this down." };
+
+  try {
+    const staff = await requirePermission("orders.cancel");
+    const result = await rejectOrder({
+      orderId: parsed.data.orderId,
+      reason: parsed.data.reason,
+      note: parsed.data.note,
+      actorUserId: staff.userId,
+      orgId: staff.orgId,
+    });
     revalidatePath("/app/orders");
     return result.ok ? { ok: true } : { ok: false, error: result.error };
   } catch (error) {

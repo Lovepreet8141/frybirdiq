@@ -100,6 +100,16 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     "orders.view",
     "orders.create",
     "orders.update",
+    /*
+     * A cashier can turn an order down.
+     *
+     * Saying "we have sold out" is the counter's decision to make, and a shop
+     * where only a manager can decline leaves customers waiting for food that
+     * is never coming. The blast radius is bounded elsewhere: rejecting an
+     * order that has been paid for is refused outright, because that is a
+     * refund — which a cashier still cannot do.
+     */
+    "orders.cancel",
     "orders.discount",
     "kitchen.view",
     "delivery.view",

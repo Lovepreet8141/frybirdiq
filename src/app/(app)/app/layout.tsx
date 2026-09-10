@@ -17,11 +17,12 @@ import { resolveHome } from "@/lib/auth/route-home";
  * on it.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const [staff, canSeeOrders, canSeeDeliveries, canSeeAnalytics] = await Promise.all([
+  const [staff, canSeeOrders, canSeeDeliveries, canSeeAnalytics, canReject] = await Promise.all([
     getStaff(),
     staffCan("orders.view"),
     staffCan("delivery.view"),
     staffCan("analytics.view"),
+    staffCan("orders.cancel"),
   ]);
 
   if (!staff) {
@@ -95,7 +96,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
       {/* Above the content, so an order that has arrived is the first thing
           seen rather than something to scroll for. */}
-      {canSeeOrders && <NewOrderAlert />}
+      {canSeeOrders && <NewOrderAlert canReject={canReject} />}
 
       <main className="flex-1">{children}</main>
     </div>

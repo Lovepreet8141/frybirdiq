@@ -107,6 +107,16 @@ export const orders = pgTable(
     invoiceNumber: text("invoice_number"),
     invoicedAt: timestamp("invoiced_at", { withTimezone: true }),
 
+    /**
+     * Why an order was turned down.
+     *
+     * A column rather than only an event, because "why do we reject orders" is
+     * a question the dashboard should be able to answer — an order refused for
+     * being outside the delivery area is a different problem from one refused
+     * because the chicken ran out.
+     */
+    cancellationReason: text("cancellation_reason"),
+
     promotionCode: text("promotion_code"),
     notes: text("notes"),
 
