@@ -49,7 +49,35 @@ export interface DateRange {
 }
 
 /** The named ranges the dashboard offers. */
-export type RangeKey = "today" | "yesterday" | "7d" | "30d";
+export type RangeKey = "today" | "yesterday" | "7d" | "30d" | "mtd" | "lastMonth";
+
+/**
+ * Calendar months, not rolling windows.
+ *
+ * A profit-and-loss has to run on a calendar month because the costs do. Rent
+ * is paid once on the 1st; a rolling 30-day window ending on the 2nd contains
+ * two rents, and one ending on the 31st of a 31-day month contains none.
+ * Either way the month looks wildly wrong for a reason nobody would guess from
+ * the screen.
+ */
+function monthBounds(date: string): { first: string; last: string } {
+  const [year, month] = date.split("-").map(Number) as [number, number, number];
+  const first = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-01`;
+  // Day 0 of the next month is the last day of this one, leap years included.
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const last = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  return { first, last };
+}
+
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+] as const;
+
+function monthLabel(date: string): string {
+  const [year, month] = date.split("-").map(Number) as [number, number, number];
+  return `${MONTH_NAMES[month - 1]} ${year}`;
+}
 
 export function resolveRange(key: RangeKey, now: Date = new Date()): DateRange {
   const today = businessDate(now);
@@ -65,6 +93,24 @@ export function resolveRange(key: RangeKey, now: Date = new Date()): DateRange {
       return { from: startOfBusinessDay(addDays(today, -6)), to: endOfBusinessDay(today), label: "Last 7 days" };
     case "30d":
       return { from: startOfBusinessDay(addDays(today, -29)), to: endOfBusinessDay(today), label: "Last 30 days" };
+    case "mtd": {
+      const { first } = monthBounds(today);
+      return {
+        from: startOfBusinessDay(first),
+        to: endOfBusinessDay(today),
+        label: `${monthLabel(today)} so far`,
+      };
+    }
+    case "lastMonth": {
+      const { first } = monthBounds(today);
+      const inPrevious = addDays(first, -1);
+      const previous = monthBounds(inPrevious);
+      return {
+        from: startOfBusinessDay(previous.first),
+        to: endOfBusinessDay(previous.last),
+        label: monthLabel(inPrevious),
+      };
+    }
   }
 }
 

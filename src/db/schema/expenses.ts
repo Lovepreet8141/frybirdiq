@@ -11,7 +11,6 @@
  * disagree the first time an order was refunded.
  */
 
-import { sql } from "drizzle-orm";
 import { boolean, date, index, integer, pgEnum, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
 
 import { money, primaryId, timestamps, ZERO_MONEY } from "./_shared";

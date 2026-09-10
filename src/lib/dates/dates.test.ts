@@ -60,3 +60,39 @@ describe("ranges", () => {
     expect(before.to.getTime() - before.from.getTime()).toBe(range.to.getTime() - range.from.getTime());
   });
 });
+
+describe("calendar month ranges", () => {
+  it("runs month-to-date from the 1st, not 30 days back", () => {
+    // The bug this prevents: rent is paid on the 1st. A rolling 30-day window
+    // ending on the 2nd contains two rents and reports a catastrophic month.
+    const range = resolveRange("mtd", new Date("2026-03-17T10:00:00+05:30"));
+    expect(businessDate(range.from)).toBe("2026-03-01");
+    expect(businessDate(new Date(range.to.getTime() - 1))).toBe("2026-03-17");
+    expect(range.label).toBe("March 2026 so far");
+  });
+
+  it("gives last month its real length, not 30 days", () => {
+    const range = resolveRange("lastMonth", new Date("2026-03-17T10:00:00+05:30"));
+    expect(businessDate(range.from)).toBe("2026-02-01");
+    expect(businessDate(new Date(range.to.getTime() - 1))).toBe("2026-02-28");
+    expect(range.label).toBe("February 2026");
+  });
+
+  it("gets February right in a leap year", () => {
+    const range = resolveRange("lastMonth", new Date("2028-03-05T10:00:00+05:30"));
+    expect(businessDate(new Date(range.to.getTime() - 1))).toBe("2028-02-29");
+  });
+
+  it("crosses a year boundary backwards", () => {
+    const range = resolveRange("lastMonth", new Date("2026-01-09T10:00:00+05:30"));
+    expect(businessDate(range.from)).toBe("2025-12-01");
+    expect(businessDate(new Date(range.to.getTime() - 1))).toBe("2025-12-31");
+    expect(range.label).toBe("December 2025");
+  });
+
+  it("covers a 31-day month end to end", () => {
+    const range = resolveRange("lastMonth", new Date("2026-02-03T10:00:00+05:30"));
+    expect(businessDate(range.from)).toBe("2026-01-01");
+    expect(businessDate(new Date(range.to.getTime() - 1))).toBe("2026-01-31");
+  });
+});

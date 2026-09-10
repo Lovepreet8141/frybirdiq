@@ -45,6 +45,15 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
             FRYBIRD <span className="text-primary">IQ</span>
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">{range.label}, Sector 9</p>
+          <nav aria-label="FRYBIRD IQ sections" className="mt-3 flex flex-wrap gap-4 text-sm font-semibold">
+            <span aria-current="page" className="text-foreground">Sales</span>
+            <Link href="/app/iq/pnl" className="text-muted-foreground transition-colors hover:text-foreground">
+              Profit and loss
+            </Link>
+            <Link href="/app/iq/expenses" className="text-muted-foreground transition-colors hover:text-foreground">
+              Expenses
+            </Link>
+          </nav>
         </div>
 
         {/* Filters in one row above the charts. */}
