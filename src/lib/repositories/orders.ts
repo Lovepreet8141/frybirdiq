@@ -12,12 +12,14 @@ import "server-only";
  * seed, and it is the first thing to verify once keys exist.
  */
 
-import { and, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { locations, orderEvents, orderItemModifiers, orderItems, orders, organizations } from "@/db/schema";
+import { locations, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
 import { assertChannelFulfilment } from "@/domain/order-channel";
+import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition } from "@/domain/order-status";
 import { isSupabaseConfigured } from "@/lib/env";
+import { type Paise, paise } from "@/lib/money";
 import { getPricedCart } from "@/lib/cart";
 import { createPendingPayment } from "./payments";
 import { IdempotencyConflict, withIdempotency } from "./idempotency";
@@ -266,4 +268,127 @@ export async function getOrder(id: string): Promise<OrderView | null> {
         .map((modifier) => modifier.modifierName),
     })),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Staff                                                               */
+/* ------------------------------------------------------------------ */
+
+export interface StaffOrderView {
+  readonly id: string;
+  readonly orderNumber: string;
+  readonly status: OrderStatus;
+  readonly fulfilment: FulfilmentType;
+  readonly customerName: string | null;
+  readonly customerPhone: string | null;
+  readonly grandTotal: Paise;
+  readonly isPaid: boolean;
+  readonly placedAt: Date | null;
+  readonly notes: string | null;
+  readonly items: readonly { name: string; quantity: number; modifiers: string[] }[];
+}
+
+/**
+ * Orders the counter still has to do something about, newest first.
+ *
+ * Terminal orders are excluded: a completed or cancelled order is history, and
+ * a counter screen that accumulates them becomes unreadable by the second
+ * lunch service.
+ */
+export async function listActiveOrders(orgId: string): Promise<readonly StaffOrderView[]> {
+  const database = db();
+
+  const rows = await database
+    .select()
+    .from(orders)
+    .where(and(eq(orders.orgId, orgId), notInArray(orders.status, [...TERMINAL_STATUSES])))
+    .orderBy(desc(orders.createdAt))
+    .limit(100);
+
+  if (rows.length === 0) return [];
+
+  const ids = rows.map((row) => row.id);
+  const items = await database.select().from(orderItems).where(inArray(orderItems.orderId, ids));
+  const itemIds = items.map((item) => item.id);
+  const mods =
+    itemIds.length > 0
+      ? await database.select().from(orderItemModifiers).where(inArray(orderItemModifiers.orderItemId, itemIds))
+      : [];
+  const paid = await database
+    .select()
+    .from(payments)
+    .where(and(inArray(payments.orderId, ids), eq(payments.status, "CAPTURED")));
+
+  const paidOrderIds = new Set(paid.map((payment) => payment.orderId));
+
+  return rows.map((row) => ({
+    id: row.id,
+    orderNumber: row.orderNumber,
+    status: row.status,
+    fulfilment: row.fulfilment,
+    customerName: row.customerName,
+    customerPhone: row.customerPhone,
+    grandTotal: paise(row.grandTotal),
+    isPaid: paidOrderIds.has(row.id),
+    placedAt: row.placedAt,
+    notes: row.notes,
+    items: items
+      .filter((item) => item.orderId === row.id)
+      .map((item) => ({
+        name: item.productName,
+        quantity: item.quantity,
+        modifiers: mods.filter((mod) => mod.orderItemId === item.id).map((mod) => mod.modifierName),
+      })),
+  }));
+}
+
+/**
+ * Moves an order to the next status.
+ *
+ * The transition is validated by the domain state machine, not by whatever the
+ * button happened to send — a stale screen must not be able to push an order
+ * backwards. The actor is recorded on the event.
+ */
+export async function advanceOrder(input: {
+  orderId: string;
+  to: OrderStatus;
+  actorUserId: string;
+  orgId: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const database = db();
+  const [order] = await database
+    .select()
+    .from(orders)
+    .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
+    .limit(1);
+
+  if (!order) return { ok: false, error: "That order does not exist." };
+
+  try {
+    assertTransition(order.status, input.to, order.fulfilment);
+  } catch {
+    return { ok: false, error: `An order that is ${order.status.toLowerCase()} cannot become ${input.to.toLowerCase()}.` };
+  }
+
+  const now = new Date();
+  await database
+    .update(orders)
+    .set({
+      status: input.to,
+      updatedAt: now,
+      ...(input.to === "ACCEPTED" ? { acceptedAt: now } : {}),
+      ...(input.to === "READY" ? { readyAt: now } : {}),
+      ...(input.to === "COMPLETED" ? { completedAt: now } : {}),
+    })
+    .where(eq(orders.id, order.id));
+
+  await database.insert(orderEvents).values({
+    orgId: input.orgId,
+    orderId: order.id,
+    fromStatus: order.status,
+    toStatus: input.to,
+    actorUserId: input.actorUserId,
+  });
+
+  return { ok: true };
 }

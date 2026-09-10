@@ -8,6 +8,25 @@ Specification: [`BUILD-PLAN.md`](BUILD-PLAN.md).
 Working agreement: [`CLAUDE.md`](CLAUDE.md).
 Design source of truth: [`design-system/MASTER.md`](design-system/MASTER.md).
 
+## Setting up staff access
+
+There is no sign-up. Create the account, then grant it a role:
+
+1. Supabase dashboard → **Authentication → Users → Add user**. Set an email and
+   password, and tick "Auto Confirm User".
+2. Grant the role:
+
+   ```bash
+   pnpm staff:grant you@example.com OWNER
+   ```
+
+Roles: `OWNER`, `ADMIN`, `MANAGER`, `CASHIER`, `KITCHEN`, `INVENTORY`,
+`ANALYST`. A cashier can take payment and discount but not refund; a manager
+can edit the menu but not reprice it. See `src/domain/permissions.ts`.
+
+Then sign in at `/sign-in`. Without a membership row an authenticated user is a
+stranger with an account — the staff area stays shut.
+
 ## Getting started
 
 ```bash
@@ -45,6 +64,7 @@ that has already taken orders unless you pass `--force`.
 | `pnpm db:seed` | Seed FRYBIRD's real menu from the printed boards |
 | `pnpm order:verify` | Print the most recent order straight from Postgres |
 | `pnpm order:settle` | Take cash on the most recent unpaid order |
+| `pnpm staff:grant <email> <role>` | Give a Supabase user a role in the org |
 | `python3 scripts/check-contrast.py` | WCAG check on the brand palette |
 
 ## Where things are
@@ -79,10 +99,6 @@ Tick an item when the real value is in the repo, not when the answer is known.
 
 ### Blocking
 
-- [ ] **Staff sign-in.** Settling a cash order needs an authenticated cashier
-      with `orders.update`. The service enforces the permission already; there
-      is no screen to reach it from, and no auth to identify who is pressing.
-      Blocks the counter using this for real.
 - [ ] **Delivery fee and radius** — *blocks delivery.* Checkout is collection
       only. Delivery needs a fee and a radius, and inventing a fee would put a
       number in front of a customer that nobody agreed to. The order lifecycle
@@ -123,6 +139,11 @@ Tick an item when the real value is in the repo, not when the answer is known.
       `inclusive`; both modes remain covered by tests, and `gst()` now requires
       the basis rather than defaulting, so no caller can silently fall back to
       the wrong one.
+- [x] **Staff sign-in.** Email and password via Supabase Auth, no public
+      sign-up — a counter account is not something a stranger should be able to
+      mint. `/app/*` is gated in a Server Component, and every action re-checks
+      its own permission, because rendering a screen is not authorization for
+      the actions on it.
 - [x] **Direct orders only.** No Swiggy, no Zomato, no commission, no
       settlement. `orders.channel` records dine-in, takeaway or online for the
       revenue split, and `margin()` is revenue net of tax minus cost. A
@@ -148,8 +169,10 @@ Still outstanding:
   payment; settling it moves the order to PAID, books the money once, and
   writes an audit row. Online payment slots in behind the same
   `PaymentProvider` interface without touching order logic.
-- **No staff screen to settle from yet.** Settlement needs authenticated staff,
-  and sign-in is not built. Until it is, `pnpm order:settle` drives the real
-  service from the command line.
+- **The counter screen is live** at `/app/orders`. A cashier signs in, sees
+  open orders, takes cash, and moves tickets through accepted → cooking →
+  ready → collected. Every action is permission-checked server-side.
+- **Orders do not appear on their own yet.** Realtime is Phase 3; the list says
+  so rather than looking live and silently not being.
 - **Realtime is Phase 3.** The tracking page reflects status at page load. It
   does not pretend to be live.

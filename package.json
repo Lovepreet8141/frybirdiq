@@ -15,7 +15,8 @@
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/db/seed.ts",
     "order:verify": "tsx scripts/verify-order.ts",
-    "order:settle": "tsx --conditions=react-server scripts/settle-cash.ts"
+    "order:settle": "tsx --conditions=react-server scripts/settle-cash.ts",
+    "staff:grant": "tsx --conditions=react-server scripts/grant-role.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
