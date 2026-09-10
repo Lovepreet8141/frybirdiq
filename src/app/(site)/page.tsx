@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
+import { HeroBadge } from "@/components/hero/hero-badge";
 import { ProductCard } from "@/components/menu/product-card";
 import { getAllProducts, getMenu } from "@/lib/repositories/menu";
+import { restaurantSchema } from "@/lib/seo/restaurant";
 
 /**
  * Home. BUILD-PLAN.md §10.
@@ -9,10 +11,12 @@ import { getAllProducts, getMenu } from "@/lib/repositories/menu";
  * "The home page is a conversion surface, not a portfolio piece." Primary goal
  * is to order, so the hero has one clear action and the menu is one tap away.
  *
- * No 3D — deferred out of Phase 0–3 per design-system/3d.md. No stock food
- * photography either: the brand brief is explicit that stock chicken photos
- * read as a template with a logo on it, and the layout is built to be
- * confident without an image and to take a real one when it exists.
+ * The hero carries the 3D badge as of Phase 4, under the terms in
+ * design-system/3d.md: dynamically imported, mounted after paint, poster
+ * fallback, desktop only. The caveat in that document still stands — real food
+ * photography would outsell a spinning logo, and the badge is not a substitute
+ * for it. It is here because the layout was already confident without an image
+ * and the badge fills the space the photograph will eventually take.
  *
  * No AI concierge yet either; §10 lists one but it is Phase 11.
  */
@@ -33,9 +37,23 @@ export default async function HomePage() {
 
   return (
     <>
+      {/* Local-business structured data. A search result that carries the
+          address, the hours and the price range is the difference between
+          being found in Ambala and not. */}
+      <script
+        type="application/ld+json"
+        // The payload is built from constants in this repo, never from user
+        // input, so there is nothing here for a string to break out of.
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema()) }}
+      />
+
       {/* Hero */}
-      <section className="border-b border-border">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-[var(--gutter)] py-16 sm:py-24">
+      <section className="relative overflow-hidden border-b border-border">
+        <HeroBadge />
+        {/* On desktop the copy keeps to the left half so the badge has a
+            column of its own. Without the cap the lede runs under the coin and
+            the one paragraph that explains the food becomes unreadable. */}
+        <div className="relative z-10 mx-auto flex w-full max-w-6xl flex-col gap-8 px-[var(--gutter)] py-16 sm:py-24 lg:max-w-[min(72rem,100%)] [&>*]:lg:max-w-[50%]">
           <div className="flex flex-col gap-5">
             <p className="text-xs font-semibold uppercase tracking-[0.08em] text-primary">
               Sector 9 · Ambala City
