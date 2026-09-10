@@ -4,58 +4,80 @@ The ordering app and FRYBIRD IQ on `frybirdiq.tech`, on a Hostinger VPS at
 194.238.16.200. WordPress can join it later on its own domain. The database stays on Supabase — nothing about this puts Postgres on
 the VPS.
 
-Everything here is written to be run by you, on your server. I have no access
-to it and have not run any of it.
+Deployed and verified on 2026-09-11. What follows is what actually worked, with
+the things that went wrong recorded where they bit rather than as a tidy
+afterthought.
 
 ---
 
-## Before anything else: the database connection will break
+## The two failures worth knowing about
 
-Your `DATABASE_URL` currently points at Supabase's **direct** connection:
+### Your database password ends in `@` — encode it
 
-```
-db.shbmprmarlubyhaklmpr.supabase.co:5432
-```
-
-That host is **IPv6-only** on current Supabase projects. It works from your Mac
-because your home connection has IPv6. Most VPS instances are IPv4-primary, and
-on one of those the app will start cleanly, serve the menu from cache, and then
-fail on the first database read with a connection timeout — which looks like a
-Supabase outage rather than a config problem.
-
-Use the **Session pooler** string in production instead:
-
-Supabase dashboard → Project Settings → Database → Connection string → **Session
-pooler**. It looks like:
+This is the one that broke the first deploy. The password must appear in
+`DATABASE_URL` as `%40`, not a literal `@`:
 
 ```
-postgresql://postgres.shbmprmarlubyhaklmpr:PASSWORD@aws-0-<region>.pooler.supabase.com:5432/postgres
+postgresql://postgres:pass%40word@db.<ref>.supabase.co:5432/postgres
+                          ^^^                ^
+                          encoded            the real separator
 ```
 
-Two things to carry over:
+Pasted raw, the URL parser treats the password's `@` as the host separator and
+sends only the characters before it. The host still parses correctly, so you get:
 
-- The username changes to `postgres.<project-ref>`. It is not just a new host.
-- Your password contains an `@`, which must stay percent-encoded as `%40`, or
-  the driver reads the host as starting from the wrong character.
+```
+password authentication failed for user "postgres"   (SQLSTATE 28P01)
+```
 
-`postgres` is already configured with `prepare: false`, which is what a pooled
-connection requires.
+which reads like a wrong password rather than a quoting bug. `nano` will not
+warn you. Copy the working line from `.env.local` rather than retyping it.
 
-Check before you deploy:
+### Ubuntu's cloud images override your sshd edits
+
+Editing `PasswordAuthentication no` into `/etc/ssh/sshd_config` appears to
+work — `sshd -t` passes, the reload succeeds — and changes nothing, because
+`/etc/ssh/sshd_config.d/50-cloud-init.conf` sets `yes` and SSH honours the
+**first** occurrence of a keyword. The include sits at the top of the main file,
+so the drop-in always wins.
+
+Edit the drop-in, and verify the effective setting rather than trusting the
+edit:
 
 ```bash
-psql "$DATABASE_URL" -c "select 1"
+sshd -T | grep -i passwordauthentication
 ```
+
+---
+
+## About IPv6 and the session pooler
+
+Supabase's direct host (`db.<ref>.supabase.co`) is IPv6-only. Advice elsewhere
+says to switch production to the session pooler for this reason.
+
+**This VPS did not need it.** Hostinger assigns a global IPv6 address, and the
+direct connection works:
+
+```bash
+timeout 10 bash -c "cat < /dev/null > /dev/tcp/db.<ref>.supabase.co/5432"
+```
+
+For a long-running Node server the direct connection is the better choice — the
+pooler exists mainly for serverless. Test before assuming; only move to the
+pooler if that check fails, and note that the pooler also changes the username
+to `postgres.<project-ref>`.
 
 ---
 
 ## 1. The VPS
 
-A 2 GB plan is the smallest sensible size once WordPress and PHP-FPM are also
-running. 1 GB will work but leaves nothing spare.
+Running on Hostinger **KVM 1** (1 vCPU, 4 GB RAM, 50 GB) — comfortably
+oversized. The app, nginx and the OS together sit under 1 GB, and the expensive
+job, `next build`, runs on the Mac and ships the result.
 
-Ubuntu 22.04 or 24.04. If you pick a Hostinger template that installs a control
-panel, the panel manages nginx — see the note in step 5.
+**Ubuntu 26.04 LTS**, plain. Do not pick a template bundled with CyberPanel,
+Plesk or cPanel: the panel takes ownership of nginx and overwrites the config in
+step 5.
 
 ```bash
 ssh root@YOUR_SERVER_IP
