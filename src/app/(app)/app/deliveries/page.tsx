@@ -26,7 +26,11 @@ export default async function DeliveriesPage() {
       </div>
 
       {deliveries.length === 0 ? (
-        <EmptyState className="mt-8" title="Nothing to deliver." detail="Orders appear here once the kitchen sends them out." />
+        <EmptyState
+          className="mt-8"
+          title="Nothing to deliver."
+          detail="Delivery orders appear here once the kitchen marks them ready. Collection orders never do — they are handed over at the counter."
+        />
       ) : (
         <ul className="mt-6 flex flex-col gap-4">
           {deliveries.map((order) => (

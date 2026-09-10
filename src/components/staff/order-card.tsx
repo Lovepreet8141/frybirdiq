@@ -103,6 +103,8 @@ export function OrderCard({
 
   const next = nextStep(order.status, order.fulfilment);
   const isDelivery = order.fulfilment === "DELIVERY";
+  /** Handing over an unpaid order is giving food away. */
+  const blockedByPayment = !order.isPaid && next?.to === "COMPLETED";
 
   const run = (work: () => Promise<{ ok: boolean; error?: string }>) =>
     startTransition(async () => {
@@ -118,6 +120,9 @@ export function OrderCard({
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-3">
             <span className="tabular font-heading text-2xl font-bold">#{order.orderNumber}</span>
+            <span className="rounded-full border border-border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              {isDelivery ? "Delivery" : "Collection"}
+            </span>
             <span
               className={cn(
                 "rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em]",
@@ -171,9 +176,16 @@ export function OrderCard({
           {next && canAdvance && (
             <button
               type="button"
-              disabled={pending}
+              /*
+               * Blocked rather than refused. Completing an unpaid order is the
+               * one move the server rejects, and letting it be pressed just to
+               * fail repeats the reason back as an error — the same sentence
+               * twice, once as a hint and once as an alert. §56 lists
+               * `disabled` as a state to build, not a case to explain after.
+               */
+              disabled={pending || blockedByPayment}
               onClick={() => run(() => advanceOrderAction({ orderId: order.id, to: next.to }))}
-              className="flex min-h-[56px] flex-1 items-center justify-center gap-2 rounded-md bg-primary px-5 font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="flex min-h-[56px] flex-1 items-center justify-center gap-2 rounded-md bg-primary px-5 font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {pending ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : next.label}
             </button>
@@ -218,7 +230,7 @@ export function OrderCard({
         </div>
 
         {/* Said before it is pressed, rather than as an error afterwards. */}
-        {!order.isPaid && next?.to === "COMPLETED" && (
+        {blockedByPayment && (
           <p className="text-sm text-muted-foreground">
             {isDelivery
               ? "Record the cash from the rider before closing this order."
