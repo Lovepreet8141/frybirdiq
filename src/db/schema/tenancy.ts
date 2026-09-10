@@ -67,19 +67,10 @@ export const locations = pgTable(
     lngMicro: integer("lng_micro"),
 
     /*
-     * Delivery pricing. Every number is configured, none assumed.
-     *
-     * `deliveryMaxMetres` at 0 means this outlet does not deliver — which is
-     * the correct state for a shop that has not decided what it charges, and
-     * the state it ships in.
+     * Delivery pricing. The bands live in `deliveryBands`; no bands means this
+     * outlet does not deliver, which is the correct state for a shop that has
+     * not decided what it charges and the state it ships in.
      */
-    deliveryBaseFee: money("delivery_base_fee").notNull().default(ZERO_MONEY),
-    /** Distance the base fee already covers. */
-    deliveryIncludedMetres: integer("delivery_included_metres").notNull().default(0),
-    /** Charged per started kilometre beyond the included distance. */
-    deliveryPerKmFee: money("delivery_per_km_fee").notNull().default(ZERO_MONEY),
-    /** Beyond this, no delivery. Zero disables it. */
-    deliveryMaxMetres: integer("delivery_max_metres").notNull().default(0),
     /** Order value at or above which delivery is free. Null means never. */
     deliveryFreeAbove: money("delivery_free_above"),
     /** Straight-line × this ≈ road distance. 13000 bps is 1.3×. */
@@ -135,4 +126,42 @@ export const featureFlags = pgTable(
     ...timestamps,
   },
   (table) => [unique("feature_flags_org_key_unique").on(table.orgId, table.key)],
+);
+
+/**
+ * Distance bands for delivery pricing.
+ *
+ * Real delivery pricing is banded — free nearby, a flat charge for the middle
+ * ring, per-kilometre once it is genuinely far. A single base-plus-per-km
+ * formula cannot express "free under 3 km, ₹30 from 3 to 5" without charging
+ * per kilometre inside the flat band.
+ *
+ * A row per band rather than JSON on the location, so the fees stay `bigint`
+ * paise columns like every other amount in the schema.
+ *
+ * Each band runs from the previous band's ceiling to its own. The highest
+ * band's ceiling is the delivery limit.
+ */
+export const deliveryBands = pgTable(
+  "delivery_bands",
+  {
+    id: primaryId(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locations.id, { onDelete: "cascade" }),
+    /** Inclusive upper bound of this band. */
+    upToMetres: integer("up_to_metres").notNull(),
+    /** Charged for any distance falling in this band. */
+    flatFee: money("flat_fee").notNull().default(ZERO_MONEY),
+    /** Added per started km beyond where this band begins. Usually zero. */
+    perKmFee: money("per_km_fee").notNull().default(ZERO_MONEY),
+    ...timestamps,
+  },
+  (table) => [
+    unique("delivery_bands_location_upto_unique").on(table.locationId, table.upToMetres),
+    index("delivery_bands_location_idx").on(table.locationId),
+  ],
 );

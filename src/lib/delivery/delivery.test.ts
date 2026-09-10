@@ -5,6 +5,7 @@ import {
   type DeliveryRates,
   formatDistance,
   fromMicro,
+  maxDeliveryMetres,
   quoteDelivery,
   straightLineMetres,
   toMicro,
@@ -12,16 +13,22 @@ import {
 } from "./index";
 
 /** Sector 9, Ambala City — roughly. Used only as a fixed reference point. */
-const OUTLET = toPoint({ lat: 30.3782, lng: 76.7767 });
+const OUTLET = toPoint({ lat: 30.361812, lng: 76.780937 });
 
+/**
+ * FRYBIRD's actual structure: free under 3 km, ₹30 from 3 to 5, then ₹30 plus
+ * ₹10 per started kilometre past 5, and nothing beyond 8.
+ *
+ * The road factor is 1.0 here so these tests are about the band rules rather
+ * than about the straight-line-to-road conversion, which has its own test.
+ */
 const RATES: DeliveryRates = {
-  baseFee: fromRupees("30"),
-  includedMetres: 2000,
-  perKmFee: fromRupees("10"),
-  maxMetres: 8000,
+  bands: [
+    { upToMetres: 3000, flatFee: ZERO, perKmFee: ZERO },
+    { upToMetres: 5000, flatFee: fromRupees("30"), perKmFee: ZERO },
+    { upToMetres: 8000, flatFee: fromRupees("30"), perKmFee: fromRupees("10") },
+  ],
   freeAboveOrderValue: null,
-  // Charge on the crow-flies distance, so the arithmetic in these tests is
-  // about the fee rules rather than about the road factor.
   roadFactorBps: 10_000,
 };
 
@@ -49,97 +56,125 @@ describe("distance", () => {
   });
 
   it("is symmetric", () => {
-    const other = toPoint({ lat: 30.39, lng: 76.79 });
+    const other = toPoint({ lat: 30.371812, lng: 76.790937 });
     expect(straightLineMetres(OUTLET, other)).toBe(straightLineMetres(other, OUTLET));
   });
 
   it("measures a known short hop", () => {
     // 0.01 degrees of latitude is about 1.11 km anywhere on Earth.
-    const north = toPoint({ lat: 30.3882, lng: 76.7767 });
+    const north = toPoint({ lat: 30.371812, lng: 76.780937 });
     expect(straightLineMetres(OUTLET, north)).toBeGreaterThan(1080);
     expect(straightLineMetres(OUTLET, north)).toBeLessThan(1130);
   });
 
   it("returns whole metres, so no fraction reaches a fee", () => {
-    const other = toPoint({ lat: 30.3912, lng: 76.7834 });
+    const other = toPoint({ lat: 30.375812, lng: 76.788937 });
     expect(Number.isInteger(straightLineMetres(OUTLET, other))).toBe(true);
   });
 });
 
 describe("pricing", () => {
-  const quote = (lat: number, lng: number, rates = RATES, orderValue = fromRupees("300")) =>
-    quoteDelivery({ from: OUTLET, to: toPoint({ lat, lng }), rates, orderValue });
-
-  it("charges only the base fee inside the included distance", () => {
-    const result = quote(30.3800, 76.7780); // a few hundred metres
-    expect(result.available).toBe(true);
-    if (!result.available) return;
-    expect(result.chargeableMetres).toBeLessThan(2000);
-    expect(formatINR(result.fee)).toBe("₹30");
-  });
-
-  it("charges each started kilometre beyond the included distance", () => {
-    // ~3.3 km out: 1.3 km beyond the 2 km included, so two started km.
-    const result = quote(30.4080, 76.7767);
-    expect(result.available).toBe(true);
-    if (!result.available) return;
-    expect(result.chargeableMetres).toBeGreaterThan(3000);
-    expect(result.chargeableMetres).toBeLessThan(3500);
-    expect(formatINR(result.fee)).toBe("₹50"); // 30 + 2 × 10
-  });
-
-  it("rounds a part kilometre up, so the same pin always costs the same", () => {
-    // Pro-rating would make the fee drift by a rupee between cart and receipt.
-    const justOver = quoteDelivery({
+  /**
+   * Places a pin a precise number of kilometres due north of the outlet.
+   *
+   * The constant is derived from the same Earth radius the module's haversine
+   * uses (pi x R / 180), not a textbook 111_132. A close-but-different value
+   * makes "6 km" land at 6003 m, which tips into the next started kilometre
+   * and fails a test for a reason that has nothing to do with the band rules.
+   */
+  const METRES_PER_DEGREE_LAT = (Math.PI * 6_371_008.8) / 180;
+  const atKm = (km: number, rates = RATES, orderValue = fromRupees("300")) =>
+    quoteDelivery({
       from: OUTLET,
-      to: toPoint({ lat: 30.3782, lng: 76.7767 }),
-      rates: { ...RATES, includedMetres: 0 },
-      orderValue: fromRupees("300"),
+      to: toPoint({ lat: 30.361812 + (km * 1000) / METRES_PER_DEGREE_LAT, lng: 76.780937 }),
+      rates,
+      orderValue,
     });
-    expect(justOver.available).toBe(true);
-    if (!justOver.available) return;
-    // Zero distance is zero started kilometres — the base fee only.
-    expect(formatINR(justOver.fee)).toBe("₹30");
+
+  /** The fee at a distance, or a failure naming the distance that was refused. */
+  const feeAt = (km: number, rates = RATES, orderValue = fromRupees("300")) => {
+    const quote = atKm(km, rates, orderValue);
+    if (!quote.available) throw new Error(`expected a quote at ${km} km, got: ${quote.reason}`);
+    return formatINR(quote.fee);
+  };
+
+  it("delivers free inside the first band", () => {
+    for (const km of [0.5, 1, 2, 2.9]) {
+      expect(feeAt(km), `${km} km`).toBe("₹0");
+    }
   });
 
-  it("refuses a pin beyond the maximum radius", () => {
-    const result = quote(30.4700, 76.7767); // ~10 km
+  it("charges a flat ₹30 across the whole middle band", () => {
+    // The point of bands: 3.2 km and 4.8 km cost the same. A base-plus-per-km
+    // formula would charge these differently.
+    expect(feeAt(3.2)).toBe("₹30");
+    expect(feeAt(4.8)).toBe("₹30");
+  });
+
+  it("adds ₹10 per started kilometre past 5 km", () => {
+    expect(feeAt(5.5)).toBe("₹40");
+    expect(feeAt(6)).toBe("₹40");
+    expect(feeAt(6.5)).toBe("₹50");
+    expect(feeAt(7.5)).toBe("₹60");
+  });
+
+  it("steps by ₹10 at the 5 km edge, not by ₹30", () => {
+    // Charging ₹10 per km on the *total* distance would make 5.1 km cost ₹60,
+    // doubling the fee for one extra step. The per-km element applies only to
+    // the distance past where the band begins.
+    expect(feeAt(4.99)).toBe("₹30");
+    expect(feeAt(5.01)).toBe("₹40");
+  });
+
+  it("refuses a pin beyond the last band", () => {
+    const result = atKm(9);
     expect(result.available).toBe(false);
     if (result.available) return;
     expect(result.reason).toMatch(/outside our delivery area/);
     expect(result.reason).toMatch(/8\.0 km/);
   });
 
-  it("applies the road factor before deciding whether the pin is in range", () => {
-    // 7 km straight line is inside an 8 km limit, but 1.3× road is not.
-    const nearLimit = { ...RATES, roadFactorBps: 13_000 };
-    const straight = quote(30.4410, 76.7767, nearLimit);
-    expect(straight.chargeableMetres).toBeGreaterThan(straight.straightLineMetres);
-    expect(straight.available).toBe(false);
+  it("delivers right up to the limit", () => {
+    expect(feeAt(8)).toBe("₹60");
+  });
+
+  it("applies the road factor before choosing the band", () => {
+    // 2.5 km straight is inside the free band; at 1.3x road it is 3.25 km and
+    // lands in the ₹30 band.
+    const roads = { ...RATES, roadFactorBps: 13_000 };
+    const result = atKm(2.5, roads);
+    expect(result.available).toBe(true);
+    if (!result.available) return;
+    expect(result.chargeableMetres).toBeGreaterThan(result.straightLineMetres);
+    expect(formatINR(result.fee)).toBe("₹30");
   });
 
   it("waives the fee above the free-delivery threshold", () => {
     const rates = { ...RATES, freeAboveOrderValue: fromRupees("500") };
-    const under = quote(30.4080, 76.7767, rates, fromRupees("499"));
-    const over = quote(30.4080, 76.7767, rates, fromRupees("500"));
+    expect(feeAt(6, rates, fromRupees("499"))).toBe("₹40");
 
-    expect(under.available && under.fee).toBe(fromRupees("50"));
+    const over = atKm(6, rates, fromRupees("500"));
     expect(over.available && over.fee).toBe(ZERO);
     expect(over.available && over.waived).toBe(true);
   });
 
-  it("says it does not deliver when nothing has been configured", () => {
-    // The correct behaviour for a shop that has not decided what it charges.
-    const result = quote(30.3800, 76.7780, DELIVERY_DISABLED);
+  it("says it does not deliver when no bands are configured", () => {
+    const result = atKm(1, DELIVERY_DISABLED);
     expect(result.available).toBe(false);
     if (result.available) return;
     expect(result.reason).toMatch(/don't deliver yet/);
   });
 
+  it("reports the delivery limit from the last band", () => {
+    expect(maxDeliveryMetres(RATES)).toBe(8000);
+    expect(maxDeliveryMetres(DELIVERY_DISABLED)).toBe(0);
+  });
+
   it("never quotes a negative fee", () => {
-    const generous = { ...RATES, includedMetres: 50_000 };
-    const result = quote(30.3800, 76.7780, generous);
-    expect(result.available && result.fee).toBe(fromRupees("30"));
+    for (const km of [0.1, 3, 5, 7.9]) {
+      const quote = atKm(km);
+      expect(quote.available && quote.fee >= ZERO, `${km} km`).toBe(true);
+    }
   });
 });
 

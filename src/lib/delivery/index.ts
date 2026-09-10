@@ -87,38 +87,55 @@ export function straightLineMetres(a: MicroPoint, b: MicroPoint): number {
 }
 
 /**
+ * One distance band.
+ *
+ * Bands are the shape real delivery pricing takes: free nearby, a flat charge
+ * for the middle ring, then per-kilometre once it is genuinely far. A single
+ * base-plus-per-km formula cannot express "free under 3 km, ₹30 from 3 to 5"
+ * without charging per kilometre inside the flat band.
+ *
+ * Each band covers from the previous band's `upToMetres` to its own. Within a
+ * band the customer pays `flatFee`, plus `perKmFee` for each **started**
+ * kilometre past where the band begins.
+ */
+export interface DeliveryBand {
+  /** Inclusive upper bound of this band. */
+  readonly upToMetres: number;
+  /** Charged for any distance falling in this band. */
+  readonly flatFee: Paise;
+  /** Added per started km beyond where this band begins. Usually zero. */
+  readonly perKmFee: Paise;
+}
+
+/**
  * What delivery costs, per location.
  *
- * Every number is configured, none is assumed. Until an outlet has rates set,
- * `maxMetres` is 0 and delivery is simply unavailable — which is the correct
- * behaviour for a shop that has not decided what it charges.
+ * Every number is configured, none assumed. No bands means the outlet does not
+ * deliver — the correct state for a shop that has not decided what it charges,
+ * and the state it ships in.
  */
 export interface DeliveryRates {
-  /** Charged on any delivery order within range. */
-  readonly baseFee: Paise;
-  /** Distance the base fee already covers. */
-  readonly includedMetres: number;
-  /** Charged per started kilometre beyond `includedMetres`. */
-  readonly perKmFee: Paise;
-  /** Beyond this, no delivery. Zero disables delivery entirely. */
-  readonly maxMetres: number;
+  /** Ordered by `upToMetres`, ascending. The last one is the delivery limit. */
+  readonly bands: readonly DeliveryBand[];
   /** Order value at or above which delivery is free. Null means never. */
   readonly freeAboveOrderValue: Paise | null;
   /**
-   * Straight-line distance × this ≈ road distance. 13_000 bps is 1.3×.
-   * 10_000 bps means "charge on the crow-flies distance".
+   * Straight-line × this ≈ road distance. 13000 bps is 1.3×.
+   * 10000 bps means "charge on the crow-flies distance".
    */
   readonly roadFactorBps: Bps;
 }
 
 export const DELIVERY_DISABLED: DeliveryRates = {
-  baseFee: ZERO,
-  includedMetres: 0,
-  perKmFee: ZERO,
-  maxMetres: 0,
+  bands: [],
   freeAboveOrderValue: null,
   roadFactorBps: 13_000,
 };
+
+/** The furthest this outlet will go. Zero when it does not deliver. */
+export function maxDeliveryMetres(rates: DeliveryRates): number {
+  return rates.bands.at(-1)?.upToMetres ?? 0;
+}
 
 export type DeliveryQuote =
   | {
@@ -141,10 +158,13 @@ export type DeliveryQuote =
 /**
  * Prices a delivery.
  *
- * Beyond the included distance, each **started** kilometre is charged in full.
- * Rounding up rather than pro-rating is what a customer expects from a per-km
- * price, and it means the same pin always quotes the same fee — a fee that
- * drifts by a rupee between the cart and the receipt reads as a bug.
+ * Finds the band the distance falls in, then charges that band's flat fee plus
+ * any per-kilometre element for the distance past where the band starts.
+ *
+ * Each **started** kilometre is charged in full rather than pro-rated. That is
+ * what a per-km price means to a customer, and it means the same pin always
+ * quotes the same fee — one that drifts by a rupee between the cart and the
+ * receipt reads as a bug.
  */
 export function quoteDelivery({
   from,
@@ -159,8 +179,9 @@ export function quoteDelivery({
 }): DeliveryQuote {
   const straight = straightLineMetres(from, to);
   const chargeable = Math.round((straight * rates.roadFactorBps) / 10_000);
+  const limit = maxDeliveryMetres(rates);
 
-  if (rates.maxMetres <= 0) {
+  if (rates.bands.length === 0) {
     return {
       available: false,
       reason: "We don't deliver yet.",
@@ -169,10 +190,10 @@ export function quoteDelivery({
     };
   }
 
-  if (chargeable > rates.maxMetres) {
+  if (chargeable > limit) {
     return {
       available: false,
-      reason: `That's outside our delivery area. We deliver up to ${(rates.maxMetres / 1000).toFixed(1)} km.`,
+      reason: `That's outside our delivery area. We deliver up to ${(limit / 1000).toFixed(1)} km.`,
       straightLineMetres: straight,
       chargeableMetres: chargeable,
     };
@@ -182,11 +203,25 @@ export function quoteDelivery({
     return { available: true, straightLineMetres: straight, chargeableMetres: chargeable, fee: ZERO, waived: true };
   }
 
-  const beyond = Math.max(0, chargeable - rates.includedMetres);
-  const extraKm = Math.ceil(beyond / 1000);
-  const fee = add(rates.baseFee, multiply(rates.perKmFee, extraKm));
+  // The first band whose ceiling the distance does not exceed.
+  let bandStart = 0;
+  for (const band of rates.bands) {
+    if (chargeable <= band.upToMetres) {
+      const beyond = Math.max(0, chargeable - bandStart);
+      const startedKm = band.perKmFee === ZERO ? 0 : Math.ceil(beyond / 1000);
+      const fee = add(band.flatFee, multiply(band.perKmFee, startedKm));
+      return { available: true, straightLineMetres: straight, chargeableMetres: chargeable, fee, waived: false };
+    }
+    bandStart = band.upToMetres;
+  }
 
-  return { available: true, straightLineMetres: straight, chargeableMetres: chargeable, fee, waived: false };
+  // Unreachable: the limit check above already covers it.
+  return {
+    available: false,
+    reason: "That's outside our delivery area.",
+    straightLineMetres: straight,
+    chargeableMetres: chargeable,
+  };
 }
 
 /** Renders a distance the way a person reads one. */

@@ -7,12 +7,12 @@ import "server-only";
  * change and never a deploy.
  */
 
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { cache } from "react";
 import { db } from "@/db";
-import { locations } from "@/db/schema";
+import { deliveryBands, locations } from "@/db/schema";
 import { type Bps, type Paise, paise } from "@/lib/money";
-import { type DeliveryQuote, type DeliveryRates, type MicroPoint, quoteDelivery } from "@/lib/delivery";
+import { type DeliveryQuote, type DeliveryRates, type MicroPoint, maxDeliveryMetres, quoteDelivery } from "@/lib/delivery";
 import { requireOrg } from "./org";
 
 export interface DeliverySettings {
@@ -34,11 +34,18 @@ export const getDeliverySettings = cache(async (): Promise<DeliverySettings | nu
       ? { latMicro: location.latMicro, lngMicro: location.lngMicro }
       : null;
 
+  const bands = await db()
+    .select()
+    .from(deliveryBands)
+    .where(eq(deliveryBands.locationId, location.id))
+    .orderBy(asc(deliveryBands.upToMetres));
+
   const rates: DeliveryRates = {
-    baseFee: paise(location.deliveryBaseFee),
-    includedMetres: location.deliveryIncludedMetres,
-    perKmFee: paise(location.deliveryPerKmFee),
-    maxMetres: location.deliveryMaxMetres,
+    bands: bands.map((band) => ({
+      upToMetres: band.upToMetres,
+      flatFee: paise(band.flatFee),
+      perKmFee: paise(band.perKmFee),
+    })),
     freeAboveOrderValue: location.deliveryFreeAbove === null ? null : paise(location.deliveryFreeAbove),
     roadFactorBps: location.deliveryRoadFactorBps as Bps,
   };
@@ -47,9 +54,9 @@ export const getDeliverySettings = cache(async (): Promise<DeliverySettings | nu
     locationId: location.id,
     shop,
     rates,
-    // Both must hold. Rates without a shop location cannot compute a distance,
-    // and a shop location without rates has nothing to charge.
-    enabled: shop !== null && rates.maxMetres > 0,
+    // Both must hold. Bands without a shop location cannot compute a distance,
+    // and a shop location without bands has nothing to charge.
+    enabled: shop !== null && maxDeliveryMetres(rates) > 0,
   };
 });
 

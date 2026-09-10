@@ -105,11 +105,12 @@ Tick an item when the real value is in the repo, not when the answer is known.
 
 ### Blocking
 
-- [ ] **Confirm the delivery rates.** Delivery is switched on with *example*
-      numbers so the flow could be tested end to end — ₹30 base, 2 km included,
-      ₹10 per km after, 8 km maximum. These are not FRYBIRD's rates. Replace
-      them with `pnpm delivery:set` before anyone can order, or switch delivery
-      back off with `--max 0`.
+- [ ] **Confirm the road factor.** The bands are FRYBIRD's own, but they are
+      charged on *estimated road distance* — straight-line × 1.3 — not on what
+      an odometer would read. A customer 2.4 km away in a straight line is
+      estimated at 3.1 km and charged ₹30, when the real road distance might be
+      2.7 km and free. Adjust with `pnpm delivery:set --road-factor 1.2`, or set
+      it to 1.0 to charge on straight-line distance.
 - [ ] **Drink SKUs and MRPs** — *blocks the POS.* The board says only "Drinks
       Available at MRP Price Only". No SKUs, no sizes, no brands. Three combos
       contain a cola that has no product to point at; they price correctly but
@@ -150,6 +151,9 @@ Tick an item when the real value is in the repo, not when the answer is known.
       mint. `/app/*` is gated in a Server Component, and every action re-checks
       its own permission, because rendering a screen is not authorization for
       the actions on it.
+- [x] **Delivery rates.** Free under 3 km, ₹30 from 3 to 5 km, ₹30 plus ₹10 per
+      started km from 5 to 8 km, nothing beyond 8. Set as distance bands on the
+      outlet; `pnpm delivery:show` prints the table.
 - [x] **Direct orders only.** No Swiggy, no Zomato, no commission, no
       settlement. `orders.channel` records dine-in, takeaway or online for the
       revenue split, and `margin()` is revenue net of tax minus cost. A

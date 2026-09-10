@@ -36,6 +36,13 @@
       "when": 1789061432883,
       "tag": "0004_delivery_pricing",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789064096776,
+      "tag": "0005_delivery_bands",
+      "breakpoints": true
     }
   ]
 }
