@@ -57,6 +57,13 @@
       "when": 1789069167192,
       "tag": "0007_invoices",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789070430406,
+      "tag": "0008_rider_role",
+      "breakpoints": true
     }
   ]
 }

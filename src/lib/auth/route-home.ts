@@ -13,11 +13,12 @@ import "server-only";
  * and an account that is neither is told so rather than bounced.
  */
 
+import { can } from "@/domain/permissions";
 import { getStaff } from "./index";
 import { getCustomer } from "@/lib/customer";
 
 export type Home =
-  | { kind: "staff"; path: "/app/orders" }
+  | { kind: "staff"; path: "/app/orders" | "/app/deliveries" }
   | { kind: "customer"; path: "/account" }
   | { kind: "neither"; path: null };
 
@@ -25,7 +26,14 @@ export async function resolveHome(): Promise<Home> {
   // Staff first: an owner who is also a customer should land on the counter,
   // because that is the side of the business they signed in to run.
   const staff = await getStaff();
-  if (staff) return { kind: "staff", path: "/app/orders" };
+  if (staff) {
+    // A rider holds no orders.view, so the counter screen would bounce them
+    // straight back out. Send them where they can actually work.
+    return {
+      kind: "staff",
+      path: can(staff.roles, "orders.view") ? "/app/orders" : "/app/deliveries",
+    };
+  }
 
   const customer = await getCustomer();
   if (customer) return { kind: "customer", path: "/account" };

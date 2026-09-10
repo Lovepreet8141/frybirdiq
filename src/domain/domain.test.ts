@@ -204,6 +204,24 @@ describe("permissions", () => {
     expect(can(["KITCHEN"], "kitchen.update")).toBe(true);
   });
 
+  it("gives a rider only what closing a delivery needs", () => {
+    expect(can(["RIDER"], "delivery.view")).toBe(true);
+    expect(can(["RIDER"], "delivery.complete")).toBe(true);
+  });
+
+  it("keeps a rider out of the rest of the shop", () => {
+    // A phone in a rider's pocket must not be able to move any other ticket,
+    // reprice the menu, or refund anything.
+    for (const permission of ["orders.update", "kitchen.update", "orders.refund", "menu.edit", "analytics.view"] as const) {
+      expect(can(["RIDER"], permission), permission).toBe(false);
+    }
+  });
+
+  it("lets the counter close a delivery too, for when the rider cannot", () => {
+    expect(can(["CASHIER"], "delivery.complete")).toBe(true);
+    expect(can(["MANAGER"], "delivery.complete")).toBe(true);
+  });
+
   it("keeps an analyst read-only", () => {
     expect(can(["ANALYST"], "analytics.view")).toBe(true);
     expect(can(["ANALYST"], "orders.create")).toBe(false);

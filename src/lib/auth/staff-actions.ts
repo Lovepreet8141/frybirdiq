@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
-import { advanceOrder } from "@/lib/repositories/orders";
+import { advanceOrder, completeDelivery } from "@/lib/repositories/orders";
 import { recordCashPayment } from "@/lib/repositories/payments";
 import { ORDER_STATUSES } from "@/domain/order-status";
 
@@ -68,6 +68,39 @@ export async function advanceOrderAction(input: unknown): Promise<StaffActionRes
       actorUserId: staff.userId,
       orgId: staff.orgId,
     });
+    revalidatePath("/app/orders");
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  } catch (error) {
+    return explain(error);
+  }
+}
+
+const deliverySchema = z.object({
+  orderId: z.uuid(),
+  cashCollected: z.boolean(),
+});
+
+/**
+ * Closes a delivery from a rider's phone.
+ *
+ * `delivery.complete` rather than `orders.update` — the narrowest permission
+ * that lets a rider finish the job they are doing, and one that cannot move
+ * any other ticket in the shop.
+ */
+export async function completeDeliveryAction(input: unknown): Promise<StaffActionResult> {
+  const parsed = deliverySchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "That delivery could not be closed." };
+
+  try {
+    const staff = await requirePermission("delivery.complete");
+    const result = await completeDelivery({
+      orderId: parsed.data.orderId,
+      actorUserId: staff.userId,
+      actorRoles: staff.roles,
+      orgId: staff.orgId,
+      cashCollected: parsed.data.cashCollected,
+    });
+    revalidatePath("/app/deliveries");
     revalidatePath("/app/orders");
     return result.ok ? { ok: true } : { ok: false, error: result.error };
   } catch (error) {

@@ -13,6 +13,7 @@ export const ROLES = [
   "MANAGER",
   "CASHIER",
   "KITCHEN",
+  "RIDER",
   "INVENTORY",
   "ANALYST",
 ] as const;
@@ -28,6 +29,9 @@ export const PERMISSIONS = [
   "orders.discount",
   "kitchen.view",
   "kitchen.update",
+  "delivery.view",
+  /** Mark a delivery done and record the cash taken at the door. */
+  "delivery.complete",
   "menu.view",
   "menu.edit",
   "menu.price",
@@ -77,6 +81,8 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     "orders.discount",
     "kitchen.view",
     "kitchen.update",
+    "delivery.view",
+    "delivery.complete",
     "menu.view",
     "menu.edit",
     "inventory.view",
@@ -96,12 +102,24 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     "orders.update",
     "orders.discount",
     "kitchen.view",
+    "delivery.view",
+    "delivery.complete",
     "menu.view",
     "customers.view",
     "customers.edit",
   ],
 
   KITCHEN: ["orders.view", "kitchen.view", "kitchen.update", "menu.view", "recipes.view", "inventory.waste"],
+
+  /**
+   * A rider sees the deliveries and closes them. Nothing else.
+   *
+   * Deliberately without `orders.update` or `kitchen.update`, which would let
+   * them move any ticket in the shop from their phone. `delivery.complete`
+   * only acts on an order that is already out for delivery — the narrowest
+   * permission that lets someone finish the job they are actually doing.
+   */
+  RIDER: ["delivery.view", "delivery.complete"],
 
   INVENTORY: [
     "inventory.view",

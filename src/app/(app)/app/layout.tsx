@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { LogOut } from "lucide-react";
-import { getStaff } from "@/lib/auth";
+import { getStaff, staffCan } from "@/lib/auth";
 import { signOut } from "@/lib/auth/actions";
 import { resolveHome } from "@/lib/auth/route-home";
 
@@ -16,7 +16,12 @@ import { resolveHome } from "@/lib/auth/route-home";
  * on it.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const staff = await getStaff();
+  const [staff, canSeeOrders, canSeeDeliveries] = await Promise.all([
+    getStaff(),
+    staffCan("orders.view"),
+    staffCan("delivery.view"),
+  ]);
+
   if (!staff) {
     // A signed-in customer who lands here is sent to their own account. Sending
     // everyone to /sign-in would bounce them between two pages that each think
@@ -29,13 +34,33 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <div className="flex min-h-full flex-col">
       <header className="border-b border-border">
         <div className="mx-auto flex h-[68px] w-full max-w-6xl items-center justify-between gap-4 px-[var(--gutter)]">
-          <div className="flex items-center gap-6">
-            <Link href="/app/orders" className="flex min-h-[44px] items-center font-heading text-lg font-bold tracking-tight">
+          <div className="flex items-center gap-2 sm:gap-6">
+            <Link
+              href={canSeeOrders ? "/app/orders" : "/app/deliveries"}
+              className="flex min-h-[44px] items-center font-heading text-lg font-bold tracking-tight"
+            >
               FRYBIRD <span className="text-primary">IQ</span>
-              <span className="ml-2 text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                Counter
-              </span>
             </Link>
+
+            {/* Nav follows permissions: a rider sees deliveries and nothing else. */}
+            <nav className="flex items-center gap-1" aria-label="Sections">
+              {canSeeOrders && (
+                <Link
+                  href="/app/orders"
+                  className="flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  Orders
+                </Link>
+              )}
+              {canSeeDeliveries && (
+                <Link
+                  href="/app/deliveries"
+                  className="flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  Deliveries
+                </Link>
+              )}
+            </nav>
           </div>
 
           <div className="flex items-center gap-4">

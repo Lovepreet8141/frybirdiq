@@ -11,7 +11,6 @@ import "server-only";
 import { and, eq, like, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, loyaltyAccounts, loyaltyTransactions, orderEvents, orders, payments } from "@/db/schema";
-import { assertTransition } from "@/domain/order-status";
 import { type Role, authorize } from "@/domain/permissions";
 import { type Paise, formatINR, paise, subtract } from "@/lib/money";
 import { pointsEarned } from "@/lib/loyalty";
@@ -90,11 +89,20 @@ export async function recordCashPayment(input: {
   // The server decides what is owed. Nothing passes an amount in.
   const amount = paise(order.grandTotal);
 
-  try {
-    assertTransition(order.status, "PAID", order.fulfilment);
-  } catch {
-    return { ok: false, error: `An order that is ${order.status} cannot be marked paid.` };
-  }
+  /*
+   * Recording a payment is not a status transition.
+   *
+   * Payment and fulfilment progress are different axes. Cash on delivery is
+   * taken at the door, by which point the order is OUT_FOR_DELIVERY — and
+   * forcing it to PAID from there is a move the lifecycle rightly refuses,
+   * which is how "cannot be marked paid" ended up in front of a cashier
+   * holding the money.
+   *
+   * So: the payment is always recorded. The status only moves to PAID when the
+   * order is still waiting on payment and has gone nowhere else. Whether an
+   * order is paid is answered by the payments table, never by the status.
+   */
+  const movesToPaid = order.status === "PENDING_PAYMENT";
 
   const { result, replayed } = await withIdempotency(
     {
@@ -177,7 +185,7 @@ export async function recordCashPayment(input: {
       await database
         .update(orders)
         .set({
-          status: "PAID",
+          ...(movesToPaid ? { status: "PAID" as const } : {}),
           invoiceNumber: order.invoiceNumber ?? invoiceNumber(issuedAt, highest + 1),
           invoicedAt: order.invoicedAt ?? issuedAt,
           updatedAt: issuedAt,
@@ -226,13 +234,15 @@ export async function recordCashPayment(input: {
         }
       }
 
+      // The event is written either way: money changing hands is a fact about
+      // the order whether or not it also moved the status.
       await database.insert(orderEvents).values({
         orgId: order.orgId,
         orderId: order.id,
         fromStatus: order.status,
-        toStatus: "PAID",
+        toStatus: movesToPaid ? "PAID" : order.status,
         actorUserId: input.actorUserId,
-        reason: `Cash taken at the counter — ${formatINR(amount)}`,
+        reason: `Cash received — ${formatINR(amount)}`,
       });
 
       // §52: money changing hands is a critical operation.

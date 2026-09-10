@@ -18,6 +18,7 @@ import { db } from "@/db";
 import { customers, locations, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
 import { assertChannelFulfilment } from "@/domain/order-channel";
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition } from "@/domain/order-status";
+import type { Role } from "@/domain/permissions";
 import { isSupabaseConfigured } from "@/lib/env";
 import { type Paise, ZERO, paise } from "@/lib/money";
 import { priceOrder } from "@/lib/pricing";
@@ -26,7 +27,7 @@ import { quoteForPin } from "./delivery";
 import { resolvePricingContext } from "./org";
 import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
-import { createPendingPayment } from "./payments";
+import { createPendingPayment, recordCashPayment } from "./payments";
 import { IdempotencyConflict, withIdempotency } from "./idempotency";
 
 const ORG_SLUG = "frybird";
@@ -645,5 +646,79 @@ export async function listCustomerOrders(input: {
       itemSummary:
         names.length <= 2 ? names.join(", ") : `${names.slice(0, 2).join(", ")} +${names.length - 2} more`,
     };
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Riders                                                              */
+/* ------------------------------------------------------------------ */
+
+/** Deliveries currently on the road. */
+export async function listDeliveries(orgId: string): Promise<readonly StaffOrderView[]> {
+  const all = await listActiveOrders(orgId);
+  return all.filter(
+    (order) => order.fulfilment === "DELIVERY" && (order.status === "READY" || order.status === "OUT_FOR_DELIVERY"),
+  );
+}
+
+/**
+ * Closes a delivery: records the cash taken at the door and marks it delivered.
+ *
+ * One action, because at the door they are one event. Splitting them would let
+ * a rider mark an order delivered and forget the money, or record money for an
+ * order still in the bag.
+ *
+ * Deliberately narrow: it only touches an order that is already out for
+ * delivery. A rider's phone cannot move any other ticket in the shop.
+ */
+export async function completeDelivery(input: {
+  orderId: string;
+  actorUserId: string;
+  actorRoles: readonly Role[];
+  orgId: string;
+  /** False when the customer had already paid some other way. */
+  cashCollected: boolean;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const database = db();
+  const [order] = await database
+    .select()
+    .from(orders)
+    .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
+    .limit(1);
+
+  if (!order) return { ok: false, error: "That delivery does not exist." };
+
+  if (order.fulfilment !== "DELIVERY") {
+    return { ok: false, error: "That order is not a delivery." };
+  }
+
+  if (order.status !== "OUT_FOR_DELIVERY") {
+    return {
+      ok: false,
+      error:
+        order.status === "COMPLETED"
+          ? "That delivery is already closed."
+          : "That order has not left the shop yet.",
+    };
+  }
+
+  if (input.cashCollected) {
+    const paid = await recordCashPayment({
+      orderId: order.id,
+      actorUserId: input.actorUserId,
+      actorRoles: input.actorRoles,
+    });
+    // "Already paid" is not a failure here — it means someone recorded it
+    // first, and the delivery should still close.
+    if (!paid.ok && !paid.error.includes("already been paid")) {
+      return { ok: false, error: paid.error };
+    }
+  }
+
+  return advanceOrder({
+    orderId: order.id,
+    to: "COMPLETED",
+    actorUserId: input.actorUserId,
+    orgId: input.orgId,
   });
 }

@@ -22,9 +22,14 @@ There is no sign-up. Create the account, then grant it a role:
    pnpm staff:grant you@example.com OWNER
    ```
 
-Roles: `OWNER`, `ADMIN`, `MANAGER`, `CASHIER`, `KITCHEN`, `INVENTORY`,
-`ANALYST`. A cashier can take payment and discount but not refund; a manager
-can edit the menu but not reprice it. See `src/domain/permissions.ts`.
+Roles: `OWNER`, `ADMIN`, `MANAGER`, `CASHIER`, `KITCHEN`, `RIDER`,
+`INVENTORY`, `ANALYST`. A cashier can take payment and discount but not refund;
+a manager can edit the menu but not reprice it; a rider can only see deliveries
+and close them. See `src/domain/permissions.ts`.
+
+A rider signs in at `/sign-in` like any staff member and lands on
+`/app/deliveries` — the counter screen would bounce them, since they hold no
+`orders.view`.
 
 Then sign in at `/sign-in`. Without a membership row an authenticated user is a
 stranger with an account — the staff area stays shut.
