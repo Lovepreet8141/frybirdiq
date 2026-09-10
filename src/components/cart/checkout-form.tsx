@@ -43,6 +43,8 @@ export function CheckoutForm({
   shop,
   deliveryEnabled,
   savedAddresses,
+  contact,
+  fromAccount,
 }: {
   idempotencyKey: string;
   /** Where the outlet is. Null when it has not been placed on the map. */
@@ -50,8 +52,20 @@ export function CheckoutForm({
   deliveryEnabled: boolean;
   /** Addresses this customer has used before. */
   savedAddresses: SavedAddressOption[];
+  /** Who is ordering, when we already know. */
+  contact: { name: string; phone: string; email: string } | null;
+  /** True when those details come from a signed-in account. */
+  fromAccount: boolean;
 }) {
   const [fulfilment, setFulfilment] = useState<"TAKEAWAY" | "DELIVERY">("TAKEAWAY");
+  /*
+   * Someone we already know is not asked again.
+   *
+   * Their details are shown as a line to confirm, with the fields collapsed
+   * behind "Change". Three pre-filled inputs still read as a form to fill in;
+   * a sentence reads as something already done.
+   */
+  const [editingContact, setEditingContact] = useState(contact === null);
   const [state, action] = useActionState<CheckoutState, FormData>(submitCheckout, { status: "idle" });
   const fieldErrors = state.status === "error" ? (state.fieldErrors ?? {}) : {};
 
@@ -108,78 +122,111 @@ export function CheckoutForm({
         </p>
       )}
 
-      <div className="flex flex-col gap-2">
-        <label htmlFor="name" className="text-sm font-semibold">
-          Name
-        </label>
-        <input
-          id="name"
-          name="name"
-          required
-          autoComplete="name"
-          aria-invalid={Boolean(fieldErrors.name)}
-          aria-describedby={fieldErrors.name ? "name-error" : undefined}
-          className="h-[52px] rounded-md border border-border bg-surface px-4 text-base focus-visible:border-border-strong"
-        />
-        {fieldErrors.name && (
-          <p id="name-error" role="alert" className="text-sm text-foreground">
-            {fieldErrors.name}
-          </p>
-        )}
-      </div>
+      {!editingContact && contact ? (
+        <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border bg-surface px-4 py-3">
+          <div className="flex min-w-0 flex-col">
+            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              {fromAccount ? "Ordering as" : "Last time you ordered as"}
+            </span>
+            <span className="font-semibold">{contact.name}</span>
+            <span className="tabular text-sm text-muted-foreground">
+              {contact.phone} · {contact.email}
+            </span>
+          </div>
 
-      <div className="flex flex-col gap-2">
-        <label htmlFor="phone" className="text-sm font-semibold">
-          Mobile number
-        </label>
-        <input
-          id="phone"
-          name="phone"
-          required
-          type="tel"
-          inputMode="numeric"
-          autoComplete="tel-national"
-          maxLength={10}
-          aria-invalid={Boolean(fieldErrors.phone)}
-          aria-describedby={fieldErrors.phone ? "phone-error" : "phone-hint"}
-          className="h-[52px] rounded-md border border-border bg-surface px-4 text-base tabular focus-visible:border-border-strong"
-        />
-        {fieldErrors.phone ? (
-          <p id="phone-error" role="alert" className="text-sm text-foreground">
-            {fieldErrors.phone}
-          </p>
-        ) : (
-          <p id="phone-hint" className="text-sm text-muted-foreground">
-            So we can call you when it&rsquo;s ready.
-          </p>
-        )}
-      </div>
+          <button
+            type="button"
+            onClick={() => setEditingContact(true)}
+            className="flex min-h-[44px] items-center rounded-md border border-border px-3 text-sm font-semibold transition-colors hover:bg-surface-muted"
+          >
+            Change
+          </button>
 
-      <div className="flex flex-col gap-2">
-        <label htmlFor="email" className="text-sm font-semibold">
-          Email
-        </label>
-        <input
-          id="email"
-          name="email"
-          required
-          type="email"
-          autoComplete="email"
-          autoCapitalize="none"
-          aria-invalid={Boolean(fieldErrors.email)}
-          aria-describedby={fieldErrors.email ? "email-error" : "email-hint"}
-          className="h-[52px] rounded-md border border-border bg-surface px-4 text-base focus-visible:border-border-strong"
-        />
-        {fieldErrors.email ? (
-          <p id="email-error" role="alert" className="text-sm text-foreground">
-            {fieldErrors.email}
-          </p>
-        ) : (
-          <p id="email-hint" className="text-sm text-muted-foreground">
-            For your receipt.
-          </p>
-        )}
-      </div>
+          {/* Submitted either way; the server validates them exactly as it
+              would freshly typed ones. */}
+          <input type="hidden" name="name" value={contact.name} />
+          <input type="hidden" name="phone" value={contact.phone} />
+          <input type="hidden" name="email" value={contact.email} />
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-col gap-2">
+            <label htmlFor="name" className="text-sm font-semibold">
+              Name
+            </label>
+            <input
+              id="name"
+              name="name"
+              required
+              autoComplete="name"
+              defaultValue={contact?.name ?? ""}
+              aria-invalid={Boolean(fieldErrors.name)}
+              aria-describedby={fieldErrors.name ? "name-error" : undefined}
+              className="h-[52px] rounded-md border border-border bg-surface px-4 text-base focus-visible:border-border-strong"
+            />
+            {fieldErrors.name && (
+              <p id="name-error" role="alert" className="text-sm text-foreground">
+                {fieldErrors.name}
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <label htmlFor="phone" className="text-sm font-semibold">
+              Mobile number
+            </label>
+            <input
+              id="phone"
+              name="phone"
+              required
+              type="tel"
+              inputMode="numeric"
+              autoComplete="tel-national"
+              maxLength={10}
+              defaultValue={contact?.phone ?? ""}
+              aria-invalid={Boolean(fieldErrors.phone)}
+              aria-describedby={fieldErrors.phone ? "phone-error" : "phone-hint"}
+              className="h-[52px] rounded-md border border-border bg-surface px-4 text-base tabular focus-visible:border-border-strong"
+            />
+            {fieldErrors.phone ? (
+              <p id="phone-error" role="alert" className="text-sm text-foreground">
+                {fieldErrors.phone}
+              </p>
+            ) : (
+              <p id="phone-hint" className="text-sm text-muted-foreground">
+                So we can call you when it&rsquo;s ready.
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <label htmlFor="email" className="text-sm font-semibold">
+              Email
+            </label>
+            <input
+              id="email"
+              name="email"
+              required
+              type="email"
+              autoComplete="email"
+              autoCapitalize="none"
+              defaultValue={contact?.email ?? ""}
+              aria-invalid={Boolean(fieldErrors.email)}
+              aria-describedby={fieldErrors.email ? "email-error" : "email-hint"}
+              className="h-[52px] rounded-md border border-border bg-surface px-4 text-base focus-visible:border-border-strong"
+            />
+            {fieldErrors.email ? (
+              <p id="email-error" role="alert" className="text-sm text-foreground">
+                {fieldErrors.email}
+              </p>
+            ) : (
+              <p id="email-hint" className="text-sm text-muted-foreground">
+                For your receipt.
+              </p>
+            )}
+          </div>
+        </>
+      )}
 
       {/*
         Marketing consent. Unticked, and separate from placing the order.

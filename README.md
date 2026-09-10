@@ -208,6 +208,9 @@ Tick an item when the real value is in the repo, not when the answer is known.
 - [x] **Invoices.** Numbered per financial year, issued on payment, with the
       GST breakdown per line. Printable; `Send on WhatsApp` opens the app with
       the order details written.
+- [x] **Details are not asked twice.** A signed-in customer sees "Ordering as
+      …" with the fields collapsed behind Change; a returning guest sees the
+      same from a cookie on their own device. Never looked up by phone number.
 - [x] **Saved addresses.** A returning customer picks a doorstep they have used
       before instead of retyping it. From the account when signed in; from a
       cookie on their own device when not — never looked up by phone number,

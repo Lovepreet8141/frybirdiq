@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { type PlaceOrderResult, placeOrder } from "@/lib/repositories/orders";
 import { writeCart } from "./index";
 import { rememberAddress } from "./remembered-address";
+import { rememberContact } from "./remembered-contact";
 
 export type CheckoutState = { status: "idle" } | { status: "error"; message: string; fieldErrors?: Record<string, string> };
 
@@ -38,7 +39,13 @@ export async function submitCheckout(_previous: CheckoutState, formData: FormDat
   }
 
   // Remembered only once the order actually went through, so a failed attempt
-  // does not leave a device claiming an address nobody ordered to.
+  // does not leave a device claiming details nobody ordered with.
+  await rememberContact({
+    name: String(formData.get("name") ?? ""),
+    phone: String(formData.get("phone") ?? ""),
+    email: String(formData.get("email") ?? "").trim(),
+  });
+
   const lat = Number(formData.get("lat"));
   const lng = Number(formData.get("lng"));
   if (Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0) {

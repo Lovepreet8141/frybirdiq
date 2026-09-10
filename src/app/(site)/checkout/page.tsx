@@ -10,6 +10,7 @@ import { toLatLng } from "@/lib/delivery";
 import { getCustomer } from "@/lib/customer";
 import { listSavedAddresses } from "@/lib/repositories/addresses";
 import { readRememberedAddress } from "@/lib/cart/remembered-address";
+import { readRememberedContact } from "@/lib/cart/remembered-contact";
 import type { SavedAddressOption } from "@/components/delivery/delivery-fields";
 import { OrderSummary } from "@/components/cart/summary";
 import { getPricedCart } from "@/lib/cart";
@@ -35,6 +36,17 @@ export default async function CheckoutPage() {
    * leaves the browser that wrote it.
    */
   const customer = await getCustomer();
+
+  /*
+   * Who is ordering, from the account when there is one and from this device's
+   * own memory when there is not. Either way it is a confirmation rather than
+   * a form: someone who has ordered before should not retype their own name.
+   */
+  const remembered = customer ? null : await readRememberedContact();
+  const contact =
+    customer && customer.name && customer.phone && customer.email
+      ? { name: customer.name, phone: customer.phone, email: customer.email }
+      : remembered;
   const savedAddresses: SavedAddressOption[] = customer
     ? (await listSavedAddresses(customer.id)).map((address) => ({
         id: address.id,
@@ -116,6 +128,8 @@ export default async function CheckoutPage() {
             shop={shop}
             deliveryEnabled={delivery?.enabled ?? false}
             savedAddresses={savedAddresses}
+            contact={contact}
+            fromAccount={Boolean(customer)}
           />
           </section>
         </div>
