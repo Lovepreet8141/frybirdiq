@@ -65,6 +65,7 @@ that has already taken orders unless you pass `--force`.
 | `pnpm order:verify` | Print the most recent order straight from Postgres |
 | `pnpm order:settle` | Take cash on the most recent unpaid order |
 | `pnpm staff:grant <email> <role>` | Give a Supabase user a role in the org |
+| `pnpm staff:check <email>` | Check a granted role will resolve at sign-in |
 | `python3 scripts/check-contrast.py` | WCAG check on the brand palette |
 
 ## Where things are

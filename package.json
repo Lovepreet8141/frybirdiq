@@ -16,7 +16,8 @@
     "db:seed": "tsx src/db/seed.ts",
     "order:verify": "tsx scripts/verify-order.ts",
     "order:settle": "tsx --conditions=react-server scripts/settle-cash.ts",
-    "staff:grant": "tsx --conditions=react-server scripts/grant-role.ts"
+    "staff:grant": "tsx --conditions=react-server scripts/grant-role.ts",
+    "staff:check": "tsx --conditions=react-server scripts/check-staff.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
