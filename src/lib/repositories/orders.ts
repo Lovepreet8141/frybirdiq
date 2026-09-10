@@ -465,6 +465,34 @@ export async function advanceOrder(input: {
 
   if (!order) return { ok: false, error: "That order does not exist." };
 
+  /*
+   * An order cannot be completed until it has been paid for.
+   *
+   * Cooking an unpaid order is normal — cash on collection and cash on
+   * delivery both take the money at the end. Handing it over unpaid is giving
+   * food away, and COMPLETED is the moment it leaves for good.
+   *
+   * The check reads the payments rather than the order's own status, because
+   * with cash the money can be recorded at any point up to handover.
+   */
+  if (input.to === "COMPLETED") {
+    const captured = await database
+      .select({ id: payments.id })
+      .from(payments)
+      .where(and(eq(payments.orderId, order.id), eq(payments.status, "CAPTURED")))
+      .limit(1);
+
+    if (captured.length === 0) {
+      return {
+        ok: false,
+        error:
+          order.fulfilment === "DELIVERY"
+            ? "Take the cash from the rider before closing this order."
+            : "Take payment before handing this over.",
+      };
+    }
+  }
+
   try {
     assertTransition(order.status, input.to, order.fulfilment);
   } catch {

@@ -38,7 +38,19 @@ const TRANSITIONS: Readonly<Record<OrderStatus, readonly OrderStatus[]>> = {
   // A counter sale tendered in cash is paid at the moment it is rung up, so
   // DRAFT reaches PAID without passing through a payment wait.
   DRAFT: ["PENDING_PAYMENT", "PAID", "CANCELLED"],
-  PENDING_PAYMENT: ["PAID", "FAILED", "CANCELLED"],
+
+  // An unpaid order can be accepted and cooked.
+  //
+  // Cash on collection and cash on delivery both take the money at the end —
+  // at handover, or at the customer's door. Requiring payment before the
+  // kitchen may start would mean a collection order is not cooked until the
+  // customer is standing at the counter, and a delivery order can never be
+  // cooked at all, because the cash is three kilometres away.
+  //
+  // What payment does gate is COMPLETED. Cooking an unpaid order is normal;
+  // handing it over unpaid is giving food away. That check lives in the order
+  // service, which can see the payments, rather than here.
+  PENDING_PAYMENT: ["PAID", "ACCEPTED", "FAILED", "CANCELLED"],
   PAID: ["ACCEPTED", "CANCELLED", "REFUNDED"],
   ACCEPTED: ["PREPARING", "CANCELLED", "REFUNDED"],
   PREPARING: ["READY", "CANCELLED", "REFUNDED"],

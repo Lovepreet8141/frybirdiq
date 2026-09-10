@@ -34,6 +34,32 @@ describe("order lifecycle", () => {
     }
   });
 
+  it("lets the kitchen accept an unpaid order", () => {
+    // Cash on collection and cash on delivery both take the money at the end.
+    // Requiring payment first would mean a collection order is not cooked
+    // until the customer is at the counter, and a delivery order is never
+    // cooked at all, because the cash is three kilometres away.
+    expect(canTransition("PENDING_PAYMENT", "ACCEPTED", "TAKEAWAY")).toBe(true);
+    expect(canTransition("PENDING_PAYMENT", "ACCEPTED", "DELIVERY")).toBe(true);
+  });
+
+  it("walks an unpaid delivery order all the way to the door", () => {
+    const steps = [
+      ["PENDING_PAYMENT", "ACCEPTED"],
+      ["ACCEPTED", "PREPARING"],
+      ["PREPARING", "READY"],
+      ["READY", "OUT_FOR_DELIVERY"],
+      ["OUT_FOR_DELIVERY", "COMPLETED"],
+    ] as const;
+
+    // The state machine permits the whole path; payment gates only the last
+    // step, and that check lives in the order service where the payments are
+    // visible.
+    for (const [from, to] of steps) {
+      expect(canTransition(from, to, "DELIVERY"), `${from} -> ${to}`).toBe(true);
+    }
+  });
+
   it("lets a counter cash sale reach PAID without waiting on a payment", () => {
     expect(canTransition("DRAFT", "PAID", "DINE_IN")).toBe(true);
   });

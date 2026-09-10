@@ -17,6 +17,7 @@ export interface StaffOrder {
   customerPhone: string | null;
   grandTotal: Paise;
   isPaid: boolean;
+  fulfilment: "DINE_IN" | "TAKEAWAY" | "DELIVERY";
   placedAt: string | null;
   notes: string | null;
   items: { name: string; quantity: number; modifiers: string[] }[];
@@ -31,26 +32,58 @@ export interface StaffOrder {
 }
 
 /**
- * The next step for a ticket, given where it is.
+ * The next step for a ticket, given where it is and how it is going out.
  *
  * Only ever one step forward. The domain state machine is the authority — this
- * map decides what to label the button, and the server decides whether the
- * move is legal.
+ * decides what to label the button, and the server decides whether the move is
+ * legal.
+ *
+ * An unpaid order can be accepted. Cash on collection and cash on delivery
+ * both take the money at the end, so waiting for payment before cooking would
+ * mean a collection order is not started until the customer is at the counter,
+ * and a delivery order is never started at all.
  */
-const NEXT: Partial<Record<OrderStatus, { to: OrderStatus; label: string }>> = {
-  PAID: { to: "ACCEPTED", label: "Accept" },
-  ACCEPTED: { to: "PREPARING", label: "Start cooking" },
-  PREPARING: { to: "READY", label: "Ready" },
-  READY: { to: "COMPLETED", label: "Collected" },
-};
+function nextStep(
+  status: OrderStatus,
+  fulfilment: StaffOrder["fulfilment"],
+): { to: OrderStatus; label: string } | null {
+  switch (status) {
+    case "PENDING_PAYMENT":
+    case "PAID":
+      return { to: "ACCEPTED", label: "Accept" };
+    case "ACCEPTED":
+      return { to: "PREPARING", label: "Start cooking" };
+    case "PREPARING":
+      return { to: "READY", label: fulfilment === "DELIVERY" ? "Ready to send" : "Ready" };
+    case "READY":
+      return fulfilment === "DELIVERY"
+        ? { to: "OUT_FOR_DELIVERY", label: "Send out" }
+        : { to: "COMPLETED", label: "Handed over" };
+    case "OUT_FOR_DELIVERY":
+      return { to: "COMPLETED", label: "Delivered" };
+    default:
+      return null;
+  }
+}
 
-const STATUS_LABEL: Partial<Record<OrderStatus, string>> = {
-  PENDING_PAYMENT: "Awaiting payment",
-  PAID: "Paid",
-  ACCEPTED: "Accepted",
-  PREPARING: "Cooking",
-  READY: "Ready to collect",
-};
+function statusLabel(status: OrderStatus, fulfilment: StaffOrder["fulfilment"]): string {
+  switch (status) {
+    case "PENDING_PAYMENT":
+      return "New";
+    case "PAID":
+      return "Paid";
+    case "ACCEPTED":
+      return "Accepted";
+    case "PREPARING":
+      return "Cooking";
+    case "READY":
+      return fulfilment === "DELIVERY" ? "Ready to send" : "Ready to collect";
+    case "OUT_FOR_DELIVERY":
+      return "Out for delivery";
+    default:
+      return status;
+  }
+}
 
 export function OrderCard({
   order,
@@ -65,7 +98,8 @@ export function OrderCard({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const next = NEXT[order.status];
+  const next = nextStep(order.status, order.fulfilment);
+  const isDelivery = order.fulfilment === "DELIVERY";
 
   const run = (work: () => Promise<{ ok: boolean; error?: string }>) =>
     startTransition(async () => {
@@ -84,14 +118,14 @@ export function OrderCard({
             <span
               className={cn(
                 "rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em]",
-                order.status === "READY"
+                order.status === "READY" || order.status === "OUT_FOR_DELIVERY"
                   ? "bg-[#3F9D52]/20 text-foreground"
                   : order.status === "PENDING_PAYMENT"
                     ? "bg-warning/20 text-foreground"
                     : "bg-surface-muted text-muted-foreground",
               )}
             >
-              {STATUS_LABEL[order.status] ?? order.status}
+              {statusLabel(order.status, order.fulfilment)}
             </span>
           </div>
           <p className="text-sm text-muted-foreground">
@@ -129,32 +163,53 @@ export function OrderCard({
       )}
 
       {/* 56px targets: staff move fast, often with wet hands. interaction.md */}
-      <div className="flex flex-wrap gap-2">
-        {!order.isPaid && canSettle && (
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => run(() => markPaidAction({ orderId: order.id }))}
-            className="flex min-h-[56px] flex-1 items-center justify-center gap-2 rounded-md bg-primary px-5 font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            {pending ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <Check className="size-4" aria-hidden="true" />
-            )}
-            Take {formatINR(order.grandTotal)}
-          </button>
-        )}
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap gap-2">
+          {next && canAdvance && (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => run(() => advanceOrderAction({ orderId: order.id, to: next.to }))}
+              className="flex min-h-[56px] flex-1 items-center justify-center gap-2 rounded-md bg-primary px-5 font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {pending ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : next.label}
+            </button>
+          )}
 
-        {next && canAdvance && order.status !== "PENDING_PAYMENT" && (
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => run(() => advanceOrderAction({ orderId: order.id, to: next.to }))}
-            className="flex min-h-[56px] flex-1 items-center justify-center rounded-md border border-border-strong px-5 font-semibold transition-colors hover:bg-surface-muted disabled:opacity-50"
-          >
-            {pending ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : next.label}
-          </button>
+          {!order.isPaid && canSettle && (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => run(() => markPaidAction({ orderId: order.id }))}
+              className={cn(
+                "flex min-h-[56px] items-center justify-center gap-2 rounded-md px-5 font-semibold transition-colors disabled:opacity-50",
+                next
+                  ? "border border-border-strong hover:bg-surface-muted"
+                  : "flex-1 bg-primary text-primary-foreground hover:opacity-90",
+              )}
+            >
+              {pending ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Check className="size-4" aria-hidden="true" />
+              )}
+              {/*
+                For delivery the cash is collected at the customer's door, not
+                here. Labelling it "Take" would ask the counter to do something
+                it cannot do; the rider hands the money over on their return.
+              */}
+              {isDelivery ? `Cash in ${formatINR(order.grandTotal)}` : `Take ${formatINR(order.grandTotal)}`}
+            </button>
+          )}
+        </div>
+
+        {/* Said before it is pressed, rather than as an error afterwards. */}
+        {!order.isPaid && next?.to === "COMPLETED" && (
+          <p className="text-sm text-muted-foreground">
+            {isDelivery
+              ? "Record the cash from the rider before closing this order."
+              : "Take payment before handing this over."}
+          </p>
         )}
       </div>
     </li>
