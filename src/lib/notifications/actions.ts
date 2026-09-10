@@ -24,7 +24,21 @@ export async function whatsappOrderLink(input: { orderId: string }): Promise<Sha
 
   const items = await database.select().from(orderItems).where(eq(orderItems.orderId, order.id));
 
-  const base = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  /*
+   * The link a customer opens. In production this must be the real domain: a
+   * message containing localhost is a message with a link that works on
+   * nobody's phone, and it would look like it had sent correctly.
+   */
+  const base = process.env.SITE_URL?.replace(/\/$/, "");
+  if (!base) {
+    return {
+      ok: false,
+      error:
+        process.env.NODE_ENV === "production"
+          ? "SITE_URL is not set, so the message would contain a link to nowhere."
+          : "Set SITE_URL in .env.local to include an order link.",
+    };
+  }
 
   const message = orderMessage({
     orderNumber: order.orderNumber,

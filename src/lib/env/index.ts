@@ -35,6 +35,14 @@ const optionalSecret = z.preprocess(
 
 const serverSchema = z.object({
   DATABASE_URL: z.string().min(1),
+  /**
+   * Where this site lives, for links that leave it.
+   *
+   * Deliberately not NEXT_PUBLIC_: Next inlines those at build time, so one
+   * set on the server would never reach a build made on a laptop — and the
+   * link in every WhatsApp message would quietly stay localhost.
+   */
+  SITE_URL: optionalSecret,
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   ANTHROPIC_API_KEY: optionalSecret,
   RAZORPAY_KEY_ID: optionalSecret,

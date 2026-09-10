@@ -111,6 +111,10 @@ NEXT_PUBLIC_SUPABASE_URL=https://shbmprmarlubyhaklmpr.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>
 SUPABASE_SERVICE_ROLE_KEY=<service role key>
 
+# The public address of this site. Links inside WhatsApp messages use it, so a
+# wrong value here sends customers a link that goes nowhere.
+SITE_URL=https://order.frybird.in
+
 # The SESSION POOLER string. See the warning above.
 DATABASE_URL=postgresql://postgres.shbmprmarlubyhaklmpr:PASSWORD%40HERE@aws-0-<region>.pooler.supabase.com:5432/postgres
 ```
