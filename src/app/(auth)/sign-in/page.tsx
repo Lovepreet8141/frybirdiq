@@ -2,24 +2,31 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { SignInForm } from "@/components/auth/sign-in-form";
-import { getStaff } from "@/lib/auth";
+import { resolveHome } from "@/lib/auth/route-home";
 
-export const metadata: Metadata = { title: "Staff sign-in", robots: { index: false, follow: false } };
+export const metadata: Metadata = { title: "FRYBIRD IQ", robots: { index: false, follow: false } };
 
 export default async function SignInPage() {
-  // Already signed in and holding a membership — no reason to show this.
-  if (await getStaff()) redirect("/app/orders");
+  // Already signed in — go wherever that account actually belongs.
+  const home = await resolveHome();
+  if (home.path) redirect(home.path);
 
   return (
     <div className="flex min-h-full flex-col items-center justify-center px-[var(--gutter)] py-16">
       <div className="flex w-full max-w-sm flex-col gap-8">
         <div className="flex flex-col gap-2">
-          <Link href="/" className="font-heading text-xl font-bold tracking-tight">
-            FRYB<span className="text-primary">I</span>RD
+          <Link href="/" className="font-heading text-sm font-bold uppercase tracking-[0.08em] text-muted-foreground">
+            FRYBIRD
           </Link>
-          <h1 className="font-heading text-3xl font-bold tracking-tight">Staff sign-in</h1>
+          <h1 className="font-heading text-4xl font-bold tracking-tight">
+            FRYBIRD <span className="text-primary">IQ</span>
+          </h1>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            For counter and kitchen. Customers don&rsquo;t need an account to order.
+            Counter and kitchen. Customers order without an account and sign in{" "}
+            <Link href="/account/sign-in" className="font-semibold text-foreground underline underline-offset-4">
+              over here
+            </Link>
+            .
           </p>
         </div>
 

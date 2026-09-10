@@ -9,6 +9,7 @@ import { customers, loyaltyAccounts } from "@/db/schema";
 import { isSupabaseConfigured } from "@/lib/env";
 import { createServerClient } from "@/lib/supabase/server";
 import { requireOrg } from "@/lib/repositories/org";
+import { resolveHome } from "@/lib/auth/route-home";
 
 export type CustomerAuthState =
   | { status: "idle" }
@@ -141,6 +142,18 @@ export async function signInCustomer(
   if (error) return { status: "error", message: "That email and password don't match." };
 
   revalidatePath("/", "layout");
+
+  // Staff signing in here are sent to the counter rather than to /account,
+  // which they have no customer record for and would be bounced out of.
+  const home = await resolveHome();
+  if (home.kind === "staff") redirect("/app/orders");
+  if (home.kind === "neither") {
+    return {
+      status: "error",
+      message: "That account has no customer profile yet. Create one, or order once as a guest.",
+    };
+  }
+
   redirect("/account");
 }
 

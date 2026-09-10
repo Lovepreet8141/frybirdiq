@@ -5,6 +5,7 @@ import { ArrowLeft } from "lucide-react";
 import { EmptyState } from "@/components/states";
 import { OrderHistoryList } from "@/components/account/order-history";
 import { getCustomer } from "@/lib/customer";
+import { resolveHome } from "@/lib/auth/route-home";
 import { listCustomerOrders } from "@/lib/repositories/orders";
 import { requireOrg } from "@/lib/repositories/org";
 
@@ -13,7 +14,10 @@ export const dynamic = "force-dynamic";
 
 export default async function CustomerOrdersPage() {
   const customer = await getCustomer();
-  if (!customer) redirect("/account/sign-in");
+  if (!customer) {
+    const home = await resolveHome();
+    redirect(home.kind === "staff" ? "/app/orders" : "/account/sign-in");
+  }
 
   const org = await requireOrg();
   const orders = await listCustomerOrders({ customerId: customer.id, orgId: org.id });

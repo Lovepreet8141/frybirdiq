@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createServerClient } from "@/lib/supabase/server";
 import { isSupabaseConfigured } from "@/lib/env";
+import { resolveHome } from "./route-home";
 
 export type SignInState = { status: "idle" } | { status: "error"; message: string };
 
@@ -48,6 +49,27 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
   }
 
   revalidatePath("/", "layout");
+
+  /*
+   * Route by what the account is, not by which form it used.
+   *
+   * A customer who signs in here has a valid session but no membership. Sending
+   * them to /app/orders would bounce them straight back to this page, and they
+   * would sit in that loop with correct credentials and no explanation.
+   */
+  const home = await resolveHome();
+
+  if (home.kind === "customer") redirect("/account");
+  if (home.kind === "neither") {
+    // Signed in, but attached to nothing. Leaving the session in place would
+    // keep every page treating them as a stranger with no way to understand it.
+    await supabase.auth.signOut();
+    return {
+      status: "error",
+      message: "That account isn't set up for staff access. Ask the owner to grant it a role.",
+    };
+  }
+
   redirect("/app/orders");
 }
 

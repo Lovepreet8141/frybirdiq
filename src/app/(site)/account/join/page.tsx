@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { JoinForm } from "@/components/account/auth-forms";
-import { getCustomer } from "@/lib/customer";
+import { resolveHome } from "@/lib/auth/route-home";
 import { getLoyaltyConfig } from "@/lib/loyalty/config";
 import { isLoyaltyEnabled } from "@/lib/loyalty";
 import { formatBps } from "@/lib/money";
@@ -10,7 +10,8 @@ import { formatBps } from "@/lib/money";
 export const metadata: Metadata = { title: "Create an account" };
 
 export default async function JoinPage() {
-  if (await getCustomer()) redirect("/account");
+  const home = await resolveHome();
+  if (home.path) redirect(home.path);
   const loyalty = await getLoyaltyConfig();
 
   return (
