@@ -43,7 +43,19 @@ the modifier is dropped at pricing time and the customer is undercharged with
 no error anywhere. This has already happened once.
 
 **Every mutation that matters is idempotent.** A retried request must not
-create a second order or a second charge. §17.
+create a second order or a second charge. §17. Order placement and cash
+settlement both go through `withIdempotency`; a double-tap returns the first
+result rather than booking twice.
+
+**Payment goes through a provider, never inline.** `src/lib/payments` owns the
+`PaymentProvider` interface and the cash implementation. Order code resolves a
+provider by name and never imports one. A provider moves money and returns what
+happened; it never sets an order's status — the service layer owns that. Adding
+Razorpay is a new module plus a line in the registry.
+
+**Cash is recorded against a person.** It is the one method with no external
+trail — no gateway record, no bank entry until the till is banked — so
+`capture` refuses an anonymous actor and every settlement writes an audit row.
 
 **Direct orders only.** Dine-in, takeaway, and FRYBIRD's own website. There are
 no aggregators in this build — no Swiggy, no Zomato, no commission, no
@@ -99,7 +111,7 @@ yesterday's order. §51.
 | Auth | Supabase Auth |
 | Realtime | Supabase Realtime |
 | Validation | Zod, at every boundary |
-| Payments | Razorpay behind a `PaymentProvider` interface |
+| Payments | Cash via `PaymentProvider`; Razorpay slots in behind the same interface |
 | Tests | Vitest |
 | Package manager | pnpm |
 

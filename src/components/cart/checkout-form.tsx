@@ -26,7 +26,7 @@ function SubmitButton() {
 }
 
 /**
- * Checkout. BUILD-PLAN.md §15.
+ * Checkout. BUILD-PLAN.md §15, §17.
  *
  * Deliberately short: §15 says not to create unnecessary steps, and this is a
  * collection order from a counter two minutes away. Name and phone are all the
@@ -35,12 +35,13 @@ function SubmitButton() {
  * Labels are visible, never placeholders — a placeholder disappears exactly
  * when the customer needs it. Errors sit beside the field they belong to.
  */
-export function CheckoutForm() {
+export function CheckoutForm({ idempotencyKey }: { idempotencyKey: string }) {
   const [state, action] = useActionState<CheckoutState, FormData>(submitCheckout, { status: "idle" });
   const fieldErrors = state.status === "error" ? (state.fieldErrors ?? {}) : {};
 
   return (
     <form action={action} className="flex flex-col gap-5">
+      <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
       {state.status === "error" && !state.fieldErrors && (
         <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm leading-relaxed">
           {state.message}

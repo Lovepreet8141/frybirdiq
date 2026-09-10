@@ -19,6 +19,9 @@ export async function submitCheckout(_previous: CheckoutState, formData: FormDat
     name: String(formData.get("name") ?? ""),
     phone: String(formData.get("phone") ?? ""),
     notes: String(formData.get("notes") ?? "") || undefined,
+    // Minted when the page rendered. A double-tap sends the same key twice and
+    // the second returns the first order rather than creating another. §17.
+    idempotencyKey: String(formData.get("idempotencyKey") ?? ""),
   });
 
   if (!result.ok) {

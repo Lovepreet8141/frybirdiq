@@ -19,6 +19,8 @@ import { locations, orderEvents, orderItemModifiers, orderItems, orders, organiz
 import { assertChannelFulfilment } from "@/domain/order-channel";
 import { isSupabaseConfigured } from "@/lib/env";
 import { getPricedCart } from "@/lib/cart";
+import { createPendingPayment } from "./payments";
+import { IdempotencyConflict, withIdempotency } from "./idempotency";
 
 const ORG_SLUG = "frybird";
 
@@ -37,6 +39,13 @@ export const checkoutSchema = z.object({
     .trim()
     .regex(/^[6-9]\d{9}$/, "Enter a 10-digit mobile number."),
   notes: z.string().trim().max(500).optional(),
+  /**
+   * Minted when the checkout page renders and sent back with the submission.
+   *
+   * A double-tap on a slow connection sends the same key twice, and the second
+   * one returns the first order instead of creating another. §17.
+   */
+  idempotencyKey: z.string().uuid(),
 });
 
 export type CheckoutInput = z.infer<typeof checkoutSchema>;
@@ -91,6 +100,8 @@ export async function placeOrder(input: CheckoutInput): Promise<PlaceOrderResult
     return { ok: false, error: "Check the details below.", fieldErrors };
   }
 
+  const details = parsed.data;
+
   // Priced here, on the server, from the cart cookie's contents only.
   const cart = await getPricedCart();
   if (cart.lines.length === 0) {
@@ -105,27 +116,49 @@ export async function placeOrder(input: CheckoutInput): Promise<PlaceOrderResult
   const [location] = await database.select().from(locations).where(eq(locations.orgId, org.id)).limit(1);
   if (!location) return { ok: false, error: "The shop is not set up yet. Nothing has been ordered." };
 
+  const { id: orgId } = org;
+  const { id: locationId } = location;
+
   // An online order collected from the counter. The pair is checked here and
   // again by a constraint on the table.
   const channel = "ONLINE" as const;
   const fulfilment = "TAKEAWAY" as const;
   assertChannelFulfilment(channel, fulfilment);
 
-  const orderNumber = await nextOrderNumber(org.id);
+  try {
+    const { result } = await withIdempotency(
+      {
+        key: details.idempotencyKey,
+        operation: "placeOrder",
+        orgId: org.id,
+        request: { phone: details.phone, total: cart.totals.gross.toString(), lines: cart.lines.length },
+      },
+      () => writeOrder(),
+    );
+    return result;
+  } catch (error) {
+    if (error instanceof IdempotencyConflict) {
+      return { ok: false, error: "That looks like a repeat submission. Refresh and try again." };
+    }
+    throw error;
+  }
+
+  async function writeOrder(): Promise<PlaceOrderResult> {
+  const orderNumber = await nextOrderNumber(orgId);
   const now = new Date();
 
   const [order] = await database
     .insert(orders)
     .values({
-      orgId: org.id,
-      locationId: location.id,
+      orgId,
+      locationId,
       orderNumber,
       status: "PENDING_PAYMENT",
       channel,
       fulfilment,
-      customerName: parsed.data.name,
-      customerPhone: parsed.data.phone,
-      notes: parsed.data.notes,
+      customerName: details.name,
+      customerPhone: details.phone,
+      notes: details.notes,
       subtotal: cart.totals.listed,
       discountTotal: cart.totals.discount,
       taxableTotal: cart.totals.taxable,
@@ -146,7 +179,7 @@ export async function placeOrder(input: CheckoutInput): Promise<PlaceOrderResult
     const [item] = await database
       .insert(orderItems)
       .values({
-        orgId: org.id,
+        orgId,
         orderId: order.id,
         productId: null,
         productName: line.product.name,
@@ -166,7 +199,7 @@ export async function placeOrder(input: CheckoutInput): Promise<PlaceOrderResult
     if (item && line.modifiers.length > 0) {
       await database.insert(orderItemModifiers).values(
         line.modifiers.map((modifier) => ({
-          orgId: org.id,
+          orgId,
           orderItemId: item.id,
           groupName: "Options",
           modifierName: modifier.name,
@@ -177,14 +210,19 @@ export async function placeOrder(input: CheckoutInput): Promise<PlaceOrderResult
   }
 
   await database.insert(orderEvents).values({
-    orgId: org.id,
+    orgId,
     orderId: order.id,
     fromStatus: "DRAFT",
     toStatus: "PENDING_PAYMENT",
     reason: "Placed on the website for collection",
   });
 
+  // What the order is waiting on. Cash at the counter, recorded now so the
+  // till has a row to settle against rather than an implicit expectation.
+  await createPendingPayment({ orgId, orderId: order.id, amount: cart.totals.gross });
+
   return { ok: true, orderId: order.id, orderNumber };
+  }
 }
 
 export interface OrderView {

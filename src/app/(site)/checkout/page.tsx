@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ArrowLeft, Store } from "lucide-react";
+import { ArrowLeft, Store, Wallet } from "lucide-react";
+import { randomUUID } from "node:crypto";
 import { CheckoutForm } from "@/components/cart/checkout-form";
+import { availableMethods } from "@/lib/payments";
 import { OrderSummary } from "@/components/cart/summary";
 import { getPricedCart } from "@/lib/cart";
 
@@ -11,6 +13,10 @@ export const metadata: Metadata = { title: "Checkout" };
 export default async function CheckoutPage() {
   const cart = await getPricedCart();
   if (cart.lines.length === 0) redirect("/cart");
+
+  // Minted per render. Resubmitting the same page cannot create a second order.
+  const idempotencyKey = randomUUID();
+  const methods = availableMethods();
 
   return (
     <div className="mx-auto w-full max-w-4xl px-[var(--gutter)] py-10 sm:py-14">
@@ -43,16 +49,38 @@ export default async function CheckoutPage() {
             <p className="text-sm leading-relaxed text-muted-foreground">
               Collect from Sector 9, Ambala City. We&rsquo;ll call when it&rsquo;s ready.
             </p>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              Pay at the counter — cash, UPI or card. Nothing is charged now.
-            </p>
+          </section>
+
+          {/*
+            Payment method, listed from the provider registry rather than
+            hard-coded. Cash is the only one for now; adding Razorpay adds an
+            entry to availableMethods() and this renders it without changing.
+          */}
+          <section aria-labelledby="payment" className="flex flex-col gap-3">
+            <h2 id="payment" className="font-heading text-lg font-semibold">
+              Payment
+            </h2>
+            <ul className="flex flex-col gap-2">
+              {methods.map((option) => (
+                <li key={option.method}>
+                  <div className="flex min-h-[56px] items-center gap-3 rounded-lg border border-primary bg-primary/10 px-4 py-3">
+                    <Wallet className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                    <span className="flex flex-col">
+                      <span className="font-semibold">{option.label}</span>
+                      <span className="text-sm text-muted-foreground">{option.detail}</span>
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <p className="text-sm text-muted-foreground">Nothing is charged now.</p>
           </section>
 
           <section aria-labelledby="details" className="flex flex-col gap-5">
             <h2 id="details" className="font-heading text-lg font-semibold">
               Your details
             </h2>
-            <CheckoutForm />
+            <CheckoutForm idempotencyKey={idempotencyKey} />
           </section>
         </div>
 

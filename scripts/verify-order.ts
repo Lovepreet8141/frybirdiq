@@ -11,7 +11,7 @@ config({ path: ".env.local", quiet: true });
 
 import { desc, eq } from "drizzle-orm";
 import { closeDb, db } from "../src/db/connection";
-import { orderEvents, orderItemModifiers, orderItems, orders } from "../src/db/schema";
+import { orderEvents, orderItemModifiers, orderItems, orders, payments } from "../src/db/schema";
 import { formatINR, paise } from "../src/lib/money";
 
 // Money columns come back as plain bigint. `paise()` is the acknowledgement
@@ -42,6 +42,12 @@ async function main() {
     console.log(`  item : ${item.quantity}x ${item.productName} @ ${inr(item.unitPrice)} = ${inr(item.lineTotal)}`);
     console.log(`         hsn=${item.hsnCode} rate=${item.taxRateBps}bps  modifiers=[${mods.map((m) => m.modifierName).join(", ")}]`);
   }
+
+  const pays = await d.select().from(payments).where(eq(payments.orderId, o.id));
+  for (const pay of pays) {
+    console.log(`  payment: ${pay.provider}/${pay.method} ${pay.status} ${inr(pay.amount)} captured=${pay.capturedAt ? "yes" : "no"}`);
+  }
+  if (pays.length === 0) console.log("  payment: NONE — order has nothing to settle against");
 
   const events = await d.select().from(orderEvents).where(eq(orderEvents.orderId, o.id));
   console.log(`  events: ${events.map((e) => `${e.fromStatus}->${e.toStatus}`).join(", ")}`);

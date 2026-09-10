@@ -43,6 +43,8 @@ that has already taken orders unless you pass `--force`.
 | `pnpm db:generate` | Generate a migration after a schema change |
 | `pnpm db:migrate` | Apply migrations |
 | `pnpm db:seed` | Seed FRYBIRD's real menu from the printed boards |
+| `pnpm order:verify` | Print the most recent order straight from Postgres |
+| `pnpm order:settle` | Take cash on the most recent unpaid order |
 | `python3 scripts/check-contrast.py` | WCAG check on the brand palette |
 
 ## Where things are
@@ -77,6 +79,10 @@ Tick an item when the real value is in the repo, not when the answer is known.
 
 ### Blocking
 
+- [ ] **Staff sign-in.** Settling a cash order needs an authenticated cashier
+      with `orders.update`. The service enforces the permission already; there
+      is no screen to reach it from, and no auth to identify who is pressing.
+      Blocks the counter using this for real.
 - [ ] **Delivery fee and radius** — *blocks delivery.* Checkout is collection
       only. Delivery needs a fee and a radius, and inventing a fee would put a
       number in front of a customer that nobody agreed to. The order lifecycle
@@ -138,8 +144,12 @@ reconcile exactly.
 
 Still outstanding:
 
-- **Payment is Phase 2.** Checkout is pay-at-counter — a real QSR flow that
-  completes the loop without a fake "payment successful" step, which §73
-  forbids before Phase 2 builds it.
+- **Cash on collection is live.** Checkout records a pending `cash/CASH`
+  payment; settling it moves the order to PAID, books the money once, and
+  writes an audit row. Online payment slots in behind the same
+  `PaymentProvider` interface without touching order logic.
+- **No staff screen to settle from yet.** Settlement needs authenticated staff,
+  and sign-in is not built. Until it is, `pnpm order:settle` drives the real
+  service from the command line.
 - **Realtime is Phase 3.** The tracking page reflects status at page load. It
   does not pretend to be live.
