@@ -74,6 +74,7 @@ that has already taken orders unless you pass `--force`.
 | `pnpm customers:export` | Export the opted-in marketing list as CSV |
 | `pnpm loyalty:show` / `loyalty:set` | The points scheme |
 | `pnpm loyalty:balances` | Balances and the movements behind them |
+| `pnpm business:show` / `business:set` | Legal name, GSTIN, phone on documents |
 | `python3 scripts/check-contrast.py` | WCAG check on the brand palette |
 
 ## Where things are
@@ -137,11 +138,12 @@ Tick an item when the real value is in the repo, not when the answer is known.
 
 ### Before issuing a tax invoice
 
-- [ ] **GSTIN and registered legal name on the organization.** Without a GSTIN
-      the document is a receipt, not a tax invoice, and it says so on its face —
-      calling it one would be a false statement on a document a customer may
-      present for a claim. Nothing sets these yet; they need a column update on
-      `organizations`.
+- [ ] **GSTIN, if and when FRYBIRD registers.** Documents are currently issued
+      as receipts with no CGST/SGST split, because a business without a GSTIN
+      cannot collect GST and a receipt showing a tax line asserts that it did.
+      Adding one with `pnpm business:set --gstin ...` turns every future
+      document into a full tax invoice with no code change. The tax figures are
+      already computed and stored on each order; only printing them waits.
 
 ### Before sending any marketing
 

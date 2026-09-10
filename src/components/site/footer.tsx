@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 export function Footer() {
@@ -5,9 +6,7 @@ export function Footer() {
     <footer className="mt-auto border-t border-border">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-[var(--gutter)] py-12 sm:flex-row sm:justify-between">
         <div className="flex flex-col gap-2">
-          <p className="font-heading text-lg font-bold tracking-tight">
-            FRYB<span className="text-primary">I</span>RD
-          </p>
+          <Image src="/frybird-wordmark.svg" alt="FRYBIRD" width={140} height={31} className="h-[28px] w-auto" />
           <p className="text-sm text-muted-foreground">Born crispy. Built bold.</p>
         </div>
 

@@ -24,7 +24,9 @@
     "customers:export": "tsx scripts/export-customers.ts",
     "loyalty:show": "tsx scripts/configure-loyalty.ts --show",
     "loyalty:set": "tsx scripts/configure-loyalty.ts",
-    "loyalty:balances": "tsx scripts/check-points.ts"
+    "loyalty:balances": "tsx scripts/check-points.ts",
+    "business:show": "tsx scripts/configure-business.ts --show",
+    "business:set": "tsx scripts/configure-business.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

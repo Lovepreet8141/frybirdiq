@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
@@ -30,6 +31,13 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
    * A document without a GSTIN is not a tax invoice, whatever it is titled.
    * Calling it one would be a false statement on a document a customer may
    * present for a claim, so it is a receipt until the GSTIN is set.
+   *
+   * It also does not itemise CGST and SGST. A business that is not registered
+   * for GST cannot collect it, and a receipt showing a tax split asserts that
+   * it did. The figures are still stored on the order, so the day a GSTIN is
+   * added every future document becomes a full tax invoice with no change
+   * here — but nothing prints a tax line until there is a registration behind
+   * it.
    */
   const isTaxInvoice = Boolean(invoice.seller.gstin);
   const title = isTaxInvoice ? "Tax Invoice" : "Receipt";
@@ -52,14 +60,13 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
       <article className="mt-6 rounded-lg bg-[#F5EDD8] p-8 text-[#1F0705] print:mt-0 print:rounded-none print:p-6">
         <header className="flex flex-wrap items-start justify-between gap-4 border-b border-[#1F0705]/20 pb-5">
           <div>
-            <p className="font-heading text-2xl font-bold tracking-tight">{invoice.seller.name}</p>
-            {invoice.seller.legalName && <p className="text-sm">{invoice.seller.legalName}</p>}
+            {/* The wordmark is cream on transparent, so it needs its own ground. */}
+            <span className="inline-flex rounded bg-[#C21F11] px-3 py-2 print:bg-[#C21F11]">
+              <Image src="/frybird-wordmark.svg" alt="FRYBIRD" width={150} height={33} className="h-[26px] w-auto" />
+            </span>
+            {invoice.seller.legalName && <p className="mt-2 text-sm font-semibold">{invoice.seller.legalName}</p>}
             <p className="mt-1 max-w-xs text-sm leading-relaxed opacity-80">{invoice.seller.address}</p>
-            {invoice.seller.gstin ? (
-              <p className="tabular mt-1 text-sm">GSTIN {invoice.seller.gstin}</p>
-            ) : (
-              <p className="mt-1 text-sm font-semibold">Not GST registered on record</p>
-            )}
+            {invoice.seller.gstin && <p className="tabular mt-1 text-sm">GSTIN {invoice.seller.gstin}</p>}
           </div>
 
           <div className="text-right">
@@ -96,11 +103,15 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
           <thead>
             <tr className="border-b border-[#1F0705]/20 text-left">
               <th scope="col" className="pb-2 pr-2 font-semibold">Item</th>
-              <th scope="col" className="pb-2 pr-2 text-right font-semibold">HSN</th>
+              {isTaxInvoice && <th scope="col" className="pb-2 pr-2 text-right font-semibold">HSN</th>}
               <th scope="col" className="pb-2 pr-2 text-right font-semibold">Qty</th>
-              <th scope="col" className="pb-2 pr-2 text-right font-semibold">Taxable</th>
-              <th scope="col" className="pb-2 pr-2 text-right font-semibold">CGST</th>
-              <th scope="col" className="pb-2 pr-2 text-right font-semibold">SGST</th>
+              {isTaxInvoice && (
+                <>
+                  <th scope="col" className="pb-2 pr-2 text-right font-semibold">Taxable</th>
+                  <th scope="col" className="pb-2 pr-2 text-right font-semibold">CGST</th>
+                  <th scope="col" className="pb-2 pr-2 text-right font-semibold">SGST</th>
+                </>
+              )}
               <th scope="col" className="pb-2 text-right font-semibold">Total</th>
             </tr>
           </thead>
@@ -113,24 +124,28 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
                     <span className="block text-xs opacity-70">{line.modifiers.join(", ")}</span>
                   )}
                 </td>
-                <td className="tabular py-2 pr-2 text-right">{line.hsnCode ?? "—"}</td>
+                {isTaxInvoice && <td className="tabular py-2 pr-2 text-right">{line.hsnCode ?? "—"}</td>}
                 <td className="tabular py-2 pr-2 text-right">{line.quantity}</td>
-                <td className="tabular py-2 pr-2 text-right">{formatINR(line.taxable, "unit")}</td>
-                <td className="tabular py-2 pr-2 text-right">
-                  {formatINR(line.cgst, "unit")}
-                  <span className="block text-xs opacity-60">{formatBps(line.rateBps / 2, 2)}</span>
-                </td>
-                <td className="tabular py-2 pr-2 text-right">
-                  {formatINR(line.sgst, "unit")}
-                  <span className="block text-xs opacity-60">{formatBps(line.rateBps / 2, 2)}</span>
-                </td>
+                {isTaxInvoice && (
+                  <>
+                    <td className="tabular py-2 pr-2 text-right">{formatINR(line.taxable, "unit")}</td>
+                    <td className="tabular py-2 pr-2 text-right">
+                      {formatINR(line.cgst, "unit")}
+                      <span className="block text-xs opacity-60">{formatBps(line.rateBps / 2, 2)}</span>
+                    </td>
+                    <td className="tabular py-2 pr-2 text-right">
+                      {formatINR(line.sgst, "unit")}
+                      <span className="block text-xs opacity-60">{formatBps(line.rateBps / 2, 2)}</span>
+                    </td>
+                  </>
+                )}
                 <td className="tabular py-2 text-right font-semibold">{formatINR(line.total, "unit")}</td>
               </tr>
             ))}
 
             {invoice.deliveryFee > 0n && (
               <tr className="border-b border-[#1F0705]/10">
-                <td className="py-2 pr-2" colSpan={6}>
+                <td className="py-2 pr-2" colSpan={isTaxInvoice ? 6 : 2}>
                   Delivery
                 </td>
                 <td className="tabular py-2 text-right font-semibold">{formatINR(invoice.deliveryFee, "unit")}</td>
@@ -141,23 +156,27 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
 
         <section className="mt-5 flex justify-end">
           <dl className="w-full max-w-xs text-sm">
-            <div className="flex justify-between gap-4 py-1">
-              <dt className="opacity-80">Taxable value</dt>
-              <dd className="tabular">{formatINR(invoice.taxable, "unit")}</dd>
-            </div>
-            <div className="flex justify-between gap-4 py-1">
-              <dt className="opacity-80">CGST</dt>
-              <dd className="tabular">{formatINR(invoice.cgst, "unit")}</dd>
-            </div>
-            <div className="flex justify-between gap-4 py-1">
-              <dt className="opacity-80">SGST</dt>
-              <dd className="tabular">{formatINR(invoice.sgst, "unit")}</dd>
-            </div>
-            {invoice.igst > 0n && (
-              <div className="flex justify-between gap-4 py-1">
-                <dt className="opacity-80">IGST</dt>
-                <dd className="tabular">{formatINR(invoice.igst, "unit")}</dd>
-              </div>
+            {isTaxInvoice && (
+              <>
+                <div className="flex justify-between gap-4 py-1">
+                  <dt className="opacity-80">Taxable value</dt>
+                  <dd className="tabular">{formatINR(invoice.taxable, "unit")}</dd>
+                </div>
+                <div className="flex justify-between gap-4 py-1">
+                  <dt className="opacity-80">CGST</dt>
+                  <dd className="tabular">{formatINR(invoice.cgst, "unit")}</dd>
+                </div>
+                <div className="flex justify-between gap-4 py-1">
+                  <dt className="opacity-80">SGST</dt>
+                  <dd className="tabular">{formatINR(invoice.sgst, "unit")}</dd>
+                </div>
+                {invoice.igst > 0n && (
+                  <div className="flex justify-between gap-4 py-1">
+                    <dt className="opacity-80">IGST</dt>
+                    <dd className="tabular">{formatINR(invoice.igst, "unit")}</dd>
+                  </div>
+                )}
+              </>
             )}
             <div className="mt-2 flex justify-between gap-4 border-t border-[#1F0705]/30 pt-2">
               <dt className="font-heading text-base font-bold">Total</dt>
@@ -167,12 +186,8 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
         </section>
 
         <footer className="mt-6 border-t border-[#1F0705]/20 pt-4 text-xs leading-relaxed opacity-70">
-          <p>Prices include GST. Amounts in Indian rupees.</p>
-          {!isTaxInvoice && (
-            <p className="mt-1 font-semibold">
-              This is a receipt, not a tax invoice — no GSTIN is on record for this business.
-            </p>
-          )}
+          <p>Amounts in Indian rupees.{isTaxInvoice ? " Prices include GST." : ""}</p>
+          <p className="mt-1">Thank you for ordering from FRYBIRD.</p>
         </footer>
       </article>
 
