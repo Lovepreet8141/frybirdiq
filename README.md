@@ -80,6 +80,7 @@ that has already taken orders unless you pass `--force`.
 | `pnpm loyalty:show` / `loyalty:set` | The points scheme |
 | `pnpm loyalty:balances` | Balances and the movements behind them |
 | `pnpm business:show` / `business:set` | Legal name, GSTIN, phone on documents |
+| `pnpm iq:report [today\|7d\|30d]` | The dashboard figures, from the terminal |
 | `python3 scripts/check-contrast.py` | WCAG check on the brand palette |
 
 ## Where things are
@@ -195,6 +196,11 @@ Tick an item when the real value is in the repo, not when the answer is known.
       `inclusive`; both modes remain covered by tests, and `gst()` now requires
       the basis rather than defaulting, so no caller can silently fall back to
       the wrong one.
+- [x] **FRYBIRD IQ.** Revenue, orders, average order and open balance with
+      period-over-period deltas; revenue by day; collection versus delivery;
+      top sellers by revenue. Light-themed, scoped to the staff area.
+- [x] **New-order alert.** Polls every 12 seconds and keeps chiming for three
+      minutes or until acknowledged. Realtime is still Phase 3.
 - [x] **Invoices.** Numbered per financial year, issued on payment, with the
       GST breakdown per line. Printable; `Send on WhatsApp` opens the app with
       the order details written.

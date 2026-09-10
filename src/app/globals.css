@@ -151,6 +151,83 @@
   --gutter: clamp(1.25rem, 5vw, 4.5rem);
 }
 
+/*
+ * FRYBIRD IQ — the staff and owner side.
+ *
+ * Light, where the customer site is dark. Not a whim: IQ is read in daylight
+ * in a shop, often on a bright tablet, and the customer site is read on a
+ * phone at night. They are different rooms.
+ *
+ * It rebinds the same semantic tokens rather than introducing a second set, so
+ * every component already written works inside it unchanged.
+ *
+ * Every pair below was measured, not eyeballed. Ink on panel is 18.15,
+ * secondary 7.98, muted labels 5.20, brand red as text 4.85, white on red
+ * 4.85, and both deltas above 5 — all clear of the 4.5 floor for body text.
+ */
+[data-surface="iq"] {
+  --ink: #191512;
+  --iq-secondary: #55504a;
+  --iq-muted: #726c63;
+  --iq-red: #d92b2b;
+  --iq-cream: #f5edd8;
+  --iq-hairline: #e2e3e5;
+
+  --background: #f4f5f6;
+  --foreground: var(--ink);
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --surface-muted: #f4f5f6;
+
+  --card: #ffffff;
+  --card-foreground: var(--ink);
+  --popover: #ffffff;
+  --popover-foreground: var(--ink);
+
+  /* Red is the action colour here, not amber — it is the logo and the active
+     state, and at 4.85 on white it carries a label safely. */
+  --primary: var(--iq-red);
+  --primary-foreground: #ffffff;
+  --secondary: var(--iq-cream);
+  --secondary-foreground: var(--ink);
+  --accent: var(--iq-cream);
+  --accent-foreground: var(--ink);
+
+  --muted: #f4f5f6;
+  --muted-foreground: var(--iq-secondary);
+
+  --destructive: #c2410c;
+  --destructive-foreground: #ffffff;
+  /* Gain and loss, for deltas. Never the only signal — a figure that moved
+     carries an arrow and a sign as well as a colour. */
+  --success: #0f7b4f;
+  --success-foreground: #ffffff;
+  --warning: #c2410c;
+  --warning-foreground: #ffffff;
+
+  --border: var(--iq-hairline);
+  --border-strong: #cfd1d4;
+  --input: var(--iq-hairline);
+  --ring: var(--iq-red);
+
+  --chart-1: #d92b2b;
+  --chart-2: #0f7b4f;
+  --chart-3: #726c63;
+  --chart-4: #c2410c;
+  --chart-5: #55504a;
+
+  --sidebar: #ffffff;
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--iq-red);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--iq-cream);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: var(--iq-hairline);
+  --sidebar-ring: var(--iq-red);
+
+  color-scheme: light;
+}
+
 /* Mirrors :root. There is no light theme yet, and pretending otherwise would
    ship a grey interface the moment a component checks for the class. */
 .dark {

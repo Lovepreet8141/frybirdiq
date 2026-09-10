@@ -156,6 +156,8 @@ imports. Every function there has a test. This is the part that must be right.
 - One migration per schema change, checked in. Never edit an applied migration.
 - Before creating a component, search this repo, then shadcn, then 21st.dev.
   Reuse or extend first. §67.
+- The staff area is a light surface (`data-surface="iq"`), the customer site is
+  dark. Both bind the same semantic tokens, so a component works in either.
 - Read `design-system/MASTER.md` before any UI work, and the page spec in
   `design-system/pages/` if one exists.
 - Every interactive feature ships all eight states in §56 — including `offline`

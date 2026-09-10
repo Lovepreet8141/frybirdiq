@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { getStaff, staffCan } from "@/lib/auth";
 import { signOut } from "@/lib/auth/actions";
+import { NewOrderAlert } from "@/components/staff/new-order-alert";
 import { resolveHome } from "@/lib/auth/route-home";
 
 /**
@@ -16,10 +17,11 @@ import { resolveHome } from "@/lib/auth/route-home";
  * on it.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const [staff, canSeeOrders, canSeeDeliveries] = await Promise.all([
+  const [staff, canSeeOrders, canSeeDeliveries, canSeeAnalytics] = await Promise.all([
     getStaff(),
     staffCan("orders.view"),
     staffCan("delivery.view"),
+    staffCan("analytics.view"),
   ]);
 
   if (!staff) {
@@ -31,7 +33,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="flex min-h-full flex-col">
+    /* The whole staff area is the IQ surface: light, where the customer
+       site is dark. They are different rooms. */
+    <div data-surface="iq" className="flex min-h-full flex-col bg-background text-foreground">
       <header className="border-b border-border">
         <div className="mx-auto flex h-[68px] w-full max-w-6xl items-center justify-between gap-4 px-[var(--gutter)]">
           <div className="flex items-center gap-2 sm:gap-6">
@@ -60,6 +64,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
                   Deliveries
                 </Link>
               )}
+              {canSeeAnalytics && (
+                <Link
+                  href="/app/iq"
+                  className="flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  IQ
+                </Link>
+              )}
             </nav>
           </div>
 
@@ -80,6 +92,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </div>
         </div>
       </header>
+
+      {/* Above the content, so an order that has arrived is the first thing
+          seen rather than something to scroll for. */}
+      {canSeeOrders && <NewOrderAlert />}
 
       <main className="flex-1">{children}</main>
     </div>
