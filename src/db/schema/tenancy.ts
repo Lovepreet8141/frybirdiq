@@ -1,5 +1,6 @@
 /** Organizations, locations, staff and roles. BUILD-PLAN.md §41, §42. */
 
+import { sql } from "drizzle-orm";
 import { boolean, index, integer, pgEnum, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
 import { ROLES } from "@/domain/permissions";
 import { ZERO_MONEY, money, primaryId, priceBasisEnum, timestamps } from "./_shared";
@@ -43,15 +44,30 @@ export const organizations = pgTable("organizations", {
   loyaltyMinRedeemPoints: integer("loyalty_min_redeem_points").notNull().default(0),
 
   /*
-   * The stamp card — "buy 7, get the 8th free." A second, independent loyalty
-   * mechanic: visit-based rather than value-based, one stamp per qualifying
-   * order regardless of what it cost. A customer earns both this and points
-   * from the same order.
+   * FRYBIRD REWARDS — the one universal stamp card. A second, independent
+   * loyalty mechanic alongside points: visit-based rather than a percentage
+   * of spend, and a single card — never a separate one per category. A
+   * customer earns both this and points from the same order.
+   *
+   * Every number here is a business decision, not a constant to bury in
+   * code — the FRYBIRD IQ settings screen writes these same columns, so
+   * changing the threshold or the reward cap is a settings change, not a
+   * deploy.
    */
   /** Whether the stamp card is live. */
   stampRewardEnabled: boolean("stamp_reward_enabled").notNull().default(true),
-  /** Orders per cycle. The Nth order — the free one — resets the count. */
-  stampRewardGoal: integer("stamp_reward_goal").notNull().default(8),
+  /** Stamps needed to unlock a free item. Currently 7. */
+  stampsRequired: integer("stamps_required").notNull().default(7),
+  /**
+   * The qualifying order's spend (food + fees, less any points redeemed —
+   * i.e. `grandTotal` less delivery) must exceed this, not merely reach it.
+   * ₹200 is 20000 paise. A SQL literal, not `fromRupees("200")` — drizzle-kit
+   * diffs defaults through JSON, and JSON.stringify cannot represent a
+   * bigint (see `ZERO_MONEY` in `_shared.ts`).
+   */
+  stampMinOrderValue: money("stamp_min_order_value").notNull().default(sql`20000`),
+  /** The most an item can list for and still be a legal free redemption. ₹250 = 25000 paise. */
+  stampMaxRewardValue: money("stamp_max_reward_value").notNull().default(sql`25000`),
 
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
   ...timestamps,

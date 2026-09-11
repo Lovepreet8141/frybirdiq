@@ -10,12 +10,12 @@ import "server-only";
 
 import { and, eq, like, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLogs, loyaltyAccounts, loyaltyStampEvents, loyaltyTransactions, orderEvents, orders, payments } from "@/db/schema";
+import { auditLogs, loyaltyAccounts, loyaltyTransactions, orderEvents, orders, payments } from "@/db/schema";
 import { type Role, authorize } from "@/domain/permissions";
 import { type Paise, formatINR, paise, subtract } from "@/lib/money";
 import { pointsEarned } from "@/lib/loyalty";
 import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
-import { nextStampCount } from "@/lib/loyalty/stamps";
+import { awardStampForOrder, qualifyingStampSpend, redeemStampReward } from "./loyalty";
 import { financialYear, invoiceNumber, parseInvoiceNumber } from "@/lib/invoice";
 import { CASH_PROVIDER, getProvider } from "@/lib/payments";
 import { withIdempotency } from "./idempotency";
@@ -236,42 +236,37 @@ export async function recordCashPayment(input: {
       }
 
       /*
-       * The stamp card moves on every paid order with a customer attached —
-       * points or no points, it counts visits, not spend.
+       * FRYBIRD REWARDS — the stamp moves when the money actually arrives,
+       * same as points and for the same reason: an order abandoned at the
+       * counter must not leave a stamp behind.
        *
-       * A redeeming order resets the count to zero; any other paid order
-       * adds one stamp. Read first rather than a raw SQL increment like
-       * points above, because a reset is not a delta that composes with
-       * whatever the count already was.
+       * `awardStampForOrder` is idempotent on the order id by itself (a
+       * unique constraint in the ledger), so a retried capture cannot mint
+       * a second stamp even without this function's own idempotency
+       * wrapper — belt and braces on the exact failure mode webhooks are
+       * prone to.
+       *
+       * If this order carried a redeemed reward — chosen and priced at
+       * checkout, see src/lib/cart — that reward is marked spent here,
+       * at the same moment the discount it granted is actually charged.
        */
       if (order.customerId) {
         const stampConfig = await getStampConfig();
-        const [existingAccount] = await database
-          .select()
-          .from(loyaltyAccounts)
-          .where(eq(loyaltyAccounts.customerId, order.customerId))
-          .limit(1);
+        const qualifying = qualifyingStampSpend(paise(order.grandTotal), paise(order.deliveryFee));
+        await awardStampForOrder({
+          orgId: order.orgId,
+          customerId: order.customerId,
+          orderId: order.id,
+          qualifyingSpend: qualifying,
+          config: stampConfig,
+        });
 
-        const nextCount = nextStampCount(existingAccount?.stampCount ?? 0, order.stampRewardApplied, stampConfig);
-
-        const [account] = await database
-          .insert(loyaltyAccounts)
-          .values({ orgId: order.orgId, customerId: order.customerId, stampCount: nextCount })
-          .onConflictDoUpdate({
-            target: loyaltyAccounts.customerId,
-            set: { stampCount: nextCount, updatedAt: new Date() },
-          })
-          .returning();
-
-        // Same principle as the points ledger: a balance nobody can explain
-        // is a balance a customer will dispute.
-        if (account) {
-          await database.insert(loyaltyStampEvents).values({
+        if (order.stampRewardId && order.stampRewardProductSlug) {
+          await redeemStampReward({
+            rewardId: order.stampRewardId,
             orgId: order.orgId,
-            accountId: account.id,
-            kind: order.stampRewardApplied ? "REDEEMED" : "EARNED",
-            countAfter: nextCount,
             orderId: order.id,
+            productSlug: order.stampRewardProductSlug,
           });
         }
       }

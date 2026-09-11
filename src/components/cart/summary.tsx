@@ -30,7 +30,7 @@ export function OrderSummary({ cart }: { cart: PricedCart }) {
 
         {cart.stampReward && (
           <div className="flex items-baseline justify-between gap-4 text-[var(--success,inherit)]">
-            <dt className="text-muted-foreground">Stamp card — cheapest item free</dt>
+            <dt className="text-muted-foreground">FRYBIRD REWARDS — free item</dt>
             <dd className="tabular">−{formatINR(cart.stampReward.discount)}</dd>
           </div>
         )}

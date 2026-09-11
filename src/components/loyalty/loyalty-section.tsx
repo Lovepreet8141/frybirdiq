@@ -3,7 +3,9 @@ import { Reveal, Stagger, StaggerItem } from "@/components/motion/reveal";
 import { getCustomer } from "@/lib/customer";
 import { isLoyaltyEnabled, pointsEarned, pointsValue } from "@/lib/loyalty";
 import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
-import { isStampRewardEnabled, stampsRequired } from "@/lib/loyalty/stamps";
+import { isStampProgramEnabled } from "@/lib/loyalty/stamps";
+import { getStampAccountState } from "@/lib/repositories/loyalty";
+import { getOrg } from "@/lib/repositories/org";
 import { formatBps, formatINR, fromRupees } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { StampCard } from "./stamp-card";
@@ -12,19 +14,27 @@ import { StampCard } from "./stamp-card";
  * Two loyalty programs, told straight, with real numbers.
  *
  * Every figure here — the earn rate, the illustrative point totals, a signed-
- * in visitor's own balance and stamp count — is read from the organization
- * and the customer row. §33's rule for the ordering AI holds for marketing
- * copy too: nothing on this page is a number nobody can look up.
+ * in visitor's own balance and stamp progress — is read from the
+ * organization and the customer's actual ledger. §33's rule for the
+ * ordering AI holds for marketing copy too: nothing on this page is a
+ * number nobody can look up.
  */
 export async function LoyaltySection() {
-  const [loyalty, stampConfig, customer] = await Promise.all([getLoyaltyConfig(), getStampConfig(), getCustomer()]);
+  const [loyalty, stampConfig, customer, org] = await Promise.all([
+    getLoyaltyConfig(),
+    getStampConfig(),
+    getCustomer(),
+    getOrg(),
+  ]);
 
   const pointsOn = isLoyaltyEnabled(loyalty);
-  const stampsOn = isStampRewardEnabled(stampConfig);
+  const stampsOn = isStampProgramEnabled(stampConfig);
   if (!pointsOn && !stampsOn) return null;
 
   const bothOn = pointsOn && stampsOn;
-  const required = stampsOn ? stampsRequired(stampConfig) : 0;
+  const stampState = customer && org ? await getStampAccountState(customer.id, org.id) : null;
+  const stampCount = stampState?.stampCount ?? 0;
+  const availableRewards = stampState?.availableRewards.length ?? 0;
 
   return (
     <section id="loyalty" aria-labelledby="loyalty-heading" className="border-b border-border bg-[var(--cream-2)]">
@@ -95,26 +105,24 @@ export async function LoyaltySection() {
                 <span className="flex size-11 items-center justify-center rounded-full bg-accent text-accent-foreground">
                   <Gift className="size-5" aria-hidden="true" />
                 </span>
-                <h3 className="mt-4 font-heading text-xl font-extrabold">
-                  Buy {required}, the {stampConfig.goal}
-                  <sup>th</sup> is free
-                </h3>
+                <h3 className="mt-4 font-heading text-xl font-extrabold">FRYBIRD REWARDS</h3>
                 <p className="mt-1.5 text-sm text-muted-foreground">
-                  {customer && customer.stampCount >= required
-                    ? "Stamped in full — your next order's cheapest item is free, taken off automatically."
-                    : "One stamp per order, whatever it costs. On the free one, your cheapest item comes off the bill by itself — nothing to redeem."}
+                  Spend over {formatINR(stampConfig.minOrderValue)}, get a stamp. Collect {stampConfig.stampsRequired}, and one item up to{" "}
+                  {formatINR(stampConfig.maxRewardValue)} is free — you pick which one.
                 </p>
 
                 <StampCard
-                  goal={stampConfig.goal}
-                  count={customer?.stampCount ?? 0}
+                  stampsRequired={stampConfig.stampsRequired}
+                  stampCount={stampCount}
+                  availableRewards={availableRewards}
                   personal={customer !== null}
                   className="mt-6"
                 />
 
-                {customer && customer.stampCount < required && (
+                {customer && availableRewards === 0 && (
                   <p className="tabular mt-4 text-sm text-muted-foreground">
-                    {required - customer.stampCount} more order{required - customer.stampCount === 1 ? "" : "s"} to go.
+                    {stampConfig.stampsRequired - stampCount} more order{stampConfig.stampsRequired - stampCount === 1 ? "" : "s"} over{" "}
+                    {formatINR(stampConfig.minOrderValue)} to go.
                   </p>
                 )}
               </div>

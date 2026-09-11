@@ -1,72 +1,66 @@
 /**
- * The stamp card — "buy 7, get the 8th free."
+ * FRYBIRD REWARDS — the one universal stamp card.
  *
- * A second loyalty mechanic, independent of points. Points reward what was
- * spent; the stamp card rewards showing up — one stamp per qualifying order,
- * a ₹49 sauce and a ₹599 party box earn the same one stamp. A customer earns
- * both from the same order.
+ * Spend more than a threshold on a qualifying order, earn one stamp.
+ * Collect enough stamps, unlock one free item up to a price cap. There is
+ * exactly one card — never a separate one per category, never one per
+ * product line. A customer earns this and points from the same order; the
+ * two programs do not interact.
  *
- * The reward is one free unit — the cheapest thing on the qualifying order —
- * not a percentage and not the whole order. That keeps the business's cost
- * bounded regardless of what the customer adds to the cart, and it is how
- * this kind of card reads on a physical one: your smallest item, on us.
+ * This module is the pure arithmetic: whether an order's spend qualifies,
+ * whether an item is a legal free redemption, and whether a given number of
+ * unconsumed stamps unlocks a reward. It knows nothing about orders,
+ * customers or the database — the repository layer supplies those and owns
+ * the ledger. Every function here is deterministic and has a test.
  */
 
 import { type Paise, ZERO } from "@/lib/money";
 
 export interface StampConfig {
   readonly enabled: boolean;
-  /** Orders per cycle. The Nth order — the free one — resets the count to zero. */
-  readonly goal: number;
+  /** Stamps needed to unlock a free item. */
+  readonly stampsRequired: number;
+  /** The qualifying spend must exceed this — reaching it exactly is not enough. */
+  readonly minOrderValue: Paise;
+  /** An item priced above this cannot be the free redemption. */
+  readonly maxRewardValue: Paise;
 }
 
-export const STAMP_DISABLED: StampConfig = { enabled: false, goal: 8 };
+export const STAMP_DISABLED: StampConfig = {
+  enabled: false,
+  stampsRequired: 7,
+  minOrderValue: ZERO,
+  maxRewardValue: ZERO,
+};
 
-export function isStampRewardEnabled(config: StampConfig): boolean {
-  return config.enabled && config.goal > 1;
-}
-
-/** Stamps needed before the next order is the free one. */
-export function stampsRequired(config: StampConfig): number {
-  return Math.max(0, config.goal - 1);
-}
-
-/**
- * Whether the order about to be priced is the free one — the customer has
- * already banked enough stamps that this order is the Nth in the cycle.
- */
-export function isStampRewardDue(count: number, config: StampConfig): boolean {
-  return isStampRewardEnabled(config) && count >= stampsRequired(config);
+export function isStampProgramEnabled(config: StampConfig): boolean {
+  return config.enabled && config.stampsRequired > 0;
 }
 
 /**
- * The count after this order settles.
+ * Whether this order's qualifying spend earns a stamp.
  *
- * A redeeming order resets the cycle rather than also banking a stamp of its
- * own — it already spent the one the count was tracking. Capped at the
- * threshold so a config change between placing and paying cannot leave the
- * count sitting past the goal it is supposed to trigger on.
+ * Strictly greater than, not "at least" — spending exactly the threshold
+ * does not qualify. ₹200.00 is 0 stamps; ₹200.01 is 1. A customer earns at
+ * most one stamp per order regardless of the amount by construction: this
+ * answers "does this order earn a stamp," a yes/no, never a count.
  */
-export function nextStampCount(count: number, redeemed: boolean, config: StampConfig): number {
-  if (redeemed) return 0;
-  return Math.min(count + 1, stampsRequired(config));
+export function qualifiesForStamp(qualifyingSpend: Paise, config: StampConfig): boolean {
+  return isStampProgramEnabled(config) && qualifyingSpend > config.minOrderValue;
+}
+
+/** Whether `unconsumedStamps` is enough to unlock a reward right now. */
+export function isRewardUnlocked(unconsumedStamps: number, config: StampConfig): boolean {
+  return isStampProgramEnabled(config) && unconsumedStamps >= config.stampsRequired;
 }
 
 /**
- * What "the free one" is worth on this order: one unit of the cheapest line.
+ * Whether an item at this listed price is a legal free redemption.
  *
- * Per unit, not per line — three of the cheapest item does not make three of
- * them free, only one. Takes the listed per-unit prices directly rather than
- * a cart shape, so it has no dependency on how a caller represents a line.
+ * Compared against the item's full per-unit price — base plus modifiers,
+ * the same "what does this actually cost" figure pricing uses everywhere
+ * else — not the bare product price a modifier could push over the cap.
  */
-export function stampRewardValue(lineUnitPrices: readonly Paise[]): Paise {
-  let min: Paise = ZERO;
-  let seen = false;
-  for (const price of lineUnitPrices) {
-    if (!seen || price < min) {
-      min = price;
-      seen = true;
-    }
-  }
-  return min;
+export function isRewardEligibleItem(unitPrice: Paise, config: StampConfig): boolean {
+  return isStampProgramEnabled(config) && unitPrice <= config.maxRewardValue;
 }

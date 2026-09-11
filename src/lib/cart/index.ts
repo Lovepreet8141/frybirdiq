@@ -13,12 +13,13 @@ import "server-only";
  */
 
 import { cookies } from "next/headers";
-import { type Paise, ZERO, add, multiply, subtract } from "@/lib/money";
+import { type Paise, ZERO, add, formatINR, multiply, subtract } from "@/lib/money";
 import { applyPromotion } from "@/lib/promotions";
 import { findPromotion } from "@/lib/repositories/promotions";
 import { redeem } from "@/lib/loyalty";
 import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
-import { isStampRewardDue, stampRewardValue } from "@/lib/loyalty/stamps";
+import { isRewardEligibleItem } from "@/lib/loyalty/stamps";
+import { getAvailableStampReward } from "@/lib/repositories/loyalty";
 import { getCustomer } from "@/lib/customer";
 import { getOrg } from "@/lib/repositories/org";
 import { type PricedLine, type PricedOrder, priceLine, priceOrder } from "@/lib/pricing";
@@ -83,9 +84,16 @@ export interface AppliedPoints {
   readonly balance: number;
 }
 
-/** The stamp card's "buy 7, get the 8th free" reward, applied to this order. */
+/** FRYBIRD REWARDS' free item, applied to this order. */
 export interface AppliedStampReward {
-  /** What the free item is worth — one unit of the cheapest line. */
+  /** Which unlocked reward this order is spending. */
+  readonly rewardId: string;
+  /** The exact cart line that is free — matching by slug alone would be
+   * ambiguous when the same product appears twice with different modifiers. */
+  readonly lineKey: string;
+  /** The item the customer chose as their free one. */
+  readonly productSlug: string;
+  /** What it's worth — its own listed price, the amount taken off. */
   readonly discount: Paise;
 }
 
@@ -99,8 +107,10 @@ export interface PricedCart {
   readonly promotionError: string | null;
   /** Points actually spendable on this order. */
   readonly points: AppliedPoints | null;
-  /** Set when this order is the stamp card's free one. */
+  /** Set when the customer chose a valid free item and it was applied. */
   readonly stampReward: AppliedStampReward | null;
+  /** Why a chosen free item was refused, if it was. */
+  readonly stampRewardError: string | null;
   /** What is left to pay after points. This is the figure that gets charged. */
   readonly payable: Paise;
   /**
@@ -129,6 +139,12 @@ export async function priceCart(cart: Cart): Promise<PricedCart> {
   const context = await resolvePricingContext();
 
   const forPricing: { unitPrice: Paise; quantity: number; modifierDeltas: Paise[]; rateBps: number; discount?: Paise }[] = [];
+
+  // The index into `resolved`/`forPricing` of the line the customer flagged
+  // as their free item, if it survived resolution. Set inside the loop
+  // rather than searched for afterward — a rejected earlier line would
+  // otherwise throw the two arrays out of step with `cart.lines`.
+  let redeemStampIndex = -1;
 
   for (const line of cart.lines) {
     const product = bySlug.get(line.slug);
@@ -163,30 +179,48 @@ export async function priceCart(cart: Cart): Promise<PricedCart> {
       // future order-level discount is allocated consistently.
       priced: priceLine({ unitPrice: product.price, quantity: line.quantity, modifierDeltas: deltas, rateBps: product.taxRateBps }, context),
     });
+
+    if (line.redeemStamp && redeemStampIndex === -1) redeemStampIndex = resolved.length - 1;
   }
 
   // Resolved once, used by both loyalty programs below — a customer earns
   // points and a stamp from the same order.
   const customer = await getCustomer();
+  const org = await getOrg();
 
   /*
-   * The stamp card. Whether this order is the free one depends on stamps
-   * already banked from *earlier* orders — nothing the browser sent decides
-   * it. The reward is one free unit of the cheapest line, applied as a
-   * discount on that specific line rather than spread across the order, so
-   * it reads exactly as promised: your cheapest item, free.
+   * FRYBIRD REWARDS. The customer chose which line is their free item — see
+   * the `redeemStamp` flag on the cart schema — and this validates that
+   * choice against the account's actual, server-held state: is there really
+   * an unlocked reward, and is the chosen item really within the price cap.
+   * Nothing here trusts the browser for the reward's existence or the
+   * item's eligibility, only for *which* line was tapped.
    */
   let stampReward: AppliedStampReward | null = null;
+  let stampRewardError: string | null = null;
 
-  if (customer && resolved.length > 0) {
-    const stampConfig = await getStampConfig();
-    if (isStampRewardDue(customer.stampCount, stampConfig)) {
-      const rewardValue = stampRewardValue(resolved.map((line) => line.unitPrice));
-      const targetIndex = resolved.findIndex((line) => line.unitPrice === rewardValue);
-      const target = targetIndex >= 0 ? forPricing[targetIndex] : undefined;
-      if (target) {
-        target.discount = add(target.discount ?? ZERO, rewardValue);
-        stampReward = { discount: rewardValue };
+  if (redeemStampIndex >= 0) {
+    if (!customer) {
+      stampRewardError = "Sign in to redeem your FRYBIRD REWARDS free item.";
+    } else if (!org) {
+      stampRewardError = "Rewards aren't available right now.";
+    } else {
+      const stampConfig = await getStampConfig();
+      const available = await getAvailableStampReward(customer.id, org.id);
+
+      if (!available) {
+        stampRewardError = "You don't have a free item to redeem yet.";
+      } else {
+        const target = resolved[redeemStampIndex];
+        if (!target || !isRewardEligibleItem(target.unitPrice, stampConfig)) {
+          stampRewardError = `That item costs more than ${formatINR(stampConfig.maxRewardValue)} — pick something ${formatINR(stampConfig.maxRewardValue)} or under for your free item.`;
+        } else {
+          const forTarget = forPricing[redeemStampIndex];
+          if (forTarget) {
+            forTarget.discount = add(forTarget.discount ?? ZERO, target.unitPrice);
+            stampReward = { rewardId: available.id, lineKey: target.key, productSlug: target.product.slug, discount: target.unitPrice };
+          }
+        }
       }
     }
   }
@@ -203,7 +237,6 @@ export async function priceCart(cart: Cart): Promise<PricedCart> {
   let promotionError: string | null = null;
 
   if (cart.promoCode) {
-    const org = await getOrg();
     const found = org ? await findPromotion(org.id, cart.promoCode) : null;
     const result = applyPromotion({ promotion: found, orderValue: foodValue });
     if (result.ok) {
@@ -247,6 +280,7 @@ export async function priceCart(cart: Cart): Promise<PricedCart> {
     promotionError,
     points,
     stampReward,
+    stampRewardError,
     payable,
     rejected,
   };

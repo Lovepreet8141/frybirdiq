@@ -12,10 +12,10 @@ import "server-only";
  * seed, and it is the first thing to verify once keys exist.
  */
 
-import { and, desc, eq, inArray, max, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, max, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { addresses, customers, locations, loyaltyAccounts, loyaltyTransactions, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
+import { addresses, customers, locations, loyaltyAccounts, loyaltyStampEvents, loyaltyTransactions, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
 import { assertChannelFulfilment, type OrderChannel } from "@/domain/order-channel";
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition } from "@/domain/order-status";
 import type { Role } from "@/domain/permissions";
@@ -31,6 +31,7 @@ import { resolvePricingContext } from "./org";
 import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
 import { createPendingPayment, recordCashPayment } from "./payments";
+import { reverseStampForOrder } from "./loyalty";
 import { IdempotencyConflict, withIdempotency } from "./idempotency";
 
 const ORG_SLUG = "frybird";
@@ -357,7 +358,8 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       sgstTotal: totals.sgst,
       igstTotal: totals.igst,
       taxTotal: totals.total,
-      stampRewardApplied: cart.stampReward !== null,
+      stampRewardId: cart.stampReward?.rewardId,
+      stampRewardProductSlug: cart.stampReward?.productSlug,
       stampRewardDiscount: cart.stampReward?.discount ?? ZERO,
       // What is actually charged: the fee-inclusive, fully discounted total,
       // less any points spent. Points are tender rather than a discount, so
@@ -528,6 +530,10 @@ export interface OrderView {
   readonly grandTotal: bigint;
   readonly placedAt: Date | null;
   readonly items: readonly { name: string; quantity: number; total: bigint; modifiers: string[] }[];
+  /** Whether FRYBIRD REWARDS actually granted a stamp for this order — only true once paid. */
+  readonly stampEarned: boolean;
+  /** What FRYBIRD REWARDS took off this order, if it redeemed a free item. */
+  readonly stampRewardDiscount: bigint;
 }
 
 export async function getOrder(id: string): Promise<OrderView | null> {
@@ -544,6 +550,12 @@ export async function getOrder(id: string): Promise<OrderView | null> {
     itemIds.length > 0
       ? await database.select().from(orderItemModifiers).where(eq(orderItemModifiers.orgId, order.orgId))
       : [];
+
+  const [stampEvent] = await database
+    .select({ id: loyaltyStampEvents.id })
+    .from(loyaltyStampEvents)
+    .where(and(eq(loyaltyStampEvents.orderId, id), isNull(loyaltyStampEvents.reversedAt)))
+    .limit(1);
 
   return {
     id: order.id,
@@ -565,6 +577,8 @@ export async function getOrder(id: string): Promise<OrderView | null> {
         .filter((modifier) => modifier.orderItemId === item.id)
         .map((modifier) => modifier.modifierName),
     })),
+    stampEarned: Boolean(stampEvent),
+    stampRewardDiscount: order.stampRewardDiscount,
   };
 }
 
@@ -794,6 +808,17 @@ export async function advanceOrder(input: {
     toStatus: input.to,
     actorUserId: input.actorUserId,
   });
+
+  /*
+   * FRYBIRD REWARDS reverses automatically the moment an order is marked
+   * refunded — whatever stamp it earned (if any) is voided here, same
+   * transaction-adjacent moment as the status write, so there is no window
+   * where a refunded order still counts toward the next free item. A no-op
+   * if this order never earned a stamp, or already had one reversed.
+   */
+  if (input.to === "REFUNDED") {
+    await reverseStampForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
+  }
 
   return { ok: true };
 }

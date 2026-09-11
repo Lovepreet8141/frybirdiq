@@ -16,6 +16,13 @@ export const cartLineSchema = z.object({
   slug: z.string().min(1).max(120),
   quantity: z.number().int().min(1).max(50),
   modifiers: z.array(z.string().min(1).max(120)).max(20).default([]),
+  /**
+   * "Make this my FRYBIRD REWARDS free item." An intent, not a discount —
+   * the server decides whether it is honoured (an available reward, an
+   * eligible price) the same way it decides everything else about the
+   * cart. See `priceCart` in ./index.
+   */
+  redeemStamp: z.boolean().default(false),
 });
 
 export const cartSchema = z.object({

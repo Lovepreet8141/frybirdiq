@@ -1,14 +1,15 @@
 /**
- * Sets the stamp card — "buy 7, get the 8th free."
+ * Sets FRYBIRD REWARDS — the one universal stamp card.
  *
  *     pnpm stamps:show
- *     pnpm stamps:set --goal 8
+ *     pnpm stamps:set --stamps 7 --min-order 200 --max-reward 250
  *     pnpm stamps:set --off
  *     pnpm stamps:set --on
  *
- * `--goal` is the visit the free item lands on — 8 means the first seven are
- * paid and the eighth is free. Independent of the points program; a customer
- * earns both from the same order.
+ * `--min-order` and `--max-reward` are rupees. The same rules the FRYBIRD IQ
+ * settings screen writes — this is the CLI equivalent, for a fresh box or a
+ * script. Independent of the points program; a customer earns both from the
+ * same order.
  */
 import { config } from "dotenv";
 config({ path: ".env.local", quiet: true });
@@ -16,7 +17,8 @@ config({ path: ".env.local", quiet: true });
 import { eq } from "drizzle-orm";
 import { closeDb, db } from "../src/db/connection";
 import { organizations } from "../src/db/schema";
-import { isStampRewardEnabled, stampsRequired } from "../src/lib/loyalty/stamps";
+import { formatINR, fromRupees, paise } from "../src/lib/money";
+import { isStampProgramEnabled } from "../src/lib/loyalty/stamps";
 
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -34,12 +36,18 @@ async function main() {
     if (process.argv.includes("--off")) updates.stampRewardEnabled = false;
     if (process.argv.includes("--on")) updates.stampRewardEnabled = true;
 
-    const goal = flag("goal");
-    if (goal !== undefined) {
-      const parsed = Math.round(Number(goal));
-      if (!Number.isFinite(parsed) || parsed < 2) throw new Error("--goal needs a whole number of 2 or more.");
-      updates.stampRewardGoal = parsed;
+    const stamps = flag("stamps");
+    if (stamps !== undefined) {
+      const parsed = Math.round(Number(stamps));
+      if (!Number.isFinite(parsed) || parsed < 1) throw new Error("--stamps needs a whole number of 1 or more.");
+      updates.stampsRequired = parsed;
     }
+
+    const minOrder = flag("min-order");
+    if (minOrder !== undefined) updates.stampMinOrderValue = fromRupees(minOrder);
+
+    const maxReward = flag("max-reward");
+    if (maxReward !== undefined) updates.stampMaxRewardValue = fromRupees(maxReward);
 
     await database.update(organizations).set(updates).where(eq(organizations.id, org.id));
     console.log("Updated.\n");
@@ -48,25 +56,18 @@ async function main() {
   const [current] = await database.select().from(organizations).where(eq(organizations.id, org.id)).limit(1);
   if (!current) return;
 
-  const scheme = { enabled: current.stampRewardEnabled, goal: current.stampRewardGoal };
+  const scheme = {
+    enabled: current.stampRewardEnabled,
+    stampsRequired: current.stampsRequired,
+    minOrderValue: paise(current.stampMinOrderValue),
+    maxRewardValue: paise(current.stampMaxRewardValue),
+  };
 
-  console.log(`${current.name} stamp card`);
-  console.log(`  scheme : ${isStampRewardEnabled(scheme) ? "on" : "OFF — set --on"}`);
-  console.log(`  goal   : buy ${stampsRequired(scheme)}, get the ${scheme.goal}${ordinalSuffix(scheme.goal)} free`);
-}
-
-function ordinalSuffix(n: number): string {
-  if (n % 100 >= 11 && n % 100 <= 13) return "th";
-  switch (n % 10) {
-    case 1:
-      return "st";
-    case 2:
-      return "nd";
-    case 3:
-      return "rd";
-    default:
-      return "th";
-  }
+  console.log(`${current.name} — FRYBIRD REWARDS`);
+  console.log(`  scheme      : ${isStampProgramEnabled(scheme) ? "on" : "OFF — set --on"}`);
+  console.log(`  qualifying  : spend over ${formatINR(scheme.minOrderValue)} on one order`);
+  console.log(`  goal        : ${scheme.stampsRequired} stamps`);
+  console.log(`  reward      : one free item up to ${formatINR(scheme.maxRewardValue)}`);
 }
 
 main()

@@ -52,6 +52,9 @@ export async function addToCart(input: unknown): Promise<CartActionResult> {
     slug: parsed.data.slug,
     quantity: parsed.data.quantity,
     modifiers: parsed.data.modifiers.filter((slug) => valid.has(slug)),
+    // A fresh add is never itself the redemption — that is a separate,
+    // explicit choice made afterwards. See setRedeemReward.
+    redeemStamp: false,
   };
 
   const cart = await readCart();
@@ -130,6 +133,30 @@ export async function clearPromoCode(): Promise<CartActionResult> {
   await writeCart({ ...cart, promoCode: undefined });
   revalidatePath("/", "layout");
   return { ok: true };
+}
+
+/**
+ * Marks one line as "my FRYBIRD REWARDS free item" — or clears it.
+ *
+ * At most one line carries the flag at a time: choosing a new one replaces
+ * whatever was chosen before rather than stacking. Whether it is actually
+ * honoured — an available reward, a price within the cap — is decided by
+ * `priceCart` every time the cart is read, never here. This action only
+ * records the customer's choice.
+ */
+export async function setRedeemReward(input: unknown): Promise<CartActionResult> {
+  const parsed = z.object({ key: z.string().min(1), redeem: z.boolean() }).safeParse(input);
+  if (!parsed.success) return { ok: false, error: "That could not be applied." };
+
+  const cart = await readCart();
+  const lines = cart.lines.map((line) => ({
+    ...line,
+    redeemStamp: lineKey(line) === parsed.data.key ? parsed.data.redeem : false,
+  }));
+
+  await writeCart({ ...cart, lines });
+  revalidatePath("/", "layout");
+  return { ok: true, itemCount: countItems(lines) };
 }
 
 /**

@@ -9,10 +9,11 @@ import { resolveHome } from "@/lib/auth/route-home";
 import { signOutCustomer } from "@/lib/customer/actions";
 import { isLoyaltyEnabled, pointsValue } from "@/lib/loyalty";
 import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
-import { isStampRewardEnabled, stampsRequired } from "@/lib/loyalty/stamps";
+import { isStampProgramEnabled } from "@/lib/loyalty/stamps";
 import { StampCard } from "@/components/loyalty/stamp-card";
 import { formatBps, formatINR } from "@/lib/money";
 import { listCustomerOrders } from "@/lib/repositories/orders";
+import { getStampAccountState } from "@/lib/repositories/loyalty";
 import { requireOrg } from "@/lib/repositories/org";
 
 export const metadata: Metadata = { title: "Your account" };
@@ -26,11 +27,15 @@ export default async function AccountPage() {
   }
 
   const org = await requireOrg();
-  const [orders, loyalty, stampConfig] = await Promise.all([
+  const [orders, loyalty, stampConfig, stampState] = await Promise.all([
     listCustomerOrders({ customerId: customer.id, orgId: org.id, limit: 5 }),
     getLoyaltyConfig(),
     getStampConfig(),
+    getStampAccountState(customer.id, org.id),
   ]);
+
+  const stampCount = stampState?.stampCount ?? 0;
+  const availableRewards = stampState?.availableRewards.length ?? 0;
 
   return (
     <div className="mx-auto w-full max-w-3xl px-[var(--gutter)] py-10 sm:py-14">
@@ -74,17 +79,32 @@ export default async function AccountPage() {
         </section>
       )}
 
-      {isStampRewardEnabled(stampConfig) && (
+      {isStampProgramEnabled(stampConfig) && (
         <section aria-labelledby="stamps" className="mt-6 rounded-lg border border-border bg-surface p-6">
           <h2 id="stamps" className="font-heading text-lg font-semibold">
-            Stamp card
+            FRYBIRD REWARDS
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            {customer.stampCount >= stampsRequired(stampConfig)
-              ? "Your next order is free — the cheapest item comes off automatically."
-              : `${customer.stampCount} of ${stampsRequired(stampConfig)} — order ${stampsRequired(stampConfig) - customer.stampCount} more and the next one's cheapest item is free.`}
+            {availableRewards > 0
+              ? "Pick your free item from the menu — it's added at no charge when you check out."
+              : `${stampCount} of ${stampConfig.stampsRequired} — spend over ${formatINR(stampConfig.minOrderValue)} on ${stampConfig.stampsRequired - stampCount} more order${stampConfig.stampsRequired - stampCount === 1 ? "" : "s"} and your next item up to ${formatINR(stampConfig.maxRewardValue)} is free.`}
           </p>
-          <StampCard goal={stampConfig.goal} count={customer.stampCount} personal className="mt-5" />
+          <StampCard
+            stampsRequired={stampConfig.stampsRequired}
+            stampCount={stampCount}
+            availableRewards={availableRewards}
+            personal
+            className="mt-5"
+          />
+          {availableRewards > 0 && (
+            <Link
+              href="/menu"
+              className="mt-5 inline-flex min-h-[48px] items-center gap-2 rounded-md bg-primary px-5 font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+            >
+              Choose your free item
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </Link>
+          )}
         </section>
       )}
 

@@ -24,6 +24,8 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
   if (!staff) redirect("/sign-in");
   if (!(await staffCan("analytics.view"))) redirect("/app/orders");
 
+  const canManageSettings = await staffCan("settings.manage");
+
   const { range: requested } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "today") as RangeKey;
   const range = resolveRange(key);
@@ -53,6 +55,11 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
             <Link href="/app/iq/expenses" className="text-muted-foreground transition-colors hover:text-foreground">
               Expenses
             </Link>
+            {canManageSettings && (
+              <Link href="/app/iq/rewards" className="text-muted-foreground transition-colors hover:text-foreground">
+                Rewards
+              </Link>
+            )}
           </nav>
         </div>
 

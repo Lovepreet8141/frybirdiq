@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Check, Circle, Clock, FileText } from "lucide-react";
+import { Check, Circle, Clock, FileText, Flame, Gift } from "lucide-react";
 import { formatINR } from "@/lib/money";
-import { type Paise } from "@/lib/money";
+import { type Paise, paise } from "@/lib/money";
 import { getOrder } from "@/lib/repositories/orders";
 import { getRating } from "@/lib/ratings";
 import { OrderRating } from "@/components/order/rating";
@@ -169,6 +169,27 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         </div>
         <p className="mt-1 text-xs text-muted-foreground">Cash, UPI or card.</p>
       </section>
+
+      {/*
+        FRYBIRD REWARDS, told straight for what actually happened to *this*
+        order. A stamp is only real once the money has arrived — showing one
+        before that would be a promise the payment could still fail to keep.
+      */}
+      {order.stampRewardDiscount > 0n ? (
+        <p className="mt-6 flex items-center gap-2 rounded-lg border-[2.5px] border-[var(--ink)] bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-[4px_4px_0_var(--red-deep)]">
+          <Gift className="size-4 shrink-0" aria-hidden="true" />
+          Your FRYBIRD REWARDS free item ({formatINR(paise(order.stampRewardDiscount))}) is on this order.
+        </p>
+      ) : order.stampEarned ? (
+        <p className="mt-6 flex items-center gap-2 rounded-lg border border-border bg-surface px-4 py-3 text-sm font-semibold">
+          <Flame className="size-4 shrink-0 text-primary" aria-hidden="true" fill="currentColor" />
+          This order earned you a FRYBIRD REWARDS stamp.
+        </p>
+      ) : (
+        status === "PENDING_PAYMENT" && (
+          <p className="mt-6 text-sm text-muted-foreground">This order earns a FRYBIRD REWARDS stamp once it&rsquo;s paid, if it qualifies.</p>
+        )
+      )}
 
       {/* Only once the order is finished. Asking someone to score food that has
           not arrived turns a bad minute during the wait into a permanent one

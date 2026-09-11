@@ -1,10 +1,10 @@
 import "server-only";
 
-/** Reads the loyalty schemes — points and the stamp card — from the organization. */
+/** Reads and writes the loyalty schemes — points and the stamp card — on the organization. */
 
 import { type LoyaltyConfig } from "./index";
 import { STAMP_DISABLED, type StampConfig } from "./stamps";
-import { paise } from "@/lib/money";
+import { type Paise, paise } from "@/lib/money";
 import { getOrg } from "@/lib/repositories/org";
 import { db } from "@/db";
 import { organizations } from "@/db/schema";
@@ -31,5 +31,38 @@ export async function getStampConfig(): Promise<StampConfig> {
   const [row] = await db().select().from(organizations).where(eq(organizations.id, org.id)).limit(1);
   if (!row) return STAMP_DISABLED;
 
-  return { enabled: row.stampRewardEnabled, goal: row.stampRewardGoal };
+  return {
+    enabled: row.stampRewardEnabled,
+    stampsRequired: row.stampsRequired,
+    minOrderValue: paise(row.stampMinOrderValue),
+    maxRewardValue: paise(row.stampMaxRewardValue),
+  };
+}
+
+/**
+ * Writes the stamp card's rules. FRYBIRD IQ's settings screen is the only
+ * caller — this is a plain write with no permission check of its own,
+ * trusting the caller already required `settings.manage` (see
+ * `src/lib/loyalty/actions.ts`), the same division of responsibility every
+ * other repository write in this codebase follows.
+ */
+export async function updateStampConfig(
+  orgId: string,
+  updates: {
+    enabled?: boolean;
+    stampsRequired?: number;
+    minOrderValue?: Paise;
+    maxRewardValue?: Paise;
+  },
+): Promise<void> {
+  await db()
+    .update(organizations)
+    .set({
+      ...(updates.enabled !== undefined ? { stampRewardEnabled: updates.enabled } : {}),
+      ...(updates.stampsRequired !== undefined ? { stampsRequired: updates.stampsRequired } : {}),
+      ...(updates.minOrderValue !== undefined ? { stampMinOrderValue: updates.minOrderValue } : {}),
+      ...(updates.maxRewardValue !== undefined ? { stampMaxRewardValue: updates.maxRewardValue } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(organizations.id, orgId));
 }

@@ -1,85 +1,120 @@
 import { describe, expect, it } from "vitest";
+import { ORDER_CHANNELS } from "@/domain/order-channel";
 import { fromRupees } from "@/lib/money";
 import {
   STAMP_DISABLED,
   type StampConfig,
-  isStampRewardDue,
-  isStampRewardEnabled,
-  nextStampCount,
-  stampRewardValue,
-  stampsRequired,
+  isRewardEligibleItem,
+  isRewardUnlocked,
+  isStampProgramEnabled,
+  qualifiesForStamp,
 } from "./stamps";
 
-/** FRYBIRD's card: buy 7, the 8th is free. */
-const CONFIG: StampConfig = { enabled: true, goal: 8 };
+/** FRYBIRD REWARDS: spend over ₹200, 7 stamps, free item up to ₹250. */
+const CONFIG: StampConfig = {
+  enabled: true,
+  stampsRequired: 7,
+  minOrderValue: fromRupees("200"),
+  maxRewardValue: fromRupees("250"),
+};
 
 describe("configuration", () => {
-  it("is enabled only with a goal above one", () => {
-    expect(isStampRewardEnabled(CONFIG)).toBe(true);
-    expect(isStampRewardEnabled(STAMP_DISABLED)).toBe(false);
-    expect(isStampRewardEnabled({ enabled: true, goal: 1 })).toBe(false);
-    expect(isStampRewardEnabled({ enabled: true, goal: 0 })).toBe(false);
-  });
-
-  it("needs one fewer stamp than the goal", () => {
-    expect(stampsRequired(CONFIG)).toBe(7);
-    expect(stampsRequired({ enabled: true, goal: 1 })).toBe(0);
+  it("is enabled only with a positive stamp goal", () => {
+    expect(isStampProgramEnabled(CONFIG)).toBe(true);
+    expect(isStampProgramEnabled(STAMP_DISABLED)).toBe(false);
+    expect(isStampProgramEnabled({ ...CONFIG, stampsRequired: 0 })).toBe(false);
   });
 });
 
-describe("eligibility", () => {
-  it("is not due below seven stamps", () => {
+describe("qualifying spend — the exact boundary the brief specifies", () => {
+  it("₹199 does not qualify", () => {
+    expect(qualifiesForStamp(fromRupees("199"), CONFIG)).toBe(false);
+  });
+
+  it("₹200 exactly does not qualify — strictly greater than, not at least", () => {
+    expect(qualifiesForStamp(fromRupees("200"), CONFIG)).toBe(false);
+  });
+
+  it("₹201 qualifies", () => {
+    expect(qualifiesForStamp(fromRupees("201"), CONFIG)).toBe(true);
+  });
+
+  it("₹500 qualifies — same one stamp as ₹201, never more for spending more", () => {
+    expect(qualifiesForStamp(fromRupees("500"), CONFIG)).toBe(true);
+  });
+
+  it("a paisa over the threshold still qualifies", () => {
+    expect(qualifiesForStamp(fromRupees("200.01"), CONFIG)).toBe(true);
+  });
+
+  it("never qualifies while the program is off, regardless of spend", () => {
+    expect(qualifiesForStamp(fromRupees("5000"), STAMP_DISABLED)).toBe(false);
+  });
+});
+
+describe("reward unlock", () => {
+  it("is not unlocked below seven unconsumed stamps", () => {
     for (let count = 0; count < 7; count++) {
-      expect(isStampRewardDue(count, CONFIG)).toBe(false);
+      expect(isRewardUnlocked(count, CONFIG)).toBe(false);
     }
   });
 
-  it("is due at seven stamps and stays due if it somehow overshoots", () => {
-    expect(isStampRewardDue(7, CONFIG)).toBe(true);
-    expect(isStampRewardDue(8, CONFIG)).toBe(true);
+  it("unlocks at exactly seven", () => {
+    expect(isRewardUnlocked(7, CONFIG)).toBe(true);
   });
 
-  it("is never due when the card is off", () => {
-    expect(isStampRewardDue(7, STAMP_DISABLED)).toBe(false);
-  });
-});
-
-describe("counting", () => {
-  it("adds one stamp per qualifying order", () => {
-    expect(nextStampCount(0, false, CONFIG)).toBe(1);
-    expect(nextStampCount(3, false, CONFIG)).toBe(4);
+  it("stays unlocked if the count somehow exceeds seven", () => {
+    // Should not happen by construction (the repository consumes stamps the
+    // moment a cycle completes), but the check itself must not regress if it does.
+    expect(isRewardUnlocked(9, CONFIG)).toBe(true);
   });
 
-  it("resets to zero on the order that redeems the reward", () => {
-    expect(nextStampCount(7, true, CONFIG)).toBe(0);
-  });
-
-  it("does not bank a stamp on top of a redemption", () => {
-    // Redeemed always wins, regardless of what count came in — the order
-    // that used the reward does not also earn one of its own.
-    expect(nextStampCount(7, true, CONFIG)).toBe(0);
-    expect(nextStampCount(0, true, CONFIG)).toBe(0);
-  });
-
-  it("caps at the threshold rather than running past it", () => {
-    // Guards a config change between placing and paying an order.
-    expect(nextStampCount(7, false, CONFIG)).toBe(7);
-    expect(nextStampCount(20, false, CONFIG)).toBe(7);
+  it("never unlocks while the program is off", () => {
+    expect(isRewardUnlocked(7, STAMP_DISABLED)).toBe(false);
   });
 });
 
-describe("reward value", () => {
-  it("is the cheapest unit price on the order", () => {
-    const prices = [fromRupees("249"), fromRupees("89"), fromRupees("399")];
-    expect(stampRewardValue(prices)).toBe(fromRupees("89"));
+describe("redemption eligibility", () => {
+  it("an item at exactly ₹250 is eligible", () => {
+    expect(isRewardEligibleItem(fromRupees("250"), CONFIG)).toBe(true);
   });
 
-  it("is zero for an empty order", () => {
-    expect(stampRewardValue([])).toBe(fromRupees("0"));
+  it("an item under ₹250 is eligible", () => {
+    expect(isRewardEligibleItem(fromRupees("89"), CONFIG)).toBe(true);
   });
 
-  it("takes one line's price even when it repeats", () => {
-    const prices = [fromRupees("49"), fromRupees("49"), fromRupees("49")];
-    expect(stampRewardValue(prices)).toBe(fromRupees("49"));
+  it("an item over ₹250 is not eligible", () => {
+    expect(isRewardEligibleItem(fromRupees("251"), CONFIG)).toBe(false);
+  });
+
+  it("a modifier that pushes the unit price past the cap makes it ineligible", () => {
+    // ₹230 base + a ₹30 modifier priced into the line's unit price.
+    expect(isRewardEligibleItem(fromRupees("260"), CONFIG)).toBe(false);
+  });
+
+  it("nothing is eligible while the program is off", () => {
+    expect(isRewardEligibleItem(fromRupees("50"), STAMP_DISABLED)).toBe(false);
+  });
+});
+
+describe("Swiggy and Zomato orders never earn a stamp", () => {
+  /*
+   * There is no channel value for an aggregator to earn a stamp through:
+   * `awardStampForOrder` (src/lib/repositories/loyalty.ts) takes a qualifying
+   * spend and a customer, never a channel, because FRYBIRD sells direct only
+   * (src/domain/order-channel.ts) and there is nothing else to branch on.
+   *
+   * This test is a canary, not a behavioural check on `stamps.ts` itself —
+   * it fails the moment someone adds "SWIGGY" or "ZOMATO" to ORDER_CHANNELS
+   * without also teaching the award path to exclude it, which is exactly
+   * the change that would silently start stamping aggregator orders.
+   */
+  it("has no aggregator channel to earn a stamp from — FRYBIRD sells direct only", () => {
+    expect(ORDER_CHANNELS).toEqual(["DINE_IN", "TAKEAWAY", "ONLINE"]);
+  });
+
+  it("rejects Swiggy and Zomato specifically, not just 'whatever is not in the list today'", () => {
+    expect(ORDER_CHANNELS).not.toContain("SWIGGY");
+    expect(ORDER_CHANNELS).not.toContain("ZOMATO");
   });
 });

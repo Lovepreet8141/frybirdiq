@@ -5,15 +5,18 @@ import "server-only";
  *
  * The counter equivalent of `src/lib/cart`'s `priceCart` — same menu
  * resolution, the same `priceOrder` pass — without the customer-site
- * concerns that do not exist here: there is no promo code, no loyalty
- * balance, and no signed-in customer to redeem points against. Kept as its
- * own function rather than adding a "skip the customer bits" flag to
- * `priceCart`, which would be a second switch on top of the one
- * `src/lib/pricing` already owns.
+ * concerns that do not exist here yet: there is no promo code, no points
+ * redemption, and no FRYBIRD REWARDS stamp redemption, because the POS has
+ * no customer lookup to attach an order to a loyalty account in the first
+ * place (a separate, not-yet-built piece — see BUILD-PLAN.md's Phase 4
+ * "customer lookup" item). Once that exists, this is the function that
+ * would grow a `customerId` and call the same
+ * `getAvailableStampReward`/`isRewardEligibleItem` pair `priceCart` already
+ * uses — not a parallel implementation of the same rule.
  *
- * Like every write path in this codebase, this is untested against a live
- * database — there is no Supabase project yet. It is written against the
- * same schema `priceCart` already exercises.
+ * Kept as its own function rather than adding a "skip the customer bits"
+ * flag to `priceCart`, which would be a second switch on top of the one
+ * `src/lib/pricing` already owns.
  */
 
 import { type CartLine, lineKey } from "@/lib/cart/schema";

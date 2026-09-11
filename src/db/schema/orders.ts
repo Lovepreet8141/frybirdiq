@@ -1,7 +1,7 @@
 /** Orders, items, events, payments, refunds. BUILD-PLAN.md §16, §17, §43, §51. */
 
 import { sql } from "drizzle-orm";
-import { boolean, check, date, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { check, date, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { FULFILMENT_TYPES, ORDER_STATUSES } from "@/domain/order-status";
 import { ORDER_CHANNELS } from "@/domain/order-channel";
 import { customers } from "./customers";
@@ -104,12 +104,15 @@ export const orders = pgTable(
     pointsEarned: integer("points_earned").notNull().default(0),
 
     /**
-     * The stamp card's "buy 7, get the 8th free" — set at placement, when
-     * the discount is priced, and read back at payment to reset the count
-     * instead of adding another stamp. §51: a later change to the stamp
-     * goal must not rewrite what this order actually gave away.
+     * FRYBIRD REWARDS, if this order redeemed one — set at placement, when
+     * the discount is priced and the customer's selected free item is
+     * known, and read back at payment to mark the reward actually spent.
+     * §51: a later change to the program's rules must not rewrite what this
+     * order actually gave away, so the amount and the item are both frozen
+     * here rather than re-derived from the reward or the product later.
      */
-    stampRewardApplied: boolean("stamp_reward_applied").notNull().default(false),
+    stampRewardId: uuid("stamp_reward_id"),
+    stampRewardProductSlug: text("stamp_reward_product_slug"),
     stampRewardDiscount: money("stamp_reward_discount").notNull().default(ZERO_MONEY),
 
     /**
