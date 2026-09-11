@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { getStaff, staffCan } from "@/lib/auth";
 import { signOut } from "@/lib/auth/actions";
+import { AppNavLink } from "@/components/staff/app-nav-link";
 import { NewOrderAlert } from "@/components/staff/new-order-alert";
 import { SoundCheck } from "@/components/staff/sound-check";
 import { resolveHome } from "@/lib/auth/route-home";
@@ -18,11 +19,12 @@ import { resolveHome } from "@/lib/auth/route-home";
  * on it.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const [staff, canSeeOrders, canSeePos, canSeeDeliveries, canSeeAnalytics, canReject] = await Promise.all([
+  const [staff, canSeeOrders, canSeePos, canSeeDeliveries, canSeeMenu, canSeeAnalytics, canReject] = await Promise.all([
     getStaff(),
     staffCan("orders.view"),
     staffCan("orders.create"),
     staffCan("delivery.view"),
+    staffCan("menu.view"),
     staffCan("analytics.view"),
     staffCan("orders.cancel"),
   ]);
@@ -50,38 +52,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             </Link>
 
             {/* Nav follows permissions: a rider sees deliveries and nothing else. */}
-            <nav className="flex items-center gap-1" aria-label="Sections">
-              {canSeeOrders && (
-                <Link
-                  href="/app/orders"
-                  className="flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  Orders
-                </Link>
-              )}
-              {canSeePos && (
-                <Link
-                  href="/app/pos"
-                  className="flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  POS
-                </Link>
-              )}
-              {canSeeDeliveries && (
-                <Link
-                  href="/app/deliveries"
-                  className="flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  Deliveries
-                </Link>
-              )}
+            <nav className="flex items-center gap-1 overflow-x-auto" aria-label="Sections">
+              {canSeeOrders && <AppNavLink href="/app/orders">Orders</AppNavLink>}
+              {canSeePos && <AppNavLink href="/app/pos">POS</AppNavLink>}
+              {canSeeDeliveries && <AppNavLink href="/app/deliveries">Deliveries</AppNavLink>}
+              {canSeeMenu && <AppNavLink href="/app/iq/menu">Menu</AppNavLink>}
+              {/* `exclude` keeps this from also lighting up on /app/iq/menu, which has its own link above. */}
               {canSeeAnalytics && (
-                <Link
-                  href="/app/iq"
-                  className="flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
-                >
+                <AppNavLink href="/app/iq" exclude="/app/iq/menu">
                   IQ
-                </Link>
+                </AppNavLink>
               )}
             </nav>
           </div>
