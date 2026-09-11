@@ -36,13 +36,17 @@ Environment=HOSTNAME=127.0.0.1
 Restart=always
 RestartSec=5
 
-# Hardening. The app writes nothing to disk — uploads go to Supabase Storage —
-# so it has no business writing anywhere on this filesystem.
+# Hardening. Customer uploads go to Supabase Storage, so the app has no
+# business writing anywhere on this filesystem except one place: Next keeps
+# its optimised-image and prerender cache under .next/cache, and with the
+# whole tree read-only it retried and failed on every single image request —
+# EROFS in the log, and every one of the menu photos re-encoded per request on
+# a one-core box.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=
+ReadWritePaths=/var/www/frybird/.next/cache
 
 StandardOutput=journal
 StandardError=journal
