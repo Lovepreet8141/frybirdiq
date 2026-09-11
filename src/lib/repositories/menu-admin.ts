@@ -22,6 +22,7 @@ import {
   menuAuditLog,
   modifierGroups,
   modifiers,
+  priceHistory,
   productAvailability,
   productModifierGroups,
   products,
@@ -612,11 +613,25 @@ export async function updateProductDetails(orgId: string, id: string, input: Pro
 export async function updateProductPrice(orgId: string, id: string, basePrice: Paise, expectedUpdatedAt: Date, actorUserId: string | null = null): Promise<void> {
   const [before] = await db().select({ name: products.name, basePrice: products.basePrice }).from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
 
-  const [updated] = await db()
-    .update(products)
-    .set({ basePrice, updatedAt: new Date() })
-    .where(and(eq(products.id, id), eq(products.orgId, orgId), sameUpdatedAt(products.updatedAt, expectedUpdatedAt)))
-    .returning({ id: products.id });
+  // The price row and its history entry are written in one transaction so
+  // the two can never disagree — a `basePrice` that moved with no matching
+  // `priceHistory` row (or the reverse) is a bug this makes impossible
+  // rather than something to reconcile later. `products.basePrice` is never
+  // treated as its own record of the past; the append-only series is.
+  const updated = await db().transaction(async (tx) => {
+    const [row] = await tx
+      .update(products)
+      .set({ basePrice, updatedAt: new Date() })
+      .where(and(eq(products.id, id), eq(products.orgId, orgId), sameUpdatedAt(products.updatedAt, expectedUpdatedAt)))
+      .returning({ id: products.id });
+
+    // Only a real change gets a row — saving the same price again isn't a
+    // price change, and `logChanges` below already filters the same way.
+    if (row && before && before.basePrice !== basePrice) {
+      await tx.insert(priceHistory).values({ orgId, productId: id, oldPrice: before.basePrice, newPrice: basePrice, changedBy: actorUserId });
+    }
+    return row;
+  });
 
   if (!updated) {
     const [current] = await db().select({ id: products.id }).from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
@@ -634,6 +649,24 @@ export async function updateProductPrice(orgId: string, id: string, basePrice: P
       changes: [{ field: "price (paise)", oldValue: before.basePrice.toString(), newValue: basePrice.toString() }],
     });
   }
+}
+
+export interface PriceHistoryRow {
+  readonly id: string;
+  readonly oldPrice: Paise | null;
+  readonly newPrice: Paise;
+  readonly changedBy: string | null;
+  readonly createdAt: Date;
+}
+
+/** The full price series for one product, oldest first — what IQ reads instead of inferring price-over-time from the audit log. */
+export async function listPriceHistory(orgId: string, productId: string): Promise<PriceHistoryRow[]> {
+  const rows = await db()
+    .select({ id: priceHistory.id, oldPrice: priceHistory.oldPrice, newPrice: priceHistory.newPrice, changedBy: priceHistory.changedBy, createdAt: priceHistory.createdAt })
+    .from(priceHistory)
+    .where(and(eq(priceHistory.productId, productId), eq(priceHistory.orgId, orgId)))
+    .orderBy(asc(priceHistory.createdAt));
+  return rows.map((row) => ({ ...row, oldPrice: row.oldPrice as Paise | null, newPrice: row.newPrice as Paise }));
 }
 
 /** Not concurrency-guarded — a photo picker action, not a multi-field edit form (§0.2's scoping). */

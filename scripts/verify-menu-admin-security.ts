@@ -20,7 +20,7 @@ config({ path: ".env.local", quiet: true });
 import { randomUUID } from "node:crypto";
 import { eq, and } from "drizzle-orm";
 import { closeDb, db } from "../src/db/connection";
-import { categories, categoryAvailability, modifierGroups, modifiers, organizations, productModifierGroups, products, taxRates, productAvailability, comboItems, recipes, media } from "../src/db/schema";
+import { categories, categoryAvailability, modifierGroups, modifiers, organizations, productModifierGroups, products, taxRates, productAvailability, comboItems, recipes, media, priceHistory } from "../src/db/schema";
 import {
   ConcurrentModificationError,
   CrossOrgReference,
@@ -31,6 +31,7 @@ import {
   createProduct,
   duplicateProduct,
   getRecentChanges,
+  listPriceHistory,
   moveCategory,
   moveProductToCategory,
   publishCategory,
@@ -42,6 +43,7 @@ import {
   setProductModifierGroups,
   updateModifier,
   updateProductDetails,
+  updateProductPrice,
 } from "../src/lib/repositories/menu-admin";
 import { deleteMedia } from "../src/lib/repositories/media";
 import { getMenu } from "../src/lib/repositories/menu";
@@ -189,6 +191,27 @@ async function main() {
     assert("moveProductToCategory updates the product's category", movedProduct?.categoryId === catA2!.id);
     await moveProductToCategory(orgA.id, prodA.id, catA.id, null); // move it back for the rest of the script
 
+    console.log("\n--- Price history: append-only, never a silent overwrite ---");
+    const [prodABeforeReprice] = await database.select({ updatedAt: products.updatedAt }).from(products).where(eq(products.id, prodA.id));
+    await updateProductPrice(orgA.id, prodA.id, 12000n as never, prodABeforeReprice!.updatedAt, null);
+    const historyAfterFirstReprice = await listPriceHistory(orgA.id, prodA.id);
+    assert("a real price change writes exactly one price_history row", historyAfterFirstReprice.length === 1);
+    assert("the row records the old and new price", historyAfterFirstReprice[0]?.oldPrice === 10000n && historyAfterFirstReprice[0]?.newPrice === 12000n);
+    const [prodAAfterReprice] = await database.select({ basePrice: products.basePrice }).from(products).where(eq(products.id, prodA.id));
+    assert("products.basePrice reflects the new price", prodAAfterReprice?.basePrice === 12000n);
+
+    const [prodABeforeSamePrice] = await database.select({ updatedAt: products.updatedAt }).from(products).where(eq(products.id, prodA.id));
+    await updateProductPrice(orgA.id, prodA.id, 12000n as never, prodABeforeSamePrice!.updatedAt, null);
+    const historyAfterSamePrice = await listPriceHistory(orgA.id, prodA.id);
+    assert("saving the same price again writes no new row", historyAfterSamePrice.length === 1);
+
+    const [prodABeforeSecondReprice] = await database.select({ updatedAt: products.updatedAt }).from(products).where(eq(products.id, prodA.id));
+    await updateProductPrice(orgA.id, prodA.id, 9500n as never, prodABeforeSecondReprice!.updatedAt, null);
+    const historyAfterSecondReprice = await listPriceHistory(orgA.id, prodA.id);
+    assert("a second real change appends a second row rather than replacing the first", historyAfterSecondReprice.length === 2);
+    assert("listPriceHistory returns rows oldest first", historyAfterSecondReprice[0]?.newPrice === 12000n && historyAfterSecondReprice[1]?.newPrice === 9500n);
+    assert("the first row is untouched by the second change", historyAfterSecondReprice[0]?.oldPrice === 10000n);
+
     console.log("\n--- Duplicate product ---");
     const { id: duplicateId } = await duplicateProduct(orgA.id, newProductId);
     const [duplicated] = await database.select({ name: products.name, status: products.status }).from(products).where(eq(products.id, duplicateId));
@@ -286,6 +309,7 @@ async function main() {
     assert("publishing a category through the wrong org leaves it untouched", catBBeforeForeignPublish?.status === catBAfterForeignPublish?.status);
   } finally {
     console.log("\n--- Cleanup ---");
+    await database.delete(priceHistory).where(eq(priceHistory.orgId, orgA.id));
     await database.delete(productAvailability).where(eq(productAvailability.orgId, orgA.id));
     await database.delete(productModifierGroups).where(eq(productModifierGroups.productId, prodA.id));
     await database.delete(comboItems).where(eq(comboItems.comboProductId, prodA.id));

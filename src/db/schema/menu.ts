@@ -105,7 +105,12 @@ export const products = pgTable(
     /** Menu descriptors in Devanagari. Never used in headlines. */
     nameHi: text("name_hi"),
 
-    /** The default listed price in paise. Channel prices override it. */
+    /**
+     * The listed price in paise — one price, not one per channel: dine-in,
+     * takeaway and the website all charge the same counter price. Never
+     * overwritten silently — see `priceHistory` below and
+     * `updateProductPrice` in `src/lib/repositories/menu-admin.ts`.
+     */
     basePrice: money("base_price").notNull(),
     taxRateId: uuid("tax_rate_id").references(() => taxRates.id, { onDelete: "set null" }),
 
@@ -368,4 +373,37 @@ export const menuAuditLog = pgTable(
     index("menu_audit_log_org_idx").on(table.orgId, table.createdAt),
     index("menu_audit_log_entity_idx").on(table.entityType, table.entityId),
   ],
+);
+
+/**
+ * An append-only series of every price a product has ever had. Distinct
+ * from `menuAuditLog` on purpose — that stays a generic changed-field
+ * record for the Review Changes screen; this is a queryable price series
+ * IQ reads directly, one row per real change, in order, never updated or
+ * deleted. `updateProductPrice` inserts here in the same transaction as the
+ * `products.base_price` write, so the two can never disagree — see that
+ * function in `src/lib/repositories/menu-admin.ts`.
+ *
+ * Single price per product — direct orders only (dine-in, takeaway, the
+ * website), all charged the same counter price. No channel dimension; see
+ * `basePrice`'s own comment on `products`.
+ */
+export const priceHistory = pgTable(
+  "price_history",
+  {
+    id: primaryId(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    /** Null only for the opening row the backfill migration writes — there is no "old" price before the series starts. */
+    oldPrice: money("old_price"),
+    newPrice: money("new_price").notNull(),
+    /** Loose, not an FK — same reasoning as `menuAuditLog.actorUserId`: a staff record leaving must not break this row. Null for the backfilled opening row, which nobody "changed". */
+    changedBy: uuid("changed_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("price_history_product_idx").on(table.productId, table.createdAt)],
 );
