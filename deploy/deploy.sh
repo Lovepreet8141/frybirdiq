@@ -48,6 +48,7 @@ echo "==> Ship to $TARGET:$REMOTE_DIR"
 # file lives in /etc/frybird/env, not here, so nothing secret is in scope.
 rsync -az --delete \
   --exclude ".env*" \
+  --exclude ".next/cache" \
   "$STAGE/" "$TARGET:$REMOTE_DIR/"
 
 echo "==> Restart"
@@ -56,6 +57,10 @@ ssh "$TARGET" '
   set -e
   if [ "$(id -u)" -ne 0 ]; then SUDO=sudo; else SUDO=""; fi
   $SUDO chown -R frybird:frybird '"'$REMOTE_DIR'"'
+  # Next writes its image cache here and the unit lists it as its only
+  # writable path. Recreated rather than assumed: the first deploy to a fresh
+  # box has never had one.
+  $SUDO install -d -o frybird -g frybird '"'$REMOTE_DIR'"'/.next/cache
   $SUDO systemctl restart frybird
   sleep 2
   $SUDO systemctl is-active frybird

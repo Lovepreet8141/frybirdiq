@@ -46,7 +46,11 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/www/frybird/.next/cache
+# The leading "-" means a missing path is tolerated rather than fatal. Without
+# it, a deploy that removes this directory leaves systemd unable to build the
+# namespace at all: the unit fails with 226/NAMESPACE and the site returns 502
+# with nothing in the application log to explain it.
+ReadWritePaths=-/var/www/frybird/.next/cache
 
 StandardOutput=journal
 StandardError=journal
