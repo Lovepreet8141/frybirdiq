@@ -7,8 +7,9 @@ and food costing, owner analytics, and an AI layer over all of it.
 Specification: [`BUILD-PLAN.md`](BUILD-PLAN.md).
 Working agreement: [`CLAUDE.md`](CLAUDE.md).
 Design source of truth: [`design-system/MASTER.md`](design-system/MASTER.md).
-Deployment: [`docs/DEPLOY.md`](docs/DEPLOY.md) — Hostinger VPS, WordPress on the
-apex domain and the ordering app on `order.frybird.in`.
+Deployment: [`docs/DEPLOY.md`](docs/DEPLOY.md) — Hostinger VPS. Live at
+[frybirdiq.tech](https://frybirdiq.tech); WordPress can join later on its own
+domain.
 
 ## Setting up staff access
 
@@ -55,7 +56,10 @@ pnpm db:seed
 `db:seed` loads the real menu — 33 products, 6 combos, 7 sauces, and the
 chicken size/heat modifiers — transcribed in
 [`src/db/menu-data.ts`](src/db/menu-data.ts). It refuses to run against an org
-that has already taken orders unless you pass `--force`.
+that has already taken orders unless you pass `--force`. That transcription is
+only the starting point: once seeded, the menu lives in the database and is
+managed from `/app/iq/menu` — the live menu has grown past the seed as staff
+add products and categories there.
 
 ## Commands
 
@@ -69,6 +73,10 @@ that has already taken orders unless you pass `--force`.
 | `pnpm db:generate` | Generate a migration after a schema change |
 | `pnpm db:migrate` | Apply migrations |
 | `pnpm db:seed` | Seed FRYBIRD's real menu from the printed boards |
+| `pnpm db:studio` | Browse the database in Drizzle Studio |
+| `pnpm menu:verify` | Regression check for the Menu Manager against a real database — cross-org rejection, concurrency conflicts, audit coverage |
+| `pnpm rewards:verify` | Regression check for the loyalty ledger — duplicate webhooks, refund reversal, concurrent redemption |
+| `pnpm check:rsc-boundaries` | Flags a Server Component handing a function to a Client Component prop — a runtime crash nothing else catches |
 | `pnpm order:verify` | Print the most recent order straight from Postgres |
 | `pnpm order:settle` | Take cash on the most recent unpaid order |
 | `pnpm staff:grant <email> <role>` | Give a Supabase user a role in the org |
@@ -87,13 +95,16 @@ that has already taken orders unless you pass `--force`.
 ## Where things are
 
 ```
-src/domain/     order lifecycle, channels, roles and permissions
-src/lib/money/  integer-paise arithmetic and INR formatting
-src/lib/tax/    GST — CGST/SGST split, inclusive and exclusive pricing
-src/lib/pricing/ the one path from a menu price to totals and margin
-src/db/schema/  42 tables, split by domain
-supabase/       migrations, including hand-written row-level security
-design-system/  tokens, motion, interaction, accessibility, content
+src/domain/         order lifecycle, channels, roles and permissions
+src/lib/money/      integer-paise arithmetic and INR formatting
+src/lib/tax/        GST — CGST/SGST split, inclusive and exclusive pricing
+src/lib/pricing/    the one path from a menu price to totals and margin
+src/lib/menu-admin/ the Menu Manager's write side — categories, products,
+                    modifiers, combos, availability, the audit log
+src/lib/pos/        pricing and menu-polling for the web POS
+src/db/schema/      54 tables, split by domain
+supabase/           migrations, including hand-written row-level security
+design-system/      tokens, motion, interaction, accessibility, content
 ```
 
 ## Two things that will bite you
@@ -250,26 +261,58 @@ Tick an item when the real value is in the repo, not when the answer is known.
 
 ## Status
 
-**Phase 0 complete** — design foundation, financial core, domain model, schema.
+**Live at [frybirdiq.tech](https://frybirdiq.tech).** Customer ordering (home,
+menu, product customization, cart, checkout, loyalty, invoices), staff
+sign-in, the counter screen, and the web POS all walk end to end against the
+real database. `CLAUDE.md` tracks the build order from `BUILD-PLAN.md` §73;
+current phase there is **4 — web POS**.
 
-**Phase 1 in progress** — the customer ordering slice. Home, menu, product
-customization, cart and checkout are built and walk end to end in the browser.
+**The Menu Control Center (`/app/iq/menu`) is the live source of truth** for
+categories, products, modifiers and combos — not just the static
+transcription in `src/db/menu-data.ts` anymore, though that file is still
+what `pnpm db:seed` loads to bootstrap a fresh database. The website, the
+counter, and POS's own live menu poll all read the same `getMenu()` path, so
+an edit in the Menu Manager reaches every surface without a redeploy. New
+items save as drafts and are published explicitly; editing something already
+live takes effect immediately, on purpose — this is not a staging system.
+Every product photo goes through Supabase Storage, never the VPS filesystem —
+a deploy's `rsync --delete` would destroy anything written to disk there.
 
-**Connected and verified against a live database.** Migrations applied, menu
-seeded, and order #001 placed end to end — ₹299 for Nashville wings at 8 pc,
-matching the printed board, stored with ₹284.76 revenue and ₹14.24 GST that
-reconcile exactly.
+**Repricing is append-only.** A price change never overwrites
+`products.base_price` in place — it inserts into `price_history` (old price,
+new price, who, when) in the same transaction as the update, so the two can
+never disagree. One price per product: direct orders only (dine-in, takeaway,
+the website), all charged the same counter price — no per-channel pricing.
+
+**The web POS prices and builds an order**, polling the menu every 25 seconds
+so a price or availability change from the Menu Manager reaches an open
+counter screen without a reload. It cannot place, hold or send an order to
+the kitchen yet — that needs POS order persistence, a separate, not-yet-built
+piece of work.
+
+**FRYBIRD REWARDS** (points/stamps) has a real ledger, verified against
+duplicate payment webhooks, refund reversal mid-redemption, and concurrent
+stamp awards — `pnpm rewards:verify`.
+
+**Cash on collection is live.** Checkout records a pending `cash/CASH`
+payment; settling it moves the order to PAID, books the money once, and
+writes an audit row. Online payment slots in behind the same
+`PaymentProvider` interface without touching order logic.
+
+**The counter screen is live** at `/app/orders`. A cashier signs in, sees
+open orders, takes cash, and moves tickets through accepted → cooking →
+ready → collected. Every action is permission-checked server-side.
 
 Still outstanding:
 
-- **Cash on collection is live.** Checkout records a pending `cash/CASH`
-  payment; settling it moves the order to PAID, books the money once, and
-  writes an audit row. Online payment slots in behind the same
-  `PaymentProvider` interface without touching order logic.
-- **The counter screen is live** at `/app/orders`. A cashier signs in, sees
-  open orders, takes cash, and moves tickets through accepted → cooking →
-  ready → collected. Every action is permission-checked server-side.
-- **Orders do not appear on their own yet.** Realtime is Phase 3; the list says
-  so rather than looking live and silently not being.
-- **Realtime is Phase 3.** The tracking page reflects status at page load. It
-  does not pretend to be live.
+- **No GST is charged.** FRYBIRD is not GST registered, so every product sits
+  on the 0% rate and `organizations.gstin` is null. The tax engine and its
+  CGST/SGST split are built and tested — every line still runs through it —
+  they just currently compute ₹0, honestly, rather than being skipped.
+  `pnpm business:set --gstin ...` is what turns it on for real.
+- **Realtime is still polling, not push.** New orders (`NewOrderAlert`) poll
+  every 12 seconds; the tracking page reflects status at page load. Both now
+  detect a stale deployment — a tab left open across a redeploy shows a clear
+  "reload to continue" instead of silently failing.
+- **Deployed on a single VPS with no zero-downtime rollout.** A deploy is a
+  few seconds of 502s. See `docs/DEPLOY.md`.
