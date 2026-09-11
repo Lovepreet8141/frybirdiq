@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { ShoppingBag, User } from "lucide-react";
+import { CartBadge } from "@/components/site/cart-badge";
 import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
 
@@ -57,10 +58,10 @@ export async function Header() {
 
           <Link
             href="/cart"
-            className="ml-1 flex min-h-[44px] items-center gap-2 rounded-md bg-primary px-4 font-semibold text-primary-foreground transition-opacity duration-[var(--duration-micro)] hover:opacity-90"
+            className="ml-1 flex min-h-[44px] cursor-pointer items-center gap-2 overflow-hidden rounded-xl border-[2.5px] border-[var(--ink)] bg-primary px-4 font-heading font-extrabold text-primary-foreground shadow-[3px_3px_0_var(--ink)] transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[5px_6px_0_var(--ink)]"
           >
             <ShoppingBag className="size-4" aria-hidden="true" />
-            <span className="tabular">{cart.itemCount}</span>
+            <CartBadge count={cart.itemCount} />
             <span className="sr-only">
               {cart.itemCount === 1 ? "item in your order" : "items in your order"}. View order.
             </span>

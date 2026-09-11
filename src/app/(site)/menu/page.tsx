@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Search, X } from "lucide-react";
+import { MenuControls } from "@/components/menu/menu-controls";
 import { ProductCard } from "@/components/menu/product-card";
 import { Stagger, StaggerItem } from "@/components/motion/reveal";
 import { EmptyState } from "@/components/states";
@@ -48,87 +48,42 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
     .filter((category) => category.products.length > 0);
 
   const total = filtered.reduce((count, category) => count + category.products.length, 0);
-  const isFiltered = Boolean(query) || vegOnly;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-10 sm:py-14">
       <h1 className="font-heading text-4xl font-bold tracking-tight sm:text-5xl">Menu</h1>
 
-      {/* Search and filter. A plain GET form, so it needs no JavaScript. */}
-      <form method="get" className="mt-8 flex flex-wrap items-center gap-3" role="search">
+      {/*
+        A GET form still wraps the controls, so pressing Enter without
+        JavaScript submits and the server filters exactly as before. With
+        JavaScript, MenuControls filters the rendered sections as you type and
+        the submit never happens.
+      */}
+      <form method="get" role="search" className="mt-8 flex flex-wrap items-center gap-3">
         <label htmlFor="menu-search" className="sr-only">
           Search the menu
         </label>
-        <div className="relative flex-1 sm:max-w-xs">
-          <Search
-            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-            aria-hidden="true"
-          />
-          <input
-            id="menu-search"
-            type="search"
-            name="q"
-            defaultValue={q}
-            placeholder="Search"
-            className="h-[44px] w-full rounded-md border border-border bg-surface pl-9 pr-3 text-base placeholder:text-muted-foreground focus-visible:border-border-strong"
-          />
-        </div>
-
-        {/* Preserves the current query when toggling diet. */}
         {vegOnly && <input type="hidden" name="diet" value="veg" />}
-
-        <button
-          type="submit"
-          className="inline-flex min-h-[44px] items-center rounded-md border border-border-strong px-4 text-sm font-semibold transition-colors duration-[var(--duration-standard)] hover:bg-surface"
-        >
-          Search
-        </button>
-
-        <Link
-          href={{ pathname: "/menu", query: { ...(q ? { q } : {}), ...(vegOnly ? {} : { diet: "veg" }) } }}
-          className={`inline-flex min-h-[44px] items-center rounded-md border px-4 text-sm font-semibold transition-colors duration-[var(--duration-standard)] ${
-            vegOnly
-              ? "border-[#3F9D52] bg-[#3F9D52]/15 text-foreground"
-              : "border-border-strong hover:bg-surface"
-          }`}
-          aria-pressed={vegOnly}
-        >
-          Veg only
-        </Link>
-
-        {isFiltered && (
-          <Link
-            href="/menu"
-            className="inline-flex min-h-[44px] items-center gap-1 rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
+        <MenuControls
+          categories={menu.map((category) => ({ slug: category.slug, name: category.name }))}
+          products={menu.flatMap((category) =>
+            category.products.map((product) => ({
+              slug: product.slug,
+              text: `${product.name} ${product.description ?? ""} ${category.name}`.toLowerCase(),
+            })),
+          )}
+          initialQuery={q}
+          vegOnly={vegOnly}
+        />
+        <noscript>
+          <button
+            type="submit"
+            className="inline-flex min-h-[48px] items-center rounded-xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] px-4 text-sm font-bold"
           >
-            <X className="size-4" aria-hidden="true" />
-            Clear
-          </Link>
-        )}
+            Search
+          </button>
+        </noscript>
       </form>
-
-      {isFiltered && (
-        <p className="tabular mt-4 text-sm text-muted-foreground" role="status" aria-live="polite">
-          {total} {total === 1 ? "item" : "items"}
-          {query && <> matching &ldquo;{q}&rdquo;</>}
-          {vegOnly && <> · vegetarian only</>}
-        </p>
-      )}
-
-      {/* Category jump links. Hidden while filtering, when they would lie. */}
-      {!isFiltered && (
-        <nav aria-label="Menu categories" className="mt-8 flex flex-wrap gap-2">
-          {menu.map((category) => (
-            <a
-              key={category.slug}
-              href={`#${category.slug}`}
-              className="inline-flex min-h-[44px] items-center rounded-md border border-border bg-surface px-4 text-sm font-semibold transition-colors duration-[var(--duration-standard)] hover:border-border-strong"
-            >
-              {category.name}
-            </a>
-          ))}
-        </nav>
-      )}
 
       {total === 0 ? (
         <EmptyState
@@ -148,7 +103,8 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
       ) : (
         <div className="mt-10 flex flex-col gap-12">
           {filtered.map((category, categoryIndex) => (
-            <section key={category.slug} id={category.slug} aria-labelledby={`${category.slug}-heading`}>
+            <section
+              data-category key={category.slug} id={category.slug} aria-labelledby={`${category.slug}-heading`}>
               <h2
                 id={`${category.slug}-heading`}
                 className="font-heading text-2xl font-bold tracking-tight sm:text-3xl"
@@ -157,7 +113,11 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
               </h2>
               <Stagger className="mt-5 grid gap-5 [perspective:1000px] sm:grid-cols-2 lg:grid-cols-3">
                 {category.products.map((product, index) => (
-                  <StaggerItem key={product.slug} className="flex">
+                  <StaggerItem
+                    key={product.slug}
+                    className="flex"
+                    data-slug={product.slug}
+                  >
                     <div className="flex w-full">
                       {/* Only the first row of the first category is above the
                           fold. Marking more than that as priority defeats the

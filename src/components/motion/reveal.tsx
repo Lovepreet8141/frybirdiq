@@ -103,10 +103,19 @@ export function Stagger({ children, className }: { children: ReactNode; classNam
   );
 }
 
-export function StaggerItem({ children, className }: { children: ReactNode; className?: string }) {
+export function StaggerItem({
+  children,
+  className,
+  ...rest
+}: {
+  children: ReactNode;
+  className?: string;
+  /** Forwarded so callers can tag the item for filtering or analytics. */
+  [key: `data-${string}`]: string | undefined;
+}) {
   const still = useReducedMotion();
   return (
-    <motion.li data-reveal className={className} variants={still ? undefined : itemVariants}>
+    <motion.li data-reveal className={className} variants={still ? undefined : itemVariants} {...rest}>
       {children}
     </motion.li>
   );

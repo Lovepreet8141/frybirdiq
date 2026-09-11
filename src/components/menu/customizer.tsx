@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Loader2, Minus, Plus } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { type Paise, add, formatINR, multiply } from "@/lib/money";
 import { addToCart } from "@/lib/cart/actions";
+import { useToast } from "@/components/ui/toast";
 import type { MenuProduct } from "@/lib/repositories/menu";
 import { cn } from "@/lib/utils";
 
@@ -23,6 +24,27 @@ import { cn } from "@/lib/utils";
 export function Customizer({ product }: { product: MenuProduct }) {
   const router = useRouter();
   const reduced = useReducedMotion();
+  const { show } = useToast();
+
+  /*
+   * The main button, watched so the sticky bar can take over when it scrolls
+   * away. On a phone the add button sits below the options and the price, and
+   * once someone has scrolled past it there is no way to order without
+   * scrolling back — which is where people give up.
+   */
+  const ctaRef = useRef<HTMLButtonElement>(null);
+  const [ctaVisible, setCtaVisible] = useState(true);
+
+  useEffect(() => {
+    const node = ctaRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setCtaVisible(entry?.isIntersecting ?? true),
+      { rootMargin: "0px 0px -8px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [added, setAdded] = useState(false);
@@ -77,9 +99,24 @@ export function Customizer({ product }: { product: MenuProduct }) {
         return;
       }
       setAdded(true);
+      show({
+        message: `${quantity} × ${product.name} added`,
+        detail: `${formatINR(lineTotal)} — fried to order, about 15 minutes.`,
+        action: { label: "View your order", href: "/cart" },
+      });
       router.refresh();
     });
   }
+
+  /* One label, rendered in two places. The sticky bar is the same control as
+     the main button, not a second one that can disagree with it. */
+  const ctaLabel = pending
+    ? "Adding"
+    : unanswered.length > 0
+      ? `Choose ${unanswered[0]!.name.toLowerCase()}`
+      : added
+        ? "Added"
+        : "Add to order";
 
   return (
     <div className="flex flex-col gap-8">
@@ -169,12 +206,13 @@ export function Customizer({ product }: { product: MenuProduct }) {
 
       {/* Add. Responds within 120ms, before the network. */}
       <motion.button
+        ref={ctaRef}
         type="button"
         onClick={submit}
         disabled={pending || unanswered.length > 0}
         whileTap={reduced || pending ? undefined : { scale: 0.98 }}
         transition={{ duration: 0.12, ease: [0.2, 0, 0, 1] }}
-        className="flex min-h-[56px] items-center justify-center gap-3 rounded-md bg-primary px-6 text-base font-semibold text-primary-foreground transition-opacity duration-[var(--duration-micro)] hover:opacity-90 disabled:opacity-50"
+        className="flex min-h-[56px] cursor-pointer items-center justify-center gap-3 rounded-xl border-[2.5px] border-[var(--ink)] bg-primary px-6 font-heading text-base font-extrabold text-primary-foreground shadow-[5px_5px_0_var(--ink)] transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[7px_8px_0_var(--ink)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-[5px_5px_0_var(--ink)]"
       >
         {pending ? (
           <>
@@ -195,6 +233,44 @@ export function Customizer({ product }: { product: MenuProduct }) {
           </>
         )}
       </motion.button>
+
+      {/* Sticky bar. Mirrors the button above rather than duplicating its
+          state, and is hidden from assistive tech — the real control is already
+          in the reading order, and announcing it twice is worse than not at
+          all. */}
+      <AnimatePresence>
+        {!ctaVisible && (
+          <motion.div
+            aria-hidden="true"
+            initial={reduced ? false : { y: "100%" }}
+            animate={{ y: 0 }}
+            exit={reduced ? { opacity: 0 } : { y: "100%" }}
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+            className="fixed inset-x-0 bottom-0 z-40 border-t-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-[0_-8px_24px_-12px_rgba(44,33,27,0.35)]"
+          >
+            <div className="mx-auto flex w-full max-w-3xl items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-heading text-sm font-extrabold">{product.name}</p>
+                <p className="tabular text-sm text-muted-foreground">
+                  {quantity} × {formatINR(unitPrice)}
+                </p>
+              </div>
+              <button
+                type="button"
+                tabIndex={-1}
+                onClick={submit}
+                disabled={pending || unanswered.length > 0}
+                className="flex min-h-[48px] shrink-0 cursor-pointer items-center gap-2 rounded-xl border-[2.5px] border-[var(--ink)] bg-primary px-5 font-heading text-sm font-extrabold text-primary-foreground shadow-[4px_4px_0_var(--ink)] transition-transform duration-200 ease-out active:translate-y-0.5 disabled:opacity-50"
+              >
+                {ctaLabel}
+                {unanswered.length === 0 && !pending && (
+                  <span className="tabular">{formatINR(lineTotal)}</span>
+                )}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <p className="sr-only" role="status" aria-live="polite">
         {added ? `${product.name} added to your order.` : ""}
