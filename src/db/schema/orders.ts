@@ -1,7 +1,7 @@
 /** Orders, items, events, payments, refunds. BUILD-PLAN.md §16, §17, §43, §51. */
 
 import { sql } from "drizzle-orm";
-import { check, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { check, date, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { FULFILMENT_TYPES, ORDER_STATUSES } from "@/domain/order-status";
 import { ORDER_CHANNELS } from "@/domain/order-channel";
 import { customers } from "./customers";
@@ -44,6 +44,16 @@ export const orders = pgTable(
 
     /** Short human number the counter and kitchen say out loud. */
     orderNumber: text("order_number").notNull(),
+    /**
+     * The IST business day this order belongs to.
+     *
+     * Stored rather than derived, because it is half of the uniqueness rule for
+     * order_number and a constraint cannot depend on a timezone conversion that
+     * might be evaluated differently later. It is also the honest answer to
+     * "which day's takings is this in", which created_at is not for anything
+     * placed between midnight and 05:30 IST.
+     */
+    businessDate: date("business_date").notNull(),
 
     status: orderStatusEnum("status").notNull().default("DRAFT"),
     /**
@@ -137,7 +147,14 @@ export const orders = pgTable(
     ...timestamps,
   },
   (table) => [
-    unique("orders_org_number_unique").on(table.orgId, table.orderNumber),
+    /*
+     * Order numbers restart each day — a counter calling out "number seven" is
+     * the point of them — so uniqueness is per business day, not for all time.
+     * The old constraint spanned every day at once, which meant the first order
+     * of the second day collided with the first order of the first and checkout
+     * failed for everyone until midnight UTC moved again.
+     */
+    unique("orders_org_day_number_unique").on(table.orgId, table.businessDate, table.orderNumber),
     unique("orders_org_invoice_unique").on(table.orgId, table.invoiceNumber),
     index("orders_org_status_idx").on(table.orgId, table.status),
     index("orders_location_placed_idx").on(table.locationId, table.placedAt),

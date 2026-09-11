@@ -12,7 +12,7 @@ import "server-only";
  * seed, and it is the first thing to verify once keys exist.
  */
 
-import { and, desc, eq, gte, inArray, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray, max, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { addresses, customers, locations, loyaltyAccounts, loyaltyTransactions, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
@@ -20,6 +20,7 @@ import { assertChannelFulfilment } from "@/domain/order-channel";
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition } from "@/domain/order-status";
 import type { Role } from "@/domain/permissions";
 import { REJECTION_LABELS, type RejectionReason } from "@/domain/rejection";
+import { businessDate } from "@/lib/dates";
 import { isSupabaseConfigured } from "@/lib/env";
 import { type Paise, ZERO, paise } from "@/lib/money";
 import { priceOrder } from "@/lib/pricing";
@@ -88,16 +89,37 @@ export type PlaceOrderResult =
  * ticket — §21. Resets each day, so it never grows into something nobody can
  * read aloud across a noisy kitchen.
  */
-async function nextOrderNumber(orgId: string): Promise<string> {
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
-
-  const todays = await db()
-    .select({ id: orders.id })
+/**
+ * The next order number for today, as the counter would call it out.
+ *
+ * Three things went wrong in the version this replaces, and each of them broke
+ * checkout outright rather than producing an odd number:
+ *
+ * The day boundary came from `new Date().setHours(0,0,0,0)`, which is midnight
+ * in the *server's* timezone. The server runs UTC, so the day rolled over at
+ * 05:30 IST — the count reset while the shop was shut and then collided with
+ * the morning's real orders.
+ *
+ * The count was `rows + 1`, so a cancelled or deleted order made the next one
+ * reuse a number that was still in the table.
+ *
+ * And the number resets daily while the unique constraint spanned all time, so
+ * the first order of any second day was guaranteed to fail. That is fixed by
+ * the constraint now including the business date; this function only has to be
+ * right about the date and the maximum.
+ *
+ * Still not safe against two checkouts landing in the same millisecond — the
+ * caller retries on the unique violation, which is the cheap correct answer at
+ * one outlet's volume. A sequence per day would be the answer at ten.
+ */
+async function nextOrderNumber(orgId: string, businessDay: string): Promise<string> {
+  const [row] = await db()
+    .select({ highest: max(orders.orderNumber) })
     .from(orders)
-    .where(and(eq(orders.orgId, orgId), gte(orders.createdAt, startOfDay)));
+    .where(and(eq(orders.orgId, orgId), eq(orders.businessDate, businessDay)));
 
-  return String(todays.length + 1).padStart(3, "0");
+  const next = row?.highest ? Number(row.highest) + 1 : 1;
+  return String(next).padStart(3, "0");
 }
 
 /**
@@ -233,7 +255,8 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   }
 
   async function writeOrder(): Promise<PlaceOrderResult> {
-  const orderNumber = await nextOrderNumber(orgId);
+  const businessDay = businessDate(new Date());
+  let orderNumber = await nextOrderNumber(orgId, businessDay);
   const now = new Date();
 
   /*
@@ -281,12 +304,21 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     })
     .returning();
 
-  const [order] = await database
-    .insert(orders)
-    .values({
+  /*
+   * Reading the highest number and then inserting is two statements, so two
+   * checkouts in the same moment can read the same number. Rather than lock
+   * the table for every order at a single outlet, the unique constraint is
+   * allowed to catch it and the number is recomputed — the second attempt
+   * reads the row the first one just wrote.
+   */
+  const insertOrder = () =>
+    database
+      .insert(orders)
+      .values({
       orgId,
       locationId,
       orderNumber,
+      businessDate: businessDay,
       customerId: customer?.id,
       status: "PENDING_PAYMENT",
       channel,
@@ -316,8 +348,22 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       // figure agree with the cash that changes hands.
       grandTotal: cart.payable,
       placedAt: now,
-    })
-    .returning();
+      })
+      .returning();
+
+  let order: Awaited<ReturnType<typeof insertOrder>>[number] | undefined;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      [order] = await insertOrder();
+      break;
+    } catch (error) {
+      // 23505 is unique_violation. Anything else is a real failure.
+      const code = (error as { cause?: { code?: string }; code?: string }).cause?.code
+        ?? (error as { code?: string }).code;
+      if (code !== "23505" || attempt === 3) throw error;
+      orderNumber = await nextOrderNumber(orgId, businessDay);
+    }
+  }
 
   if (!order) return { ok: false, error: "The order could not be saved. Nothing has been charged." };
 
