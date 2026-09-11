@@ -18,9 +18,10 @@ import { resolveHome } from "@/lib/auth/route-home";
  * on it.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const [staff, canSeeOrders, canSeeDeliveries, canSeeAnalytics, canReject] = await Promise.all([
+  const [staff, canSeeOrders, canSeePos, canSeeDeliveries, canSeeAnalytics, canReject] = await Promise.all([
     getStaff(),
     staffCan("orders.view"),
+    staffCan("orders.create"),
     staffCan("delivery.view"),
     staffCan("analytics.view"),
     staffCan("orders.cancel"),
@@ -56,6 +57,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
                   className="flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
                 >
                   Orders
+                </Link>
+              )}
+              {canSeePos && (
+                <Link
+                  href="/app/pos"
+                  className="flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  POS
                 </Link>
               )}
               {canSeeDeliveries && (

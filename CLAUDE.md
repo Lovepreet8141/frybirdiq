@@ -183,7 +183,7 @@ change to a calculation without a change to its test is incomplete.
 Follow `BUILD-PLAN.md` §73. Do not skip ahead. Phase 1 must let a real customer
 place a real order end to end before POS work begins.
 
-Current phase: **0 — design and architecture.**
+Current phase: **4 — web POS.**
 
 <!-- BEGIN:nextjs-agent-rules -->
 

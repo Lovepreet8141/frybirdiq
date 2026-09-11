@@ -87,6 +87,46 @@ export function menuSource(): MenuSource {
   return isSupabaseConfigured() ? "database" : "menu-data";
 }
 
+export interface ResolvedLineModifiers {
+  readonly modifiers: MenuModifier[];
+  readonly error: string | null;
+}
+
+/**
+ * Resolves the modifier slugs a line carries against the product's own
+ * groups — the one place that validates a set of chosen modifiers, shared by
+ * the customer cart (`src/lib/cart`) and the counter (`src/lib/pos`), so the
+ * rule for what counts as a legal selection cannot drift between the two.
+ */
+export function resolveLineModifiers(
+  product: MenuProduct,
+  selected: readonly string[],
+): ResolvedLineModifiers {
+  const modifiers: MenuModifier[] = [];
+
+  for (const group of product.modifierGroups) {
+    const chosen = group.modifiers.filter((modifier) => selected.includes(modifier.slug));
+
+    if (chosen.length < group.minSelections) {
+      // Fall back to the group's default rather than rejecting the line, so a
+      // link shared without options — or a tap-to-add with none chosen yet —
+      // still resolves to something orderable.
+      const fallback = group.modifiers.find((modifier) => modifier.isDefault) ?? group.modifiers[0];
+      if (!fallback) return { modifiers: [], error: `${group.name} has no options` };
+      modifiers.push(fallback);
+      continue;
+    }
+
+    if (group.maxSelections !== null && chosen.length > group.maxSelections) {
+      return { modifiers: [], error: `Too many choices for ${group.name}` };
+    }
+
+    modifiers.push(...chosen);
+  }
+
+  return { modifiers, error: null };
+}
+
 const RESTAURANT_RATE = TAX_RATES.find((rate) => rate.isDefault);
 const DEFAULT_RATE_BPS = RESTAURANT_RATE?.rateBps ?? 500;
 const DEFAULT_HSN = RESTAURANT_RATE?.hsnCode ?? null;

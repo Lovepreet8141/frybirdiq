@@ -22,7 +22,7 @@ import { getCustomer } from "@/lib/customer";
 import { getOrg } from "@/lib/repositories/org";
 import { type PricedLine, type PricedOrder, priceLine, priceOrder } from "@/lib/pricing";
 import { resolvePricingContext } from "@/lib/repositories/org";
-import { type MenuModifier, type MenuProduct, getMenu } from "@/lib/repositories/menu";
+import { type MenuModifier, type MenuProduct, getMenu, resolveLineModifiers } from "@/lib/repositories/menu";
 import { type Cart, EMPTY_CART, cartSchema, lineKey } from "./schema";
 
 export const CART_COOKIE = "frybird_cart";
@@ -105,35 +105,6 @@ export interface PricedCart {
   readonly rejected: readonly { slug: string; reason: string }[];
 }
 
-/** Resolves the modifier slugs a line carries against the product's own groups. */
-function resolveModifiers(
-  product: MenuProduct,
-  selected: readonly string[],
-): { modifiers: MenuModifier[]; error: string | null } {
-  const modifiers: MenuModifier[] = [];
-
-  for (const group of product.modifierGroups) {
-    const chosen = group.modifiers.filter((modifier) => selected.includes(modifier.slug));
-
-    if (chosen.length < group.minSelections) {
-      // Fall back to the group's default rather than rejecting the line, so a
-      // link shared without options still resolves to something orderable.
-      const fallback = group.modifiers.find((modifier) => modifier.isDefault) ?? group.modifiers[0];
-      if (!fallback) return { modifiers: [], error: `${group.name} has no options` };
-      modifiers.push(fallback);
-      continue;
-    }
-
-    if (group.maxSelections !== null && chosen.length > group.maxSelections) {
-      return { modifiers: [], error: `Too many choices for ${group.name}` };
-    }
-
-    modifiers.push(...chosen);
-  }
-
-  return { modifiers, error: null };
-}
-
 /**
  * Prices a whole cart.
  *
@@ -157,7 +128,7 @@ export async function priceCart(cart: Cart): Promise<PricedCart> {
       continue;
     }
 
-    const { modifiers, error } = resolveModifiers(product, line.modifiers);
+    const { modifiers, error } = resolveLineModifiers(product, line.modifiers);
     if (error) {
       rejected.push({ slug: line.slug, reason: error });
       continue;
