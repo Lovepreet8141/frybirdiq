@@ -4,6 +4,7 @@ import { Bike, Clock, Flame, MapPin, Phone, ShoppingBag, Timer } from "lucide-re
 
 import { StageMotion } from "@/components/hero/stage";
 import { Reveal, Stagger, StaggerItem } from "@/components/motion/reveal";
+import { LoyaltySection } from "@/components/loyalty/loyalty-section";
 import { ProductCard } from "@/components/menu/product-card";
 import { Price } from "@/components/menu/price";
 import { getAllProducts, getMenu } from "@/lib/repositories/menu";
@@ -236,6 +237,9 @@ export default async function HomePage() {
           </Link>
         </div>
       </section>
+
+      {/* ───────────── loyalty ───────────── */}
+      <LoyaltySection />
 
       {/* ───────────── why frybird ───────────── */}
       <section id="why" aria-labelledby="why-heading" className="border-b border-border">

@@ -1,7 +1,7 @@
 /** Orders, items, events, payments, refunds. BUILD-PLAN.md §16, §17, §43, §51. */
 
 import { sql } from "drizzle-orm";
-import { check, date, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, date, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { FULFILMENT_TYPES, ORDER_STATUSES } from "@/domain/order-status";
 import { ORDER_CHANNELS } from "@/domain/order-channel";
 import { customers } from "./customers";
@@ -104,6 +104,15 @@ export const orders = pgTable(
     pointsEarned: integer("points_earned").notNull().default(0),
 
     /**
+     * The stamp card's "buy 7, get the 8th free" — set at placement, when
+     * the discount is priced, and read back at payment to reset the count
+     * instead of adding another stamp. §51: a later change to the stamp
+     * goal must not rewrite what this order actually gave away.
+     */
+    stampRewardApplied: boolean("stamp_reward_applied").notNull().default(false),
+    stampRewardDiscount: money("stamp_reward_discount").notNull().default(ZERO_MONEY),
+
+    /**
      * Tax invoice number. Unique and sequential within the financial year.
      *
      * Separate from `orderNumber`, which resets daily so the counter can call
@@ -156,6 +165,9 @@ export const orders = pgTable(
      */
     unique("orders_org_day_number_unique").on(table.orgId, table.businessDate, table.orderNumber),
     unique("orders_org_invoice_unique").on(table.orgId, table.invoiceNumber),
+    // The counter and the dashboard both read "today's orders"; this is what
+    // makes that a lookup rather than a scan.
+    index("orders_org_business_date_idx").on(table.orgId, table.businessDate),
     index("orders_org_status_idx").on(table.orgId, table.status),
     index("orders_location_placed_idx").on(table.locationId, table.placedAt),
     // Revenue split by channel is the reporting question this column exists

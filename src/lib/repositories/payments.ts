@@ -10,11 +10,12 @@ import "server-only";
 
 import { and, eq, like, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLogs, loyaltyAccounts, loyaltyTransactions, orderEvents, orders, payments } from "@/db/schema";
+import { auditLogs, loyaltyAccounts, loyaltyStampEvents, loyaltyTransactions, orderEvents, orders, payments } from "@/db/schema";
 import { type Role, authorize } from "@/domain/permissions";
 import { type Paise, formatINR, paise, subtract } from "@/lib/money";
 import { pointsEarned } from "@/lib/loyalty";
-import { getLoyaltyConfig } from "@/lib/loyalty/config";
+import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
+import { nextStampCount } from "@/lib/loyalty/stamps";
 import { financialYear, invoiceNumber, parseInvoiceNumber } from "@/lib/invoice";
 import { CASH_PROVIDER, getProvider } from "@/lib/payments";
 import { withIdempotency } from "./idempotency";
@@ -231,6 +232,47 @@ export async function recordCashPayment(input: {
           }
 
           await database.update(orders).set({ pointsEarned: earned }).where(eq(orders.id, order.id));
+        }
+      }
+
+      /*
+       * The stamp card moves on every paid order with a customer attached —
+       * points or no points, it counts visits, not spend.
+       *
+       * A redeeming order resets the count to zero; any other paid order
+       * adds one stamp. Read first rather than a raw SQL increment like
+       * points above, because a reset is not a delta that composes with
+       * whatever the count already was.
+       */
+      if (order.customerId) {
+        const stampConfig = await getStampConfig();
+        const [existingAccount] = await database
+          .select()
+          .from(loyaltyAccounts)
+          .where(eq(loyaltyAccounts.customerId, order.customerId))
+          .limit(1);
+
+        const nextCount = nextStampCount(existingAccount?.stampCount ?? 0, order.stampRewardApplied, stampConfig);
+
+        const [account] = await database
+          .insert(loyaltyAccounts)
+          .values({ orgId: order.orgId, customerId: order.customerId, stampCount: nextCount })
+          .onConflictDoUpdate({
+            target: loyaltyAccounts.customerId,
+            set: { stampCount: nextCount, updatedAt: new Date() },
+          })
+          .returning();
+
+        // Same principle as the points ledger: a balance nobody can explain
+        // is a balance a customer will dispute.
+        if (account) {
+          await database.insert(loyaltyStampEvents).values({
+            orgId: order.orgId,
+            accountId: account.id,
+            kind: order.stampRewardApplied ? "REDEEMED" : "EARNED",
+            countAfter: nextCount,
+            orderId: order.id,
+          });
         }
       }
 

@@ -41,6 +41,18 @@ export const organizations = pgTable("organizations", {
   loyaltyPointValue: money("loyalty_point_value").notNull().default(ZERO_MONEY),
   /** Points needed before any can be spent. Zero means no minimum. */
   loyaltyMinRedeemPoints: integer("loyalty_min_redeem_points").notNull().default(0),
+
+  /*
+   * The stamp card — "buy 7, get the 8th free." A second, independent loyalty
+   * mechanic: visit-based rather than value-based, one stamp per qualifying
+   * order regardless of what it cost. A customer earns both this and points
+   * from the same order.
+   */
+  /** Whether the stamp card is live. */
+  stampRewardEnabled: boolean("stamp_reward_enabled").notNull().default(true),
+  /** Orders per cycle. The Nth order — the free one — resets the count. */
+  stampRewardGoal: integer("stamp_reward_goal").notNull().default(8),
+
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
   ...timestamps,
 });

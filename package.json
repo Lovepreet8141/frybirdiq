@@ -25,6 +25,8 @@
     "loyalty:show": "tsx scripts/configure-loyalty.ts --show",
     "loyalty:set": "tsx scripts/configure-loyalty.ts",
     "loyalty:balances": "tsx scripts/check-points.ts",
+    "stamps:show": "tsx scripts/configure-stamps.ts --show",
+    "stamps:set": "tsx scripts/configure-stamps.ts",
     "business:show": "tsx scripts/configure-business.ts --show",
     "business:set": "tsx scripts/configure-business.ts",
     "iq:report": "tsx --conditions=react-server scripts/iq-report.ts",

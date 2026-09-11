@@ -27,6 +27,8 @@ export interface Customer {
   readonly email: string | null;
   readonly marketingConsent: boolean;
   readonly points: number;
+  /** Stamps since the last free item — the "buy 7, get the 8th free" card. */
+  readonly stampCount: number;
 }
 
 export const getCustomer = cache(async (): Promise<Customer | null> => {
@@ -63,6 +65,7 @@ export const getCustomer = cache(async (): Promise<Customer | null> => {
     email: row.email,
     marketingConsent: row.marketingConsent,
     points: account?.pointsBalance ?? 0,
+    stampCount: account?.stampCount ?? 0,
   };
 });
 

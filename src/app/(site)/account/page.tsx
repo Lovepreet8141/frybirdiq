@@ -8,7 +8,9 @@ import { getCustomer } from "@/lib/customer";
 import { resolveHome } from "@/lib/auth/route-home";
 import { signOutCustomer } from "@/lib/customer/actions";
 import { isLoyaltyEnabled, pointsValue } from "@/lib/loyalty";
-import { getLoyaltyConfig } from "@/lib/loyalty/config";
+import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
+import { isStampRewardEnabled, stampsRequired } from "@/lib/loyalty/stamps";
+import { StampCard } from "@/components/loyalty/stamp-card";
 import { formatBps, formatINR } from "@/lib/money";
 import { listCustomerOrders } from "@/lib/repositories/orders";
 import { requireOrg } from "@/lib/repositories/org";
@@ -24,9 +26,10 @@ export default async function AccountPage() {
   }
 
   const org = await requireOrg();
-  const [orders, loyalty] = await Promise.all([
+  const [orders, loyalty, stampConfig] = await Promise.all([
     listCustomerOrders({ customerId: customer.id, orgId: org.id, limit: 5 }),
     getLoyaltyConfig(),
+    getStampConfig(),
   ]);
 
   return (
@@ -68,6 +71,20 @@ export default async function AccountPage() {
               ? `Worth ${formatINR(pointsValue(customer.points, loyalty))} off your next order.`
               : `Earn ${formatBps(loyalty.earnBps, 0)} back as points on everything you order.`}
           </p>
+        </section>
+      )}
+
+      {isStampRewardEnabled(stampConfig) && (
+        <section aria-labelledby="stamps" className="mt-6 rounded-lg border border-border bg-surface p-6">
+          <h2 id="stamps" className="font-heading text-lg font-semibold">
+            Stamp card
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {customer.stampCount >= stampsRequired(stampConfig)
+              ? "Your next order is free — the cheapest item comes off automatically."
+              : `${customer.stampCount} of ${stampsRequired(stampConfig)} — order ${stampsRequired(stampConfig) - customer.stampCount} more and the next one's cheapest item is free.`}
+          </p>
+          <StampCard goal={stampConfig.goal} count={customer.stampCount} personal className="mt-5" />
         </section>
       )}
 

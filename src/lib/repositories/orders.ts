@@ -22,7 +22,7 @@ import type { Role } from "@/domain/permissions";
 import { REJECTION_LABELS, type RejectionReason } from "@/domain/rejection";
 import { businessDate } from "@/lib/dates";
 import { isSupabaseConfigured } from "@/lib/env";
-import { type Paise, ZERO, paise } from "@/lib/money";
+import { type Paise, ZERO, paise, subtract } from "@/lib/money";
 import { priceOrder } from "@/lib/pricing";
 import { fromMicro, toPoint } from "@/lib/delivery";
 import { quoteForPin } from "./delivery";
@@ -218,7 +218,16 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     deliveryDistance = quote.chargeableMetres;
   }
 
-  // Totals including the fee, priced by the same function the cart uses.
+  /*
+   * Totals including the fee, priced by the same function the cart uses.
+   *
+   * Each line carries `line.priced.discount` forward rather than being
+   * repriced from scratch — that figure is already the cart's own promotion
+   * allocation plus any stamp-card reward, and recomputing the lines here
+   * without it would tax the order as if neither discount existed while
+   * `grandTotal` below still reflected them, two figures on the same order
+   * that stop agreeing the moment either discount is in play.
+   */
   const context = await resolvePricingContext();
   const totals = priceOrder(
     {
@@ -227,6 +236,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
         quantity: line.quantity,
         modifierDeltas: line.modifiers.map((modifier) => modifier.priceDelta),
         rateBps: line.product.taxRateBps,
+        discount: line.priced.discount,
       })),
       fees:
         deliveryFee > ZERO
@@ -235,6 +245,10 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     },
     context,
   );
+
+  // What the customer is actually charged: the fee-inclusive, fully
+  // discounted total, less any points spent.
+  const payable = subtract(totals.gross, cart.points?.discount ?? ZERO);
 
   try {
     const { result } = await withIdempotency(
@@ -334,8 +348,8 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       deliveryLngMicro: pin?.lngMicro ?? null,
       deliveryDistanceMetres: deliveryDistance,
       deliveryFee,
-      subtotal: cart.totals.listed,
-      discountTotal: cart.totals.discount,
+      subtotal: totals.listed,
+      discountTotal: totals.discount,
       promotionCode: cart.promotion?.code,
       pointsRedeemed: cart.points?.points ?? 0,
       taxableTotal: totals.taxable,
@@ -343,10 +357,13 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       sgstTotal: totals.sgst,
       igstTotal: totals.igst,
       taxTotal: totals.total,
-      // What is actually charged: the order total less any points spent.
-      // Points are tender rather than a discount, so the payment row and this
-      // figure agree with the cash that changes hands.
-      grandTotal: cart.payable,
+      stampRewardApplied: cart.stampReward !== null,
+      stampRewardDiscount: cart.stampReward?.discount ?? ZERO,
+      // What is actually charged: the fee-inclusive, fully discounted total,
+      // less any points spent. Points are tender rather than a discount, so
+      // the payment row and this figure agree with the cash that changes
+      // hands.
+      grandTotal: payable,
       placedAt: now,
       })
       .returning();
@@ -451,7 +468,9 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
 
   // What the order is waiting on. Cash at the counter, recorded now so the
   // till has a row to settle against rather than an implicit expectation.
-  await createPendingPayment({ orgId, orderId: order.id, amount: cart.payable });
+  // `payable`, not `cart.payable` — the cart's own figure never carries a
+  // delivery fee, because priceCart prices the food before the fee is known.
+  await createPendingPayment({ orgId, orderId: order.id, amount: payable });
 
   /*
    * Spend the points, and count the code.

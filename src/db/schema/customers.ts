@@ -1,6 +1,6 @@
 /** Customers, addresses, loyalty, consent. BUILD-PLAN.md §29, §30, §83. */
 
-import { boolean, index, integer, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { organizations } from "./tenancy";
 import { money, primaryId, timestamps } from "./_shared";
 
@@ -77,6 +77,12 @@ export const loyaltyAccounts = pgTable(
       .references(() => customers.id, { onDelete: "cascade" })
       .unique(),
     pointsBalance: integer("points_balance").notNull().default(0),
+    /**
+     * Progress toward the free item — "buy 7, get the 8th free." Orders since
+     * the last reward, not points; resets to zero the moment a reward is
+     * redeemed rather than banking past the goal.
+     */
+    stampCount: integer("stamp_count").notNull().default(0),
     tier: text("tier"),
     ...timestamps,
   },
@@ -105,6 +111,32 @@ export const loyaltyTransactions = pgTable(
     ...timestamps,
   },
   (table) => [index("loyalty_transactions_account_idx").on(table.accountId)],
+);
+
+export const loyaltyStampEventKindEnum = pgEnum("loyalty_stamp_event_kind", ["EARNED", "REDEEMED"]);
+
+/**
+ * Every movement of the stamp card, for the same reason the points ledger
+ * exists: a balance nobody can explain is a balance customers will dispute.
+ * `countAfter` rather than a delta — a redemption is a reset to zero, not a
+ * number that composes with what came before it.
+ */
+export const loyaltyStampEvents = pgTable(
+  "loyalty_stamp_events",
+  {
+    id: primaryId(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => loyaltyAccounts.id, { onDelete: "cascade" }),
+    kind: loyaltyStampEventKindEnum("kind").notNull(),
+    countAfter: integer("count_after").notNull(),
+    orderId: uuid("order_id"),
+    ...timestamps,
+  },
+  (table) => [index("loyalty_stamp_events_account_idx").on(table.accountId)],
 );
 
 export const promotions = pgTable(
