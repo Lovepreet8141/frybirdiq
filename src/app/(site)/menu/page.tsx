@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { DensityToggle } from "@/components/menu/density-toggle";
 import { MenuControls } from "@/components/menu/menu-controls";
 import { ProductCard } from "@/components/menu/product-card";
 import { Stagger, StaggerItem } from "@/components/motion/reveal";
@@ -64,6 +65,7 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
           Search the menu
         </label>
         {vegOnly && <input type="hidden" name="diet" value="veg" />}
+        <DensityToggle />
         <MenuControls
           categories={menu.map((category) => ({ slug: category.slug, name: category.name }))}
           products={menu.flatMap((category) =>
@@ -111,7 +113,7 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
               >
                 {category.name}
               </h2>
-              <Stagger className="mt-5 grid gap-5 [perspective:1000px] sm:grid-cols-2 lg:grid-cols-3">
+              <Stagger className="menu-grid mt-5 grid gap-5 [perspective:1000px] sm:grid-cols-2 lg:grid-cols-3">
                 {category.products.map((product, index) => (
                   <StaggerItem
                     key={product.slug}

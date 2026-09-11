@@ -46,11 +46,25 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${archivo.variable} ${inter.variable} ${baloo.variable} h-full`}>
+    <html lang="en" className={`${archivo.variable} ${inter.variable} ${baloo.variable} h-full`}
+      /* The inline script below sets data-menu-density on this element before
+         hydration, so the server's markup and the client's first read differ
+         by design. Without this React reports it as a mismatch on every load. */
+      suppressHydrationWarning
+    >
       <head>
         {/* Scroll reveals start at opacity 0. Without JS the animation never
             runs and the page would render blank below the hero, so the styles
             are undone entirely when scripting is off. */}
+        {/* Applies the remembered menu density before first paint. Without
+            it the page renders two-up, hydrates, then reflows to one — a
+            visible jump on exactly the screen it is meant to help. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{document.documentElement.dataset.menuDensity=localStorage.getItem('frybird:menu-density')==='1'?'1':'2'}catch(e){}",
+          }}
+        />
         <noscript>
           <style>{`[data-reveal]{opacity:1!important;transform:none!important}`}</style>
         </noscript>

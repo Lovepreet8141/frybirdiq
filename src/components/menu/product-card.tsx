@@ -52,7 +52,7 @@ export function ProductCard({
       className="group flex h-full min-h-[44px] w-full cursor-pointer flex-col rounded-xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] p-4 text-center shadow-[6px_6px_0_var(--red)] transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-[5px] hover:shadow-[10px_12px_0_var(--red)] focus-visible:-translate-y-[5px] focus-visible:shadow-[10px_12px_0_var(--red)] motion-safe:hover:[transform:translateY(-5px)_rotateX(5deg)] sm:p-5"
     >
       {product.image ? (
-        <div className="flex h-[150px] shrink-0 items-center justify-center">
+        <div data-product-media className="flex h-[150px] shrink-0 items-center justify-center">
           <Image
             src={product.image.url}
             alt={product.image.alt}
@@ -67,7 +67,7 @@ export function ProductCard({
         /* No photograph for this item. The space is still reserved so the card
            lines up with its neighbours in the row, and the mark carries it —
            an empty gap would read as an image that failed to load. */
-        <div className="flex h-[150px] shrink-0 items-center justify-center" aria-hidden="true">
+        <div data-product-media className="flex h-[150px] shrink-0 items-center justify-center" aria-hidden="true">
           <span className="font-heading text-5xl font-black italic leading-none text-secondary">F</span>
         </div>
       )}
@@ -78,7 +78,7 @@ export function ProductCard({
       </h3>
 
       {product.description && (
-        <p className="mt-1.5 line-clamp-2 min-h-[2.4em] text-[0.83rem] leading-snug text-muted-foreground">
+        <p data-product-desc className="mt-1.5 line-clamp-2 min-h-[2.4em] text-[0.83rem] leading-snug text-muted-foreground">
           {product.description}
         </p>
       )}

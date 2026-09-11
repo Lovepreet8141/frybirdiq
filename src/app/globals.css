@@ -135,6 +135,28 @@
   --sidebar-ring: var(--red);
 
   --radius: 0.875rem;
+
+  /* Motion. The POS ceiling is enforced by review, not by CSS — see
+     design-system/motion.md. */
+  --duration-micro: 120ms;
+  --duration-standard: 200ms;
+  --duration-entrance: 320ms;
+  --duration-hero: 560ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0, 1);
+  --ease-accelerate: cubic-bezier(0.3, 0, 1, 1);
+
+  /* Touch. 44px on customer surfaces, 56px on the POS. */
+  --target-min: 44px;
+  --target-pos: 56px;
+
+  /*
+   * Page gutter. Every page padding is px-[var(--gutter)], so an undefined
+   * value here silently removes the side padding from the entire site — the
+   * wordmark ends up against the left edge of a phone and the cart button
+   * against the right. It is the single most load-bearing token in the file.
+   */
+  --gutter: clamp(1rem, 5vw, 4.5rem);
 }
 
 /*
@@ -521,4 +543,27 @@
 @media (prefers-reduced-motion: reduce) {
   .fb-ticker > span { animation: none; }
   .fb-btn { transition: none; }
+}
+
+/*
+ * Menu density, set by the toggle on the menu page and remembered per person.
+ * Only applies below the sm breakpoint — above it the grid is already two or
+ * three across and the control is hidden.
+ */
+@media (max-width: 639px) {
+  :root[data-menu-density="2"] .menu-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+  /* A two-up card has half the width, so its photo and type step down with
+     it — otherwise the name wraps to four lines and the cards stop matching. */
+  :root[data-menu-density="2"] .menu-grid [data-product-media] {
+    height: 104px;
+  }
+  :root[data-menu-density="2"] .menu-grid h3 {
+    font-size: 0.9rem;
+  }
+  :root[data-menu-density="2"] .menu-grid [data-product-desc] {
+    display: none;
+  }
 }

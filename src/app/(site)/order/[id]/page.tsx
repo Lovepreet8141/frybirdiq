@@ -5,6 +5,8 @@ import { Check, Circle, Clock, FileText } from "lucide-react";
 import { formatINR } from "@/lib/money";
 import { type Paise } from "@/lib/money";
 import { getOrder } from "@/lib/repositories/orders";
+import { getRating } from "@/lib/ratings";
+import { OrderRating } from "@/components/order/rating";
 import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
 
 export const metadata: Metadata = { title: "Your order" };
@@ -59,6 +61,9 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
   const { id } = await params;
   const order = await getOrder(id);
   if (!order) notFound();
+
+  // Only fetched for a finished order — nothing else can carry a rating.
+  const rating = order.status === "COMPLETED" ? await getRating(order.id) : null;
 
   const status = order.status as OrderStatus;
   const isDelivery = order.fulfilment === "DELIVERY";
@@ -164,6 +169,21 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         </div>
         <p className="mt-1 text-xs text-muted-foreground">Cash, UPI or card.</p>
       </section>
+
+      {/* Only once the order is finished. Asking someone to score food that has
+          not arrived turns a bad minute during the wait into a permanent one
+          star. */}
+      {order.status === "COMPLETED" && (
+        <section
+          aria-labelledby="rate"
+          className="mt-10 rounded-2xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] p-5 shadow-[6px_6px_0_var(--red)]"
+        >
+          <h2 id="rate" className="sr-only">
+            Rate this order
+          </h2>
+          <OrderRating orderId={order.id} initial={rating} />
+        </section>
+      )}
 
       <div className="mt-10 flex flex-wrap items-center gap-3">
         <Link

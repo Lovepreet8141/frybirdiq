@@ -85,6 +85,13 @@
       "when": 1789079799561,
       "tag": "0011_iq_expenses_and_costing",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789087130840,
+      "tag": "0012_order_ratings",
+      "breakpoints": true
     }
   ]
 }

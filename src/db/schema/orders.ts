@@ -305,3 +305,40 @@ export const refunds = pgTable(
   },
   (table) => [index("refunds_order_idx").on(table.orderId)],
 );
+
+/**
+ * A score out of five for a finished order. No comment field.
+ *
+ * Deliberately attached to an order rather than to a product or left open to
+ * anyone: a rating nobody had to buy to leave is worth nothing, and within a
+ * week it is worth less than nothing. One row per order, enforced by the
+ * database rather than by the form, so a double-tap or a replayed request
+ * cannot leave two.
+ *
+ * There is no text column and there is not going to be one. The owner asked
+ * for a score without a comment, and half the reason ratings work here is that
+ * leaving one costs a single tap — adding a textarea beside it turns a
+ * two-second action into a writing task and most people would abandon it.
+ */
+export const orderRatings = pgTable(
+  "order_ratings",
+  {
+    id: primaryId(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    /** 1 to 5. Constrained in the migration as well as in the action. */
+    score: integer("score").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    unique("order_ratings_order_unique").on(table.orderId),
+    index("order_ratings_org_idx").on(table.orgId, table.score),
+    // The action validates this too. The database check is what holds when a
+    // future script or a console session writes the row instead of the form.
+    check("order_ratings_score_range", sql`${table.score} between 1 and 5`),
+  ],
+);

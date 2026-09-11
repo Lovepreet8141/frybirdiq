@@ -1,6 +1,6 @@
 "use client";
 
-import { Search, X } from "lucide-react";
+import { ChevronDown, Search, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -175,13 +175,51 @@ export function MenuControls({
         {matches === null ? "" : `${matches} ${matches === 1 ? "item" : "items"} matching “${query.trim()}”`}
       </p>
 
-      {/* The rail. Hidden while searching, when a jump link would lie about
-          where it lands. */}
+      {/*
+        Categories. Hidden while searching, when a jump link would lie about
+        where it lands.
+
+        A select on a phone and chips above it. Nine chips on a 375px screen
+        means a rail that scrolls sideways, and a horizontal scroller inside a
+        vertical page is a thing people miss entirely — the sixth category may
+        as well not exist. The native select opens the OS picker, shows all
+        nine at once, and is the control people already know.
+      */}
+      {normalised === "" && (
+        <div className="w-full sm:hidden">
+          <label htmlFor="category-jump" className="sr-only">
+            Jump to a category
+          </label>
+          <div className="relative">
+            <select
+              id="category-jump"
+              value={active ?? ""}
+              onChange={(event) => {
+                const target = document.getElementById(event.target.value);
+                setActive(event.target.value);
+                target?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
+              className="h-[48px] w-full cursor-pointer appearance-none rounded-xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] pl-4 pr-10 font-heading text-sm font-extrabold shadow-[3px_3px_0_var(--ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--red)] focus-visible:ring-offset-2"
+            >
+              {categories.map((category) => (
+                <option key={category.slug} value={category.slug}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDown
+              className="pointer-events-none absolute right-3 top-1/2 size-5 -translate-y-1/2"
+              aria-hidden="true"
+            />
+          </div>
+        </div>
+      )}
+
       {normalised === "" && (
         <nav
           ref={railRef}
           aria-label="Menu categories"
-          className="-mx-[var(--gutter)] w-[calc(100%+2*var(--gutter))] overflow-x-auto px-[var(--gutter)] pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className="-mx-[var(--gutter)] hidden w-[calc(100%+2*var(--gutter))] overflow-x-auto px-[var(--gutter)] pb-1 sm:block [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           <ul className="flex w-max gap-2">
             {categories.map((category) => {

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
@@ -38,6 +39,26 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
         Menu
       </Link>
 
+      {/*
+        The photograph, which this page was missing entirely — the menu showed
+        the food and then the page you open to actually order it showed none.
+        It leads, because on a phone it is the whole first screen and it is what
+        the decision is made on.
+      */}
+      {product.image && (
+        <div className="mt-6 flex items-center justify-center rounded-2xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] p-4 shadow-[6px_6px_0_var(--red)]">
+          <Image
+            src={product.image.url}
+            alt={product.image.alt}
+            width={640}
+            height={640}
+            priority
+            sizes="(min-width: 768px) 40rem, 92vw"
+            className="h-[clamp(180px,48vw,300px)] w-auto object-contain drop-shadow-[0_18px_18px_rgba(44,33,27,0.22)]"
+          />
+        </div>
+      )}
+
       <div className="mt-6 flex flex-col gap-4">
         <div className="flex items-center gap-3">
           <VegMark veg={product.veg} />
@@ -47,21 +68,14 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
           </span>
         </div>
 
-        <h1 className="font-heading text-4xl font-bold tracking-tight sm:text-5xl">{product.name}</h1>
+        <h1 className="font-heading text-3xl font-black tracking-tight sm:text-5xl">{product.name}</h1>
 
         {product.description && (
           <p className="max-w-prose text-lg leading-relaxed text-muted-foreground">{product.description}</p>
         )}
 
-        <Price amount={product.price} className="text-2xl font-bold" />
+        <Price amount={product.price} className="font-heading text-2xl font-black text-primary" />
       </div>
-
-      {/*
-        A photo slot lives here. It is left out rather than filled with stock
-        imagery — the brand brief is explicit that stock chicken photos read as
-        a template with a logo on it, and a confident typographic block is
-        better than a wrong picture.
-      */}
 
       <div className="mt-10 border-t border-border pt-10">
         <Customizer product={product} />
