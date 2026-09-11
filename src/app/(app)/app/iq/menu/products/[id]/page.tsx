@@ -121,12 +121,12 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
         </div>
         <div className="flex items-center gap-2">
           {product.status === "DRAFT" && canPublish && (
-            <ActionButton action={() => publishProductAction(id)}>Publish</ActionButton>
+            <ActionButton action={publishProductAction.bind(null, id)}>Publish</ActionButton>
           )}
-          <ActionButton action={() => duplicateProductAction(id)} variant="ghost">
+          <ActionButton action={duplicateProductAction.bind(null, id)} variant="ghost">
             Duplicate
           </ActionButton>
-          <ActionButton action={() => setProductActiveAction(id, !product.isActive)} variant="ghost">
+          <ActionButton action={setProductActiveAction.bind(null, id, !product.isActive)} variant="ghost">
             {product.isActive ? "Archive" : "Restore"}
           </ActionButton>
         </div>

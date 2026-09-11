@@ -14,6 +14,7 @@ import type { OrderChannel } from "@/domain/order-channel";
 import { lineKey } from "@/lib/cart/schema";
 import { type PriceDraftOk, pollPosMenu, priceDraftOrder } from "@/lib/pos/actions";
 import type { MenuCategory, MenuProduct } from "@/lib/repositories/menu";
+import { recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 import { CategoryRail } from "./category-rail";
 import { CustomerLookup } from "./customer-lookup";
 import { ModifierPicker } from "./modifier-picker";
@@ -64,7 +65,11 @@ export function PosShell({ categories: initialCategories, canLookupCustomers }: 
     let stopped = false;
 
     const tick = async () => {
-      const result = await pollPosMenu(channel);
+      // A stale tab (open across a deploy) makes this call fail the same
+      // way every product form in the Menu Manager used to — caught here
+      // so it just skips this refresh instead of becoming an unhandled
+      // rejection with the grid silently never updating again.
+      const result = await recoverFromStaleDeployment(() => pollPosMenu(channel));
       if (stopped || !result.ok) return;
       setCategories(result.categories);
     };

@@ -37,11 +37,17 @@ Restart=always
 RestartSec=5
 
 # Hardening. Customer uploads go to Supabase Storage, so the app has no
-# business writing anywhere on this filesystem except one place: Next keeps
-# its optimised-image and prerender cache under .next/cache, and with the
-# whole tree read-only it retried and failed on every single image request —
-# EROFS in the log, and every one of the menu photos re-encoded per request on
-# a one-core box.
+# business writing anywhere on this filesystem except Next's own generated
+# output. Two paths, not one — the first found this way: Next keeps its
+# optimised-image and prerender cache under .next/cache, and with the whole
+# tree read-only it retried and failed on every single image request — EROFS
+# in the log, and every one of the menu photos re-encoded per request on a
+# one-core box. The second found the same way, later: a static route like
+# `src/app/icon.svg` gets a cached response file under .next/server/app/ (as
+# `icon.svg.body`/`.meta`) that Next writes to at request time even though
+# the build already shipped one — same EROFS, same fix, different file.
+# Broader than a single filename on purpose: whatever the next special route
+# type needs to write in this directory, this already covers it.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -51,6 +57,7 @@ ProtectHome=true
 # namespace at all: the unit fails with 226/NAMESPACE and the site returns 502
 # with nothing in the application log to explain it.
 ReadWritePaths=-/var/www/frybird/.next/cache
+ReadWritePaths=-/var/www/frybird/.next/server/app
 
 StandardOutput=journal
 StandardError=journal

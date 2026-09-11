@@ -53,8 +53,8 @@ export default async function ModifiersPage() {
                 <p className="text-sm text-muted-foreground">{group.modifiers.length} options</p>
               </div>
               <div className="flex items-center gap-1.5">
-                {group.status === "DRAFT" && canPublish && <ActionButton action={() => publishModifierGroupAction(group.id)}>Publish</ActionButton>}
-                <ActionButton action={() => deleteModifierGroupAction(group.id)} variant="destructive" confirmMessage={`Delete "${group.name}"?`}>
+                {group.status === "DRAFT" && canPublish && <ActionButton action={publishModifierGroupAction.bind(null, group.id)}>Publish</ActionButton>}
+                <ActionButton action={deleteModifierGroupAction.bind(null, group.id)} variant="destructive" confirmMessage={`Delete "${group.name}"?`}>
                   Delete
                 </ActionButton>
               </div>

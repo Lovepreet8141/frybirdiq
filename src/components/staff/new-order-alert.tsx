@@ -6,6 +6,8 @@ import { Bell, BellOff, Bike, Check, Clock, Loader2, Store, X } from "lucide-rea
 import { type NewOrder, pollNewOrders } from "@/lib/auth/order-alert-action";
 import { acceptOrderAction, rejectOrderAction } from "@/lib/auth/staff-actions";
 import { REJECTION_LABELS, REJECTION_REASONS, type RejectionReason } from "@/domain/rejection";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, isStaleDeploymentError } from "@/lib/errors/stale-deployment";
 import { openKotWindow } from "./print-kot";
 import { useChime } from "./use-chime";
 import { cn } from "@/lib/utils";
@@ -46,6 +48,17 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Set when a poll fails because this tab predates the last deploy — see
+   * `src/lib/errors/stale-deployment.ts`. Unlike a form, a background poll
+   * has nobody watching for an inline error message, so silently swallowing
+   * this would mean a genuinely dangerous failure mode: new orders stop
+   * arriving here and nothing says why until someone happens to reload.
+   * Shown as a banner that outranks everything else on screen, and once
+   * true the poll stops retrying — every following attempt would fail the
+   * same way, for the same reason, until a reload fetches the current build.
+   */
+  const [staleDeployment, setStaleDeployment] = useState(false);
   /*
    * How long the kitchen says it will take.
    *
@@ -72,7 +85,17 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
     let stopped = false;
 
     const tick = async () => {
-      const result = await pollNewOrders();
+      let result;
+      try {
+        result = await pollNewOrders();
+      } catch (error) {
+        if (!isStaleDeploymentError(error)) throw error;
+        if (!stopped) {
+          setStaleDeployment(true);
+          clearInterval(timer);
+        }
+        return;
+      }
       if (stopped) return;
 
       // Everything still awaiting a decision, minus anything already in front
@@ -170,6 +193,18 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
 
   return (
     <>
+      {/* Outranks the deferred banner below — a stopped poll means new
+          orders may already be waiting and nothing else on this screen
+          will say so. */}
+      {staleDeployment && (
+        <div role="alert" className="sticky top-0 z-40 border-b-2 border-[var(--destructive)] bg-[var(--destructive)] text-white">
+          <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-[var(--gutter)] py-3">
+            <p className="font-heading text-lg font-bold">{STALE_DEPLOYMENT_MESSAGE} New orders won&apos;t appear here until you do.</p>
+            <ReloadAppButton className="!bg-white !text-[var(--destructive)] hover:!opacity-90" />
+          </div>
+        </div>
+      )}
+
       {/* Deferred orders keep a standing reminder. Nothing is ever lost by
           pressing Later. */}
       {deferred.length > 0 && !current && (

@@ -19,7 +19,7 @@ export function ProductPreview({ product }: { product: MenuProduct }) {
       <div>
         <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">Counter (POS)</p>
         <div className="max-w-[200px]">
-          <ProductTile product={product} quantity={0} disabled={false} onTap={() => {}} />
+          <ProductTile product={product} quantity={0} disabled={false} />
         </div>
       </div>
     </div>

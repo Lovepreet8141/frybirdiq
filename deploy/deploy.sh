@@ -28,6 +28,12 @@ echo "==> Gates"
 pnpm typecheck
 pnpm lint
 pnpm test
+# Catches a Server Component handing a plain closure to a Client Component
+# prop — a runtime RSC serialization crash typecheck/lint/build/test cannot
+# see, since it only fires when a force-dynamic route actually renders for
+# a real request. See scripts/check-rsc-boundaries.sh for the incident this
+# came from.
+pnpm check:rsc-boundaries
 
 echo "==> Build"
 rm -rf .next

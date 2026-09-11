@@ -96,12 +96,19 @@ export function ProductTile({
   product,
   quantity,
   disabled,
-  onTap,
+  // Optional, defaulted here rather than required — the Menu Manager's
+  // preview panel renders this same tile from a Server Component and has
+  // nothing real for a tap to do there. Defaulting inside this Client
+  // Component means the preview never has to pass a function across the
+  // server/client boundary at all; a plain closure created in a Server
+  // Component and handed to a Client Component isn't serializable, and
+  // that used to crash both the preview and the page around it.
+  onTap = () => {},
 }: {
   product: MenuProduct;
   quantity: number;
   disabled: boolean;
-  onTap: () => void;
+  onTap?: () => void;
 }) {
   const [justAdded, setJustAdded] = useState(false);
 

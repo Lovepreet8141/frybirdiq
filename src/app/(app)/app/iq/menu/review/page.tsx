@@ -23,11 +23,6 @@ const EDIT_PATH: Record<string, (id: string) => string> = {
   product: (id) => `/app/iq/menu/products/${id}`,
   modifierGroup: (id) => `/app/iq/menu/modifiers/${id}`,
 };
-const PUBLISH_ACTION: Record<string, (id: string) => Promise<{ ok: boolean; error?: string }>> = {
-  category: publishCategoryAction,
-  product: publishProductAction,
-  modifierGroup: publishModifierGroupAction,
-};
 
 /**
  * Everything still in draft, in one place — new categories, products and
@@ -78,7 +73,18 @@ export default async function MenuReviewPage({ searchParams }: { searchParams: P
                   {item.name}
                 </Link>
               </div>
-              <ActionButton action={() => PUBLISH_ACTION[item.kind]!(item.id)}>Publish</ActionButton>
+              {/*
+                Three static branches, not a dynamic `PUBLISH_ACTION[item.kind]`
+                lookup wrapped in a closure — a Server Component can only pass a
+                genuine Server Action reference to a Client Component's prop, and
+                only `.bind()` called directly on a statically-imported action is
+                recognised as one. A Record lookup, or any arrow function that
+                wraps the call, is just a plain closure to the RSC serializer and
+                crashes the render. See src/lib/menu-admin/actions.ts.
+              */}
+              {item.kind === "category" && <ActionButton action={publishCategoryAction.bind(null, item.id)}>Publish</ActionButton>}
+              {item.kind === "product" && <ActionButton action={publishProductAction.bind(null, item.id)}>Publish</ActionButton>}
+              {item.kind === "modifierGroup" && <ActionButton action={publishModifierGroupAction.bind(null, item.id)}>Publish</ActionButton>}
             </li>
           ))
         )}

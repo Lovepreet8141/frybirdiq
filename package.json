@@ -37,7 +37,8 @@
     "iq:categories": "tsx --conditions=react-server scripts/iq-seed-categories.ts",
     "iq:pnl": "tsx --conditions=react-server scripts/iq-pnl-check.ts",
     "images:import": "tsx --conditions=react-server scripts/import-product-images.ts",
-    "addons:apply": "tsx --conditions=react-server scripts/apply-addons.ts"
+    "addons:apply": "tsx --conditions=react-server scripts/apply-addons.ts",
+    "check:rsc-boundaries": "bash scripts/check-rsc-boundaries.sh"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
