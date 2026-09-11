@@ -204,6 +204,32 @@ Logs:
 journalctl -u frybird -f
 ```
 
+### `./deploy/deploy.sh` does not ship this file
+
+`deploy.sh` rsyncs the built app into `/var/www/frybird` — it never touches
+`/etc/systemd/system/frybird.service`. Edit `deploy/frybird.service` in the
+repo and the running unit does not change until you push that edit to the
+server yourself:
+
+```bash
+scp deploy/frybird.service root@194.238.16.200:/etc/systemd/system/frybird.service
+ssh root@194.238.16.200 "systemctl daemon-reload && systemctl restart frybird"
+```
+
+Skip this and the repo and the server quietly disagree about what the unit
+says — the next person to read `deploy/frybird.service` sees a rule that
+was never applied.
+
+`ReadWritePaths` must cover both `.next/cache` **and** `.next/server/app`.
+The first is Next's own image and prerender cache. The second is where a
+static route handler — `src/app/icon.svg` is the one that surfaced this —
+writes its cached response (`icon.svg.body`, `icon.svg.meta`) at request
+time even though the build already shipped one. `ProtectSystem=strict`
+makes the whole filesystem read-only outside `ReadWritePaths`, so missing
+either path means `EROFS` in the log the first time that route is hit,
+not at deploy time and not in any gate — see `deploy/frybird.service` for
+both entries.
+
 ---
 
 ## 5. nginx and TLS
