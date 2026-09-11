@@ -64,7 +64,6 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
         <label htmlFor="menu-search" className="sr-only">
           Search the menu
         </label>
-        {vegOnly && <input type="hidden" name="diet" value="veg" />}
         <DensityToggle />
         <MenuControls
           categories={menu.map((category) => ({ slug: category.slug, name: category.name }))}
@@ -72,10 +71,11 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
             category.products.map((product) => ({
               slug: product.slug,
               text: `${product.name} ${product.description ?? ""} ${category.name}`.toLowerCase(),
+              veg: product.veg === "VEG",
             })),
           )}
           initialQuery={q}
-          vegOnly={vegOnly}
+          initialVegOnly={vegOnly}
         />
         <noscript>
           <button

@@ -1,21 +1,25 @@
 "use client";
 
 import { ChevronDown, Search, X } from "lucide-react";
-import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Search and the category rail, as an enhancement over the form underneath.
+ * Search, veg-only and the category rail, as an enhancement over the form
+ * underneath.
  *
- * The page filters on the server from the URL, which is why it works with
- * JavaScript off, survives a back button and can be shared. None of that is
- * given up here. This component filters the already-rendered sections in the
- * DOM as you type — hiding what does not match rather than re-fetching — and
- * writes the query into the URL with replaceState so the address bar still
- * describes what is on screen.
+ * The page filters on the server from the URL on first load, which is why
+ * it works with JavaScript off, survives a back button and can be shared.
+ * None of that is given up here. Once JavaScript runs, both search and
+ * veg-only filter the already-rendered DOM instead — hiding what does not
+ * match rather than re-fetching — and keep the URL in sync with
+ * `replaceState` so the address bar still describes what is on screen.
  *
- * Filtering 49 items across a network round trip is the difference between
- * a menu that feels considered and one that feels like a form from 2009.
+ * Neither filter navigates. They used to: veg-only was a `<Link>` to
+ * `?diet=veg`, and every tap re-ran the whole page load — which, on a
+ * desktop browser, resets scroll to the top of the page the same as
+ * following any other link. Someone three screens down the menu who tapped
+ * "Veg only" landed back at the masthead, which reads as the page fighting
+ * the scroll rather than as a filter being applied.
  */
 
 interface Category {
@@ -27,34 +31,42 @@ interface Searchable {
   readonly slug: string;
   /** Name, description and category, lowercased once on the server. */
   readonly text: string;
+  readonly veg: boolean;
 }
 
 export function MenuControls({
   categories,
   products,
   initialQuery,
-  vegOnly,
+  initialVegOnly,
 }: {
   categories: readonly Category[];
   products: readonly Searchable[];
   initialQuery: string;
-  vegOnly: boolean;
+  initialVegOnly: boolean;
 }) {
   const [query, setQuery] = useState(initialQuery);
+  const [vegOnly, setVegOnly] = useState(initialVegOnly);
   const [active, setActive] = useState<string | null>(categories[0]?.slug ?? null);
   const railRef = useRef<HTMLElement>(null);
 
   const normalised = query.trim().toLowerCase();
+  const filtering = normalised !== "" || vegOnly;
 
   /*
    * What matches is derived here, during render, from the list the server
    * sent — not read back out of the DOM in an effect. The effect below only
-   * applies the result.
+   * applies the result. Both filters combine: veg-only narrows the set
+   * search then searches within.
    */
   const matched = useMemo(() => {
-    if (normalised === "") return null;
-    return new Set(products.filter((p) => p.text.includes(normalised)).map((p) => p.slug));
-  }, [normalised, products]);
+    if (!filtering) return null;
+    return new Set(
+      products
+        .filter((p) => (!vegOnly || p.veg) && (normalised === "" || p.text.includes(normalised)))
+        .map((p) => p.slug),
+    );
+  }, [normalised, vegOnly, filtering, products]);
 
   const matches = matched?.size ?? null;
 
@@ -78,16 +90,20 @@ export function MenuControls({
       const url = new URL(window.location.href);
       if (normalised) url.searchParams.set("q", query.trim());
       else url.searchParams.delete("q");
-      // replaceState, not push: typing six characters should not put six
-      // entries in the back button.
+      if (vegOnly) url.searchParams.set("diet", "veg");
+      else url.searchParams.delete("diet");
+      // replaceState, not push: typing six characters — or tapping veg-only
+      // on and off — should not put six entries in the back button, and
+      // never triggers Next's own route transition, which is what was
+      // resetting scroll position.
       window.history.replaceState(null, "", url);
     }, 250);
     return () => clearTimeout(timer);
-  }, [normalised, query]);
+  }, [normalised, query, vegOnly]);
 
   /* ---------- scroll spy ---------- */
   useEffect(() => {
-    if (normalised !== "") return;
+    if (filtering) return;
     const sections = categories
       .map((category) => document.getElementById(category.slug))
       .filter((node): node is HTMLElement => node !== null);
@@ -107,7 +123,7 @@ export function MenuControls({
 
     for (const section of sections) observer.observe(section);
     return () => observer.disconnect();
-  }, [categories, normalised]);
+  }, [categories, filtering]);
 
   /* Keep the active chip in view on a rail that scrolls sideways. */
   useEffect(() => {
@@ -116,7 +132,10 @@ export function MenuControls({
     chip?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
   }, [active]);
 
-  const clearHref = useMemo(() => (vegOnly ? "/menu?diet=veg" : "/menu"), [vegOnly]);
+  function clearAll() {
+    setQuery("");
+    setVegOnly(false);
+  }
 
   return (
     <>
@@ -147,36 +166,54 @@ export function MenuControls({
         )}
       </div>
 
-      <Link
-        href={vegOnly ? { pathname: "/menu", query: query ? { q: query } : {} } : { pathname: "/menu", query: { ...(query ? { q: query } : {}), diet: "veg" } }}
-        aria-pressed={vegOnly}
-        className={`inline-flex min-h-[48px] cursor-pointer items-center rounded-xl border-[2.5px] px-4 text-sm font-bold transition-[transform,box-shadow] duration-200 ease-out ${
+      {/*
+        A real checkbox styled as a pill, not a link — pressing it flips
+        state immediately (green when on, back to normal when off) with no
+        navigation and nothing to jump the page's scroll position. It still
+        submits as `diet=veg` in the form underneath when JavaScript is off.
+      */}
+      <label
+        className={`inline-flex min-h-[48px] cursor-pointer items-center rounded-xl border-[2.5px] px-4 text-sm font-bold transition-[transform,box-shadow] duration-200 ease-out has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-[var(--red)] ${
           vegOnly
             ? "border-[var(--success)] bg-[var(--success)] text-[var(--cream-hi)] shadow-[4px_4px_0_var(--ink)]"
             : "border-[var(--ink)] bg-[var(--cream-hi)] shadow-[4px_4px_0_var(--ink)] hover:-translate-y-0.5 hover:shadow-[6px_7px_0_var(--ink)]"
         }`}
       >
+        <input
+          type="checkbox"
+          name="diet"
+          value="veg"
+          checked={vegOnly}
+          onChange={(event) => setVegOnly(event.target.checked)}
+          className="sr-only"
+        />
         Veg only
-      </Link>
+      </label>
 
       {(query !== "" || vegOnly) && (
-        <Link
-          href={clearHref}
-          onClick={() => setQuery("")}
+        <button
+          type="button"
+          onClick={clearAll}
           className="inline-flex min-h-[48px] cursor-pointer items-center gap-1 rounded-xl px-3 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
         >
           <X className="size-4" aria-hidden="true" />
           Clear
-        </Link>
+        </button>
       )}
 
       {/* Live count. Polite, so it does not interrupt typing. */}
       <p className="tabular w-full text-sm text-muted-foreground" role="status" aria-live="polite">
-        {matches === null ? "" : `${matches} ${matches === 1 ? "item" : "items"} matching “${query.trim()}”`}
+        {matches === null
+          ? ""
+          : query.trim()
+            ? `${matches} ${matches === 1 ? "item" : "items"} matching "${query.trim()}"${vegOnly ? ", veg only" : ""}`
+            : vegOnly
+              ? `${matches} veg ${matches === 1 ? "item" : "items"}`
+              : ""}
       </p>
 
       {/*
-        Categories. Hidden while searching, when a jump link would lie about
+        Categories. Hidden while filtering, when a jump link would lie about
         where it lands.
 
         A select on a phone and chips above it. Nine chips on a 375px screen
@@ -185,7 +222,7 @@ export function MenuControls({
         as well not exist. The native select opens the OS picker, shows all
         nine at once, and is the control people already know.
       */}
-      {normalised === "" && (
+      {!filtering && (
         <div className="w-full sm:hidden">
           <label htmlFor="category-jump" className="sr-only">
             Jump to a category
@@ -215,7 +252,7 @@ export function MenuControls({
         </div>
       )}
 
-      {normalised === "" && (
+      {!filtering && (
         <nav
           ref={railRef}
           aria-label="Menu categories"
