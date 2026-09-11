@@ -125,11 +125,31 @@ export function MenuControls({
     return () => observer.disconnect();
   }, [categories, filtering]);
 
-  /* Keep the active chip in view on a rail that scrolls sideways. */
+  /*
+   * Keep the active chip in view on a rail that scrolls sideways — by
+   * moving the rail's own scrollLeft directly, never scrollIntoView.
+   *
+   * scrollIntoView's "nearest scrollable ancestor" search does not stop at
+   * this rail: the rail only scrolls horizontally (overflow-x-auto, no
+   * overflow-y), so for the vertical axis the nearest scrollable ancestor
+   * is the page itself. Every scroll-spy update — which fires continuously
+   * while scrolling, and again right after any anchor click — was asking
+   * the browser to scroll the *page* back up to reveal a rail that sits
+   * near the top, fighting the scroll it was supposed to be following.
+   */
   useEffect(() => {
     if (!active) return;
-    const chip = railRef.current?.querySelector<HTMLElement>(`[data-chip="${active}"]`);
-    chip?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
+    const rail = railRef.current;
+    const chip = rail?.querySelector<HTMLElement>(`[data-chip="${active}"]`);
+    if (!rail || !chip) return;
+
+    const railBox = rail.getBoundingClientRect();
+    const chipBox = chip.getBoundingClientRect();
+    if (chipBox.left < railBox.left) {
+      rail.scrollBy({ left: chipBox.left - railBox.left - 16, behavior: "smooth" });
+    } else if (chipBox.right > railBox.right) {
+      rail.scrollBy({ left: chipBox.right - railBox.right + 16, behavior: "smooth" });
+    }
   }, [active]);
 
   function clearAll() {
