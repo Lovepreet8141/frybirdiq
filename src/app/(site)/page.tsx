@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Bike, Clock, Flame, MapPin, Phone, ShoppingBag, Timer } from "lucide-react";
 
 import { StageMotion } from "@/components/hero/stage";
+import { Reveal, Stagger, StaggerItem } from "@/components/motion/reveal";
 import { ProductCard } from "@/components/menu/product-card";
 import { Price } from "@/components/menu/price";
 import { getAllProducts, getMenu } from "@/lib/repositories/menu";
@@ -100,36 +101,44 @@ export default async function HomePage() {
       {/* ───────────── the heavy hitters ───────────── */}
       <section id="picks" aria-labelledby="picks-heading" className="border-b border-border">
         <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-16 sm:py-20">
-          <h2
-            id="picks-heading"
-            className="text-center font-heading text-[clamp(2rem,6vw,3.4rem)] font-black italic leading-none tracking-[-0.03em] text-primary"
-          >
-            The heavy hitters
-          </h2>
-          <p className="mt-2 text-center text-muted-foreground">What Ambala keeps coming back for.</p>
+          <Reveal>
+            <h2
+              id="picks-heading"
+              className="text-center font-heading text-[clamp(2rem,6vw,3.4rem)] font-black italic leading-none tracking-[-0.03em] text-primary"
+            >
+              The heavy hitters
+            </h2>
+          </Reveal>
+          <Reveal delay={0.06}>
+            <p className="mt-2 text-center text-muted-foreground">What Ambala keeps coming back for.</p>
+          </Reveal>
 
-          <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {/* The row carries the perspective; the card's hover tilt is
+              meaningless without one on its parent. */}
+          <Stagger className="mt-10 grid gap-5 [perspective:1000px] sm:grid-cols-2 lg:grid-cols-4">
             {picks.map((product, index) => (
-              <li key={product.slug} className="flex">
+              <StaggerItem key={product.slug} className="flex">
                 <ProductCard product={product} priority={index < 4} />
-              </li>
+              </StaggerItem>
             ))}
-          </ul>
+          </Stagger>
         </div>
       </section>
 
       {/* ───────────── how to get it ───────────── */}
       <section aria-labelledby="how-heading" className="border-b border-border">
         <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 sm:py-16">
-          <h2 id="how-heading" className="font-heading text-2xl font-extrabold">How to get it</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Pick whatever&rsquo;s fastest from where you are.</p>
+          <Reveal>
+            <h2 id="how-heading" className="font-heading text-2xl font-extrabold">How to get it</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Pick whatever&rsquo;s fastest from where you are.</p>
+          </Reveal>
 
           {/*
             Two routes, not three. The design comp has a Zomato row; FRYBIRD
             sells direct, so a link handing the order to an aggregator — and
             its commission — has no place on the page.
           */}
-          <div className="mt-6 flex flex-col gap-3">
+          <Stagger className="mt-6 flex flex-col gap-3">
             {[
               {
                 href: "/menu?fulfilment=takeaway",
@@ -144,10 +153,10 @@ export default async function HomePage() {
                 detail: "Free within 3 km · ₹30 to 5 km · ₹10/km beyond",
               },
             ].map((option) => (
+              <StaggerItem key={option.href}>
               <Link
-                key={option.href}
                 href={option.href}
-                className="flex min-h-[76px] items-center gap-4 rounded-[var(--radius)] border border-border bg-card p-4 shadow-[0_1px_2px_rgba(44,33,27,0.06)] transition-transform duration-[var(--duration-micro)] hover:-translate-y-0.5"
+                className="flex min-h-[76px] cursor-pointer items-center gap-4 rounded-xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] p-4 shadow-[5px_5px_0_var(--red)] transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-[3px] hover:shadow-[8px_9px_0_var(--red)]"
               >
                 <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground">
                   <option.icon className="size-5" aria-hidden="true" />
@@ -157,16 +166,19 @@ export default async function HomePage() {
                   <span className="mt-0.5 text-sm text-muted-foreground">{option.detail}</span>
                 </span>
               </Link>
+              </StaggerItem>
             ))}
-          </div>
+          </Stagger>
         </div>
       </section>
 
       {/* ───────────── on the menu ───────────── */}
       <section aria-labelledby="menu-heading" className="border-b border-border">
         <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 sm:py-16">
-          <h2 id="menu-heading" className="font-heading text-2xl font-extrabold">On the menu</h2>
-          <p className="mt-1 text-sm text-muted-foreground">A taste of what&rsquo;s in the full lineup.</p>
+          <Reveal>
+            <h2 id="menu-heading" className="font-heading text-2xl font-extrabold">On the menu</h2>
+            <p className="mt-1 text-sm text-muted-foreground">A taste of what&rsquo;s in the full lineup.</p>
+          </Reveal>
 
           <div className="mt-6 flex flex-col gap-8">
             {rows.map((category) => (
@@ -228,9 +240,11 @@ export default async function HomePage() {
       {/* ───────────── why frybird ───────────── */}
       <section id="why" aria-labelledby="why-heading" className="border-b border-border">
         <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 sm:py-16">
-          <h2 id="why-heading" className="font-heading text-2xl font-extrabold">Why FRYBIRD</h2>
+          <Reveal>
+            <h2 id="why-heading" className="font-heading text-2xl font-extrabold">Why FRYBIRD</h2>
+          </Reveal>
 
-          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+          <Stagger className="mt-6 grid gap-5 sm:grid-cols-3">
             {[
               {
                 icon: Flame,
@@ -248,25 +262,27 @@ export default async function HomePage() {
                 body: "Cayenne oil brushed on hot, layered rather than dumped. First bite is flavour. Third bite is when you reach for the drink.",
               },
             ].map((card) => (
-              <div
+              <StaggerItem
                 key={card.title}
-                className="rounded-[var(--radius)] border border-border bg-card p-5 shadow-[0_1px_2px_rgba(44,33,27,0.06)]"
+                className="rounded-xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] p-5 shadow-[6px_6px_0_var(--red)]"
               >
                 <span className="flex size-10 items-center justify-center rounded-full bg-accent text-accent-foreground">
                   <card.icon className="size-5" aria-hidden="true" />
                 </span>
                 <h3 className="mt-3 font-bold">{card.title}</h3>
                 <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{card.body}</p>
-              </div>
+              </StaggerItem>
             ))}
-          </div>
+          </Stagger>
         </div>
       </section>
 
       {/* ───────────── find us ───────────── */}
       <section id="visit" aria-labelledby="find-heading">
         <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 sm:py-16">
-          <h2 id="find-heading" className="font-heading text-2xl font-extrabold">Find us</h2>
+          <Reveal>
+            <h2 id="find-heading" className="font-heading text-2xl font-extrabold">Find us</h2>
+          </Reveal>
 
           <ul className="mt-6 flex flex-col gap-4 text-sm">
             <li className="flex gap-3">

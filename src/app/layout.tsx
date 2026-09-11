@@ -47,6 +47,14 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${archivo.variable} ${inter.variable} ${baloo.variable} h-full`}>
+      <head>
+        {/* Scroll reveals start at opacity 0. Without JS the animation never
+            runs and the page would render blank below the hero, so the styles
+            are undone entirely when scripting is off. */}
+        <noscript>
+          <style>{`[data-reveal]{opacity:1!important;transform:none!important}`}</style>
+        </noscript>
+      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

@@ -40,7 +40,16 @@ export function ProductCard({
   return (
     <Link
       href={`/item/${product.slug}`}
-      className="group flex h-full min-h-[44px] w-full flex-col rounded-[var(--radius)] border border-border bg-card p-4 shadow-[0_1px_2px_rgba(44,33,27,0.06)] transition-[transform,box-shadow] duration-[var(--duration-standard)] hover:-translate-y-0.5 hover:shadow-[0_6px_16px_-6px_rgba(44,33,27,0.28)] focus-visible:-translate-y-0.5 sm:p-5"
+      /*
+       * The hard offset shadow is the card, not decoration on it. A blurred
+       * drop shadow reads as generic material; a solid red block offset behind
+       * a heavy ink rule reads as print, which is what this brand is.
+       *
+       * The lift is 5px and the shadow grows to meet it, so the card appears to
+       * rise off the page rather than slide up it. rotateX needs a perspective
+       * on the row — the grid sets one.
+       */
+      className="group flex h-full min-h-[44px] w-full cursor-pointer flex-col rounded-xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] p-4 text-center shadow-[6px_6px_0_var(--red)] transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-[5px] hover:shadow-[10px_12px_0_var(--red)] focus-visible:-translate-y-[5px] focus-visible:shadow-[10px_12px_0_var(--red)] motion-safe:hover:[transform:translateY(-5px)_rotateX(5deg)] sm:p-5"
     >
       {product.image ? (
         <div className="flex h-[150px] shrink-0 items-center justify-center">
@@ -63,26 +72,25 @@ export function ProductCard({
         </div>
       )}
 
-      <div className="mt-4 flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <div className="flex items-center gap-2">
-            <VegMark veg={product.veg} />
-            <SpiceMark level={product.spice} />
-          </div>
-          <h3 className="font-heading text-lg font-bold leading-snug">{product.name}</h3>
-        </div>
-        <Price amount={product.price} className="shrink-0 font-heading text-lg font-black text-primary" />
-      </div>
+      <h3 className="mt-3 flex items-center justify-center gap-2 font-heading text-base font-extrabold leading-snug">
+        <VegMark veg={product.veg} />
+        {product.name}
+      </h3>
 
       {product.description && (
-        <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+        <p className="mt-1.5 line-clamp-2 min-h-[2.4em] text-[0.83rem] leading-snug text-muted-foreground">
           {product.description}
         </p>
       )}
 
-      <span className="mt-auto inline-flex items-center gap-1 pt-3 text-sm font-semibold text-primary-strong">
+      <div className="mt-2 flex items-center justify-center gap-2">
+        <Price amount={product.price} className="font-heading text-xl font-black text-primary" />
+        <SpiceMark level={product.spice} />
+      </div>
+
+      <span className="mt-auto inline-flex items-center justify-center gap-1 pt-3 text-sm font-semibold text-primary-strong">
         {hasOptions ? "Choose options" : "Add to order"}
-        <ChevronRight className="size-4 transition-transform duration-[var(--duration-standard)] group-hover:translate-x-0.5" aria-hidden="true" />
+        <ChevronRight className="size-4 transition-transform duration-200 ease-out group-hover:translate-x-0.5" aria-hidden="true" />
       </span>
     </Link>
   );

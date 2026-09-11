@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Search, X } from "lucide-react";
 import { ProductCard } from "@/components/menu/product-card";
+import { Stagger, StaggerItem } from "@/components/motion/reveal";
 import { EmptyState } from "@/components/states";
 import { getMenu } from "@/lib/repositories/menu";
 
@@ -154,9 +155,9 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
               >
                 {category.name}
               </h2>
-              <ul className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <Stagger className="mt-5 grid gap-5 [perspective:1000px] sm:grid-cols-2 lg:grid-cols-3">
                 {category.products.map((product, index) => (
-                  <li key={product.slug} className="flex">
+                  <StaggerItem key={product.slug} className="flex">
                     <div className="flex w-full">
                       {/* Only the first row of the first category is above the
                           fold. Marking more than that as priority defeats the
@@ -166,9 +167,9 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
                         priority={categoryIndex === 0 && index < 3}
                       />
                     </div>
-                  </li>
+                  </StaggerItem>
                 ))}
-              </ul>
+              </Stagger>
             </section>
           ))}
         </div>
