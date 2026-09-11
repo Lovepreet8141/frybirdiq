@@ -26,7 +26,13 @@ function Submit() {
  * screen before the product even exists is more form than a first save
  * needs.
  */
-export function ProductCreateForm({ categories }: { categories: readonly { id: string; name: string }[] }) {
+export function ProductCreateForm({
+  categories,
+  initialCategoryId,
+}: {
+  categories: readonly { id: string; name: string }[];
+  initialCategoryId?: string;
+}) {
   const router = useRouter();
   const [state, formAction] = useActionState<CreateProductResult, FormData>(createProductAction, IDLE);
 
@@ -53,7 +59,7 @@ export function ProductCreateForm({ categories }: { categories: readonly { id: s
       </div>
       <label className="flex flex-col gap-1 text-sm font-semibold">
         Category
-        <select name="categoryId" className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal">
+        <select name="categoryId" defaultValue={initialCategoryId ?? ""} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal">
           <option value="">Uncategorised</option>
           {categories.map((c) => (
             <option key={c.id} value={c.id}>

@@ -28,7 +28,7 @@ export default async function ModifiersPage() {
   return (
     <div className="mx-auto w-full max-w-3xl px-[var(--gutter)] py-8">
       <Link href="/app/iq/menu" className="text-sm text-muted-foreground underline underline-offset-2">
-        ← Menu Manager
+        ← Menu Control Center
       </Link>
       <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
         <h1 className="font-heading text-3xl font-bold tracking-tight">Modifier groups</h1>

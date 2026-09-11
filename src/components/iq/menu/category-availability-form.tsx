@@ -3,14 +3,14 @@
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { AVAILABILITY_STATUSES, type AvailabilityStatus } from "@/domain/menu-availability";
-import { type ActionResult, deleteAvailabilityRuleAction, setAvailabilityRuleAction } from "@/lib/menu-admin/actions";
+import { type ActionResult, deleteCategoryAvailabilityRuleAction, setCategoryAvailabilityRuleAction } from "@/lib/menu-admin/actions";
 import { ActionButton } from "./action-button";
 
 const STATUS_LABELS: Record<AvailabilityStatus, string> = {
-  AVAILABLE: "Available",
-  TEMPORARILY_UNAVAILABLE: "Temporarily unavailable",
-  SOLD_OUT_TODAY: "Sold out today",
-  SCHEDULED_UNAVAILABLE: "Unavailable until a set time",
+  AVAILABLE: "Visible",
+  TEMPORARILY_UNAVAILABLE: "Hidden",
+  SOLD_OUT_TODAY: "Hidden for today",
+  SCHEDULED_UNAVAILABLE: "Hidden until a set time",
 };
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -18,27 +18,15 @@ const CHANNEL_LABELS: Record<string, string> = {
   DINE_IN: "Dine-in",
   TAKEAWAY: "Takeaway",
   ONLINE: "Website",
-  KIOSK: "Kiosk (menu visibility only — not live yet)",
-  SWIGGY: "Swiggy (menu visibility only — not connected)",
-  ZOMATO: "Zomato (menu visibility only — not connected)",
+  KIOSK: "Kiosk (visibility only — not live yet)",
+  SWIGGY: "Swiggy (visibility only — not connected)",
+  ZOMATO: "Zomato (visibility only — not connected)",
 };
-
-export interface AvailabilityRuleView {
-  readonly id: string;
-  readonly channel: string | null;
-  readonly status: AvailabilityStatus;
-  readonly unavailableUntil: Date | null;
-  readonly reason: string | null;
-}
 
 function Submit() {
   const { pending } = useFormStatus();
   return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="inline-flex min-h-[40px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60"
-    >
+    <button type="submit" disabled={pending} className="inline-flex min-h-[40px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60">
       {pending ? "Saving…" : "Add rule"}
     </button>
   );
@@ -47,22 +35,26 @@ function Submit() {
 const IDLE: ActionResult = { ok: true };
 
 /**
- * A product's channel-specific availability. "Every channel" is the
- * wildcard row — set it and the product is 86'd everywhere at once. A
- * channel-specific rule only affects that one channel, which is how "sold
- * out for delivery, still fine dine-in" gets expressed.
- *
- * There is one location today, so a location picker would be a control with
- * nothing to choose — every rule here implicitly applies to it.
+ * Whole-category visibility per channel — "hide Combos from Kiosk" without
+ * touching every product in it. Uses the same status vocabulary as product
+ * availability (AVAILABLE/TEMPORARILY_UNAVAILABLE/SCHEDULED_UNAVAILABLE are
+ * the ones that make sense here — the form doesn't offer SOLD_OUT_TODAY,
+ * since "the category ran out" isn't a real concept).
  */
-export function ProductAvailabilityForm({ productId, rules }: { productId: string; rules: readonly AvailabilityRuleView[] }) {
-  const action = setAvailabilityRuleAction.bind(null, productId);
+export function CategoryAvailabilityForm({
+  categoryId,
+  rules,
+}: {
+  categoryId: string;
+  rules: readonly { id: string; channel: string | null; status: AvailabilityStatus; unavailableUntil: Date | null; reason: string | null }[];
+}) {
+  const action = setCategoryAvailabilityRuleAction.bind(null, categoryId);
   const [state, formAction] = useActionState<ActionResult, FormData>(action, IDLE);
 
   return (
     <div className="flex flex-col gap-4">
       {rules.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Available everywhere — no exceptions set.</p>
+        <p className="text-sm text-muted-foreground">Visible everywhere — no exceptions set.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {rules.map((rule) => (
@@ -72,7 +64,7 @@ export function ProductAvailabilityForm({ productId, rules }: { productId: strin
                 {rule.reason && ` — ${rule.reason}`}
                 {rule.unavailableUntil && ` until ${rule.unavailableUntil.toLocaleString("en-IN")}`}
               </span>
-              <ActionButton action={() => deleteAvailabilityRuleAction(rule.id)} variant="destructive">
+              <ActionButton action={() => deleteCategoryAvailabilityRuleAction(rule.id)} variant="destructive">
                 Remove
               </ActionButton>
             </li>
@@ -99,9 +91,9 @@ export function ProductAvailabilityForm({ productId, rules }: { productId: strin
           </select>
         </label>
         <label className="flex flex-col gap-1 text-sm font-semibold">
-          Status
+          Visibility
           <select name="status" className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal">
-            {AVAILABILITY_STATUSES.filter((s) => s !== "AVAILABLE").map((status) => (
+            {AVAILABILITY_STATUSES.filter((s) => s !== "AVAILABLE" && s !== "SOLD_OUT_TODAY").map((status) => (
               <option key={status} value={status}>
                 {STATUS_LABELS[status]}
               </option>

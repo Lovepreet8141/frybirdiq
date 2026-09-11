@@ -30,7 +30,7 @@ export default async function CombosPage() {
   return (
     <div className="mx-auto w-full max-w-3xl px-[var(--gutter)] py-8">
       <Link href="/app/iq/menu" className="text-sm text-muted-foreground underline underline-offset-2">
-        ← Menu Manager
+        ← Menu Control Center
       </Link>
       <h1 className="mt-3 font-heading text-3xl font-bold tracking-tight">Combos</h1>
       <p className="mt-1 text-sm text-muted-foreground">

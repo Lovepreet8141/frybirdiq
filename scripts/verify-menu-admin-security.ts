@@ -18,21 +18,31 @@ import { config } from "dotenv";
 config({ path: ".env.local", quiet: true });
 
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { closeDb, db } from "../src/db/connection";
-import { categories, modifierGroups, modifiers, organizations, productModifierGroups, products, taxRates, productAvailability, comboItems, recipes, media } from "../src/db/schema";
+import { categories, categoryAvailability, modifierGroups, modifiers, organizations, productModifierGroups, products, taxRates, productAvailability, comboItems, recipes, media } from "../src/db/schema";
 import {
   CrossOrgReference,
   addComboItem,
   addModifier,
   createBareRecipe,
+  createModifierGroup,
   createProduct,
+  duplicateProduct,
+  getRecentChanges,
   moveCategory,
+  moveProductToCategory,
+  publishCategory,
+  publishProduct,
   setAvailabilityRule,
+  setCategoryAvailabilityRule,
+  setProductActive,
   setProductModifierGroups,
+  updateModifier,
   updateProductDetails,
 } from "../src/lib/repositories/menu-admin";
 import { deleteMedia } from "../src/lib/repositories/media";
+import { getMenu } from "../src/lib/repositories/menu";
 
 let ok = true;
 function assert(label: string, cond: boolean) {
@@ -70,13 +80,13 @@ async function main() {
   try {
     console.log("\n--- Cross-org rejection: category/tax rate on product create+update ---");
     await assertRejected("createProduct refuses a category from another org", () =>
-      createProduct(orgA.id, { name: "x", slug: `x-${suffix}`, description: null, shortDescription: null, categoryId: catB.id, taxRateId: null, spiceLevel: 0, isVegetarian: false, allergens: [], tags: [], sku: null, prepMinutes: null, kdsStation: null }),
+      createProduct(orgA.id, { name: "x", slug: `x-${suffix}`, description: null, shortDescription: null, categoryId: catB.id, taxRateId: null, spiceLevel: 0, isVegetarian: false, allergens: [], tags: [], sku: null, prepMinutes: null, kdsStation: null, servingInfo: null }),
     );
     await assertRejected("createProduct refuses a tax rate from another org", () =>
-      createProduct(orgA.id, { name: "x", slug: `y-${suffix}`, description: null, shortDescription: null, categoryId: null, taxRateId: taxB.id, spiceLevel: 0, isVegetarian: false, allergens: [], tags: [], sku: null, prepMinutes: null, kdsStation: null }),
+      createProduct(orgA.id, { name: "x", slug: `y-${suffix}`, description: null, shortDescription: null, categoryId: null, taxRateId: taxB.id, spiceLevel: 0, isVegetarian: false, allergens: [], tags: [], sku: null, prepMinutes: null, kdsStation: null, servingInfo: null }),
     );
     await assertRejected("updateProductDetails refuses a category from another org", () =>
-      updateProductDetails(orgA.id, prodA.id, { name: "A product", slug: prodA.slug, description: null, shortDescription: null, categoryId: catB.id, taxRateId: null, spiceLevel: 0, isVegetarian: false, allergens: [], tags: [], sku: null, prepMinutes: null, kdsStation: null }),
+      updateProductDetails(orgA.id, prodA.id, { name: "A product", slug: prodA.slug, description: null, shortDescription: null, categoryId: catB.id, taxRateId: null, spiceLevel: 0, isVegetarian: false, allergens: [], tags: [], sku: null, prepMinutes: null, kdsStation: null, servingInfo: null }),
     );
     const [unchanged] = await database.select({ categoryId: products.categoryId }).from(products).where(eq(products.id, prodA.id));
     assert("the rejected update left the product's real category untouched", unchanged?.categoryId === catA.id);
@@ -140,6 +150,82 @@ async function main() {
     await database.update(products).set({ images: [] }).where(eq(products.id, prodA.id));
     const allowedDelete = await deleteMedia(orgA.id, mediaRow.id);
     assert("deleteMedia succeeds once nothing references the photo", allowedDelete.ok === true);
+
+    console.log("\n--- Product lifecycle: create, publish, archive ---");
+    const { id: newProductId } = await createProduct(orgA.id, {
+      name: "Lifecycle test product",
+      slug: `lifecycle-${suffix}`,
+      description: null,
+      shortDescription: null,
+      categoryId: catA.id,
+      taxRateId: null,
+      spiceLevel: 0,
+      isVegetarian: false,
+      allergens: [],
+      tags: [],
+      sku: null,
+      prepMinutes: null,
+      kdsStation: null,
+      servingInfo: "Serves 1",
+    });
+    const [created] = await database.select({ status: products.status, servingInfo: products.servingInfo }).from(products).where(eq(products.id, newProductId));
+    assert("a newly created product starts as DRAFT", created?.status === "DRAFT");
+    assert("servingInfo is stored", created?.servingInfo === "Serves 1");
+
+    await publishProduct(orgA.id, newProductId, null);
+    const [published] = await database.select({ status: products.status }).from(products).where(eq(products.id, newProductId));
+    assert("publishProduct sets status to PUBLISHED", published?.status === "PUBLISHED");
+
+    await setProductActive(orgA.id, newProductId, false, null);
+    const [archived] = await database.select({ isActive: products.isActive }).from(products).where(eq(products.id, newProductId));
+    assert("setProductActive(false) archives the product", archived?.isActive === false);
+
+    console.log("\n--- Category assignment: moving a product between categories ---");
+    await moveProductToCategory(orgA.id, prodA.id, catA2!.id, null);
+    const [movedProduct] = await database.select({ categoryId: products.categoryId }).from(products).where(eq(products.id, prodA.id));
+    assert("moveProductToCategory updates the product's category", movedProduct?.categoryId === catA2!.id);
+    await moveProductToCategory(orgA.id, prodA.id, catA.id, null); // move it back for the rest of the script
+
+    console.log("\n--- Duplicate product ---");
+    const { id: duplicateId } = await duplicateProduct(orgA.id, newProductId);
+    const [duplicated] = await database.select({ name: products.name, status: products.status }).from(products).where(eq(products.id, duplicateId));
+    assert("duplicateProduct creates a new DRAFT with a '(copy)' name", duplicated?.status === "DRAFT" && (duplicated?.name ?? "").includes("copy"));
+
+    console.log("\n--- Modifier groups & options ---");
+    const { id: newGroupId } = await createModifierGroup(orgA.id, { name: "Sauce choice", slug: `sauce-${suffix}`, description: null, minSelections: 1, maxSelections: 1 });
+    await addModifier(orgA.id, newGroupId, { name: "Mayo", slug: `mayo-${suffix}`, priceDelta: 0n as never, isDefault: true, isAvailable: true });
+    const [mayoOption] = await database.select({ id: modifiers.id }).from(modifiers).where(and(eq(modifiers.groupId, newGroupId), eq(modifiers.slug, `mayo-${suffix}`)));
+    assert("addModifier creates the option", mayoOption !== undefined);
+    if (mayoOption) {
+      await updateModifier(orgA.id, mayoOption.id, { name: "Mayo (updated)", slug: `mayo-${suffix}`, priceDelta: 1000n as never, isDefault: true, isAvailable: true });
+      const [updatedOption] = await database.select({ name: modifiers.name, priceDelta: modifiers.priceDelta }).from(modifiers).where(eq(modifiers.id, mayoOption.id));
+      assert("updateModifier changes name and price", updatedOption?.name === "Mayo (updated)" && updatedOption?.priceDelta === 1000n);
+    }
+    await database.delete(modifierGroups).where(eq(modifierGroups.id, newGroupId)); // cascades its modifier
+
+    console.log("\n--- Scheduled availability ---");
+    const backAt = new Date(Date.now() + 60 * 60 * 1000);
+    await setAvailabilityRule(orgA.id, prodA.id, { locationId: null, channel: null, status: "SCHEDULED_UNAVAILABLE", unavailableUntil: backAt, reason: "Kitchen issue" }, null);
+    const [scheduledRule] = await database.select().from(productAvailability).where(eq(productAvailability.productId, prodA.id));
+    assert("a SCHEDULED_UNAVAILABLE rule stores its return time", scheduledRule?.status === "SCHEDULED_UNAVAILABLE" && scheduledRule?.unavailableUntil?.getTime() === backAt.getTime());
+    await setAvailabilityRule(orgA.id, prodA.id, { locationId: null, channel: null, status: "AVAILABLE", unavailableUntil: null, reason: null }, null); // reset
+
+    console.log("\n--- Audit log: a real, persisted change record ---");
+    const changes = await getRecentChanges(orgA.id, 100);
+    assert("publishing the lifecycle product wrote a status change to the audit log", changes.some((c) => c.entityId === newProductId && c.field === "status" && c.newValue === "PUBLISHED"));
+    assert("archiving the lifecycle product wrote an active change to the audit log", changes.some((c) => c.entityId === newProductId && c.field === "active" && c.newValue === "false"));
+    assert("moving the product's category wrote a category change to the audit log", changes.some((c) => c.entityId === prodA.id && c.field === "category"));
+
+    console.log("\n--- Category publish flow ---");
+    await database.update(categories).set({ status: "DRAFT" }).where(eq(categories.id, catA.id)); // force a known starting state
+    await publishCategory(orgA.id, catA.id, null);
+    const [catAAfterPublish] = await database.select({ status: categories.status }).from(categories).where(eq(categories.id, catA.id));
+    assert("publishCategory sets status to PUBLISHED for the caller's own category", catAAfterPublish?.status === "PUBLISHED");
+
+    const [catBBeforeForeignPublish] = await database.select({ status: categories.status }).from(categories).where(eq(categories.id, catB.id));
+    await publishCategory(orgA.id, catB.id, null); // catB belongs to orgB — the orgId-scoped WHERE must match nothing
+    const [catBAfterForeignPublish] = await database.select({ status: categories.status }).from(categories).where(eq(categories.id, catB.id));
+    assert("publishing a category through the wrong org leaves it untouched", catBBeforeForeignPublish?.status === catBAfterForeignPublish?.status);
   } finally {
     console.log("\n--- Cleanup ---");
     await database.delete(productAvailability).where(eq(productAvailability.orgId, orgA.id));
@@ -161,12 +247,65 @@ async function main() {
     console.log("Test data removed.");
   }
 
-  console.log(ok ? "\nALL PASS" : "\nSOME FAILED");
-  if (!ok) process.exitCode = 1;
+}
+
+/**
+ * Channel visibility, end to end through the real `getMenu()` — which
+ * always resolves the one real "frybird" org (`requireOrg()`'s hardcoded
+ * `ORG_SLUG`), so this cannot run against a throwaway org the way the rest
+ * of this script does. It picks a real category, temporarily hides it from
+ * one channel, and confirms the actual customer/POS read path reflects
+ * that — then removes the row it added, whether the checks pass or fail.
+ */
+async function verifyCategoryChannelVisibility() {
+  const database = db();
+  const [org] = await database.select({ id: organizations.id }).from(organizations).where(eq(organizations.slug, "frybird")).limit(1);
+  if (!org) {
+    console.log("\n--- Category channel visibility ---\nSKIPPED — no 'frybird' organization found.");
+    return;
+  }
+
+  const rows = await database
+    .select({ categoryId: categories.id, categorySlug: categories.slug })
+    .from(categories)
+    .innerJoin(products, eq(products.categoryId, categories.id))
+    .where(and(eq(categories.orgId, org.id), eq(categories.status, "PUBLISHED"), eq(products.status, "PUBLISHED"), eq(products.isActive, true)))
+    .limit(1);
+  const target = rows[0];
+  if (!target) {
+    console.log("\n--- Category channel visibility ---\nSKIPPED — no published category with a published product to test against.");
+    return;
+  }
+
+  console.log(`\n--- Category channel visibility (against the real menu: "${target.categorySlug}") ---`);
+  try {
+    const before = await getMenu("ONLINE");
+    assert("the target category is visible on the website before the test", before.some((c) => c.slug === target.categorySlug));
+
+    await setCategoryAvailabilityRule(org.id, target.categoryId, { channel: "ONLINE", status: "TEMPORARILY_UNAVAILABLE", unavailableUntil: null, reason: "audit test" }, null);
+
+    const onlineAfterHide = await getMenu("ONLINE");
+    assert("hiding a category from ONLINE removes it from the website's menu", !onlineAfterHide.some((c) => c.slug === target.categorySlug));
+
+    const dineInAfterHide = await getMenu("DINE_IN");
+    assert("the same category is still visible at the counter — the hide was channel-specific", dineInAfterHide.some((c) => c.slug === target.categorySlug));
+
+    const [rule] = await database.select({ id: categoryAvailability.id }).from(categoryAvailability).where(and(eq(categoryAvailability.categoryId, target.categoryId), eq(categoryAvailability.channel, "ONLINE"))).limit(1);
+    if (rule) await database.delete(categoryAvailability).where(eq(categoryAvailability.id, rule.id));
+
+    const onlineAfterRestore = await getMenu("ONLINE");
+    assert("removing the rule restores the category on the website", onlineAfterRestore.some((c) => c.slug === target.categorySlug));
+  } finally {
+    // Belt-and-braces: remove any rule this test left behind even if an assertion above threw.
+    await database.delete(categoryAvailability).where(and(eq(categoryAvailability.categoryId, target.categoryId), eq(categoryAvailability.channel, "ONLINE")));
+  }
 }
 
 main()
+  .then(verifyCategoryChannelVisibility)
   .then(async () => {
+    console.log(ok ? "\nALL PASS" : "\nSOME FAILED");
+    if (!ok) process.exitCode = 1;
     await closeDb();
   })
   .catch(async (error) => {

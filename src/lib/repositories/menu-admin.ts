@@ -16,7 +16,9 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   categories,
+  categoryAvailability,
   comboItems,
+  menuAuditLog,
   modifierGroups,
   modifiers,
   productAvailability,
@@ -27,7 +29,8 @@ import {
   recipes,
   taxRates,
 } from "@/db/schema";
-import type { AvailabilityStatus } from "@/domain/menu-availability";
+import { type AvailabilityStatus, resolveAvailability } from "@/domain/menu-availability";
+import { businessDate } from "@/lib/dates";
 import { type Paise } from "@/lib/money";
 
 /**
@@ -68,6 +71,81 @@ async function assertProductOwned(orgId: string, productId: string): Promise<voi
 async function assertModifierGroupOwned(orgId: string, groupId: string): Promise<void> {
   const [row] = await db().select({ id: modifierGroups.id }).from(modifierGroups).where(and(eq(modifierGroups.id, groupId), eq(modifierGroups.orgId, orgId))).limit(1);
   if (!row) throw new CrossOrgReference("modifier group");
+}
+
+/* ------------------------------------------------------------------ */
+/* Change log — a real, persisted record; never a fake "publish" state */
+/* ------------------------------------------------------------------ */
+
+type LoggableValue = string | number | boolean | null;
+
+function stringifyLoggable(value: LoggableValue): string | null {
+  if (value === null) return null;
+  return typeof value === "string" ? value : String(value);
+}
+
+/**
+ * Records one field's old and new value against a menu entity. Called from
+ * the write functions below, right alongside the update it is describing —
+ * never reconstructed after the fact by diffing two reads, which could miss
+ * a change made between them.
+ *
+ * Only fields that actually changed are worth a row; callers pass every
+ * candidate field and this filters silently rather than making every call
+ * site repeat the `oldValue !== newValue` check.
+ */
+async function logChanges(input: {
+  orgId: string;
+  entityType: "category" | "product" | "modifierGroup" | "availability";
+  entityId: string;
+  entityName: string;
+  actorUserId: string | null;
+  changes: readonly { field: string; oldValue: LoggableValue; newValue: LoggableValue }[];
+}): Promise<void> {
+  const rows = input.changes
+    .filter((c) => stringifyLoggable(c.oldValue) !== stringifyLoggable(c.newValue))
+    .map((c) => ({
+      orgId: input.orgId,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      entityName: input.entityName,
+      field: c.field,
+      oldValue: stringifyLoggable(c.oldValue),
+      newValue: stringifyLoggable(c.newValue),
+      actorUserId: input.actorUserId,
+    }));
+  if (rows.length === 0) return;
+  await db().insert(menuAuditLog).values(rows);
+}
+
+export interface MenuChangeRow {
+  readonly id: string;
+  readonly entityType: string;
+  readonly entityId: string;
+  readonly entityName: string;
+  readonly field: string;
+  readonly oldValue: string | null;
+  readonly newValue: string | null;
+  readonly createdAt: Date;
+}
+
+/** The most recent changes across the whole menu, newest first — Review Changes' "what changed" list. */
+export async function getRecentChanges(orgId: string, limit = 50): Promise<MenuChangeRow[]> {
+  return db()
+    .select({
+      id: menuAuditLog.id,
+      entityType: menuAuditLog.entityType,
+      entityId: menuAuditLog.entityId,
+      entityName: menuAuditLog.entityName,
+      field: menuAuditLog.field,
+      oldValue: menuAuditLog.oldValue,
+      newValue: menuAuditLog.newValue,
+      createdAt: menuAuditLog.createdAt,
+    })
+    .from(menuAuditLog)
+    .where(eq(menuAuditLog.orgId, orgId))
+    .orderBy(desc(menuAuditLog.createdAt))
+    .limit(limit);
 }
 
 /* ------------------------------------------------------------------ */
@@ -129,16 +207,49 @@ export async function createCategory(orgId: string, input: CategoryInput): Promi
   return row;
 }
 
-export async function updateCategory(orgId: string, id: string, input: CategoryInput): Promise<void> {
+export async function updateCategory(orgId: string, id: string, input: CategoryInput, actorUserId: string | null = null): Promise<void> {
+  const [before] = await db().select({ name: categories.name }).from(categories).where(and(eq(categories.id, id), eq(categories.orgId, orgId))).limit(1);
   await db().update(categories).set({ ...input, updatedAt: new Date() }).where(and(eq(categories.id, id), eq(categories.orgId, orgId)));
+  if (before) {
+    await logChanges({
+      orgId,
+      entityType: "category",
+      entityId: id,
+      entityName: input.name,
+      actorUserId,
+      changes: [{ field: "name", oldValue: before.name, newValue: input.name }],
+    });
+  }
 }
 
-export async function setCategoryActive(orgId: string, id: string, isActive: boolean): Promise<void> {
+export async function setCategoryActive(orgId: string, id: string, isActive: boolean, actorUserId: string | null = null): Promise<void> {
+  const [before] = await db().select({ name: categories.name, isActive: categories.isActive }).from(categories).where(and(eq(categories.id, id), eq(categories.orgId, orgId))).limit(1);
   await db().update(categories).set({ isActive, updatedAt: new Date() }).where(and(eq(categories.id, id), eq(categories.orgId, orgId)));
+  if (before) {
+    await logChanges({
+      orgId,
+      entityType: "category",
+      entityId: id,
+      entityName: before.name,
+      actorUserId,
+      changes: [{ field: "active", oldValue: before.isActive, newValue: isActive }],
+    });
+  }
 }
 
-export async function publishCategory(orgId: string, id: string): Promise<void> {
+export async function publishCategory(orgId: string, id: string, actorUserId: string | null = null): Promise<void> {
+  const [before] = await db().select({ name: categories.name, status: categories.status }).from(categories).where(and(eq(categories.id, id), eq(categories.orgId, orgId))).limit(1);
   await db().update(categories).set({ status: "PUBLISHED", updatedAt: new Date() }).where(and(eq(categories.id, id), eq(categories.orgId, orgId)));
+  if (before) {
+    await logChanges({
+      orgId,
+      entityType: "category",
+      entityId: id,
+      entityName: before.name,
+      actorUserId,
+      changes: [{ field: "status", oldValue: before.status, newValue: "PUBLISHED" }],
+    });
+  }
 }
 
 /** Refused while a product still references the category — same guard the FK already enforces, checked first for a clean message. */
@@ -190,26 +301,63 @@ export interface ProductAdminRow {
   readonly status: "DRAFT" | "PUBLISHED";
   readonly sku: string | null;
   readonly image: string | null;
+  readonly isVegetarian: boolean;
+  readonly badges: readonly string[];
+  readonly hasModifiers: boolean;
+  readonly position: number;
+  /** Resolved right now, wildcard (every location/channel) — the row/card badge. */
+  readonly availabilityStatus: AvailabilityStatus;
 }
 
+/**
+ * The product list every Menu Manager screen reads — Products, the category
+ * view, and the Menu Control Center's card grid all call this one function
+ * rather than each assembling its own query, so "what a product's row looks
+ * like" cannot drift between screens.
+ */
 export async function listProductsAdmin(orgId: string, filter?: { search?: string; categoryId?: string }): Promise<ProductAdminRow[]> {
-  const rows = await db()
-    .select({
-      id: products.id,
-      name: products.name,
-      slug: products.slug,
-      categoryId: products.categoryId,
-      categoryName: categories.name,
-      basePrice: products.basePrice,
-      isActive: products.isActive,
-      status: products.status,
-      sku: products.sku,
-      images: products.images,
-    })
-    .from(products)
-    .leftJoin(categories, eq(products.categoryId, categories.id))
-    .where(eq(products.orgId, orgId))
-    .orderBy(asc(categories.position), asc(products.position));
+  const database = db();
+  const [rows, groupLinks, availabilityRows] = await Promise.all([
+    database
+      .select({
+        id: products.id,
+        name: products.name,
+        slug: products.slug,
+        categoryId: products.categoryId,
+        categoryName: categories.name,
+        basePrice: products.basePrice,
+        isActive: products.isActive,
+        status: products.status,
+        sku: products.sku,
+        images: products.images,
+        isVegetarian: products.isVegetarian,
+        tags: products.tags,
+        position: products.position,
+      })
+      .from(products)
+      .leftJoin(categories, eq(products.categoryId, categories.id))
+      .where(eq(products.orgId, orgId))
+      .orderBy(asc(categories.position), asc(products.position)),
+    database.selectDistinct({ productId: productModifierGroups.productId }).from(productModifierGroups).innerJoin(products, eq(productModifierGroups.productId, products.id)).where(eq(products.orgId, orgId)),
+    database.select().from(productAvailability).where(eq(productAvailability.orgId, orgId)),
+  ]);
+
+  const productIdsWithModifiers = new Set(groupLinks.map((r) => r.productId));
+  const availabilityByProduct = new Map<string, typeof availabilityRows>();
+  for (const row of availabilityRows) {
+    const existing = availabilityByProduct.get(row.productId) ?? [];
+    existing.push(row);
+    availabilityByProduct.set(row.productId, existing);
+  }
+  const today = businessDate();
+  function resolveStatus(productId: string): AvailabilityStatus {
+    const productRows = availabilityByProduct.get(productId);
+    if (!productRows || productRows.length === 0) return "AVAILABLE";
+    return resolveAvailability(
+      productRows.map((row) => ({ locationId: null, channel: null, status: row.status, unavailableUntil: row.unavailableUntil, reason: row.reason, setOnBusinessDate: businessDate(row.updatedAt) })),
+      { locationId: null, channel: null, now: new Date(), today },
+    ).status;
+  }
 
   const search = filter?.search?.trim().toLowerCase();
   return rows
@@ -224,6 +372,11 @@ export async function listProductsAdmin(orgId: string, filter?: { search?: strin
       basePrice: row.basePrice as Paise,
       isActive: row.isActive,
       status: row.status,
+      isVegetarian: row.isVegetarian,
+      badges: row.tags,
+      hasModifiers: productIdsWithModifiers.has(row.id),
+      position: row.position,
+      availabilityStatus: resolveStatus(row.id),
       sku: row.sku,
       image: row.images?.[0]?.url ?? null,
     }));
@@ -247,20 +400,22 @@ export interface ProductDetail {
   readonly sku: string | null;
   readonly prepMinutes: number | null;
   readonly kdsStation: string | null;
+  readonly servingInfo: string | null;
   readonly isActive: boolean;
   readonly status: "DRAFT" | "PUBLISHED";
   readonly modifierGroupIds: readonly string[];
+  /** Whether this product bundles others — see `combo_items` — the product editor uses this to show combo-specific sections. */
+  readonly isCombo: boolean;
 }
 
 export async function getProductAdmin(orgId: string, id: string): Promise<ProductDetail | null> {
   const [row] = await db().select().from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
   if (!row) return null;
 
-  const assigned = await db()
-    .select({ groupId: productModifierGroups.groupId })
-    .from(productModifierGroups)
-    .where(eq(productModifierGroups.productId, id))
-    .orderBy(asc(productModifierGroups.position));
+  const [assigned, comboRows] = await Promise.all([
+    db().select({ groupId: productModifierGroups.groupId }).from(productModifierGroups).where(eq(productModifierGroups.productId, id)).orderBy(asc(productModifierGroups.position)),
+    db().select({ id: comboItems.id }).from(comboItems).where(eq(comboItems.comboProductId, id)).limit(1),
+  ]);
 
   return {
     id: row.id,
@@ -280,9 +435,11 @@ export async function getProductAdmin(orgId: string, id: string): Promise<Produc
     sku: row.sku,
     prepMinutes: row.prepMinutes,
     kdsStation: row.kdsStation,
+    servingInfo: row.servingInfo,
     isActive: row.isActive,
     status: row.status,
     modifierGroupIds: assigned.map((a) => a.groupId),
+    isCombo: comboRows.length > 0,
   };
 }
 
@@ -300,6 +457,7 @@ export interface ProductInput {
   readonly sku: string | null;
   readonly prepMinutes: number | null;
   readonly kdsStation: string | null;
+  readonly servingInfo: string | null;
 }
 
 export async function createProduct(orgId: string, input: ProductInput): Promise<{ id: string }> {
@@ -324,31 +482,171 @@ export async function createProduct(orgId: string, input: ProductInput): Promise
   return row;
 }
 
-export async function updateProductDetails(orgId: string, id: string, input: ProductInput): Promise<void> {
+export async function updateProductDetails(orgId: string, id: string, input: ProductInput, actorUserId: string | null = null): Promise<void> {
   if (input.categoryId) await assertCategoryOwned(orgId, input.categoryId);
   if (input.taxRateId) await assertTaxRateOwned(orgId, input.taxRateId);
+
+  const [before] = await db().select({ name: products.name, categoryId: products.categoryId, sku: products.sku }).from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
 
   await db()
     .update(products)
     .set({ ...input, allergens: [...input.allergens], tags: [...input.tags], updatedAt: new Date() })
     .where(and(eq(products.id, id), eq(products.orgId, orgId)));
+
+  if (before) {
+    await logChanges({
+      orgId,
+      entityType: "product",
+      entityId: id,
+      entityName: input.name,
+      actorUserId,
+      changes: [
+        { field: "name", oldValue: before.name, newValue: input.name },
+        { field: "category", oldValue: before.categoryId, newValue: input.categoryId },
+        { field: "sku", oldValue: before.sku, newValue: input.sku },
+      ],
+    });
+  }
 }
 
 /** `menu.price`-gated at the action layer — the one field a MANAGER cannot touch. */
-export async function updateProductPrice(orgId: string, id: string, basePrice: Paise): Promise<void> {
+export async function updateProductPrice(orgId: string, id: string, basePrice: Paise, actorUserId: string | null = null): Promise<void> {
+  const [before] = await db().select({ name: products.name, basePrice: products.basePrice }).from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
   await db().update(products).set({ basePrice, updatedAt: new Date() }).where(and(eq(products.id, id), eq(products.orgId, orgId)));
+  if (before) {
+    await logChanges({
+      orgId,
+      entityType: "product",
+      entityId: id,
+      entityName: before.name,
+      actorUserId,
+      changes: [{ field: "price (paise)", oldValue: before.basePrice.toString(), newValue: basePrice.toString() }],
+    });
+  }
 }
 
 export async function setProductImages(orgId: string, id: string, images: readonly { url: string; alt: string }[]): Promise<void> {
   await db().update(products).set({ images: [...images], updatedAt: new Date() }).where(and(eq(products.id, id), eq(products.orgId, orgId)));
 }
 
-export async function setProductActive(orgId: string, id: string, isActive: boolean): Promise<void> {
+export async function setProductActive(orgId: string, id: string, isActive: boolean, actorUserId: string | null = null): Promise<void> {
+  const [before] = await db().select({ name: products.name, isActive: products.isActive }).from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
   await db().update(products).set({ isActive, updatedAt: new Date() }).where(and(eq(products.id, id), eq(products.orgId, orgId)));
+  if (before) {
+    await logChanges({
+      orgId,
+      entityType: "product",
+      entityId: id,
+      entityName: before.name,
+      actorUserId,
+      changes: [{ field: "active", oldValue: before.isActive, newValue: isActive }],
+    });
+  }
 }
 
-export async function publishProduct(orgId: string, id: string): Promise<void> {
+export async function publishProduct(orgId: string, id: string, actorUserId: string | null = null): Promise<void> {
+  const [before] = await db().select({ name: products.name, status: products.status }).from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
   await db().update(products).set({ status: "PUBLISHED", updatedAt: new Date() }).where(and(eq(products.id, id), eq(products.orgId, orgId)));
+  if (before) {
+    await logChanges({
+      orgId,
+      entityType: "product",
+      entityId: id,
+      entityName: before.name,
+      actorUserId,
+      changes: [{ field: "status", oldValue: before.status, newValue: "PUBLISHED" }],
+    });
+  }
+}
+
+/** Reorders a product within its category — the product list's "move up/down" action. Uncategorised products reorder among themselves. */
+export async function moveProductPosition(orgId: string, id: string, direction: "up" | "down"): Promise<void> {
+  const [target] = await db().select({ categoryId: products.categoryId }).from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
+  if (!target) return;
+
+  const siblings = await db()
+    .select({ id: products.id, position: products.position })
+    .from(products)
+    .where(and(eq(products.orgId, orgId), target.categoryId ? eq(products.categoryId, target.categoryId) : isNull(products.categoryId)))
+    .orderBy(asc(products.position));
+
+  const index = siblings.findIndex((row) => row.id === id);
+  if (index === -1) return;
+  const swapWith = direction === "up" ? index - 1 : index + 1;
+  if (swapWith < 0 || swapWith >= siblings.length) return;
+
+  const a = siblings[index]!;
+  const b = siblings[swapWith]!;
+  await db().transaction(async (tx) => {
+    await tx.update(products).set({ position: b.position, updatedAt: new Date() }).where(and(eq(products.id, a.id), eq(products.orgId, orgId)));
+    await tx.update(products).set({ position: a.position, updatedAt: new Date() }).where(and(eq(products.id, b.id), eq(products.orgId, orgId)));
+  });
+}
+
+/** Moves a product to a different category (or to "uncategorised") — the product list's quick "move to category" action. */
+export async function moveProductToCategory(orgId: string, id: string, newCategoryId: string | null, actorUserId: string | null = null): Promise<void> {
+  if (newCategoryId) await assertCategoryOwned(orgId, newCategoryId);
+
+  const [before] = await db()
+    .select({ name: products.name, categoryId: products.categoryId, oldCategoryName: categories.name })
+    .from(products)
+    .leftJoin(categories, eq(products.categoryId, categories.id))
+    .where(and(eq(products.id, id), eq(products.orgId, orgId)))
+    .limit(1);
+  if (!before) return;
+
+  const [max] = await db().select({ position: sql<number>`coalesce(max(${products.position}), -1)` }).from(products).where(and(eq(products.orgId, orgId), newCategoryId ? eq(products.categoryId, newCategoryId) : isNull(products.categoryId)));
+
+  await db().update(products).set({ categoryId: newCategoryId, position: (max?.position ?? -1) + 1, updatedAt: new Date() }).where(and(eq(products.id, id), eq(products.orgId, orgId)));
+
+  const [newCategoryName] = newCategoryId ? await db().select({ name: categories.name }).from(categories).where(eq(categories.id, newCategoryId)).limit(1) : [null];
+  await logChanges({
+    orgId,
+    entityType: "product",
+    entityId: id,
+    entityName: before.name,
+    actorUserId,
+    changes: [{ field: "category", oldValue: before.oldCategoryName, newValue: newCategoryName?.name ?? null }],
+  });
+}
+
+/**
+ * Clones a product — name, description, pricing, dietary/tax fields, photos,
+ * and its assigned modifier groups — as a new DRAFT, for "start from an
+ * existing burger rather than a blank form." Combo contents are not copied;
+ * a duplicated combo starts as a normal draft product with no bundled items,
+ * since blindly cloning combo_items could silently double-bundle a product
+ * that was never meant to appear in two combos without a deliberate choice.
+ */
+export async function duplicateProduct(orgId: string, id: string): Promise<{ id: string }> {
+  const source = await getProductAdmin(orgId, id);
+  if (!source) throw new CrossOrgReference("product");
+
+  const slug = `${source.slug}-copy-${Math.random().toString(36).slice(2, 7)}`;
+  const { id: newId } = await createProduct(orgId, {
+    name: `${source.name} (copy)`,
+    slug,
+    description: source.description,
+    shortDescription: source.shortDescription,
+    categoryId: source.categoryId,
+    taxRateId: source.taxRateId,
+    spiceLevel: source.spiceLevel,
+    isVegetarian: source.isVegetarian,
+    allergens: source.allergens,
+    tags: source.tags,
+    sku: null,
+    prepMinutes: source.prepMinutes,
+    kdsStation: source.kdsStation,
+    servingInfo: source.servingInfo,
+  });
+
+  await Promise.all([
+    updateProductPrice(orgId, newId, source.basePrice),
+    setProductImages(orgId, newId, source.images),
+    source.modifierGroupIds.length > 0 ? setProductModifierGroups(orgId, newId, source.modifierGroupIds) : Promise.resolve(),
+  ]);
+
+  return { id: newId };
 }
 
 /**
@@ -548,7 +846,7 @@ export interface AvailabilityRuleInput {
  * "at most one wildcard row" guarantee the schema comment promises the
  * repository layer would own.
  */
-export async function setAvailabilityRule(orgId: string, productId: string, input: AvailabilityRuleInput): Promise<void> {
+export async function setAvailabilityRule(orgId: string, productId: string, input: AvailabilityRuleInput, actorUserId: string | null = null): Promise<void> {
   await assertProductOwned(orgId, productId);
 
   const database = db();
@@ -556,21 +854,92 @@ export async function setAvailabilityRule(orgId: string, productId: string, inpu
   conditions.push(input.locationId === null ? isNull(productAvailability.locationId) : eq(productAvailability.locationId, input.locationId));
   conditions.push(input.channel === null ? isNull(productAvailability.channel) : eq(productAvailability.channel, input.channel));
 
-  const [existing] = await database.select({ id: productAvailability.id }).from(productAvailability).where(and(...conditions)).limit(1);
+  const [existing] = await database.select().from(productAvailability).where(and(...conditions)).limit(1);
+  const [product] = await database.select({ name: products.name }).from(products).where(eq(products.id, productId)).limit(1);
 
   if (existing) {
     await database
       .update(productAvailability)
       .set({ status: input.status, unavailableUntil: input.unavailableUntil, reason: input.reason, updatedAt: new Date() })
       .where(eq(productAvailability.id, existing.id));
-    return;
+  } else {
+    await database.insert(productAvailability).values({ orgId, productId, ...input });
   }
 
-  await database.insert(productAvailability).values({ orgId, productId, ...input });
+  if (product) {
+    await logChanges({
+      orgId,
+      entityType: "availability",
+      entityId: productId,
+      entityName: product.name,
+      actorUserId,
+      changes: [{ field: input.channel ? `availability (${input.channel})` : "availability", oldValue: existing?.status ?? "AVAILABLE", newValue: input.status }],
+    });
+  }
 }
 
 export async function deleteAvailabilityRule(orgId: string, id: string): Promise<void> {
   await db().delete(productAvailability).where(and(eq(productAvailability.id, id), eq(productAvailability.orgId, orgId)));
+}
+
+/* ------------------------------------------------------------------ */
+/* Category availability — channel visibility for a whole category.    */
+/* ------------------------------------------------------------------ */
+
+export interface CategoryAvailabilityRuleRow {
+  readonly id: string;
+  readonly channel: string | null;
+  readonly status: AvailabilityStatus;
+  readonly unavailableUntil: Date | null;
+  readonly reason: string | null;
+  readonly updatedAt: Date;
+}
+
+export async function listCategoryAvailabilityRules(orgId: string, categoryId: string): Promise<CategoryAvailabilityRuleRow[]> {
+  return db().select().from(categoryAvailability).where(and(eq(categoryAvailability.orgId, orgId), eq(categoryAvailability.categoryId, categoryId))).orderBy(desc(categoryAvailability.updatedAt));
+}
+
+export interface CategoryAvailabilityRuleInput {
+  readonly channel: string | null;
+  readonly status: AvailabilityStatus;
+  readonly unavailableUntil: Date | null;
+  readonly reason: string | null;
+}
+
+/** Same upsert-by-lookup shape as `setAvailabilityRule`, scoped to a category instead of a product. */
+export async function setCategoryAvailabilityRule(orgId: string, categoryId: string, input: CategoryAvailabilityRuleInput, actorUserId: string | null = null): Promise<void> {
+  await assertCategoryOwned(orgId, categoryId);
+
+  const database = db();
+  const conditions = [eq(categoryAvailability.orgId, orgId), eq(categoryAvailability.categoryId, categoryId)];
+  conditions.push(input.channel === null ? isNull(categoryAvailability.channel) : eq(categoryAvailability.channel, input.channel));
+
+  const [existing] = await database.select().from(categoryAvailability).where(and(...conditions)).limit(1);
+  const [category] = await database.select({ name: categories.name }).from(categories).where(eq(categories.id, categoryId)).limit(1);
+
+  if (existing) {
+    await database
+      .update(categoryAvailability)
+      .set({ status: input.status, unavailableUntil: input.unavailableUntil, reason: input.reason, updatedAt: new Date() })
+      .where(eq(categoryAvailability.id, existing.id));
+  } else {
+    await database.insert(categoryAvailability).values({ orgId, categoryId, ...input });
+  }
+
+  if (category) {
+    await logChanges({
+      orgId,
+      entityType: "availability",
+      entityId: categoryId,
+      entityName: category.name,
+      actorUserId,
+      changes: [{ field: input.channel ? `visibility (${input.channel})` : "visibility", oldValue: existing?.status ?? "AVAILABLE", newValue: input.status }],
+    });
+  }
+}
+
+export async function deleteCategoryAvailabilityRule(orgId: string, id: string): Promise<void> {
+  await db().delete(categoryAvailability).where(and(eq(categoryAvailability.id, id), eq(categoryAvailability.orgId, orgId)));
 }
 
 /* ------------------------------------------------------------------ */
@@ -596,6 +965,70 @@ export async function listDraftItems(orgId: string): Promise<DraftItem[]> {
     ...draftProducts.map((p) => ({ kind: "product" as const, id: p.id, name: p.name })),
     ...draftGroups.map((g) => ({ kind: "modifierGroup" as const, id: g.id, name: g.name })),
   ];
+}
+
+/* ------------------------------------------------------------------ */
+/* Menu health — the Menu Control Center's completeness summary.       */
+/* ------------------------------------------------------------------ */
+
+export interface MenuHealth {
+  readonly totalProducts: number;
+  readonly withPhotos: number;
+  readonly withDescriptions: number;
+  readonly withModifiers: number;
+  readonly unavailable: number;
+  readonly drafts: number;
+  readonly missingTaxRate: number;
+  /** 0-100, weighted toward the fields that actually matter to a customer deciding what to order. */
+  readonly completenessPct: number;
+}
+
+/**
+ * Only counts what the schema/business rules actually require — a photo, a
+ * description and a tax rate are real gaps; nothing here invents a
+ * compliance requirement that isn't already a real column or rule.
+ */
+export async function getMenuHealth(orgId: string): Promise<MenuHealth> {
+  const database = db();
+
+  const [rows, withModifierRows, availabilityRows] = await Promise.all([
+    database
+      .select({ id: products.id, images: products.images, description: products.description, status: products.status, taxRateId: products.taxRateId })
+      .from(products)
+      .where(and(eq(products.orgId, orgId), eq(products.isActive, true))),
+    database.selectDistinct({ productId: productModifierGroups.productId }).from(productModifierGroups).innerJoin(products, eq(productModifierGroups.productId, products.id)).where(eq(products.orgId, orgId)),
+    database.select().from(productAvailability).where(eq(productAvailability.orgId, orgId)),
+  ]);
+
+  const productIdsWithModifiers = new Set(withModifierRows.map((r) => r.productId));
+  const availabilityByProduct = new Map<string, typeof availabilityRows>();
+  for (const row of availabilityRows) {
+    const existing = availabilityByProduct.get(row.productId) ?? [];
+    existing.push(row);
+    availabilityByProduct.set(row.productId, existing);
+  }
+
+  const today = businessDate();
+  let unavailable = 0;
+  for (const productRows of availabilityByProduct.values()) {
+    const resolved = resolveAvailability(
+      productRows.map((row) => ({ locationId: null, channel: null, status: row.status, unavailableUntil: row.unavailableUntil, reason: row.reason, setOnBusinessDate: businessDate(row.updatedAt) })),
+      { locationId: null, channel: null, now: new Date(), today },
+    );
+    if (!resolved.available) unavailable += 1;
+  }
+
+  const totalProducts = rows.length;
+  const withPhotos = rows.filter((r) => r.images.length > 0).length;
+  const withDescriptions = rows.filter((r) => (r.description ?? "").trim().length > 0).length;
+  const withModifiers = rows.filter((r) => productIdsWithModifiers.has(r.id)).length;
+  const drafts = rows.filter((r) => r.status === "DRAFT").length;
+  const missingTaxRate = rows.filter((r) => r.taxRateId === null).length;
+
+  const completenessPct =
+    totalProducts === 0 ? 100 : Math.round(((withPhotos + withDescriptions + (totalProducts - missingTaxRate)) / (totalProducts * 3)) * 100);
+
+  return { totalProducts, withPhotos, withDescriptions, withModifiers, unavailable, drafts, missingTaxRate, completenessPct };
 }
 
 /* ------------------------------------------------------------------ */

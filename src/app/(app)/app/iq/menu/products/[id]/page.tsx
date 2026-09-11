@@ -2,18 +2,23 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getStaff, staffCan } from "@/lib/auth";
-import { formatINR } from "@/lib/money";
+import { formatINR, paise } from "@/lib/money";
 import {
   getProductAdmin,
   getRecipeStatus,
   listAvailabilityRules,
   listCategoriesAdmin,
+  listComboItems,
   listModifierGroupsAdmin,
+  listProductsAdmin,
   listTaxRates,
 } from "@/lib/repositories/menu-admin";
 import { listMedia } from "@/lib/repositories/media";
 import type { MenuProduct } from "@/lib/repositories/menu";
+import { resolveAvailability } from "@/domain/menu-availability";
+import { businessDate } from "@/lib/dates";
 import { ActionButton } from "@/components/iq/menu/action-button";
+import { AvailabilityBadge } from "@/components/iq/menu/availability-badge";
 import { ProductAvailabilityForm } from "@/components/iq/menu/product-availability-form";
 import { ProductDetailsForm } from "@/components/iq/menu/product-details-form";
 import { ProductMediaForm } from "@/components/iq/menu/product-media-form";
@@ -21,7 +26,7 @@ import { ProductModifiersForm } from "@/components/iq/menu/product-modifiers-for
 import { ProductPreview } from "@/components/iq/menu/product-preview";
 import { ProductPriceForm } from "@/components/iq/menu/product-price-form";
 import { ProductRecipeSection } from "@/components/iq/menu/product-recipe-section";
-import { publishProductAction, setProductActiveAction } from "@/lib/menu-admin/actions";
+import { duplicateProductAction, publishProductAction, setProductActiveAction } from "@/lib/menu-admin/actions";
 
 export const metadata: Metadata = { title: "Edit product — FRYBIRD IQ", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -48,18 +53,30 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
   const product = await getProductAdmin(staff.orgId, id);
   if (!product) notFound();
 
-  const [categories, taxRates, groups, rules, library, recipeStatus] = await Promise.all([
+  const [categories, taxRates, groups, rules, library, recipeStatus, comboContents] = await Promise.all([
     listCategoriesAdmin(staff.orgId),
     listTaxRates(staff.orgId),
     listModifierGroupsAdmin(staff.orgId),
     listAvailabilityRules(staff.orgId, id),
     listMedia(staff.orgId),
     getRecipeStatus(staff.orgId, id),
+    product.isCombo ? listComboItems(staff.orgId, id) : Promise.resolve([]),
   ]);
 
   const category = categories.find((c) => c.id === product.categoryId);
   const taxRate = taxRates.find((r) => r.id === product.taxRateId);
   const assignedGroups = groups.filter((g) => product.modifierGroupIds.includes(g.id));
+
+  const today = businessDate();
+  const resolvedAvailability = resolveAvailability(
+    rules.map((r) => ({ locationId: null, channel: null, status: r.status, unavailableUntil: r.unavailableUntil, reason: r.reason, setOnBusinessDate: businessDate(r.updatedAt) })),
+    { locationId: null, channel: null, now: new Date(), today },
+  );
+
+  const allProducts = product.isCombo ? await listProductsAdmin(staff.orgId) : [];
+  const comboItemsWithPrice = comboContents.map((item) => ({ ...item, price: allProducts.find((p) => p.id === item.productId)?.basePrice ?? 0n }));
+  const comboItemsTotal = comboItemsWithPrice.reduce((sum, item) => sum + item.price * BigInt(item.quantity), 0n);
+  const comboSavings = comboItemsTotal - product.basePrice;
 
   const previewProduct: MenuProduct = {
     slug: product.slug,
@@ -89,22 +106,26 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
 
   return (
     <div className="mx-auto w-full max-w-3xl px-[var(--gutter)] py-8">
-      <Link href="/app/iq/menu/products" className="text-sm text-muted-foreground underline underline-offset-2">
-        ← Products
+      <Link href="/app/iq/menu" className="text-sm text-muted-foreground underline underline-offset-2">
+        ← Menu Control Center
       </Link>
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-heading text-3xl font-bold tracking-tight">{product.name}</h1>
           <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+            <AvailabilityBadge status={resolvedAvailability.status} isActive={product.isActive} />
             {product.status === "DRAFT" ? "Draft — not visible yet." : "Live."}
-            {!product.isActive && " Archived."}
+            {resolvedAvailability.reason && ` — ${resolvedAvailability.reason}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
           {product.status === "DRAFT" && canPublish && (
             <ActionButton action={() => publishProductAction(id)}>Publish</ActionButton>
           )}
+          <ActionButton action={() => duplicateProductAction(id)} variant="ghost">
+            Duplicate
+          </ActionButton>
           <ActionButton action={() => setProductActiveAction(id, !product.isActive)} variant="ghost">
             {product.isActive ? "Archive" : "Restore"}
           </ActionButton>
@@ -135,6 +156,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
               sku: product.sku,
               prepMinutes: product.prepMinutes,
               kdsStation: product.kdsStation,
+              servingInfo: product.servingInfo,
             }}
           />
         </Section>
@@ -148,6 +170,39 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
         <Section title="Modifiers" hint="Which option groups this product offers, and in what order.">
           <ProductModifiersForm productId={id} groups={groups.map((g) => ({ id: g.id, name: g.name, status: g.status }))} initialSelected={product.modifierGroupIds} />
         </Section>
+
+        {product.isCombo && (
+          <Section title="Combo contents" hint="Fixed items this combo bundles. &quot;Choose one&quot;/&quot;choose any&quot; components live in Modifiers above — a combo upgrade is just a modifier group, the same mechanism every product uses.">
+            {comboItemsWithPrice.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No fixed items yet.</p>
+            ) : (
+              <ul className="flex flex-col gap-1 text-sm">
+                {comboItemsWithPrice.map((item) => {
+                  const itemProduct = allProducts.find((p) => p.id === item.productId);
+                  return (
+                    <li key={item.id} className="flex items-center justify-between">
+                      <span>
+                        {item.quantity}× {itemProduct?.name ?? "Unknown product"}
+                      </span>
+                      <span className="tabular text-muted-foreground">{formatINR(paise(item.price * BigInt(item.quantity)))}</span>
+                    </li>
+                  );
+                })}
+                <li className="flex items-center justify-between border-t border-border pt-1.5 font-semibold">
+                  <span>Items priced separately</span>
+                  <span className="tabular">{formatINR(paise(comboItemsTotal))}</span>
+                </li>
+                <li className="flex items-center justify-between font-semibold text-[var(--success)]">
+                  <span>Combo saves</span>
+                  <span className="tabular">{comboSavings > 0n ? formatINR(paise(comboSavings)) : "No savings — check the combo's price"}</span>
+                </li>
+              </ul>
+            )}
+            <Link href={`/app/iq/menu/combos/${id}`} className="mt-3 inline-block text-sm font-semibold text-primary hover:underline">
+              Edit combo items →
+            </Link>
+          </Section>
+        )}
 
         <Section title="Media">
           <ProductMediaForm productId={id} initialImages={product.images} library={library} />

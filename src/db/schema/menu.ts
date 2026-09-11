@@ -113,6 +113,8 @@ export const products = pgTable(
     prepMinutes: integer("prep_minutes"),
     /** Which kitchen station makes this — fry, grill, assembly. Read by the KDS once it exists; unused today. */
     kdsStation: text("kds_station"),
+    /** Free text — "Serves 2", "450g", "Approx. 12 wings". Shown on the card; not a nutrition claim. */
+    servingInfo: text("serving_info"),
 
     isActive: boolean("is_active").notNull().default(true),
     position: integer("position").notNull().default(0),
@@ -317,4 +319,70 @@ export const comboItems = pgTable(
     position: integer("position").notNull().default(0),
   },
   (table) => [index("combo_items_combo_idx").on(table.comboProductId)],
+);
+
+/**
+ * Per-channel category visibility — the same shape as `productAvailability`,
+ * scoped to a category instead of a product, so "hide Combos from Kiosk"
+ * doesn't mean 86ing every product in it one at a time. Reuses
+ * `productAvailabilityStatusEnum` rather than inventing a second status
+ * vocabulary; TEMPORARILY_UNAVAILABLE/SOLD_OUT_TODAY read oddly for a
+ * category but the repository layer only ever writes AVAILABLE,
+ * TEMPORARILY_UNAVAILABLE or SCHEDULED_UNAVAILABLE here — see
+ * `menu-admin.ts`'s category-availability functions.
+ */
+export const categoryAvailability = pgTable(
+  "category_availability",
+  {
+    id: primaryId(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    categoryId: uuid("category_id")
+      .notNull()
+      .references(() => categories.id, { onDelete: "cascade" }),
+    /** A real `OrderChannel` value, a menu-visibility-only marketplace name ("SWIGGY"/"ZOMATO"), or null for every channel. */
+    channel: text("channel"),
+    status: productAvailabilityStatusEnum("status").notNull().default("AVAILABLE"),
+    unavailableUntil: timestamp("unavailable_until", { withTimezone: true }),
+    reason: text("reason"),
+    ...timestamps,
+  },
+  (table) => [
+    unique("category_availability_unique").on(table.categoryId, table.channel),
+    index("category_availability_category_idx").on(table.categoryId),
+  ],
+);
+
+/**
+ * A real, persisted record of what changed on a menu entity and when —
+ * powers the Review Changes screen's "recent changes" list without staging
+ * live edits (edits to a PUBLISHED item still take effect immediately; see
+ * `menuItemStatusEnum`'s own comment). Written by the repository layer
+ * itself, next to the write it is logging, never assembled after the fact
+ * from other tables — so it can never drift from what actually happened.
+ */
+export const menuAuditLog = pgTable(
+  "menu_audit_log",
+  {
+    id: primaryId(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    /** "category" | "product" | "modifierGroup" — kept as text, not an FK, so a deleted row's history survives it. */
+    entityType: text("entity_type").notNull(),
+    entityId: uuid("entity_id").notNull(),
+    /** A human label for the row itself at the time of the change — survives the entity being renamed or deleted later. */
+    entityName: text("entity_name").notNull(),
+    field: text("field").notNull(),
+    /** Stored as text — every field type (string, number, boolean, date) renders the same way in a diff. */
+    oldValue: text("old_value"),
+    newValue: text("new_value"),
+    actorUserId: uuid("actor_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("menu_audit_log_org_idx").on(table.orgId, table.createdAt),
+    index("menu_audit_log_entity_idx").on(table.entityType, table.entityId),
+  ],
 );

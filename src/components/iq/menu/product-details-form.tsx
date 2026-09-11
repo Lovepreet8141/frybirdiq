@@ -1,10 +1,12 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { type ActionResult, updateProductDetailsAction } from "@/lib/menu-admin/actions";
 
 const IDLE: ActionResult = { ok: true };
+
+const BADGE_PRESETS = ["Bestseller", "Popular", "New"] as const;
 
 function Submit() {
   const { pending } = useFormStatus();
@@ -42,11 +44,24 @@ export function ProductDetailsForm({
     sku: string | null;
     prepMinutes: number | null;
     kdsStation: string | null;
+    servingInfo: string | null;
   };
 }) {
   const action = updateProductDetailsAction.bind(null, id);
   const [state, formAction] = useActionState<ActionResult, FormData>(action, IDLE);
   const justSaved = state !== IDLE && state.ok;
+
+  const initialPresets = initial.tags.filter((t): t is (typeof BADGE_PRESETS)[number] => (BADGE_PRESETS as readonly string[]).includes(t));
+  const initialCustom = initial.tags.filter((t) => !(BADGE_PRESETS as readonly string[]).includes(t));
+  const [selectedBadges, setSelectedBadges] = useState<Set<string>>(new Set(initialPresets));
+  const [customBadges, setCustomBadges] = useState(initialCustom.join(", "));
+  const tagsValue = useMemo(() => {
+    const custom = customBadges
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    return [...selectedBadges, ...custom].join(", ");
+  }, [selectedBadges, customBadges]);
 
   return (
     <form action={formAction} className="flex flex-col gap-3">
@@ -123,16 +138,49 @@ export function ProductDetailsForm({
         <input name="allergens" defaultValue={initial.allergens.join(", ")} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal" />
       </label>
 
-      <label className="flex flex-col gap-1 text-sm font-semibold">
-        Badges <span className="font-normal text-muted-foreground">(e.g. bestseller, new — comma-separated)</span>
-        <input name="tags" defaultValue={initial.tags.join(", ")} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal" />
-      </label>
+      <fieldset className="flex flex-col gap-1.5">
+        <legend className="text-sm font-semibold">Badges</legend>
+        <div className="flex flex-wrap gap-3">
+          {BADGE_PRESETS.map((preset) => (
+            <label key={preset} className="flex min-h-[36px] cursor-pointer items-center gap-1.5 text-sm">
+              <input
+                type="checkbox"
+                checked={selectedBadges.has(preset)}
+                onChange={(e) =>
+                  setSelectedBadges((current) => {
+                    const next = new Set(current);
+                    if (e.target.checked) next.add(preset);
+                    else next.delete(preset);
+                    return next;
+                  })
+                }
+                className="size-4 accent-primary"
+              />
+              {preset}
+            </label>
+          ))}
+        </div>
+        <input
+          value={customBadges}
+          onChange={(e) => setCustomBadges(e.target.value)}
+          placeholder="Other badges, comma-separated"
+          className="mt-1 min-h-[36px] rounded-md border border-border bg-surface px-3 text-sm font-normal"
+        />
+        <input type="hidden" name="tags" value={tagsValue} />
+      </fieldset>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm font-semibold">
           SKU
           <input name="sku" defaultValue={initial.sku ?? ""} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal" />
         </label>
+        <label className="flex flex-col gap-1 text-sm font-semibold">
+          Serving info <span className="font-normal text-muted-foreground">(e.g. &quot;Serves 2&quot;, &quot;450g&quot;)</span>
+          <input name="servingInfo" defaultValue={initial.servingInfo ?? ""} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal" />
+        </label>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm font-semibold">
           Prep time (minutes)
           <input name="prepMinutes" type="number" min={0} max={240} defaultValue={initial.prepMinutes ?? ""} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal" />

@@ -30,7 +30,7 @@ import { type Paise, fromRupees } from "@/lib/money";
 import { isSupabaseConfigured } from "@/lib/env";
 import { db } from "@/db";
 import { requireOrg } from "./org";
-import { categories, locations, modifierGroups, modifiers, productAvailability, productModifierGroups, products, taxRates } from "@/db/schema";
+import { categories, categoryAvailability, locations, modifierGroups, modifiers, productAvailability, productModifierGroups, products, taxRates } from "@/db/schema";
 import {
   CATEGORIES,
   CHICKEN_CUTS,
@@ -316,6 +316,7 @@ async function readFromDatabase(channel: string | null): Promise<MenuCategory[]>
       sku: products.sku,
       prepMinutes: products.prepMinutes,
       kdsStation: products.kdsStation,
+      categoryId: categories.id,
       categorySlug: categories.slug,
       categoryName: categories.name,
       categoryPosition: categories.position,
@@ -399,6 +400,40 @@ async function readFromDatabase(channel: string | null): Promise<MenuCategory[]>
     );
   }
 
+  // Category visibility per channel — "hide Combos from Kiosk" without
+  // touching every product in it. Resolved with the same domain function as
+  // product availability; a category with no rows is visible everywhere.
+  const categoryIds = [...new Set(rows.map((row) => row.categoryId))];
+  const categoryAvailabilityRows =
+    categoryIds.length === 0
+      ? []
+      : await database.select().from(categoryAvailability).where(and(eq(categoryAvailability.orgId, org.id), inArray(categoryAvailability.categoryId, categoryIds)));
+
+  const categoryAvailabilityById = new Map<string, typeof categoryAvailabilityRows>();
+  for (const row of categoryAvailabilityRows) {
+    const existing = categoryAvailabilityById.get(row.categoryId) ?? [];
+    existing.push(row);
+    categoryAvailabilityById.set(row.categoryId, existing);
+  }
+
+  const hiddenCategoryIds = new Set<string>();
+  for (const categoryId of categoryIds) {
+    const categoryRows = categoryAvailabilityById.get(categoryId);
+    if (!categoryRows || categoryRows.length === 0) continue;
+    const resolved = resolveAvailability(
+      categoryRows.map((row) => ({
+        locationId: null,
+        channel: row.channel,
+        status: row.status,
+        unavailableUntil: row.unavailableUntil,
+        reason: row.reason,
+        setOnBusinessDate: businessDate(row.updatedAt),
+      })),
+      { locationId: null, channel, now: new Date(), today },
+    );
+    if (!resolved.available) hiddenCategoryIds.add(categoryId);
+  }
+
   const groupsByProduct = new Map<string, Map<string, MenuModifierGroup>>();
   for (const row of groupRows) {
     const forProduct = groupsByProduct.get(row.productSlug) ?? new Map();
@@ -421,6 +456,8 @@ async function readFromDatabase(channel: string | null): Promise<MenuCategory[]>
 
   const byCategory = new Map<string, MenuCategory>();
   for (const row of rows) {
+    if (hiddenCategoryIds.has(row.categoryId)) continue;
+
     const product: MenuProduct = {
       slug: row.productSlug,
       name: row.productName,

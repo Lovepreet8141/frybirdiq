@@ -127,6 +127,13 @@
       "when": 1789155000000,
       "tag": "0017_media_storage_policies",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789160000000,
+      "tag": "0018_menu_control_center",
+      "breakpoints": true
     }
   ]
 }

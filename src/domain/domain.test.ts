@@ -199,6 +199,13 @@ describe("permissions", () => {
     expect(can(["OWNER"], "menu.price")).toBe(true);
   });
 
+  it("stops a manager publishing a menu draft — the same OWNER/ADMIN-only gate as pricing", () => {
+    expect(can(["MANAGER"], "menu.publish")).toBe(false);
+    expect(can(["OWNER"], "menu.publish")).toBe(true);
+    expect(can(["ADMIN"], "menu.publish")).toBe(true);
+    expect(can(["CASHIER"], "menu.publish")).toBe(false);
+  });
+
   it("keeps the kitchen out of money and analytics", () => {
     expect(can(["KITCHEN"], "orders.refund")).toBe(false);
     expect(can(["KITCHEN"], "analytics.view")).toBe(false);
