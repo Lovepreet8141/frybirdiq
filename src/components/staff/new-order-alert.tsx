@@ -6,6 +6,7 @@ import { Bell, BellOff, Bike, Check, Clock, Loader2, Store, X } from "lucide-rea
 import { type NewOrder, pollNewOrders } from "@/lib/auth/order-alert-action";
 import { acceptOrderAction, rejectOrderAction } from "@/lib/auth/staff-actions";
 import { REJECTION_LABELS, REJECTION_REASONS, type RejectionReason } from "@/domain/rejection";
+import { openKotWindow } from "./print-kot";
 import { useChime } from "./use-chime";
 import { cn } from "@/lib/utils";
 
@@ -128,11 +129,19 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
 
   async function accept() {
     if (!current) return;
+    // Opened here, before the first await — a browser only lets
+    // `window.open` through without treating it as a pop-up when it runs in
+    // the same tick as the tap that caused it.
+    const kot = openKotWindow();
     setBusy(true);
     setError(null);
     const result = await acceptOrderAction({ orderId: current.id, prepMinutes });
     setBusy(false);
-    if (!result.ok) return setError(result.error ?? "That didn't work.");
+    if (!result.ok) {
+      kot.cancel();
+      return setError(result.error ?? "That didn't work.");
+    }
+    kot.commit(current.id);
     done();
   }
 

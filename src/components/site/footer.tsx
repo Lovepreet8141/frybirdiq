@@ -19,7 +19,7 @@ export async function Footer() {
           <p className="text-sm text-[var(--cream-2)]">Born crispy. Built bold.</p>
         </div>
 
-        <div className="flex flex-col gap-2 text-sm" id="visit">
+        <div className="flex flex-col gap-2 text-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--cream-2)]/70">Visit</p>
           <address className="not-italic leading-relaxed">
             Sector 9

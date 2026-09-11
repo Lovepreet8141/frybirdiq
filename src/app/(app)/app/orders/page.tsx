@@ -11,10 +11,11 @@ export const dynamic = "force-dynamic";
 
 export default async function StaffOrdersPage() {
   const staff = await requireStaff();
-  const [orders, canSettle, canAdvance] = await Promise.all([
+  const [orders, canSettle, canAdvance, canPrintKot] = await Promise.all([
     listActiveOrders(staff.orgId),
     staffCan("orders.update"),
     staffCan("kitchen.update"),
+    staffCan("kitchen.view"),
   ]);
 
   return (
@@ -39,6 +40,7 @@ export default async function StaffOrdersPage() {
               key={order.id}
               canSettle={canSettle}
               canAdvance={canAdvance}
+              canPrintKot={canPrintKot}
               order={
                 {
                   ...order,

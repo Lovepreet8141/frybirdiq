@@ -1,21 +1,22 @@
-import Image from "next/image";
 import Link from "next/link";
 import { Bike, Clock, Flame, MapPin, Phone, ShoppingBag, Timer } from "lucide-react";
 
-import { StageMotion } from "@/components/hero/stage";
+import { PremiumHero } from "@/components/hero/premium-hero";
 import { Reveal, Stagger, StaggerItem } from "@/components/motion/reveal";
 import { LoyaltySection } from "@/components/loyalty/loyalty-section";
+import { OrderNowBar } from "@/components/site/order-now-bar";
 import { ProductCard } from "@/components/menu/product-card";
-import { Price } from "@/components/menu/price";
-import { getAllProducts, getMenu } from "@/lib/repositories/menu";
+import { getAllProducts } from "@/lib/repositories/menu";
 import { restaurantSchema } from "@/lib/seo/restaurant";
 
 /**
  * Home. BUILD-PLAN.md §10.
  *
- * "The home page is a conversion surface, not a portfolio piece." Built to the
- * FRYBIRD site design: cream stage, perspective floor, the burger itself as
- * the hero, then the order routes, then the food.
+ * "The home page is a conversion surface, not a portfolio piece." One
+ * confident hero, the picks, how to order, the two loyalty programs, why
+ * the food is what it is, then where to find it. No menu browsing here —
+ * that is what /menu is for; a preview of it on the homepage duplicated the
+ * same six categories a tap away and gave the page nowhere to breathe.
  *
  * Every price and every product on this page is read from the database. The
  * design comp carries its own numbers; hardcoding them would give a homepage
@@ -26,17 +27,18 @@ import { restaurantSchema } from "@/lib/seo/restaurant";
 /** The four the menu leads with. A curatorial choice — §33: not called bestsellers. */
 const PICKS = ["nashville-bomb", "chicken-wings", "paneer-champ", "frybird-loaded-fries"];
 
-/** Categories shown as scroll rows, in order. */
-const ROWS = ["burgers", "chicken", "wraps", "fries"];
+const HERO_STATS = [
+  { label: "Kitchen hours", value: "11:30 AM – 11 PM" },
+  { label: "Ready in", value: "~15 minutes" },
+  { label: "Heat levels", value: "Classic · Nashville" },
+] as const;
 
 export default async function HomePage() {
-  const [menu, products] = await Promise.all([getMenu(), getAllProducts()]);
+  const products = await getAllProducts();
   const bySlug = new Map(products.map((product) => [product.slug, product]));
 
   const picks = PICKS.map((slug) => bySlug.get(slug)).filter((p) => p !== undefined);
   const hero = bySlug.get("og-smash") ?? bySlug.get("nashville-bomb");
-  const rows = ROWS.map((slug) => menu.find((c) => c.slug === slug)).filter((c) => c !== undefined);
-  const itemCount = products.length;
 
   return (
     <>
@@ -45,56 +47,29 @@ export default async function HomePage() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema()) }}
       />
 
-      {/* ───────────── hero ───────────── */}
-      <section className="fb-stage" id="fb-stage">
-        <div className="fb-horizon" />
-        <div className="fb-watermark" aria-hidden="true">F</div>
-        <div className="fb-floor" id="fb-floor" aria-hidden="true" />
-
-        <div className="mx-auto w-full max-w-[1180px] px-5">
-          <div className="fb-scene">
-            <h1 className="fb-mark">FRYBIRD</h1>
-            <p className="fb-tagline">BORN CRISPY. BUILT BOLD.</p>
-
-            {hero?.image && (
-              <div className="fb-shot" id="fb-shot">
-                <div className="fb-shot-shadow" />
-                <Image
-                  src={hero.image.url}
-                  alt={hero.image.alt}
-                  width={800}
-                  height={800}
-                  priority
-                  sizes="(min-width: 640px) 360px, 64vw"
-                />
-              </div>
-            )}
-
-            <div className="fb-cta-block">
-              <div className="fb-cta-panel" />
-              <div className="fb-cta">
-                <Link className="fb-btn" href="/menu">Order now</Link>
-                <Link className="fb-btn ghost" href="#picks">See the menu</Link>
-              </div>
-              <p className="fb-meta">
-                Sector 9, Ambala City &nbsp;·&nbsp; Open till 11 PM &nbsp;·&nbsp; Fried to order in <b>about 15 min</b>
-              </p>
-            </div>
-          </div>
-        </div>
-        <StageMotion />
-      </section>
+      <PremiumHero productImage={hero?.image ?? null} stats={HERO_STATS} />
 
       {/* ───────────── ticker ───────────── */}
-      <div className="fb-ticker" aria-hidden="true">
+      <div
+        aria-hidden="true"
+        className="hero-ticker border-b border-[var(--cream-hi)]/10 bg-[var(--ink)] py-3 font-heading text-sm font-extrabold tracking-[0.16em] text-[var(--cream-hi)]"
+      >
         <span>
           <span>
-            NASHVILLE HOT <i>✦</i> SMASHED DAILY <i>✦</i> FRIED TO ORDER <i>✦</i> 12-HOUR BRINE{" "}
-            <i>✦</i> LOADED FRIES <i>✦</i> BORN CRISPY BUILT BOLD <i>✦</i>{" "}
+            NASHVILLE HOT <i className="mx-4 not-italic text-primary">✦</i> SMASHED DAILY{" "}
+            <i className="mx-4 not-italic text-primary">✦</i> FRIED TO ORDER{" "}
+            <i className="mx-4 not-italic text-primary">✦</i> 12-HOUR BRINE{" "}
+            <i className="mx-4 not-italic text-primary">✦</i> LOADED FRIES{" "}
+            <i className="mx-4 not-italic text-primary">✦</i> BORN CRISPY BUILT BOLD{" "}
+            <i className="mx-4 not-italic text-primary">✦</i>{" "}
           </span>
           <span>
-            NASHVILLE HOT <i>✦</i> SMASHED DAILY <i>✦</i> FRIED TO ORDER <i>✦</i> 12-HOUR BRINE{" "}
-            <i>✦</i> LOADED FRIES <i>✦</i> BORN CRISPY BUILT BOLD <i>✦</i>{" "}
+            NASHVILLE HOT <i className="mx-4 not-italic text-primary">✦</i> SMASHED DAILY{" "}
+            <i className="mx-4 not-italic text-primary">✦</i> FRIED TO ORDER{" "}
+            <i className="mx-4 not-italic text-primary">✦</i> 12-HOUR BRINE{" "}
+            <i className="mx-4 not-italic text-primary">✦</i> LOADED FRIES{" "}
+            <i className="mx-4 not-italic text-primary">✦</i> BORN CRISPY BUILT BOLD{" "}
+            <i className="mx-4 not-italic text-primary">✦</i>{" "}
           </span>
         </span>
       </div>
@@ -123,6 +98,17 @@ export default async function HomePage() {
               </StaggerItem>
             ))}
           </Stagger>
+
+          <Reveal delay={0.12}>
+            <div className="mt-10 text-center">
+              <Link
+                href="/menu"
+                className="inline-flex min-h-[52px] cursor-pointer items-center justify-center gap-2 rounded-xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] px-7 font-heading text-sm font-extrabold shadow-[4px_4px_0_var(--red)] transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[6px_7px_0_var(--red)]"
+              >
+                See the full menu
+              </Link>
+            </div>
+          </Reveal>
         </div>
       </section>
 
@@ -173,71 +159,6 @@ export default async function HomePage() {
         </div>
       </section>
 
-      {/* ───────────── on the menu ───────────── */}
-      <section aria-labelledby="menu-heading" className="border-b border-border">
-        <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 sm:py-16">
-          <Reveal>
-            <h2 id="menu-heading" className="font-heading text-2xl font-extrabold">On the menu</h2>
-            <p className="mt-1 text-sm text-muted-foreground">A taste of what&rsquo;s in the full lineup.</p>
-          </Reveal>
-
-          <div className="mt-6 flex flex-col gap-8">
-            {rows.map((category) => (
-              <div key={category.slug}>
-                <div className="flex items-baseline justify-between">
-                  <h3 className="font-heading text-lg font-extrabold">{category.name}</h3>
-                  <Link
-                    href={`/menu#${category.slug}`}
-                    className="text-sm font-semibold text-primary-strong underline-offset-4 hover:underline"
-                  >
-                    See all
-                  </Link>
-                </div>
-
-                {/* A scroll row rather than a wrapped grid: it is a preview, and
-                    a row that runs off the edge says "there is more" in a way a
-                    tidy grid of four does not. */}
-                <ul className="mt-3 flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {category.products.slice(0, 8).map((product) => (
-                    <li key={product.slug} className="snap-start">
-                      <Link href={`/item/${product.slug}`} className="block w-32 shrink-0">
-                        <div className="relative aspect-square w-32 overflow-hidden rounded-lg border border-border bg-card">
-                          {product.image ? (
-                            <Image
-                              src={product.image.url}
-                              alt=""
-                              fill
-                              sizes="128px"
-                              className="object-contain p-2"
-                            />
-                          ) : (
-                            <span
-                              aria-hidden="true"
-                              className="flex size-full items-center justify-center font-heading text-3xl font-black italic text-secondary"
-                            >
-                              F
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-2 truncate text-sm font-semibold">{product.name}</p>
-                        <Price amount={product.price} className="text-sm font-bold" />
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-
-          <Link
-            href="/menu"
-            className="mt-8 flex h-14 items-center justify-center rounded-lg bg-primary text-base font-bold text-primary-foreground shadow-[0_2px_6px_rgba(44,33,27,0.08)] transition-transform duration-[var(--duration-micro)] active:scale-[0.98]"
-          >
-            See all {itemCount} items
-          </Link>
-        </div>
-      </section>
-
       {/* ───────────── loyalty ───────────── */}
       <LoyaltySection />
 
@@ -283,7 +204,7 @@ export default async function HomePage() {
 
       {/* ───────────── find us ───────────── */}
       <section id="visit" aria-labelledby="find-heading">
-        <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 sm:py-16">
+        <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 pb-[104px] sm:py-16 lg:pb-16">
           <Reveal>
             <h2 id="find-heading" className="font-heading text-2xl font-extrabold">Find us</h2>
           </Reveal>
@@ -321,6 +242,11 @@ export default async function HomePage() {
           </a>
         </div>
       </section>
+
+      {/* Homepage only — the header's cart button covers every other page,
+          and a bar pinned to every screen stopped meaning "start an order"
+          and started meaning wallpaper. */}
+      <OrderNowBar />
     </>
   );
 }

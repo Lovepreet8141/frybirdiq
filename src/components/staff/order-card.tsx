@@ -3,12 +3,13 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Check, Clock, FileText, Loader2 } from "lucide-react";
+import { Check, Clock, FileText, Loader2, Printer } from "lucide-react";
 import { type Paise, formatINR } from "@/lib/money";
 import { advanceOrderAction, markPaidAction } from "@/lib/auth/staff-actions";
 import type { OrderStatus } from "@/domain/order-status";
 import { cn } from "@/lib/utils";
 import { DeliveryPanel } from "./delivery-panel";
+import { openKotWindow } from "./print-kot";
 import { WhatsAppButton } from "@/components/order/whatsapp-button";
 
 export interface StaffOrder {
@@ -93,10 +94,12 @@ export function OrderCard({
   order,
   canSettle,
   canAdvance,
+  canPrintKot,
 }: {
   order: StaffOrder;
   canSettle: boolean;
   canAdvance: boolean;
+  canPrintKot: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -114,6 +117,23 @@ export function OrderCard({
       if (!result.ok) setError(result.error ?? "That didn't work.");
       router.refresh();
     });
+
+  /**
+   * Accepting an order is the moment the kitchen needs paper. The ticket
+   * window opens here, synchronously in the click, before `run` even
+   * starts its transition — a browser only lets `window.open` through
+   * without being treated as a pop-up when it runs in the same tick as the
+   * tap that caused it.
+   */
+  const acceptAndPrint = () => {
+    const kot = openKotWindow();
+    run(async () => {
+      const result = await advanceOrderAction({ orderId: order.id, to: "ACCEPTED" });
+      if (result.ok) kot.commit(order.id);
+      else kot.cancel();
+      return result;
+    });
+  };
 
   return (
     <li className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-5">
@@ -197,7 +217,11 @@ export function OrderCard({
                * `disabled` as a state to build, not a case to explain after.
                */
               disabled={pending || blockedByPayment}
-              onClick={() => run(() => advanceOrderAction({ orderId: order.id, to: next.to }))}
+              onClick={
+                next.to === "ACCEPTED"
+                  ? acceptAndPrint
+                  : () => run(() => advanceOrderAction({ orderId: order.id, to: next.to }))
+              }
               className="flex min-h-[56px] flex-1 items-center justify-center gap-2 rounded-md bg-primary px-5 font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {pending ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : next.label}
@@ -240,6 +264,16 @@ export function OrderCard({
             <FileText className="size-4" aria-hidden="true" />
             {order.invoiceNumber ?? "Receipt"}
           </Link>
+          {canPrintKot && (
+            <button
+              type="button"
+              onClick={() => openKotWindow().commit(order.id)}
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition-colors hover:bg-surface-muted"
+            >
+              <Printer className="size-4" aria-hidden="true" />
+              Print KOT
+            </button>
+          )}
         </div>
 
         {/* Said before it is pressed, rather than as an error afterwards. */}

@@ -39,7 +39,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     /* The whole staff area is the IQ surface: light, where the customer
        site is dark. They are different rooms. */
     <div data-surface="iq" className="surface-dark flex min-h-full flex-col bg-background text-foreground">
-      <header className="border-b border-border">
+      <header className="border-b border-border print:hidden">
         <div className="mx-auto flex h-[68px] w-full max-w-6xl items-center justify-between gap-4 px-[var(--gutter)]">
           <div className="flex items-center gap-2 sm:gap-6">
             <Link
@@ -107,8 +107,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       </header>
 
       {/* Above the content, so an order that has arrived is the first thing
-          seen rather than something to scroll for. */}
-      {canSeeOrders && <NewOrderAlert canReject={canReject} />}
+          seen rather than something to scroll for. Hidden on print — a
+          kitchen ticket printing must never pop this dialog onto paper. */}
+      {canSeeOrders && (
+        <div className="print:hidden">
+          <NewOrderAlert canReject={canReject} />
+        </div>
+      )}
 
       <main className="flex-1">{children}</main>
     </div>

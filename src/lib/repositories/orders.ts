@@ -16,7 +16,7 @@ import { and, desc, eq, inArray, max, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { addresses, customers, locations, loyaltyAccounts, loyaltyTransactions, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
-import { assertChannelFulfilment } from "@/domain/order-channel";
+import { assertChannelFulfilment, type OrderChannel } from "@/domain/order-channel";
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition } from "@/domain/order-status";
 import type { Role } from "@/domain/permissions";
 import { REJECTION_LABELS, type RejectionReason } from "@/domain/rejection";
@@ -662,6 +662,61 @@ export async function listActiveOrders(orgId: string): Promise<readonly StaffOrd
         modifiers: mods.filter((mod) => mod.orderItemId === item.id).map((mod) => mod.modifierName),
       })),
   }));
+}
+
+/** What the kitchen needs on paper. Nothing here is a price — a KOT is not a bill. */
+export interface KotOrder {
+  readonly id: string;
+  readonly orderNumber: string;
+  readonly channel: OrderChannel;
+  readonly fulfilment: FulfilmentType;
+  readonly tableLabel: string | null;
+  readonly customerName: string | null;
+  readonly notes: string | null;
+  readonly placedAt: Date | null;
+  readonly items: readonly { name: string; quantity: number; modifiers: readonly string[] }[];
+}
+
+/**
+ * One order, for the kitchen ticket. Scoped by both id and org — the id
+ * alone would let a stray order id from another tenant print here, since
+ * the app queries as `postgres` and bypasses row-level security.
+ *
+ * Unlike `listActiveOrders`, this does not exclude terminal orders: a
+ * printer jam or a torn ticket is a reason to reprint one that has already
+ * moved on.
+ */
+export async function getKotOrder(orderId: string, orgId: string): Promise<KotOrder | null> {
+  const database = db();
+  const [row] = await database
+    .select()
+    .from(orders)
+    .where(and(eq(orders.id, orderId), eq(orders.orgId, orgId)))
+    .limit(1);
+  if (!row) return null;
+
+  const items = await database.select().from(orderItems).where(eq(orderItems.orderId, row.id));
+  const itemIds = items.map((item) => item.id);
+  const mods =
+    itemIds.length > 0
+      ? await database.select().from(orderItemModifiers).where(inArray(orderItemModifiers.orderItemId, itemIds))
+      : [];
+
+  return {
+    id: row.id,
+    orderNumber: row.orderNumber,
+    channel: row.channel,
+    fulfilment: row.fulfilment,
+    tableLabel: row.tableLabel,
+    customerName: row.customerName,
+    notes: row.notes,
+    placedAt: row.placedAt,
+    items: items.map((item) => ({
+      name: item.productName,
+      quantity: item.quantity,
+      modifiers: mods.filter((mod) => mod.orderItemId === item.id).map((mod) => mod.modifierName),
+    })),
+  };
 }
 
 /**
