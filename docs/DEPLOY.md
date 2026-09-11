@@ -163,8 +163,13 @@ From your Mac:
 
 ```bash
 cd "/Users/lovepreetsingh/Downloads/Frybirdiq"
-./deploy/deploy.sh frybird@YOUR_SERVER_IP
+./deploy/deploy.sh root@194.238.16.200
 ```
+
+Deploy **as root**, not as `frybird`. The service user is a `--system` account
+with no shell and no password, so it cannot receive an ssh session —
+`frybird@` fails with `Permission denied (publickey)`. Files land root-owned
+and `deploy.sh` chowns them to `frybird` on arrival.
 
 It runs typecheck, lint and tests first, builds, then ships about 45 MB of
 traced output. It builds locally on purpose: `next build` wants 1–2 GB of RAM
@@ -252,7 +257,7 @@ Deploy the code **after** the migration when a change is additive, and
 ## 7. Every deploy after the first
 
 ```bash
-./deploy/deploy.sh frybird@YOUR_SERVER_IP
+./deploy/deploy.sh root@194.238.16.200
 ```
 
 Restarting drops in-flight requests. At a QSR that means doing it between
