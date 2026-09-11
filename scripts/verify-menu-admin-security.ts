@@ -22,6 +22,7 @@ import { eq, and } from "drizzle-orm";
 import { closeDb, db } from "../src/db/connection";
 import { categories, categoryAvailability, modifierGroups, modifiers, organizations, productModifierGroups, products, taxRates, productAvailability, comboItems, recipes, media } from "../src/db/schema";
 import {
+  ConcurrentModificationError,
   CrossOrgReference,
   addComboItem,
   addModifier,
@@ -34,6 +35,7 @@ import {
   moveProductToCategory,
   publishCategory,
   publishProduct,
+  removeComboItem,
   setAvailabilityRule,
   setCategoryAvailabilityRule,
   setProductActive,
@@ -80,13 +82,13 @@ async function main() {
   try {
     console.log("\n--- Cross-org rejection: category/tax rate on product create+update ---");
     await assertRejected("createProduct refuses a category from another org", () =>
-      createProduct(orgA.id, { name: "x", slug: `x-${suffix}`, description: null, shortDescription: null, categoryId: catB.id, taxRateId: null, spiceLevel: 0, isVegetarian: false, allergens: [], tags: [], sku: null, prepMinutes: null, kdsStation: null, servingInfo: null }),
+      createProduct(orgA.id, { name: "x", slug: `x-${suffix}`, description: null, shortDescription: null, categoryId: catB.id, taxRateId: null, spiceLevel: 0, isVegetarian: false, allergens: [], tags: [], sku: null, prepMinutes: null, kdsStation: null, servingInfo: null, productType: "SIMPLE" }),
     );
     await assertRejected("createProduct refuses a tax rate from another org", () =>
-      createProduct(orgA.id, { name: "x", slug: `y-${suffix}`, description: null, shortDescription: null, categoryId: null, taxRateId: taxB.id, spiceLevel: 0, isVegetarian: false, allergens: [], tags: [], sku: null, prepMinutes: null, kdsStation: null, servingInfo: null }),
+      createProduct(orgA.id, { name: "x", slug: `y-${suffix}`, description: null, shortDescription: null, categoryId: null, taxRateId: taxB.id, spiceLevel: 0, isVegetarian: false, allergens: [], tags: [], sku: null, prepMinutes: null, kdsStation: null, servingInfo: null, productType: "SIMPLE" }),
     );
     await assertRejected("updateProductDetails refuses a category from another org", () =>
-      updateProductDetails(orgA.id, prodA.id, { name: "A product", slug: prodA.slug, description: null, shortDescription: null, categoryId: catB.id, taxRateId: null, spiceLevel: 0, isVegetarian: false, allergens: [], tags: [], sku: null, prepMinutes: null, kdsStation: null, servingInfo: null }),
+      updateProductDetails(orgA.id, prodA.id, { name: "A product", slug: prodA.slug, description: null, shortDescription: null, categoryId: catB.id, taxRateId: null, spiceLevel: 0, isVegetarian: false, allergens: [], tags: [], sku: null, prepMinutes: null, kdsStation: null, servingInfo: null, productType: "SIMPLE" }, new Date()),
     );
     const [unchanged] = await database.select({ categoryId: products.categoryId }).from(products).where(eq(products.id, prodA.id));
     assert("the rejected update left the product's real category untouched", unchanged?.categoryId === catA.id);
@@ -167,6 +169,7 @@ async function main() {
       prepMinutes: null,
       kdsStation: null,
       servingInfo: "Serves 1",
+      productType: "SIMPLE",
     });
     const [created] = await database.select({ status: products.status, servingInfo: products.servingInfo }).from(products).where(eq(products.id, newProductId));
     assert("a newly created product starts as DRAFT", created?.status === "DRAFT");
@@ -197,11 +200,66 @@ async function main() {
     const [mayoOption] = await database.select({ id: modifiers.id }).from(modifiers).where(and(eq(modifiers.groupId, newGroupId), eq(modifiers.slug, `mayo-${suffix}`)));
     assert("addModifier creates the option", mayoOption !== undefined);
     if (mayoOption) {
-      await updateModifier(orgA.id, mayoOption.id, { name: "Mayo (updated)", slug: `mayo-${suffix}`, priceDelta: 1000n as never, isDefault: true, isAvailable: true });
-      const [updatedOption] = await database.select({ name: modifiers.name, priceDelta: modifiers.priceDelta }).from(modifiers).where(eq(modifiers.id, mayoOption.id));
+      const [mayoBefore] = await database.select({ updatedAt: modifiers.updatedAt }).from(modifiers).where(eq(modifiers.id, mayoOption.id));
+      await updateModifier(orgA.id, mayoOption.id, { name: "Mayo (updated)", slug: `mayo-${suffix}`, priceDelta: 1000n as never, isDefault: true, isAvailable: true }, mayoBefore!.updatedAt);
+      const [updatedOption] = await database.select({ name: modifiers.name, priceDelta: modifiers.priceDelta, updatedAt: modifiers.updatedAt }).from(modifiers).where(eq(modifiers.id, mayoOption.id));
       assert("updateModifier changes name and price", updatedOption?.name === "Mayo (updated)" && updatedOption?.priceDelta === 1000n);
+
+      console.log("\n--- Optimistic concurrency: a stale expectedUpdatedAt is rejected ---");
+      let concurrencyRejected = false;
+      try {
+        await updateModifier(orgA.id, mayoOption.id, { name: "Mayo (stale write)", slug: `mayo-${suffix}`, priceDelta: 0n as never, isDefault: true, isAvailable: true }, mayoBefore!.updatedAt);
+      } catch (error) {
+        concurrencyRejected = error instanceof ConcurrentModificationError;
+      }
+      assert("updateModifier throws ConcurrentModificationError when the version token is stale", concurrencyRejected);
+      const [afterStaleAttempt] = await database.select({ name: modifiers.name }).from(modifiers).where(eq(modifiers.id, mayoOption.id));
+      assert("the stale write did not change the row", afterStaleAttempt?.name === "Mayo (updated)");
     }
+    console.log("\n--- Audit log: modifier group and option lifecycle ---");
+    const groupChanges = await getRecentChanges(orgA.id, 200);
+    assert("creating the modifier group wrote a create entry", groupChanges.some((c) => c.entityId === newGroupId && c.field === "created"));
+    assert("adding the option wrote a create entry", mayoOption !== undefined && groupChanges.some((c) => c.entityId === mayoOption.id && c.field === "created"));
+    assert("updating the option wrote a name change entry", mayoOption !== undefined && groupChanges.some((c) => c.entityId === mayoOption.id && c.field === "name" && c.newValue === "Mayo (updated)"));
+
     await database.delete(modifierGroups).where(eq(modifierGroups.id, newGroupId)); // cascades its modifier
+
+    console.log("\n--- Combo products: explicit productType, not the old comboItems.length heuristic ---");
+    const { id: comboProductId } = await createProduct(orgA.id, {
+      name: "Audit combo",
+      slug: `audit-combo-${suffix}`,
+      description: null,
+      shortDescription: null,
+      categoryId: catA.id,
+      taxRateId: null,
+      spiceLevel: 0,
+      isVegetarian: false,
+      allergens: [],
+      tags: [],
+      sku: null,
+      prepMinutes: null,
+      kdsStation: null,
+      servingInfo: null,
+      productType: "COMBO",
+    });
+    const [comboRow] = await database.select({ productType: products.productType }).from(products).where(eq(products.id, comboProductId));
+    assert("a product created with productType COMBO stores it, even with zero combo items", comboRow?.productType === "COMBO");
+
+    await addComboItem(orgA.id, comboProductId, prodA.id, 2, null);
+    const [comboItemRow] = await database.select({ id: comboItems.id }).from(comboItems).where(eq(comboItems.comboProductId, comboProductId));
+    assert("addComboItem creates the composition row", comboItemRow !== undefined);
+
+    const comboChanges = await getRecentChanges(orgA.id, 200);
+    assert("creating the combo product wrote a create entry with entityType combo", comboChanges.some((c) => c.entityId === comboProductId && c.field === "created" && c.entityType === "combo"));
+    assert("adding a combo item wrote a composition change entry", comboChanges.some((c) => c.entityId === comboProductId && c.field === "composition" && c.oldValue === null));
+
+    if (comboItemRow) {
+      await removeComboItem(orgA.id, comboItemRow.id, null);
+      const afterRemoval = await database.select().from(comboItems).where(eq(comboItems.id, comboItemRow.id));
+      assert("removeComboItem deletes the composition row", afterRemoval.length === 0);
+      const comboChangesAfterRemoval = await getRecentChanges(orgA.id, 200);
+      assert("removing a combo item wrote a composition change entry", comboChangesAfterRemoval.some((c) => c.entityId === comboProductId && c.field === "composition" && c.newValue === null));
+    }
 
     console.log("\n--- Scheduled availability ---");
     const backAt = new Date(Date.now() + 60 * 60 * 1000);

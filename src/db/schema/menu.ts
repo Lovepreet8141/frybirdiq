@@ -33,6 +33,16 @@ export const productAvailabilityStatusEnum = pgEnum("product_availability_status
 ]);
 
 /**
+ * Whether a product bundles others.
+ *
+ * Replaces inferring "is this a combo" from `comboItems.length > 0` — that
+ * heuristic missed a real case: a combo whose only component is a modifier
+ * group ("choose your side") with zero fixed items was invisible as a combo
+ * everywhere this was checked. An explicit column has no such blind spot.
+ */
+export const productTypeEnum = pgEnum("product_type", ["SIMPLE", "COMBO"]);
+
+/**
  * A GST rate with its HSN/SAC code.
  *
  * Rates live on their own rows rather than as a number on the product so that
@@ -88,6 +98,8 @@ export const products = pgTable(
     categoryId: uuid("category_id").references(() => categories.id, { onDelete: "set null" }),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
+    /** SIMPLE unless this product bundles others via `comboItems` and/or assigned modifier groups. */
+    productType: productTypeEnum("product_type").notNull().default("SIMPLE"),
     description: text("description"),
     shortDescription: text("short_description"),
     /** Menu descriptors in Devanagari. Never used in headlines. */
@@ -200,35 +212,6 @@ export const media = pgTable(
   (table) => [index("media_org_idx").on(table.orgId)],
 );
 
-/**
- * Price per order channel.
- *
- * Empty for now: FRYBIRD charges one price across dine-in, counter and the
- * website, so a product's `basePrice` applies everywhere. The table stays
- * because online orders may later need their own price to absorb delivery
- * packaging, and because reporting already groups by channel — but nothing
- * seeds it, and an absent row means "use the base price".
- */
-export const productChannelPrices = pgTable(
-  "product_channel_prices",
-  {
-    id: primaryId(),
-    orgId: uuid("org_id")
-      .notNull()
-      .references(() => organizations.id, { onDelete: "cascade" }),
-    productId: uuid("product_id")
-      .notNull()
-      .references(() => products.id, { onDelete: "cascade" }),
-    /** An `OrderChannel` value. */
-    channel: text("channel").notNull(),
-    price: money("price").notNull(),
-    ...timestamps,
-  },
-  (table) => [
-    unique("product_channel_prices_unique").on(table.productId, table.channel),
-    index("product_channel_prices_product_idx").on(table.productId),
-  ],
-);
 
 export const modifierGroups = pgTable(
   "modifier_groups",

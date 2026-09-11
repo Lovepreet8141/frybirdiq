@@ -134,6 +134,13 @@
       "when": 1789160000000,
       "tag": "0018_menu_control_center",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789170000000,
+      "tag": "0019_product_type_and_cleanup",
+      "breakpoints": true
     }
   ]
 }

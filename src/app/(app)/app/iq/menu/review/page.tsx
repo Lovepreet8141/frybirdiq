@@ -10,7 +10,14 @@ import { publishAllDraftsAction, publishCategoryAction, publishModifierGroupActi
 export const metadata: Metadata = { title: "Review changes — FRYBIRD IQ", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
 
-const KIND_LABEL: Record<string, string> = { category: "Category", product: "Product", modifierGroup: "Modifier group", availability: "Availability" };
+const KIND_LABEL: Record<string, string> = {
+  category: "Category",
+  product: "Product",
+  modifierGroup: "Modifier group",
+  modifier: "Modifier option",
+  combo: "Combo",
+  availability: "Availability",
+};
 const EDIT_PATH: Record<string, (id: string) => string> = {
   category: (id) => `/app/iq/menu/categories/${id}`,
   product: (id) => `/app/iq/menu/products/${id}`,
@@ -27,7 +34,7 @@ const PUBLISH_ACTION: Record<string, (id: string) => Promise<{ ok: boolean; erro
  * modifier groups only. Editing something already live takes effect
  * immediately on save; this list is exclusively "not visible to anyone yet".
  */
-export default async function MenuReviewPage() {
+export default async function MenuReviewPage({ searchParams }: { searchParams: Promise<{ kind?: string }> }) {
   const staff = await getStaff();
   if (!staff) redirect("/sign-in");
   if (!(await staffCan("menu.publish"))) {
@@ -38,7 +45,9 @@ export default async function MenuReviewPage() {
     );
   }
 
-  const [drafts, recentChanges] = await Promise.all([listDraftItems(staff.orgId), getRecentChanges(staff.orgId, 40)]);
+  const { kind: kindFilter } = await searchParams;
+  const [drafts, allRecentChanges] = await Promise.all([listDraftItems(staff.orgId), getRecentChanges(staff.orgId, 100)]);
+  const recentChanges = kindFilter ? allRecentChanges.filter((c) => c.entityType === kindFilter) : allRecentChanges.slice(0, 40);
 
   return (
     <div className="mx-auto w-full max-w-2xl px-[var(--gutter)] py-8">
@@ -76,10 +85,28 @@ export default async function MenuReviewPage() {
       </ul>
 
       <section className="mt-8">
-        <h2 className="font-heading text-lg font-bold">Recent changes</h2>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          A real log of what changed on already-live items — not a staging system. These edits already took effect the moment they were saved; this is visibility, not an undo list.
-        </p>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="font-heading text-lg font-bold">Activity log</h2>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              A real log of what changed on already-live items — not a staging system. These edits already took effect the moment they were saved; this is visibility, not an undo list.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1.5 text-sm">
+            <Link href="/app/iq/menu/review" className={`rounded-md border px-2.5 py-1 ${!kindFilter ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground hover:bg-surface-muted"}`}>
+              All
+            </Link>
+            {(["category", "product", "combo", "modifierGroup", "modifier", "availability"] as const).map((k) => (
+              <Link
+                key={k}
+                href={`/app/iq/menu/review?kind=${k}`}
+                className={`rounded-md border px-2.5 py-1 ${kindFilter === k ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground hover:bg-surface-muted"}`}
+              >
+                {KIND_LABEL[k]}
+              </Link>
+            ))}
+          </div>
+        </div>
         <ul className="mt-4 divide-y divide-border rounded-lg border border-border bg-surface px-4">
           {recentChanges.length === 0 ? (
             <li className="py-8 text-center text-sm text-muted-foreground">No changes recorded yet.</li>

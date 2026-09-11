@@ -13,6 +13,7 @@ import "server-only";
  */
 
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { type PgColumn } from "drizzle-orm/pg-core";
 import { db } from "@/db";
 import {
   categories,
@@ -22,7 +23,6 @@ import {
   modifierGroups,
   modifiers,
   productAvailability,
-  productChannelPrices,
   productModifierGroups,
   products,
   recipeItems,
@@ -32,6 +32,47 @@ import {
 import { type AvailabilityStatus, resolveAvailability } from "@/domain/menu-availability";
 import { businessDate } from "@/lib/dates";
 import { type Paise } from "@/lib/money";
+
+/**
+ * Thrown when an edit's `expectedUpdatedAt` no longer matches the row —
+ * someone else saved a change to this exact entity since the form was
+ * loaded. Deliberately scoped to the multi-field edit forms (category,
+ * product details/price, modifier group, modifier option) where a stale
+ * save could silently discard a colleague's different edit — never to the
+ * single-purpose toggles (archive, publish, mark-unavailable, reorder),
+ * where two people acting on the same row in quick succession is normal,
+ * sequential, legitimate use, not a conflict. See the Menu Control Center
+ * architecture contract, §0.2 — this is conflict *detection* on an
+ * immediate write, not staging; the winning save still applies instantly.
+ */
+export class ConcurrentModificationError extends Error {
+  constructor(what: string) {
+    super(`menu-admin: ${what} was changed by someone else since you loaded it`);
+    this.name = "ConcurrentModificationError";
+  }
+}
+
+/**
+ * Compares a concurrency-token column against a client-supplied
+ * `expectedUpdatedAt` at millisecond precision.
+ *
+ * `updated_at` columns are `timestamptz` with no explicit precision, so
+ * Postgres stores microseconds — but the `postgres` driver reads timestamps
+ * back into JS `Date`, which can only hold milliseconds, and re-serializes
+ * with `.toISOString()` (also milliseconds) when it goes back out as a query
+ * parameter. A plain `eq(column, expectedUpdatedAt)` therefore compares a
+ * microsecond-precision stored value against a millisecond-precision
+ * parameter and fails almost every time, even when nothing has changed —
+ * caught by `pnpm menu:verify` throwing `ConcurrentModificationError` on a
+ * `duplicateProduct` call no one else had touched. Truncating both sides to
+ * the millisecond, the finest precision a `Date` can actually represent,
+ * fixes the comparison without a schema change; two genuinely distinct edits
+ * landing in the same millisecond is not a real-world case this staff UI
+ * needs to guard against.
+ */
+function sameUpdatedAt(column: PgColumn, expectedUpdatedAt: Date) {
+  return sql`date_trunc('milliseconds', ${column}) = date_trunc('milliseconds', ${expectedUpdatedAt.toISOString()}::timestamptz)`;
+}
 
 /**
  * Thrown when a caller-supplied id resolves to a row belonging to a
@@ -94,14 +135,17 @@ function stringifyLoggable(value: LoggableValue): string | null {
  * candidate field and this filters silently rather than making every call
  * site repeat the `oldValue !== newValue` check.
  */
-async function logChanges(input: {
-  orgId: string;
-  entityType: "category" | "product" | "modifierGroup" | "availability";
-  entityId: string;
-  entityName: string;
-  actorUserId: string | null;
-  changes: readonly { field: string; oldValue: LoggableValue; newValue: LoggableValue }[];
-}): Promise<void> {
+export type AuditEntityType = "category" | "product" | "modifierGroup" | "modifier" | "combo" | "availability";
+
+interface AuditIdentity {
+  readonly orgId: string;
+  readonly entityType: AuditEntityType;
+  readonly entityId: string;
+  readonly entityName: string;
+  readonly actorUserId: string | null;
+}
+
+async function logChanges(input: AuditIdentity & { changes: readonly { field: string; oldValue: LoggableValue; newValue: LoggableValue }[] }): Promise<void> {
   const rows = input.changes
     .filter((c) => stringifyLoggable(c.oldValue) !== stringifyLoggable(c.newValue))
     .map((c) => ({
@@ -116,6 +160,20 @@ async function logChanges(input: {
     }));
   if (rows.length === 0) return;
   await db().insert(menuAuditLog).values(rows);
+}
+
+/** Every entity creation logs one "created" row — closes the gap where only updates were ever audited. */
+async function auditCreate(input: AuditIdentity): Promise<void> {
+  await logChanges({ ...input, changes: [{ field: "created", oldValue: null, newValue: input.entityName }] });
+}
+
+/**
+ * Every entity deletion logs one "deleted" row — called with the entity's
+ * name captured *before* the delete, since `menuAuditLog.entityId` is a
+ * loose reference by design (it must survive the row it names being gone).
+ */
+async function auditDelete(input: AuditIdentity): Promise<void> {
+  await logChanges({ ...input, changes: [{ field: "deleted", oldValue: input.entityName, newValue: null }] });
 }
 
 export interface MenuChangeRow {
@@ -162,6 +220,8 @@ export interface CategoryAdminRow {
   readonly isActive: boolean;
   readonly status: "DRAFT" | "PUBLISHED";
   readonly productCount: number;
+  /** The optimistic-concurrency token — the edit form round-trips this back so a stale save is refused. */
+  readonly updatedAt: Date;
 }
 
 export async function listCategoriesAdmin(orgId: string): Promise<CategoryAdminRow[]> {
@@ -175,6 +235,7 @@ export async function listCategoriesAdmin(orgId: string): Promise<CategoryAdminR
       position: categories.position,
       isActive: categories.isActive,
       status: categories.status,
+      updatedAt: categories.updatedAt,
       productCount: sql<number>`count(${products.id})::int`,
     })
     .from(categories)
@@ -197,19 +258,38 @@ export interface CategoryInput {
   readonly imageUrl: string | null;
 }
 
-export async function createCategory(orgId: string, input: CategoryInput): Promise<{ id: string }> {
+export async function createCategory(orgId: string, input: CategoryInput, actorUserId: string | null = null): Promise<{ id: string }> {
   const [max] = await db().select({ position: sql<number>`coalesce(max(${categories.position}), -1)` }).from(categories).where(eq(categories.orgId, orgId));
   const [row] = await db()
     .insert(categories)
     .values({ orgId, ...input, position: (max?.position ?? -1) + 1, status: "DRAFT" })
     .returning({ id: categories.id });
   if (!row) throw new Error("menu-admin: could not create category");
+  await auditCreate({ orgId, entityType: "category", entityId: row.id, entityName: input.name, actorUserId });
   return row;
 }
 
-export async function updateCategory(orgId: string, id: string, input: CategoryInput, actorUserId: string | null = null): Promise<void> {
+/**
+ * `expectedUpdatedAt` is the concurrency token — the edit form round-trips
+ * the `updatedAt` it loaded with. If nothing matches (id+org right, but the
+ * timestamp has moved because someone else saved first), this throws
+ * `ConcurrentModificationError` rather than overwriting their change.
+ */
+export async function updateCategory(orgId: string, id: string, input: CategoryInput, expectedUpdatedAt: Date, actorUserId: string | null = null): Promise<void> {
   const [before] = await db().select({ name: categories.name }).from(categories).where(and(eq(categories.id, id), eq(categories.orgId, orgId))).limit(1);
-  await db().update(categories).set({ ...input, updatedAt: new Date() }).where(and(eq(categories.id, id), eq(categories.orgId, orgId)));
+
+  const [updated] = await db()
+    .update(categories)
+    .set({ ...input, updatedAt: new Date() })
+    .where(and(eq(categories.id, id), eq(categories.orgId, orgId), sameUpdatedAt(categories.updatedAt, expectedUpdatedAt)))
+    .returning({ id: categories.id });
+
+  if (!updated) {
+    const [current] = await db().select({ id: categories.id }).from(categories).where(and(eq(categories.id, id), eq(categories.orgId, orgId))).limit(1);
+    if (current) throw new ConcurrentModificationError("category");
+    return; // genuinely gone or not this org's — no-op, matches the rest of this file's ownership-miss behaviour
+  }
+
   if (before) {
     await logChanges({
       orgId,
@@ -253,10 +333,11 @@ export async function publishCategory(orgId: string, id: string, actorUserId: st
 }
 
 /** Refused while a product still references the category — same guard the FK already enforces, checked first for a clean message. */
-export async function deleteCategory(orgId: string, id: string): Promise<{ ok: boolean; error?: string }> {
+export async function deleteCategory(orgId: string, id: string, actorUserId: string | null = null): Promise<{ ok: boolean; error?: string }> {
   const [inUse] = await db().select({ id: products.id }).from(products).where(and(eq(products.categoryId, id), eq(products.orgId, orgId))).limit(1);
   if (inUse) return { ok: false, error: "This category still has products in it. Move or delete them first." };
-  await db().delete(categories).where(and(eq(categories.id, id), eq(categories.orgId, orgId)));
+  const [deleted] = await db().delete(categories).where(and(eq(categories.id, id), eq(categories.orgId, orgId))).returning({ name: categories.name });
+  if (deleted) await auditDelete({ orgId, entityType: "category", entityId: id, entityName: deleted.name, actorUserId });
   return { ok: true };
 }
 
@@ -305,6 +386,7 @@ export interface ProductAdminRow {
   readonly badges: readonly string[];
   readonly hasModifiers: boolean;
   readonly position: number;
+  readonly productType: "SIMPLE" | "COMBO";
   /** Resolved right now, wildcard (every location/channel) — the row/card badge. */
   readonly availabilityStatus: AvailabilityStatus;
 }
@@ -333,6 +415,7 @@ export async function listProductsAdmin(orgId: string, filter?: { search?: strin
         isVegetarian: products.isVegetarian,
         tags: products.tags,
         position: products.position,
+        productType: products.productType,
       })
       .from(products)
       .leftJoin(categories, eq(products.categoryId, categories.id))
@@ -376,6 +459,7 @@ export async function listProductsAdmin(orgId: string, filter?: { search?: strin
       badges: row.tags,
       hasModifiers: productIdsWithModifiers.has(row.id),
       position: row.position,
+      productType: row.productType,
       availabilityStatus: resolveStatus(row.id),
       sku: row.sku,
       image: row.images?.[0]?.url ?? null,
@@ -404,18 +488,18 @@ export interface ProductDetail {
   readonly isActive: boolean;
   readonly status: "DRAFT" | "PUBLISHED";
   readonly modifierGroupIds: readonly string[];
-  /** Whether this product bundles others — see `combo_items` — the product editor uses this to show combo-specific sections. */
+  readonly productType: "SIMPLE" | "COMBO";
+  /** Derived from `productType`, kept as a convenience for the editor's conditional sections — never re-derived from `comboItems.length`. */
   readonly isCombo: boolean;
+  /** The optimistic-concurrency token — round-tripped by the details and price forms. */
+  readonly updatedAt: Date;
 }
 
 export async function getProductAdmin(orgId: string, id: string): Promise<ProductDetail | null> {
   const [row] = await db().select().from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
   if (!row) return null;
 
-  const [assigned, comboRows] = await Promise.all([
-    db().select({ groupId: productModifierGroups.groupId }).from(productModifierGroups).where(eq(productModifierGroups.productId, id)).orderBy(asc(productModifierGroups.position)),
-    db().select({ id: comboItems.id }).from(comboItems).where(eq(comboItems.comboProductId, id)).limit(1),
-  ]);
+  const assigned = await db().select({ groupId: productModifierGroups.groupId }).from(productModifierGroups).where(eq(productModifierGroups.productId, id)).orderBy(asc(productModifierGroups.position));
 
   return {
     id: row.id,
@@ -439,7 +523,9 @@ export async function getProductAdmin(orgId: string, id: string): Promise<Produc
     isActive: row.isActive,
     status: row.status,
     modifierGroupIds: assigned.map((a) => a.groupId),
-    isCombo: comboRows.length > 0,
+    productType: row.productType,
+    isCombo: row.productType === "COMBO",
+    updatedAt: row.updatedAt,
   };
 }
 
@@ -458,9 +544,10 @@ export interface ProductInput {
   readonly prepMinutes: number | null;
   readonly kdsStation: string | null;
   readonly servingInfo: string | null;
+  readonly productType: "SIMPLE" | "COMBO";
 }
 
-export async function createProduct(orgId: string, input: ProductInput): Promise<{ id: string }> {
+export async function createProduct(orgId: string, input: ProductInput, actorUserId: string | null = null): Promise<{ id: string }> {
   if (input.categoryId) await assertCategoryOwned(orgId, input.categoryId);
   if (input.taxRateId) await assertTaxRateOwned(orgId, input.taxRateId);
 
@@ -479,24 +566,36 @@ export async function createProduct(orgId: string, input: ProductInput): Promise
     })
     .returning({ id: products.id });
   if (!row) throw new Error("menu-admin: could not create product");
+  await auditCreate({ orgId, entityType: input.productType === "COMBO" ? "combo" : "product", entityId: row.id, entityName: input.name, actorUserId });
   return row;
 }
 
-export async function updateProductDetails(orgId: string, id: string, input: ProductInput, actorUserId: string | null = null): Promise<void> {
+/**
+ * `expectedUpdatedAt` is the concurrency token — see `updateCategory`'s doc
+ * comment for the full rationale, identical here.
+ */
+export async function updateProductDetails(orgId: string, id: string, input: ProductInput, expectedUpdatedAt: Date, actorUserId: string | null = null): Promise<void> {
   if (input.categoryId) await assertCategoryOwned(orgId, input.categoryId);
   if (input.taxRateId) await assertTaxRateOwned(orgId, input.taxRateId);
 
   const [before] = await db().select({ name: products.name, categoryId: products.categoryId, sku: products.sku }).from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
 
-  await db()
+  const [updated] = await db()
     .update(products)
     .set({ ...input, allergens: [...input.allergens], tags: [...input.tags], updatedAt: new Date() })
-    .where(and(eq(products.id, id), eq(products.orgId, orgId)));
+    .where(and(eq(products.id, id), eq(products.orgId, orgId), sameUpdatedAt(products.updatedAt, expectedUpdatedAt)))
+    .returning({ id: products.id });
+
+  if (!updated) {
+    const [current] = await db().select({ id: products.id }).from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
+    if (current) throw new ConcurrentModificationError("product");
+    return;
+  }
 
   if (before) {
     await logChanges({
       orgId,
-      entityType: "product",
+      entityType: input.productType === "COMBO" ? "combo" : "product",
       entityId: id,
       entityName: input.name,
       actorUserId,
@@ -509,10 +608,22 @@ export async function updateProductDetails(orgId: string, id: string, input: Pro
   }
 }
 
-/** `menu.price`-gated at the action layer — the one field a MANAGER cannot touch. */
-export async function updateProductPrice(orgId: string, id: string, basePrice: Paise, actorUserId: string | null = null): Promise<void> {
+/** `menu.price`-gated at the action layer — the one field a MANAGER cannot touch. Also concurrency-guarded (§0.2). */
+export async function updateProductPrice(orgId: string, id: string, basePrice: Paise, expectedUpdatedAt: Date, actorUserId: string | null = null): Promise<void> {
   const [before] = await db().select({ name: products.name, basePrice: products.basePrice }).from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
-  await db().update(products).set({ basePrice, updatedAt: new Date() }).where(and(eq(products.id, id), eq(products.orgId, orgId)));
+
+  const [updated] = await db()
+    .update(products)
+    .set({ basePrice, updatedAt: new Date() })
+    .where(and(eq(products.id, id), eq(products.orgId, orgId), sameUpdatedAt(products.updatedAt, expectedUpdatedAt)))
+    .returning({ id: products.id });
+
+  if (!updated) {
+    const [current] = await db().select({ id: products.id }).from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
+    if (current) throw new ConcurrentModificationError("product");
+    return;
+  }
+
   if (before) {
     await logChanges({
       orgId,
@@ -525,8 +636,20 @@ export async function updateProductPrice(orgId: string, id: string, basePrice: P
   }
 }
 
-export async function setProductImages(orgId: string, id: string, images: readonly { url: string; alt: string }[]): Promise<void> {
+/** Not concurrency-guarded — a photo picker action, not a multi-field edit form (§0.2's scoping). */
+export async function setProductImages(orgId: string, id: string, images: readonly { url: string; alt: string }[], actorUserId: string | null = null): Promise<void> {
+  const [before] = await db().select({ name: products.name, images: products.images }).from(products).where(and(eq(products.id, id), eq(products.orgId, orgId))).limit(1);
   await db().update(products).set({ images: [...images], updatedAt: new Date() }).where(and(eq(products.id, id), eq(products.orgId, orgId)));
+  if (before) {
+    await logChanges({
+      orgId,
+      entityType: "product",
+      entityId: id,
+      entityName: before.name,
+      actorUserId,
+      changes: [{ field: "photo count", oldValue: before.images.length, newValue: images.length }],
+    });
+  }
 }
 
 export async function setProductActive(orgId: string, id: string, isActive: boolean, actorUserId: string | null = null): Promise<void> {
@@ -618,33 +741,42 @@ export async function moveProductToCategory(orgId: string, id: string, newCatego
  * since blindly cloning combo_items could silently double-bundle a product
  * that was never meant to appear in two combos without a deliberate choice.
  */
-export async function duplicateProduct(orgId: string, id: string): Promise<{ id: string }> {
+export async function duplicateProduct(orgId: string, id: string, actorUserId: string | null = null): Promise<{ id: string }> {
   const source = await getProductAdmin(orgId, id);
   if (!source) throw new CrossOrgReference("product");
 
   const slug = `${source.slug}-copy-${Math.random().toString(36).slice(2, 7)}`;
-  const { id: newId } = await createProduct(orgId, {
-    name: `${source.name} (copy)`,
-    slug,
-    description: source.description,
-    shortDescription: source.shortDescription,
-    categoryId: source.categoryId,
-    taxRateId: source.taxRateId,
-    spiceLevel: source.spiceLevel,
-    isVegetarian: source.isVegetarian,
-    allergens: source.allergens,
-    tags: source.tags,
-    sku: null,
-    prepMinutes: source.prepMinutes,
-    kdsStation: source.kdsStation,
-    servingInfo: source.servingInfo,
-  });
+  const { id: newId } = await createProduct(
+    orgId,
+    {
+      name: `${source.name} (copy)`,
+      slug,
+      description: source.description,
+      shortDescription: source.shortDescription,
+      categoryId: source.categoryId,
+      taxRateId: source.taxRateId,
+      spiceLevel: source.spiceLevel,
+      isVegetarian: source.isVegetarian,
+      allergens: source.allergens,
+      tags: source.tags,
+      sku: null,
+      prepMinutes: source.prepMinutes,
+      kdsStation: source.kdsStation,
+      servingInfo: source.servingInfo,
+      productType: source.productType,
+    },
+    actorUserId,
+  );
 
-  await Promise.all([
-    updateProductPrice(orgId, newId, source.basePrice),
-    setProductImages(orgId, newId, source.images),
-    source.modifierGroupIds.length > 0 ? setProductModifierGroups(orgId, newId, source.modifierGroupIds) : Promise.resolve(),
-  ]);
+  // Sequenced, not Promise.all: updateProductPrice is concurrency-guarded
+  // against products.updatedAt, and setProductImages also bumps that same
+  // column — running them concurrently would race the guard against its
+  // own sibling call and could throw a spurious ConcurrentModificationError
+  // on a row nobody else has touched yet.
+  const [justCreated] = await db().select({ updatedAt: products.updatedAt }).from(products).where(eq(products.id, newId)).limit(1);
+  await updateProductPrice(orgId, newId, source.basePrice, justCreated!.updatedAt, actorUserId);
+  await setProductImages(orgId, newId, source.images);
+  if (source.modifierGroupIds.length > 0) await setProductModifierGroups(orgId, newId, source.modifierGroupIds, actorUserId);
 
   return { id: newId };
 }
@@ -666,7 +798,7 @@ export async function duplicateProduct(orgId: string, id: string): Promise<{ id:
  * two statements — either the whole replacement is visible, or none of it
  * is.
  */
-export async function setProductModifierGroups(orgId: string, productId: string, groupIds: readonly string[]): Promise<void> {
+export async function setProductModifierGroups(orgId: string, productId: string, groupIds: readonly string[], actorUserId: string | null = null): Promise<void> {
   await assertProductOwned(orgId, productId);
 
   if (groupIds.length > 0) {
@@ -674,12 +806,33 @@ export async function setProductModifierGroups(orgId: string, productId: string,
     if (owned.length !== new Set(groupIds).size) throw new CrossOrgReference("modifier group");
   }
 
-  await db().transaction(async (tx) => {
+  const database = db();
+  const [product, before, allGroups] = await Promise.all([
+    database.select({ name: products.name }).from(products).where(eq(products.id, productId)).limit(1),
+    database.select({ groupId: productModifierGroups.groupId }).from(productModifierGroups).where(eq(productModifierGroups.productId, productId)),
+    database.select({ id: modifierGroups.id, name: modifierGroups.name }).from(modifierGroups).where(eq(modifierGroups.orgId, orgId)),
+  ]);
+  const nameById = new Map(allGroups.map((g) => [g.id, g.name]));
+  const beforeNames = before.map((b) => nameById.get(b.groupId) ?? b.groupId).sort().join(", ");
+  const afterNames = groupIds.map((id) => nameById.get(id) ?? id).sort().join(", ");
+
+  await database.transaction(async (tx) => {
     await tx.delete(productModifierGroups).where(eq(productModifierGroups.productId, productId));
     if (groupIds.length > 0) {
       await tx.insert(productModifierGroups).values(groupIds.map((groupId, position) => ({ productId, groupId, position })));
     }
   });
+
+  if (product[0]) {
+    await logChanges({
+      orgId,
+      entityType: "product",
+      entityId: productId,
+      entityName: product[0].name,
+      actorUserId,
+      changes: [{ field: "modifier groups", oldValue: beforeNames || null, newValue: afterNames || null }],
+    });
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -693,7 +846,8 @@ export interface ModifierGroupAdminRow {
   readonly minSelections: number;
   readonly maxSelections: number | null;
   readonly status: "DRAFT" | "PUBLISHED";
-  readonly modifiers: readonly { id: string; name: string; slug: string; priceDelta: Paise; isAvailable: boolean }[];
+  readonly updatedAt: Date;
+  readonly modifiers: readonly { id: string; name: string; slug: string; priceDelta: Paise; isDefault: boolean; isAvailable: boolean; updatedAt: Date }[];
 }
 
 export async function listModifierGroupsAdmin(orgId: string): Promise<ModifierGroupAdminRow[]> {
@@ -711,9 +865,10 @@ export async function listModifierGroupsAdmin(orgId: string): Promise<ModifierGr
     minSelections: group.minSelections,
     maxSelections: group.maxSelections,
     status: group.status,
+    updatedAt: group.updatedAt,
     modifiers: modifierRows
       .filter((m) => m.groupId === group.id)
-      .map((m) => ({ id: m.id, name: m.name, slug: m.slug, priceDelta: m.priceDelta as Paise, isAvailable: m.isAvailable })),
+      .map((m) => ({ id: m.id, name: m.name, slug: m.slug, priceDelta: m.priceDelta as Paise, isDefault: m.isDefault, isAvailable: m.isAvailable, updatedAt: m.updatedAt })),
   }));
 }
 
@@ -725,24 +880,58 @@ export interface ModifierGroupInput {
   readonly maxSelections: number | null;
 }
 
-export async function createModifierGroup(orgId: string, input: ModifierGroupInput): Promise<{ id: string }> {
+export async function createModifierGroup(orgId: string, input: ModifierGroupInput, actorUserId: string | null = null): Promise<{ id: string }> {
   const [row] = await db().insert(modifierGroups).values({ orgId, ...input, status: "DRAFT" }).returning({ id: modifierGroups.id });
   if (!row) throw new Error("menu-admin: could not create modifier group");
+  await auditCreate({ orgId, entityType: "modifierGroup", entityId: row.id, entityName: input.name, actorUserId });
   return row;
 }
 
-export async function updateModifierGroup(orgId: string, id: string, input: ModifierGroupInput): Promise<void> {
-  await db().update(modifierGroups).set({ ...input, updatedAt: new Date() }).where(and(eq(modifierGroups.id, id), eq(modifierGroups.orgId, orgId)));
+/** Concurrency-guarded (§0.2) — a modifier group's full edit form. */
+export async function updateModifierGroup(orgId: string, id: string, input: ModifierGroupInput, expectedUpdatedAt: Date, actorUserId: string | null = null): Promise<void> {
+  const [before] = await db().select({ name: modifierGroups.name, minSelections: modifierGroups.minSelections, maxSelections: modifierGroups.maxSelections }).from(modifierGroups).where(and(eq(modifierGroups.id, id), eq(modifierGroups.orgId, orgId))).limit(1);
+
+  const [updated] = await db()
+    .update(modifierGroups)
+    .set({ ...input, updatedAt: new Date() })
+    .where(and(eq(modifierGroups.id, id), eq(modifierGroups.orgId, orgId), sameUpdatedAt(modifierGroups.updatedAt, expectedUpdatedAt)))
+    .returning({ id: modifierGroups.id });
+
+  if (!updated) {
+    const [current] = await db().select({ id: modifierGroups.id }).from(modifierGroups).where(and(eq(modifierGroups.id, id), eq(modifierGroups.orgId, orgId))).limit(1);
+    if (current) throw new ConcurrentModificationError("modifier group");
+    return;
+  }
+
+  if (before) {
+    await logChanges({
+      orgId,
+      entityType: "modifierGroup",
+      entityId: id,
+      entityName: input.name,
+      actorUserId,
+      changes: [
+        { field: "name", oldValue: before.name, newValue: input.name },
+        { field: "min selections (required/optional)", oldValue: before.minSelections, newValue: input.minSelections },
+        { field: "max selections", oldValue: before.maxSelections, newValue: input.maxSelections },
+      ],
+    });
+  }
 }
 
-export async function publishModifierGroup(orgId: string, id: string): Promise<void> {
+export async function publishModifierGroup(orgId: string, id: string, actorUserId: string | null = null): Promise<void> {
+  const [before] = await db().select({ name: modifierGroups.name, status: modifierGroups.status }).from(modifierGroups).where(and(eq(modifierGroups.id, id), eq(modifierGroups.orgId, orgId))).limit(1);
   await db().update(modifierGroups).set({ status: "PUBLISHED", updatedAt: new Date() }).where(and(eq(modifierGroups.id, id), eq(modifierGroups.orgId, orgId)));
+  if (before) {
+    await logChanges({ orgId, entityType: "modifierGroup", entityId: id, entityName: before.name, actorUserId, changes: [{ field: "status", oldValue: before.status, newValue: "PUBLISHED" }] });
+  }
 }
 
-export async function deleteModifierGroup(orgId: string, id: string): Promise<{ ok: boolean; error?: string }> {
+export async function deleteModifierGroup(orgId: string, id: string, actorUserId: string | null = null): Promise<{ ok: boolean; error?: string }> {
   const [inUse] = await db().select({ id: productModifierGroups.id }).from(productModifierGroups).where(eq(productModifierGroups.groupId, id)).limit(1);
   if (inUse) return { ok: false, error: "This group is still assigned to a product. Remove it there first." };
-  await db().delete(modifierGroups).where(and(eq(modifierGroups.id, id), eq(modifierGroups.orgId, orgId)));
+  const [deleted] = await db().delete(modifierGroups).where(and(eq(modifierGroups.id, id), eq(modifierGroups.orgId, orgId))).returning({ name: modifierGroups.name });
+  if (deleted) await auditDelete({ orgId, entityType: "modifierGroup", entityId: id, entityName: deleted.name, actorUserId });
   return { ok: true };
 }
 
@@ -754,18 +943,48 @@ export interface ModifierInput {
   readonly isAvailable: boolean;
 }
 
-export async function addModifier(orgId: string, groupId: string, input: ModifierInput): Promise<void> {
+export async function addModifier(orgId: string, groupId: string, input: ModifierInput, actorUserId: string | null = null): Promise<void> {
   await assertModifierGroupOwned(orgId, groupId);
   const [max] = await db().select({ position: sql<number>`coalesce(max(${modifiers.position}), -1)` }).from(modifiers).where(eq(modifiers.groupId, groupId));
-  await db().insert(modifiers).values({ orgId, groupId, ...input, position: (max?.position ?? -1) + 1 });
+  const [row] = await db().insert(modifiers).values({ orgId, groupId, ...input, position: (max?.position ?? -1) + 1 }).returning({ id: modifiers.id });
+  if (row) await auditCreate({ orgId, entityType: "modifier", entityId: row.id, entityName: input.name, actorUserId });
 }
 
-export async function updateModifier(orgId: string, id: string, input: ModifierInput): Promise<void> {
-  await db().update(modifiers).set({ ...input, updatedAt: new Date() }).where(and(eq(modifiers.id, id), eq(modifiers.orgId, orgId)));
+/** Concurrency-guarded (§0.2) — a modifier option's full edit form. */
+export async function updateModifier(orgId: string, id: string, input: ModifierInput, expectedUpdatedAt: Date, actorUserId: string | null = null): Promise<void> {
+  const [before] = await db().select({ name: modifiers.name, priceDelta: modifiers.priceDelta, isAvailable: modifiers.isAvailable }).from(modifiers).where(and(eq(modifiers.id, id), eq(modifiers.orgId, orgId))).limit(1);
+
+  const [updated] = await db()
+    .update(modifiers)
+    .set({ ...input, updatedAt: new Date() })
+    .where(and(eq(modifiers.id, id), eq(modifiers.orgId, orgId), sameUpdatedAt(modifiers.updatedAt, expectedUpdatedAt)))
+    .returning({ id: modifiers.id });
+
+  if (!updated) {
+    const [current] = await db().select({ id: modifiers.id }).from(modifiers).where(and(eq(modifiers.id, id), eq(modifiers.orgId, orgId))).limit(1);
+    if (current) throw new ConcurrentModificationError("modifier option");
+    return;
+  }
+
+  if (before) {
+    await logChanges({
+      orgId,
+      entityType: "modifier",
+      entityId: id,
+      entityName: input.name,
+      actorUserId,
+      changes: [
+        { field: "name", oldValue: before.name, newValue: input.name },
+        { field: "price (paise)", oldValue: before.priceDelta.toString(), newValue: input.priceDelta.toString() },
+        { field: "available", oldValue: before.isAvailable, newValue: input.isAvailable },
+      ],
+    });
+  }
 }
 
-export async function deleteModifier(orgId: string, id: string): Promise<void> {
-  await db().delete(modifiers).where(and(eq(modifiers.id, id), eq(modifiers.orgId, orgId)));
+export async function deleteModifier(orgId: string, id: string, actorUserId: string | null = null): Promise<void> {
+  const [deleted] = await db().delete(modifiers).where(and(eq(modifiers.id, id), eq(modifiers.orgId, orgId))).returning({ name: modifiers.name });
+  if (deleted) await auditDelete({ orgId, entityType: "modifier", entityId: id, entityName: deleted.name, actorUserId });
 }
 
 /* ------------------------------------------------------------------ */
@@ -791,23 +1010,50 @@ export async function listComboItems(orgId: string, comboProductId: string): Pro
 }
 
 /** Both the combo container and the product being bundled into it must belong to the caller's organization. */
-export async function addComboItem(orgId: string, comboProductId: string, productId: string, quantity: number): Promise<void> {
+export async function addComboItem(orgId: string, comboProductId: string, productId: string, quantity: number, actorUserId: string | null = null): Promise<void> {
   await assertProductOwned(orgId, comboProductId);
   await assertProductOwned(orgId, productId);
-  const [max] = await db().select({ position: sql<number>`coalesce(max(${comboItems.position}), -1)` }).from(comboItems).where(eq(comboItems.comboProductId, comboProductId));
-  await db().insert(comboItems).values({ comboProductId, productId, quantity, position: (max?.position ?? -1) + 1 });
+  const database = db();
+  const [max, combo, item] = await Promise.all([
+    database.select({ position: sql<number>`coalesce(max(${comboItems.position}), -1)` }).from(comboItems).where(eq(comboItems.comboProductId, comboProductId)),
+    database.select({ name: products.name }).from(products).where(eq(products.id, comboProductId)).limit(1),
+    database.select({ name: products.name }).from(products).where(eq(products.id, productId)).limit(1),
+  ]);
+  await database.insert(comboItems).values({ comboProductId, productId, quantity, position: (max[0]?.position ?? -1) + 1 });
+
+  if (combo[0]) {
+    await logChanges({
+      orgId,
+      entityType: "combo",
+      entityId: comboProductId,
+      entityName: combo[0].name,
+      actorUserId,
+      changes: [{ field: "composition", oldValue: null, newValue: `+${quantity}× ${item[0]?.name ?? "item"}` }],
+    });
+  }
 }
 
-export async function removeComboItem(orgId: string, id: string): Promise<void> {
+export async function removeComboItem(orgId: string, id: string, actorUserId: string | null = null): Promise<void> {
   const database = db();
   const [row] = await database
-    .select({ id: comboItems.id })
+    .select({ id: comboItems.id, comboProductId: comboItems.comboProductId, comboName: products.name, itemProductId: comboItems.productId, quantity: comboItems.quantity })
     .from(comboItems)
     .innerJoin(products, eq(comboItems.comboProductId, products.id))
     .where(and(eq(comboItems.id, id), eq(products.orgId, orgId)))
     .limit(1);
   if (!row) return;
+
+  const [item] = await database.select({ name: products.name }).from(products).where(eq(products.id, row.itemProductId)).limit(1);
   await database.delete(comboItems).where(eq(comboItems.id, id));
+
+  await logChanges({
+    orgId,
+    entityType: "combo",
+    entityId: row.comboProductId,
+    entityName: row.comboName,
+    actorUserId,
+    changes: [{ field: "composition", oldValue: `${row.quantity}× ${item?.name ?? "item"}`, newValue: null }],
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -1065,15 +1311,6 @@ export async function createBareRecipe(orgId: string, productId: string, yieldQu
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for the shape callers will need once this is real
 export function inventoryAvailability(productId: string): "unknown" {
   return "unknown";
-}
-
-/** Unused today (see `productChannelPrices`'s own comment) — read for completeness by the pricing tab, never written by this pass. */
-export async function getChannelPriceOverrides(orgId: string, productId: string): Promise<readonly { channel: string; price: Paise }[]> {
-  const rows = await db()
-    .select({ channel: productChannelPrices.channel, price: productChannelPrices.price })
-    .from(productChannelPrices)
-    .where(and(eq(productChannelPrices.orgId, orgId), eq(productChannelPrices.productId, productId)));
-  return rows.map((r) => ({ channel: r.channel, price: r.price as Paise }));
 }
 
 /* ------------------------------------------------------------------ */

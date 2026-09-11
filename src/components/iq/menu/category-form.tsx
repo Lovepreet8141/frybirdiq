@@ -24,17 +24,28 @@ export function CategoryForm({
   initial,
 }: {
   id?: string;
-  initial?: { name: string; slug: string; description: string | null; imageUrl: string | null };
+  initial?: { name: string; slug: string; description: string | null; imageUrl: string | null; updatedAt: Date };
 }) {
   const action = id ? updateCategoryAction.bind(null, id) : createCategoryAction;
   const [state, formAction] = useActionState<ActionResult, FormData>(action, IDLE);
   const justSaved = state !== IDLE && state.ok;
+  const isConflict = !state.ok && state.error?.includes("changed by someone else") === true;
 
   return (
     <form action={formAction} className="flex flex-col gap-3">
+      {id && initial && <input type="hidden" name="expectedUpdatedAt" value={initial.updatedAt.toISOString()} />}
       {!state.ok && state.error && (
         <p role="alert" className="text-sm text-[var(--destructive)]">
           {state.error}
+          {isConflict && (
+            <>
+              {" "}
+              <a href="" className="underline">
+                Reload the page
+              </a>
+              .
+            </>
+          )}
         </p>
       )}
       {justSaved && (

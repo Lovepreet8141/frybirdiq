@@ -21,16 +21,27 @@ function Submit() {
 }
 
 /** `menu.price`-gated at the action layer — this is the one field a MANAGER cannot change. */
-export function ProductPriceForm({ id, basePrice }: { id: string; basePrice: Paise }) {
+export function ProductPriceForm({ id, basePrice, updatedAt }: { id: string; basePrice: Paise; updatedAt: Date }) {
   const action = updateProductPriceAction.bind(null, id);
   const [state, formAction] = useActionState<ActionResult, FormData>(action, IDLE);
   const justSaved = state !== IDLE && state.ok;
+  const isConflict = !state.ok && state.error?.includes("changed by someone else") === true;
 
   return (
     <form action={formAction} className="flex flex-col gap-3">
+      <input type="hidden" name="expectedUpdatedAt" value={updatedAt.toISOString()} />
       {!state.ok && state.error && (
         <p role="alert" className="text-sm text-[var(--destructive)]">
           {state.error}
+          {isConflict && (
+            <>
+              {" "}
+              <a href="" className="underline">
+                Reload the page
+              </a>
+              .
+            </>
+          )}
         </p>
       )}
       {justSaved && (

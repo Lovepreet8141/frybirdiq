@@ -24,6 +24,7 @@ export default async function ComboItemsPage({ params }: { params: Promise<{ id:
   ]);
   const combo = products.find((p) => p.id === id);
   if (!combo || !comboDetail) notFound();
+  if (comboDetail.productType !== "COMBO") redirect(`/app/iq/menu/products/${id}`);
 
   const candidates = products.filter((p) => p.id !== id);
   const itemsTotal = items.reduce((sum, item) => sum + (products.find((p) => p.id === item.productId)?.basePrice ?? 0n) * BigInt(item.quantity), 0n);

@@ -45,11 +45,14 @@ export function ProductDetailsForm({
     prepMinutes: number | null;
     kdsStation: string | null;
     servingInfo: string | null;
+    productType: "SIMPLE" | "COMBO";
+    updatedAt: Date;
   };
 }) {
   const action = updateProductDetailsAction.bind(null, id);
   const [state, formAction] = useActionState<ActionResult, FormData>(action, IDLE);
   const justSaved = state !== IDLE && state.ok;
+  const isConflict = !state.ok && state.error?.includes("changed by someone else") === true;
 
   const initialPresets = initial.tags.filter((t): t is (typeof BADGE_PRESETS)[number] => (BADGE_PRESETS as readonly string[]).includes(t));
   const initialCustom = initial.tags.filter((t) => !(BADGE_PRESETS as readonly string[]).includes(t));
@@ -65,9 +68,19 @@ export function ProductDetailsForm({
 
   return (
     <form action={formAction} className="flex flex-col gap-3">
+      <input type="hidden" name="expectedUpdatedAt" value={initial.updatedAt.toISOString()} />
       {!state.ok && state.error && (
         <p role="alert" className="text-sm text-[var(--destructive)]">
           {state.error}
+          {isConflict && (
+            <>
+              {" "}
+              <a href="" className="underline">
+                Reload the page
+              </a>
+              .
+            </>
+          )}
         </p>
       )}
       {justSaved && (
@@ -86,6 +99,15 @@ export function ProductDetailsForm({
           <input name="slug" required pattern="[a-z0-9-]+" defaultValue={initial.slug} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal" />
         </label>
       </div>
+
+      <label className="flex flex-col gap-1 text-sm font-semibold">
+        Product type
+        <select name="productType" defaultValue={initial.productType} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal">
+          <option value="SIMPLE">Simple item</option>
+          <option value="COMBO">Combo</option>
+        </select>
+        <span className="text-xs font-normal text-muted-foreground">A combo gets a &quot;Combo contents&quot; section below once saved.</span>
+      </label>
 
       <label className="flex flex-col gap-1 text-sm font-semibold">
         Short description <span className="font-normal text-muted-foreground">(card and grid)</span>

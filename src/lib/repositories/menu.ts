@@ -25,7 +25,7 @@ import "server-only";
 
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { businessDate } from "@/lib/dates";
-import { type ResolvedAvailability, resolveAvailability } from "@/domain/menu-availability";
+import { type RequiredGroupCheck, type ResolvedAvailability, resolveAvailability, resolveWithRequiredGroups } from "@/domain/menu-availability";
 import { type Paise, fromRupees } from "@/lib/money";
 import { isSupabaseConfigured } from "@/lib/env";
 import { db } from "@/db";
@@ -338,6 +338,13 @@ async function readFromDatabase(channel: string | null): Promise<MenuCategory[]>
     )
     .orderBy(asc(categories.position), asc(products.position));
 
+  // Deliberately not filtered to `isAvailable = true` here — a group whose
+  // every option is currently unavailable must still be visible to the
+  // resolution pass below so a *required* group finding itself with zero
+  // available options can mark the whole product unavailable, instead of
+  // silently vanishing from the product and letting a mandatory choice go
+  // unenforced at cart time. Unavailable options are filtered out only when
+  // building what the customer actually sees, further down.
   const groupRows = await database
     .select({
       productSlug: products.slug,
@@ -352,19 +359,14 @@ async function readFromDatabase(channel: string | null): Promise<MenuCategory[]>
       modifierName: modifiers.name,
       priceDelta: modifiers.priceDelta,
       isDefault: modifiers.isDefault,
+      isAvailable: modifiers.isAvailable,
       modifierPosition: modifiers.position,
     })
     .from(productModifierGroups)
     .innerJoin(products, eq(productModifierGroups.productId, products.id))
     .innerJoin(modifierGroups, eq(productModifierGroups.groupId, modifierGroups.id))
     .innerJoin(modifiers, eq(modifiers.groupId, modifierGroups.id))
-    .where(
-      and(
-        eq(products.orgId, org.id),
-        eq(modifiers.isAvailable, true),
-        eq(modifierGroups.status, "PUBLISHED"),
-      ),
-    )
+    .where(and(eq(products.orgId, org.id), eq(modifierGroups.status, "PUBLISHED")))
     .orderBy(asc(productModifierGroups.position), asc(modifiers.position));
 
   const productIds = rows.map((row) => row.productId);
@@ -434,24 +436,28 @@ async function readFromDatabase(channel: string | null): Promise<MenuCategory[]>
     if (!resolved.available) hiddenCategoryIds.add(categoryId);
   }
 
+  // Two views built from the same rows: `groupsByProduct` is what the
+  // customer is actually offered (unavailable options dropped), while
+  // `requiredChecksByProduct` counts available options per group — including
+  // groups left with zero — so a required group that's been fully 86'd can
+  // still be detected below even though it now contributes no options to
+  // the first view.
   const groupsByProduct = new Map<string, Map<string, MenuModifierGroup>>();
+  const requiredChecksByProduct = new Map<string, Map<string, RequiredGroupCheck>>();
   for (const row of groupRows) {
     const forProduct = groupsByProduct.get(row.productSlug) ?? new Map();
     const existing = forProduct.get(row.groupId);
-    const modifier: MenuModifier = {
-      slug: row.modifierSlug,
-      name: row.modifierName,
-      priceDelta: row.priceDelta as Paise,
-      isDefault: row.isDefault,
-    };
-    forProduct.set(row.groupId, {
-      slug: row.groupSlug,
-      name: row.groupName,
-      minSelections: row.minSelections,
-      maxSelections: row.maxSelections,
-      modifiers: [...(existing?.modifiers ?? []), modifier],
-    });
+    const modifiers = existing?.modifiers ?? [];
+    if (row.isAvailable) {
+      modifiers.push({ slug: row.modifierSlug, name: row.modifierName, priceDelta: row.priceDelta as Paise, isDefault: row.isDefault });
+    }
+    forProduct.set(row.groupId, { slug: row.groupSlug, name: row.groupName, minSelections: row.minSelections, maxSelections: row.maxSelections, modifiers });
     groupsByProduct.set(row.productSlug, forProduct);
+
+    const checksForProduct = requiredChecksByProduct.get(row.productSlug) ?? new Map();
+    const existingCheck = checksForProduct.get(row.groupId) ?? { name: row.groupName, minSelections: row.minSelections, availableCount: 0 };
+    checksForProduct.set(row.groupId, { ...existingCheck, availableCount: existingCheck.availableCount + (row.isAvailable ? 1 : 0) });
+    requiredChecksByProduct.set(row.productSlug, checksForProduct);
   }
 
   const byCategory = new Map<string, MenuCategory>();
@@ -483,7 +489,7 @@ async function readFromDatabase(channel: string | null): Promise<MenuCategory[]>
       prepMinutes: row.prepMinutes,
       kdsStation: row.kdsStation,
       badges: row.tags,
-      availability: resolveForProduct(row.productId),
+      availability: resolveWithRequiredGroups(resolveForProduct(row.productId), [...(requiredChecksByProduct.get(row.productSlug)?.values() ?? [])]),
     };
 
     const category = byCategory.get(row.categorySlug);

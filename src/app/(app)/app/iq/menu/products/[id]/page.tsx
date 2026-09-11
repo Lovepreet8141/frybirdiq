@@ -95,7 +95,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
       name: g.name,
       minSelections: g.minSelections,
       maxSelections: g.maxSelections,
-      modifiers: g.modifiers.map((m) => ({ slug: m.slug, name: m.name, priceDelta: m.priceDelta, isDefault: false })),
+      modifiers: g.modifiers.map((m) => ({ slug: m.slug, name: m.name, priceDelta: m.priceDelta, isDefault: m.isDefault })),
     })),
     sku: product.sku,
     prepMinutes: product.prepMinutes,
@@ -157,12 +157,14 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
               prepMinutes: product.prepMinutes,
               kdsStation: product.kdsStation,
               servingInfo: product.servingInfo,
+              productType: product.productType,
+              updatedAt: product.updatedAt,
             }}
           />
         </Section>
 
         <Section title="Pricing" hint={canPrice ? undefined : "Only an owner or admin can change the price."}>
-          {canPrice ? <ProductPriceForm id={id} basePrice={product.basePrice} /> : (
+          {canPrice ? <ProductPriceForm id={id} basePrice={product.basePrice} updatedAt={product.updatedAt} /> : (
             <p className="tabular text-lg font-bold">{formatINR(product.basePrice)}</p>
           )}
         </Section>

@@ -9,10 +9,10 @@ export const metadata: Metadata = { title: "Combos — FRYBIRD IQ", robots: { in
 export const dynamic = "force-dynamic";
 
 /**
- * A combo is a regular product that bundles others (see `comboItems` in
- * `src/db/schema/menu.ts`) — there is no separate "combo" entity, so this is
- * the product list again, pointed at each product's combo contents instead
- * of its details.
+ * A combo is a regular product with `productType: "COMBO"` that bundles
+ * others (see `comboItems` in `src/db/schema/menu.ts`) — there is no
+ * separate "combo" entity, so this is the product list again, filtered to
+ * combos and pointed at each one's contents instead of its details.
  */
 export default async function CombosPage() {
   const staff = await getStaff();
@@ -26,6 +26,7 @@ export default async function CombosPage() {
   }
 
   const products = await listProductsAdmin(staff.orgId);
+  const combos = products.filter((p) => p.productType === "COMBO");
 
   return (
     <div className="mx-auto w-full max-w-3xl px-[var(--gutter)] py-8">
@@ -34,19 +35,23 @@ export default async function CombosPage() {
       </Link>
       <h1 className="mt-3 font-heading text-3xl font-bold tracking-tight">Combos</h1>
       <p className="mt-1 text-sm text-muted-foreground">
-        Pick which product is the combo, then choose what it bundles. Any product can be a combo container.
+        To create a new combo, create a product and set its type to &quot;Combo&quot; on the Details tab — it&apos;ll show up here.
       </p>
 
-      <ul className="mt-4 divide-y divide-border rounded-lg border border-border bg-surface px-4">
-        {products.map((product) => (
-          <li key={product.id} className="flex items-center justify-between gap-3 py-3">
-            <span className="font-semibold">{product.name}</span>
-            <Link href={`/app/iq/menu/combos/${product.id}`} className="text-sm font-semibold text-primary hover:underline">
-              Manage items →
-            </Link>
-          </li>
-        ))}
-      </ul>
+      {combos.length === 0 ? (
+        <p className="mt-6 text-sm text-muted-foreground">No combos yet.</p>
+      ) : (
+        <ul className="mt-4 divide-y divide-border rounded-lg border border-border bg-surface px-4">
+          {combos.map((product) => (
+            <li key={product.id} className="flex items-center justify-between gap-3 py-3">
+              <span className="font-semibold">{product.name}</span>
+              <Link href={`/app/iq/menu/combos/${product.id}`} className="text-sm font-semibold text-primary hover:underline">
+                Manage items →
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

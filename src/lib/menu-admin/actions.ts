@@ -15,6 +15,7 @@ import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
 import { fromRupees } from "@/lib/money";
 import {
+  ConcurrentModificationError,
   CrossOrgReference,
   addComboItem,
   addModifier,
@@ -28,6 +29,7 @@ import {
   deleteModifier,
   deleteModifierGroup,
   duplicateProduct,
+  getProductAdmin,
   listDraftItems,
   moveCategory,
   moveProductPosition,
@@ -50,6 +52,7 @@ import {
 } from "@/lib/repositories/menu-admin";
 import { deleteMedia, uploadMedia } from "@/lib/repositories/media";
 import { AVAILABILITY_STATUSES } from "@/domain/menu-availability";
+import { revalidateMenuSurfaces } from "./cache";
 import { MENU_VISIBILITY_CHANNELS, UNAVAILABLE_REASON_PRESETS, type ReactivationPreset } from "./constants";
 
 export interface ActionResult {
@@ -63,12 +66,18 @@ function explain(error: unknown): ActionResult {
   // A crafted id that doesn't belong to this organization — the dropdowns
   // never offer one, so this only fires against a request built by hand.
   if (error instanceof CrossOrgReference) return { ok: false, error: "That could not be found." };
+  if (error instanceof ConcurrentModificationError) {
+    return { ok: false, error: "Someone else changed this since you loaded it. Refresh and try again." };
+  }
   throw error;
 }
 
-function revalidateMenu() {
-  revalidatePath("/app/iq/menu");
-  revalidatePath("/menu");
+/** Parses the hidden `expectedUpdatedAt` field every concurrency-guarded edit form carries. */
+function parseExpectedUpdatedAt(formData: FormData): Date {
+  const raw = formData.get("expectedUpdatedAt");
+  const date = new Date(String(raw ?? ""));
+  if (Number.isNaN(date.getTime())) throw new Error("menu-admin: form is missing a valid expectedUpdatedAt field");
+  return date;
 }
 
 const slugField = z
@@ -92,13 +101,17 @@ export async function createCategoryAction(_prev: ActionResult, formData: FormDa
 
   try {
     const staff = await requirePermission("menu.edit");
-    await createCategory(staff.orgId, {
-      name: parsed.data.name,
-      slug: parsed.data.slug,
-      description: parsed.data.description || null,
-      imageUrl: parsed.data.imageUrl || null,
-    });
-    revalidateMenu();
+    await createCategory(
+      staff.orgId,
+      {
+        name: parsed.data.name,
+        slug: parsed.data.slug,
+        description: parsed.data.description || null,
+        imageUrl: parsed.data.imageUrl || null,
+      },
+      staff.userId,
+    );
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -111,6 +124,7 @@ export async function updateCategoryAction(id: string, _prev: ActionResult, form
 
   try {
     const staff = await requirePermission("menu.edit");
+    const expectedUpdatedAt = parseExpectedUpdatedAt(formData);
     await updateCategory(
       staff.orgId,
       id,
@@ -120,9 +134,10 @@ export async function updateCategoryAction(id: string, _prev: ActionResult, form
         description: parsed.data.description || null,
         imageUrl: parsed.data.imageUrl || null,
       },
+      expectedUpdatedAt,
       staff.userId,
     );
-    revalidateMenu();
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -133,7 +148,7 @@ export async function setCategoryActiveAction(id: string, isActive: boolean): Pr
   try {
     const staff = await requirePermission("menu.edit");
     await setCategoryActive(staff.orgId, id, isActive, staff.userId);
-    revalidateMenu();
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -144,7 +159,7 @@ export async function publishCategoryAction(id: string): Promise<ActionResult> {
   try {
     const staff = await requirePermission("menu.publish");
     await publishCategory(staff.orgId, id, staff.userId);
-    revalidateMenu();
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -154,8 +169,8 @@ export async function publishCategoryAction(id: string): Promise<ActionResult> {
 export async function deleteCategoryAction(id: string): Promise<ActionResult> {
   try {
     const staff = await requirePermission("menu.edit");
-    const result = await deleteCategory(staff.orgId, id);
-    revalidateMenu();
+    const result = await deleteCategory(staff.orgId, id, staff.userId);
+    revalidateMenuSurfaces();
     return result;
   } catch (error) {
     return explain(error);
@@ -166,7 +181,7 @@ export async function moveCategoryAction(id: string, direction: "up" | "down"): 
   try {
     const staff = await requirePermission("menu.edit");
     await moveCategory(staff.orgId, id, direction);
-    revalidateMenu();
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -190,6 +205,7 @@ const productDetailsSchema = z.object({
   prepMinutes: z.coerce.number().int().min(0).max(240).optional().or(z.literal("")),
   kdsStation: z.string().trim().max(60).optional(),
   servingInfo: z.string().trim().max(100).optional(),
+  productType: z.enum(["SIMPLE", "COMBO"]).optional().default("SIMPLE"),
 });
 
 function splitList(value: string | undefined): string[] {
@@ -209,23 +225,28 @@ export async function createProductAction(_prev: CreateProductResult, formData: 
 
   try {
     const staff = await requirePermission("menu.edit");
-    const { id } = await createProduct(staff.orgId, {
-      name: parsed.data.name,
-      slug: parsed.data.slug,
-      description: parsed.data.description || null,
-      shortDescription: parsed.data.shortDescription || null,
-      categoryId: parsed.data.categoryId || null,
-      taxRateId: parsed.data.taxRateId || null,
-      spiceLevel: parsed.data.spiceLevel,
-      isVegetarian: parsed.data.isVegetarian,
-      allergens: splitList(parsed.data.allergens),
-      tags: splitList(parsed.data.tags),
-      sku: parsed.data.sku || null,
-      prepMinutes: parsed.data.prepMinutes === "" ? null : (parsed.data.prepMinutes ?? null),
-      kdsStation: parsed.data.kdsStation || null,
-      servingInfo: parsed.data.servingInfo || null,
-    });
-    revalidateMenu();
+    const { id } = await createProduct(
+      staff.orgId,
+      {
+        name: parsed.data.name,
+        slug: parsed.data.slug,
+        description: parsed.data.description || null,
+        shortDescription: parsed.data.shortDescription || null,
+        categoryId: parsed.data.categoryId || null,
+        taxRateId: parsed.data.taxRateId || null,
+        spiceLevel: parsed.data.spiceLevel,
+        isVegetarian: parsed.data.isVegetarian,
+        allergens: splitList(parsed.data.allergens),
+        tags: splitList(parsed.data.tags),
+        sku: parsed.data.sku || null,
+        prepMinutes: parsed.data.prepMinutes === "" ? null : (parsed.data.prepMinutes ?? null),
+        kdsStation: parsed.data.kdsStation || null,
+        servingInfo: parsed.data.servingInfo || null,
+        productType: parsed.data.productType,
+      },
+      staff.userId,
+    );
+    revalidateMenuSurfaces({ productSlug: parsed.data.slug });
     return { ok: true, id };
   } catch (error) {
     return explain(error);
@@ -238,6 +259,7 @@ export async function updateProductDetailsAction(id: string, _prev: ActionResult
 
   try {
     const staff = await requirePermission("menu.edit");
+    const expectedUpdatedAt = parseExpectedUpdatedAt(formData);
     await updateProductDetails(
       staff.orgId,
       id,
@@ -256,10 +278,12 @@ export async function updateProductDetailsAction(id: string, _prev: ActionResult
         prepMinutes: parsed.data.prepMinutes === "" ? null : (parsed.data.prepMinutes ?? null),
         kdsStation: parsed.data.kdsStation || null,
         servingInfo: parsed.data.servingInfo || null,
+        productType: parsed.data.productType,
       },
+      expectedUpdatedAt,
       staff.userId,
     );
-    revalidateMenu();
+    revalidateMenuSurfaces({ productSlug: parsed.data.slug });
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -276,8 +300,10 @@ export async function updateProductPriceAction(id: string, _prev: ActionResult, 
 
   try {
     const staff = await requirePermission("menu.price");
-    await updateProductPrice(staff.orgId, id, fromRupees(parsed.data.basePrice), staff.userId);
-    revalidateMenu();
+    const expectedUpdatedAt = parseExpectedUpdatedAt(formData);
+    await updateProductPrice(staff.orgId, id, fromRupees(parsed.data.basePrice), expectedUpdatedAt, staff.userId);
+    const product = await getProductAdmin(staff.orgId, id);
+    revalidateMenuSurfaces({ productSlug: product?.slug });
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -288,7 +314,8 @@ export async function setProductActiveAction(id: string, isActive: boolean): Pro
   try {
     const staff = await requirePermission("menu.edit");
     await setProductActive(staff.orgId, id, isActive, staff.userId);
-    revalidateMenu();
+    const product = await getProductAdmin(staff.orgId, id);
+    revalidateMenuSurfaces({ productSlug: product?.slug });
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -299,7 +326,8 @@ export async function publishProductAction(id: string): Promise<ActionResult> {
   try {
     const staff = await requirePermission("menu.publish");
     await publishProduct(staff.orgId, id, staff.userId);
-    revalidateMenu();
+    const product = await getProductAdmin(staff.orgId, id);
+    revalidateMenuSurfaces({ productSlug: product?.slug });
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -310,8 +338,8 @@ export async function publishProductAction(id: string): Promise<ActionResult> {
 export async function duplicateProductAction(id: string): Promise<CreateProductResult> {
   try {
     const staff = await requirePermission("menu.edit");
-    const { id: newId } = await duplicateProduct(staff.orgId, id);
-    revalidateMenu();
+    const { id: newId } = await duplicateProduct(staff.orgId, id, staff.userId);
+    revalidateMenuSurfaces();
     return { ok: true, id: newId };
   } catch (error) {
     return explain(error);
@@ -322,7 +350,7 @@ export async function moveProductPositionAction(id: string, direction: "up" | "d
   try {
     const staff = await requirePermission("menu.edit");
     await moveProductPosition(staff.orgId, id, direction);
-    revalidateMenu();
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -334,7 +362,7 @@ export async function moveProductToCategoryAction(id: string, categoryId: string
   try {
     const staff = await requirePermission("menu.edit");
     await moveProductToCategory(staff.orgId, id, categoryId, staff.userId);
-    revalidateMenu();
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -344,8 +372,9 @@ export async function moveProductToCategoryAction(id: string, categoryId: string
 export async function setProductModifierGroupsAction(id: string, groupIds: readonly string[]): Promise<ActionResult> {
   try {
     const staff = await requirePermission("menu.edit");
-    await setProductModifierGroups(staff.orgId, id, groupIds);
-    revalidateMenu();
+    await setProductModifierGroups(staff.orgId, id, groupIds, staff.userId);
+    const product = await getProductAdmin(staff.orgId, id);
+    revalidateMenuSurfaces({ productSlug: product?.slug });
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -355,8 +384,9 @@ export async function setProductModifierGroupsAction(id: string, groupIds: reado
 export async function setProductImagesAction(id: string, images: readonly { url: string; alt: string }[]): Promise<ActionResult> {
   try {
     const staff = await requirePermission("menu.edit");
-    await setProductImages(staff.orgId, id, images);
-    revalidateMenu();
+    await setProductImages(staff.orgId, id, images, staff.userId);
+    const product = await getProductAdmin(staff.orgId, id);
+    revalidateMenuSurfaces({ productSlug: product?.slug });
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -416,14 +446,18 @@ export async function createModifierGroupAction(_prev: CreateGroupResult, formDa
 
   try {
     const staff = await requirePermission("menu.edit");
-    const { id } = await createModifierGroup(staff.orgId, {
-      name: parsed.data.name,
-      slug: parsed.data.slug,
-      description: parsed.data.description || null,
-      minSelections: parsed.data.minSelections,
-      maxSelections: parsed.data.maxSelections === "" ? null : (parsed.data.maxSelections ?? null),
-    });
-    revalidateMenu();
+    const { id } = await createModifierGroup(
+      staff.orgId,
+      {
+        name: parsed.data.name,
+        slug: parsed.data.slug,
+        description: parsed.data.description || null,
+        minSelections: parsed.data.minSelections,
+        maxSelections: parsed.data.maxSelections === "" ? null : (parsed.data.maxSelections ?? null),
+      },
+      staff.userId,
+    );
+    revalidateMenuSurfaces();
     return { ok: true, id };
   } catch (error) {
     return explain(error);
@@ -436,14 +470,21 @@ export async function updateModifierGroupAction(id: string, _prev: ActionResult,
 
   try {
     const staff = await requirePermission("menu.edit");
-    await updateModifierGroup(staff.orgId, id, {
-      name: parsed.data.name,
-      slug: parsed.data.slug,
-      description: parsed.data.description || null,
-      minSelections: parsed.data.minSelections,
-      maxSelections: parsed.data.maxSelections === "" ? null : (parsed.data.maxSelections ?? null),
-    });
-    revalidateMenu();
+    const expectedUpdatedAt = parseExpectedUpdatedAt(formData);
+    await updateModifierGroup(
+      staff.orgId,
+      id,
+      {
+        name: parsed.data.name,
+        slug: parsed.data.slug,
+        description: parsed.data.description || null,
+        minSelections: parsed.data.minSelections,
+        maxSelections: parsed.data.maxSelections === "" ? null : (parsed.data.maxSelections ?? null),
+      },
+      expectedUpdatedAt,
+      staff.userId,
+    );
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -453,8 +494,8 @@ export async function updateModifierGroupAction(id: string, _prev: ActionResult,
 export async function publishModifierGroupAction(id: string): Promise<ActionResult> {
   try {
     const staff = await requirePermission("menu.publish");
-    await publishModifierGroup(staff.orgId, id);
-    revalidateMenu();
+    await publishModifierGroup(staff.orgId, id, staff.userId);
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -469,9 +510,9 @@ export async function publishAllDraftsAction(): Promise<ActionResult> {
     for (const item of drafts) {
       if (item.kind === "category") await publishCategory(staff.orgId, item.id, staff.userId);
       else if (item.kind === "product") await publishProduct(staff.orgId, item.id, staff.userId);
-      else await publishModifierGroup(staff.orgId, item.id);
+      else await publishModifierGroup(staff.orgId, item.id, staff.userId);
     }
-    revalidateMenu();
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -481,8 +522,8 @@ export async function publishAllDraftsAction(): Promise<ActionResult> {
 export async function deleteModifierGroupAction(id: string): Promise<ActionResult> {
   try {
     const staff = await requirePermission("menu.edit");
-    const result = await deleteModifierGroup(staff.orgId, id);
-    revalidateMenu();
+    const result = await deleteModifierGroup(staff.orgId, id, staff.userId);
+    revalidateMenuSurfaces();
     return result;
   } catch (error) {
     return explain(error);
@@ -503,14 +544,19 @@ export async function addModifierAction(groupId: string, _prev: ActionResult, fo
 
   try {
     const staff = await requirePermission("menu.edit");
-    await addModifier(staff.orgId, groupId, {
-      name: parsed.data.name,
-      slug: parsed.data.slug,
-      priceDelta: fromRupees(parsed.data.priceDelta),
-      isDefault: parsed.data.isDefault,
-      isAvailable: parsed.data.isAvailable,
-    });
-    revalidateMenu();
+    await addModifier(
+      staff.orgId,
+      groupId,
+      {
+        name: parsed.data.name,
+        slug: parsed.data.slug,
+        priceDelta: fromRupees(parsed.data.priceDelta),
+        isDefault: parsed.data.isDefault,
+        isAvailable: parsed.data.isAvailable,
+      },
+      staff.userId,
+    );
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -523,14 +569,21 @@ export async function updateModifierAction(id: string, _prev: ActionResult, form
 
   try {
     const staff = await requirePermission("menu.edit");
-    await updateModifier(staff.orgId, id, {
-      name: parsed.data.name,
-      slug: parsed.data.slug,
-      priceDelta: fromRupees(parsed.data.priceDelta),
-      isDefault: parsed.data.isDefault,
-      isAvailable: parsed.data.isAvailable,
-    });
-    revalidateMenu();
+    const expectedUpdatedAt = parseExpectedUpdatedAt(formData);
+    await updateModifier(
+      staff.orgId,
+      id,
+      {
+        name: parsed.data.name,
+        slug: parsed.data.slug,
+        priceDelta: fromRupees(parsed.data.priceDelta),
+        isDefault: parsed.data.isDefault,
+        isAvailable: parsed.data.isAvailable,
+      },
+      expectedUpdatedAt,
+      staff.userId,
+    );
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -540,8 +593,8 @@ export async function updateModifierAction(id: string, _prev: ActionResult, form
 export async function deleteModifierAction(id: string): Promise<ActionResult> {
   try {
     const staff = await requirePermission("menu.edit");
-    await deleteModifier(staff.orgId, id);
-    revalidateMenu();
+    await deleteModifier(staff.orgId, id, staff.userId);
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -553,8 +606,9 @@ export async function deleteModifierAction(id: string): Promise<ActionResult> {
 export async function addComboItemAction(comboProductId: string, productId: string, quantity: number): Promise<ActionResult> {
   try {
     const staff = await requirePermission("menu.edit");
-    await addComboItem(staff.orgId, comboProductId, productId, quantity);
-    revalidateMenu();
+    await addComboItem(staff.orgId, comboProductId, productId, quantity, staff.userId);
+    const combo = await getProductAdmin(staff.orgId, comboProductId);
+    revalidateMenuSurfaces({ productSlug: combo?.slug });
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -564,8 +618,8 @@ export async function addComboItemAction(comboProductId: string, productId: stri
 export async function removeComboItemAction(id: string): Promise<ActionResult> {
   try {
     const staff = await requirePermission("menu.edit");
-    await removeComboItem(staff.orgId, id);
-    revalidateMenu();
+    await removeComboItem(staff.orgId, id, staff.userId);
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -600,8 +654,7 @@ export async function setAvailabilityRuleAction(productId: string, _prev: Action
       },
       staff.userId,
     );
-    revalidateMenu();
-    revalidatePath("/app/pos");
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -612,8 +665,7 @@ export async function deleteAvailabilityRuleAction(id: string): Promise<ActionRe
   try {
     const staff = await requirePermission("menu.edit");
     await deleteAvailabilityRule(staff.orgId, id);
-    revalidateMenu();
-    revalidatePath("/app/pos");
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -664,8 +716,7 @@ export async function quickSetAvailabilityAction(input: {
     })();
 
     await setAvailabilityRule(staff.orgId, input.productId, { locationId: null, channel: null, status, unavailableUntil, reason }, staff.userId);
-    revalidateMenu();
-    revalidatePath("/app/pos");
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -677,8 +728,7 @@ export async function quickMarkAvailableAction(productId: string): Promise<Actio
   try {
     const staff = await requirePermission("menu.edit");
     await setAvailabilityRule(staff.orgId, productId, { locationId: null, channel: null, status: "AVAILABLE", unavailableUntil: null, reason: null }, staff.userId);
-    revalidateMenu();
-    revalidatePath("/app/pos");
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -711,8 +761,7 @@ export async function setCategoryAvailabilityRuleAction(categoryId: string, _pre
       },
       staff.userId,
     );
-    revalidateMenu();
-    revalidatePath("/app/pos");
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -723,8 +772,7 @@ export async function deleteCategoryAvailabilityRuleAction(id: string): Promise<
   try {
     const staff = await requirePermission("menu.edit");
     await deleteCategoryAvailabilityRule(staff.orgId, id);
-    revalidateMenu();
-    revalidatePath("/app/pos");
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);
@@ -737,7 +785,7 @@ export async function createBareRecipeAction(productId: string, yieldQuantity: n
   try {
     const staff = await requirePermission("recipes.edit");
     await createBareRecipe(staff.orgId, productId, yieldQuantity);
-    revalidateMenu();
+    revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {
     return explain(error);

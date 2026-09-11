@@ -117,3 +117,29 @@ export function resolveAvailability(
     }
   }
 }
+
+export interface RequiredGroupCheck {
+  readonly name: string;
+  readonly minSelections: number;
+  /** How many of this group's modifiers are currently available to choose. */
+  readonly availableCount: number;
+}
+
+/**
+ * Layers "can this actually be completed" on top of a product's own
+ * category/product-level resolution — the third tier of "category → product
+ * → modifier" availability. A product can be AVAILABLE by its own rows and
+ * still be unorderable as specified: if a *required* modifier group
+ * (`minSelections >= 1`) has zero available options left, there is no legal
+ * selection for it, and the product must resolve as unavailable rather than
+ * silently reaching the customer with an impossible-to-complete choice.
+ *
+ * Only tightens an already-available product; never overrides a product
+ * that's unavailable for its own reason (that reason stays the one shown).
+ */
+export function resolveWithRequiredGroups(product: ResolvedAvailability, groups: readonly RequiredGroupCheck[]): ResolvedAvailability {
+  if (!product.available) return product;
+  const exhausted = groups.find((g) => g.minSelections >= 1 && g.availableCount === 0);
+  if (!exhausted) return product;
+  return { status: "TEMPORARILY_UNAVAILABLE", available: false, reason: `${exhausted.name}: no options available`, until: null };
+}

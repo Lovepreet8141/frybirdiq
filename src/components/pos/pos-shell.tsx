@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { OrderChannel } from "@/domain/order-channel";
 import { lineKey } from "@/lib/cart/schema";
-import { type PriceDraftOk, priceDraftOrder } from "@/lib/pos/actions";
+import { type PriceDraftOk, pollPosMenu, priceDraftOrder } from "@/lib/pos/actions";
 import type { MenuCategory, MenuProduct } from "@/lib/repositories/menu";
 import { CategoryRail } from "./category-rail";
 import { CustomerLookup } from "./customer-lookup";
@@ -31,9 +31,17 @@ interface DraftLine {
 }
 
 const PRICE_DEBOUNCE_MS = 200;
+/**
+ * Not urgent the way a new order is — a price or an 86 from the Menu
+ * Manager reaching the counter within half a minute is plenty, and anything
+ * shorter is unnecessary load on a screen that stays open for a whole
+ * shift.
+ */
+const MENU_POLL_MS = 25_000;
 
-export function PosShell({ categories, canLookupCustomers }: { categories: readonly MenuCategory[]; canLookupCustomers: boolean }) {
-  const [activeCategory, setActiveCategory] = useState<string | null>(categories[0]?.slug ?? null);
+export function PosShell({ categories: initialCategories, canLookupCustomers }: { categories: readonly MenuCategory[]; canLookupCustomers: boolean }) {
+  const [categories, setCategories] = useState<readonly MenuCategory[]>(initialCategories);
+  const [activeCategory, setActiveCategory] = useState<string | null>(initialCategories[0]?.slug ?? null);
   const [channel, setChannel] = useState<OrderChannel | null>(null);
   const [lines, setLines] = useState<readonly DraftLine[]>([]);
   const [pickerProduct, setPickerProduct] = useState<MenuProduct | null>(null);
@@ -45,6 +53,36 @@ export function PosShell({ categories, canLookupCustomers }: { categories: reado
 
   const online = useOnline();
 
+  // Refresh the grid against the same shared menu path everything else
+  // reads (§ pollPosMenu) — a price change, a photo, or someone marking an
+  // item sold out from the Menu Manager reaches this screen without anyone
+  // reloading the tab. Never touches `lines` or the priced draft: an order
+  // already being built keeps whatever it was quoted until the counter taps
+  // something new, exactly like every other price in this app.
+  useEffect(() => {
+    if (!online) return;
+    let stopped = false;
+
+    const tick = async () => {
+      const result = await pollPosMenu(channel);
+      if (stopped || !result.ok) return;
+      setCategories(result.categories);
+    };
+
+    const timer = setInterval(() => void tick(), MENU_POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [online, channel]);
+
+  // If the category picked before a refresh no longer exists (renamed,
+  // unpublished), fall back to the first still-available one rather than
+  // silently showing an empty grid under a stale label — derived, not
+  // synced via an effect, so a menu refresh can never cause an extra render
+  // pass just to correct the selection.
+  const resolvedActiveCategory = activeCategory && categories.some((c) => c.slug === activeCategory) ? activeCategory : (categories[0]?.slug ?? null);
+
   const bySlug = useMemo(
     () => new Map(categories.flatMap((category) => category.products).map((product) => [product.slug, product])),
     [categories],
@@ -55,7 +93,7 @@ export function PosShell({ categories, canLookupCustomers }: { categories: reado
   const activeProducts =
     normalisedSearch !== ""
       ? allProducts.filter((product) => product.name.toLowerCase().includes(normalisedSearch) || (product.sku ?? "").toLowerCase().includes(normalisedSearch))
-      : (categories.find((category) => category.slug === activeCategory)?.products ?? []);
+      : (categories.find((category) => category.slug === resolvedActiveCategory)?.products ?? []);
 
   const quantities = useMemo(() => {
     const map = new Map<string, number>();
@@ -179,7 +217,7 @@ export function PosShell({ categories, canLookupCustomers }: { categories: reado
             name: category.name,
             count: category.products.length,
           }))}
-          active={activeCategory}
+          active={resolvedActiveCategory}
           onSelect={setActiveCategory}
         />
       </div>
@@ -193,7 +231,7 @@ export function PosShell({ categories, canLookupCustomers }: { categories: reado
         </label>
         <select
           id="pos-category"
-          value={activeCategory ?? ""}
+          value={resolvedActiveCategory ?? ""}
           onChange={(event) => setActiveCategory(event.target.value)}
           className="h-[44px] w-full rounded-md border border-border bg-background px-3 text-sm font-semibold"
         >

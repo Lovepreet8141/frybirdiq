@@ -19,6 +19,7 @@ import { ZERO, formatINR } from "@/lib/money";
 import { findCustomerByPhone } from "@/lib/repositories/customers";
 import { getStampConfig } from "@/lib/loyalty/config";
 import { getStampAccountState } from "@/lib/repositories/loyalty";
+import { type MenuCategory, getMenu } from "@/lib/repositories/menu";
 import { priceDraft } from "./pricing";
 
 const draftSchema = z.object({
@@ -105,6 +106,32 @@ export async function priceDraftOrder(input: unknown): Promise<PriceDraftResult>
     hasTax: draft.totals.total > ZERO,
     rejected: draft.rejected,
   };
+}
+
+/**
+ * Refreshes the product grid against the same shared menu path everything
+ * else reads — not a second menu system, just `getMenu()` polled from a
+ * screen that stays open for a whole shift. A change made from the Menu
+ * Manager (a price, a photo, someone marking an item sold out) reaches the
+ * counter within one poll interval without anyone reloading the tab, the
+ * same "channel and price never trusted from the client" rule this file
+ * already applies to pricing.
+ */
+const pollChannelSchema = z.enum(["DINE_IN", "TAKEAWAY"]).nullable().default(null);
+
+export async function pollPosMenu(channel: unknown): Promise<{ ok: true; categories: readonly MenuCategory[] } | { ok: false; error: string }> {
+  const parsed = pollChannelSchema.safeParse(channel);
+  if (!parsed.success) return { ok: false, error: "That channel isn't valid." };
+
+  try {
+    await requirePermission("orders.create");
+  } catch (error) {
+    if (error instanceof NotSignedIn) return { ok: false, error: "You've been signed out. Sign in again." };
+    if (error instanceof NotPermitted) return { ok: false, error: "You don't have permission to view the menu." };
+    throw error;
+  }
+
+  return { ok: true, categories: await getMenu(parsed.data) };
 }
 
 export interface CustomerLookupResult {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type AvailabilityRow, resolveAvailability } from "./menu-availability";
+import { type AvailabilityRow, type RequiredGroupCheck, resolveAvailability, resolveWithRequiredGroups } from "./menu-availability";
 
 const NOW = new Date("2026-09-11T12:00:00Z");
 const TODAY = "2026-09-11";
@@ -93,5 +93,35 @@ describe("resolveAvailability", () => {
       const result = resolveAvailability(rows, { locationId: null, channel: null, now: NOW, today: TODAY });
       expect(result.available).toBe(true);
     });
+  });
+});
+
+const AVAILABLE: ReturnType<typeof resolveAvailability> = { status: "AVAILABLE", available: true, reason: null, until: null };
+
+function group(overrides: Partial<RequiredGroupCheck>): RequiredGroupCheck {
+  return { name: "Heat", minSelections: 1, availableCount: 1, ...overrides };
+}
+
+describe("resolveWithRequiredGroups", () => {
+  it("stays available when every required group still has an option", () => {
+    const result = resolveWithRequiredGroups(AVAILABLE, [group({ availableCount: 2 })]);
+    expect(result).toEqual(AVAILABLE);
+  });
+
+  it("stays available when an optional group (minSelections 0) is fully exhausted", () => {
+    const result = resolveWithRequiredGroups(AVAILABLE, [group({ minSelections: 0, availableCount: 0 })]);
+    expect(result.available).toBe(true);
+  });
+
+  it("becomes unavailable when a required group has zero available options", () => {
+    const result = resolveWithRequiredGroups(AVAILABLE, [group({ name: "Spice level", minSelections: 1, availableCount: 0 })]);
+    expect(result.available).toBe(false);
+    expect(result.reason).toBe("Spice level: no options available");
+  });
+
+  it("never overrides a product already unavailable for its own reason", () => {
+    const alreadyOut: ReturnType<typeof resolveAvailability> = { status: "SOLD_OUT_TODAY", available: false, reason: "No more thighs", until: null };
+    const result = resolveWithRequiredGroups(alreadyOut, [group({ availableCount: 0 })]);
+    expect(result).toEqual(alreadyOut);
   });
 });

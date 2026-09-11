@@ -25,12 +25,13 @@ export function ModifierGroupForm({
   initial,
 }: {
   id?: string;
-  initial?: { name: string; slug: string; minSelections: number; maxSelections: number | null };
+  initial?: { name: string; slug: string; minSelections: number; maxSelections: number | null; updatedAt: Date };
 }) {
   const router = useRouter();
   const action = id ? updateModifierGroupAction.bind(null, id) : createModifierGroupAction;
   const [state, formAction] = useActionState<CreateGroupResult, FormData>(action, IDLE);
   const justSaved = state !== IDLE && state.ok;
+  const isConflict = !state.ok && state.error?.includes("changed by someone else") === true;
 
   useEffect(() => {
     if (!id && state.ok && state.id) router.push(`/app/iq/menu/modifiers/${state.id}`);
@@ -38,9 +39,19 @@ export function ModifierGroupForm({
 
   return (
     <form action={formAction} className="flex flex-col gap-3">
+      {id && initial && <input type="hidden" name="expectedUpdatedAt" value={initial.updatedAt.toISOString()} />}
       {!state.ok && state.error && (
         <p role="alert" className="text-sm text-[var(--destructive)]">
           {state.error}
+          {isConflict && (
+            <>
+              {" "}
+              <a href="" className="underline">
+                Reload the page
+              </a>
+              .
+            </>
+          )}
         </p>
       )}
       {justSaved && (
