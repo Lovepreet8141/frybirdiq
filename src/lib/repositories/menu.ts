@@ -23,12 +23,14 @@ import "server-only";
  * does.
  */
 
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
+import { businessDate } from "@/lib/dates";
+import { type ResolvedAvailability, resolveAvailability } from "@/domain/menu-availability";
 import { type Paise, fromRupees } from "@/lib/money";
 import { isSupabaseConfigured } from "@/lib/env";
 import { db } from "@/db";
 import { requireOrg } from "./org";
-import { categories, modifierGroups, modifiers, productModifierGroups, products, taxRates } from "@/db/schema";
+import { categories, locations, modifierGroups, modifiers, productAvailability, productModifierGroups, products, taxRates } from "@/db/schema";
 import {
   CATEGORIES,
   CHICKEN_CUTS,
@@ -38,6 +40,9 @@ import {
   TAX_RATES,
   type VegClass,
 } from "@/db/menu-data";
+
+/** Available everywhere — what a product with no availability row at all is. */
+const DEFAULT_AVAILABILITY: ResolvedAvailability = { status: "AVAILABLE", available: true, reason: null, until: null };
 
 export interface MenuModifier {
   readonly slug: string;
@@ -72,6 +77,14 @@ export interface MenuProduct {
   /** The first photograph, or null. Products without one render typographically. */
   readonly image: { readonly url: string; readonly alt: string } | null;
   readonly modifierGroups: readonly MenuModifierGroup[];
+  /** Stock-keeping code, if one has been set. */
+  readonly sku: string | null;
+  readonly prepMinutes: number | null;
+  readonly kdsStation: string | null;
+  /** Free-form labels — "bestseller", "new" — from the product's tags. */
+  readonly badges: readonly string[];
+  /** Resolved for the channel/location `getMenu` was called with. */
+  readonly availability: ResolvedAvailability;
 }
 
 export interface MenuCategory {
@@ -164,6 +177,19 @@ function chickenGroups(cut: (typeof CHICKEN_CUTS)[number]): MenuModifierGroup[] 
   ];
 }
 
+/**
+ * Fields this fallback has no source for. There is no admin database to have
+ * drafted or 86'd anything here, so everything is simply published and
+ * available.
+ */
+const TRANSCRIPTION_DEFAULTS = {
+  sku: null,
+  prepMinutes: null,
+  kdsStation: null,
+  badges: [] as readonly string[],
+  availability: DEFAULT_AVAILABILITY,
+};
+
 function buildFromTranscription(): MenuCategory[] {
   const plain: MenuCategory[] = CATEGORIES.map((category) => ({
     slug: category.slug,
@@ -184,6 +210,7 @@ function buildFromTranscription(): MenuCategory[] {
       // finished without one, which is exactly what this fallback needs.
       image: null,
       modifierGroups: [],
+      ...TRANSCRIPTION_DEFAULTS,
     })),
   }));
 
@@ -203,6 +230,7 @@ function buildFromTranscription(): MenuCategory[] {
       hsnCode: DEFAULT_HSN,
       image: null,
       modifierGroups: chickenGroups(cut),
+      ...TRANSCRIPTION_DEFAULTS,
     })),
   };
 
@@ -222,6 +250,7 @@ function buildFromTranscription(): MenuCategory[] {
       hsnCode: DEFAULT_HSN,
       image: null,
       modifierGroups: [],
+      ...TRANSCRIPTION_DEFAULTS,
     })),
   };
 
@@ -241,6 +270,7 @@ function buildFromTranscription(): MenuCategory[] {
       hsnCode: DEFAULT_HSN,
       image: null,
       modifierGroups: [],
+      ...TRANSCRIPTION_DEFAULTS,
     })),
   };
 
@@ -260,15 +290,21 @@ function buildFromTranscription(): MenuCategory[] {
  * written to match the schema and the seed, and it is the first thing to
  * verify once keys exist.
  */
-async function readFromDatabase(): Promise<MenuCategory[]> {
+async function readFromDatabase(channel: string | null): Promise<MenuCategory[]> {
   const database = db();
   // Scoped explicitly. The app connects as `postgres`, which bypasses
   // row-level security, so this filter is the tenant boundary — not a
   // secondary check on top of one. See ./org.
   const org = await requireOrg();
+  // Single-store today: the one location this org has, used to resolve
+  // location-scoped availability rows. A second location would need this
+  // to become a parameter, same as everywhere else this pattern appears.
+  const [location] = await database.select({ id: locations.id }).from(locations).where(eq(locations.orgId, org.id)).limit(1);
+  const locationId = location?.id ?? null;
 
   const rows = await database
     .select({
+      productId: products.id,
       productSlug: products.slug,
       images: products.images,
       productName: products.name,
@@ -276,6 +312,10 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
       price: products.basePrice,
       isVegetarian: products.isVegetarian,
       spiceLevel: products.spiceLevel,
+      tags: products.tags,
+      sku: products.sku,
+      prepMinutes: products.prepMinutes,
+      kdsStation: products.kdsStation,
       categorySlug: categories.slug,
       categoryName: categories.name,
       categoryPosition: categories.position,
@@ -287,7 +327,14 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
     .from(products)
     .innerJoin(categories, eq(products.categoryId, categories.id))
     .leftJoin(taxRates, eq(products.taxRateId, taxRates.id))
-    .where(and(eq(products.orgId, org.id), eq(products.isActive, true)))
+    .where(
+      and(
+        eq(products.orgId, org.id),
+        eq(products.isActive, true),
+        eq(products.status, "PUBLISHED"),
+        eq(categories.status, "PUBLISHED"),
+      ),
+    )
     .orderBy(asc(categories.position), asc(products.position));
 
   const groupRows = await database
@@ -310,8 +357,47 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
     .innerJoin(products, eq(productModifierGroups.productId, products.id))
     .innerJoin(modifierGroups, eq(productModifierGroups.groupId, modifierGroups.id))
     .innerJoin(modifiers, eq(modifiers.groupId, modifierGroups.id))
-    .where(and(eq(products.orgId, org.id), eq(modifiers.isAvailable, true)))
+    .where(
+      and(
+        eq(products.orgId, org.id),
+        eq(modifiers.isAvailable, true),
+        eq(modifierGroups.status, "PUBLISHED"),
+      ),
+    )
     .orderBy(asc(productModifierGroups.position), asc(modifiers.position));
+
+  const productIds = rows.map((row) => row.productId);
+  const availabilityRows =
+    productIds.length === 0
+      ? []
+      : await database.select().from(productAvailability).where(and(eq(productAvailability.orgId, org.id), inArray(productAvailability.productId, productIds)));
+
+  const availabilityByProduct = new Map<string, typeof availabilityRows>();
+  for (const row of availabilityRows) {
+    const existing = availabilityByProduct.get(row.productId) ?? [];
+    existing.push(row);
+    availabilityByProduct.set(row.productId, existing);
+  }
+
+  const today = businessDate();
+  function resolveForProduct(productId: string): ResolvedAvailability {
+    const productRows = availabilityByProduct.get(productId);
+    if (!productRows || productRows.length === 0) return DEFAULT_AVAILABILITY;
+
+    return resolveAvailability(
+      productRows.map((row) => ({
+        locationId: row.locationId,
+        channel: row.channel,
+        status: row.status,
+        unavailableUntil: row.unavailableUntil,
+        reason: row.reason,
+        // A row's own last-updated date is when its status was set — the
+        // only thing that makes a stale SOLD_OUT_TODAY expire.
+        setOnBusinessDate: businessDate(row.updatedAt),
+      })),
+      { locationId, channel, now: new Date(), today },
+    );
+  }
 
   const groupsByProduct = new Map<string, Map<string, MenuModifierGroup>>();
   for (const row of groupRows) {
@@ -356,6 +442,11 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
       // every menu render is bytes nothing on screen will use.
       image: row.images?.[0] ? { url: row.images[0].url, alt: row.images[0].alt } : null,
       modifierGroups: [...(groupsByProduct.get(row.productSlug)?.values() ?? [])],
+      sku: row.sku,
+      prepMinutes: row.prepMinutes,
+      kdsStation: row.kdsStation,
+      badges: row.tags,
+      availability: resolveForProduct(row.productId),
     };
 
     const category = byCategory.get(row.categorySlug);
@@ -373,12 +464,21 @@ async function readFromDatabase(): Promise<MenuCategory[]> {
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
-export async function getMenu(): Promise<readonly MenuCategory[]> {
-  return isSupabaseConfigured() ? readFromDatabase() : buildFromTranscription();
+/**
+ * The menu, filtered to what is actually orderable on `channel`.
+ *
+ * `channel` should be an `OrderChannel` value ("DINE_IN", "TAKEAWAY",
+ * "ONLINE") for a real ordering surface, or `null` when there is no channel
+ * context (the transcription fallback, or an admin preview that wants to see
+ * a product regardless of channel-specific 86ing). Availability rows scoped
+ * to a *different* channel never match — see `src/domain/menu-availability`.
+ */
+export async function getMenu(channel: string | null = null): Promise<readonly MenuCategory[]> {
+  return isSupabaseConfigured() ? readFromDatabase(channel) : buildFromTranscription();
 }
 
-export async function getProduct(slug: string): Promise<MenuProduct | null> {
-  const menu = await getMenu();
+export async function getProduct(slug: string, channel: string | null = null): Promise<MenuProduct | null> {
+  const menu = await getMenu(channel);
   for (const category of menu) {
     const found = category.products.find((product) => product.slug === slug);
     if (found) return found;
@@ -387,7 +487,7 @@ export async function getProduct(slug: string): Promise<MenuProduct | null> {
 }
 
 /** Every product, flattened. Used by search and by the signature row. */
-export async function getAllProducts(): Promise<readonly MenuProduct[]> {
-  const menu = await getMenu();
+export async function getAllProducts(channel: string | null = null): Promise<readonly MenuProduct[]> {
+  const menu = await getMenu(channel);
   return menu.flatMap((category) => category.products);
 }

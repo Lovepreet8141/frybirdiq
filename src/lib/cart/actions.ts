@@ -30,7 +30,7 @@ export async function addToCart(input: unknown): Promise<CartActionResult> {
   const parsed = cartLineSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "That item could not be added." };
 
-  const product = await getProduct(parsed.data.slug);
+  const product = await getProduct(parsed.data.slug, "ONLINE");
   if (!product) return { ok: false, error: "That item is no longer on the menu." };
 
   // Every required group must be answered, and no group may be over-filled.

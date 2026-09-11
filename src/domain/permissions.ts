@@ -35,6 +35,7 @@ export const PERMISSIONS = [
   "menu.view",
   "menu.edit",
   "menu.price",
+  "menu.publish",
   "inventory.view",
   "inventory.adjust",
   "inventory.waste",

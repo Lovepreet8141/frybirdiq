@@ -1,5 +1,6 @@
 "use client";
 
+import { Search, X } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { formatINR } from "@/lib/money";
@@ -20,6 +21,8 @@ export function ProductGrid({
   quantities,
   disabled,
   disabledReason,
+  search,
+  onSearchChange,
   onTap,
 }: {
   products: readonly MenuProduct[];
@@ -27,35 +30,69 @@ export function ProductGrid({
   quantities: ReadonlyMap<string, number>;
   disabled: boolean;
   disabledReason?: string;
+  search: string;
+  onSearchChange: (value: string) => void;
   onTap: (product: MenuProduct) => void;
 }) {
-  if (products.length === 0) {
-    return <EmptyState className="m-4" title="Nothing in this category." detail="Try another one from the rail." />;
-  }
-
   return (
     <div className="flex h-full flex-col overflow-y-auto p-4">
+      <div className="relative mb-3 shrink-0">
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+        <label htmlFor="pos-search" className="sr-only">
+          Search products
+        </label>
+        <input
+          id="pos-search"
+          type="search"
+          value={search}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder="Search the whole menu"
+          autoComplete="off"
+          className="h-[44px] w-full rounded-md border border-border bg-surface pl-9 pr-9 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        />
+        {search !== "" && (
+          <button
+            type="button"
+            onClick={() => onSearchChange("")}
+            aria-label="Clear search"
+            className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted hover:text-foreground"
+          >
+            <X className="size-4" aria-hidden="true" />
+          </button>
+        )}
+      </div>
+
       {disabled && disabledReason && (
         <p role="status" className="mb-3 rounded-md border border-border bg-surface-muted px-3 py-2 text-sm text-muted-foreground">
           {disabledReason}
         </p>
       )}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
-        {products.map((product) => (
-          <ProductTile
-            key={product.slug}
-            product={product}
-            quantity={quantities.get(product.slug) ?? 0}
-            disabled={disabled}
-            onTap={() => onTap(product)}
-          />
-        ))}
-      </div>
+
+      {products.length === 0 ? (
+        <EmptyState
+          className="m-4"
+          title={search ? "Nothing matches that search." : "Nothing in this category."}
+          detail={search ? "Try a different search." : "Try another one from the rail."}
+        />
+      ) : (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+          {products.map((product) => (
+            <ProductTile
+              key={product.slug}
+              product={product}
+              quantity={quantities.get(product.slug) ?? 0}
+              disabled={disabled}
+              onTap={() => onTap(product)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function ProductTile({
+/** Exported so the Menu Manager's product preview panel renders the exact tile the counter shows — never a re-implementation of it. */
+export function ProductTile({
   product,
   quantity,
   disabled,
@@ -75,12 +112,13 @@ function ProductTile({
   }, [justAdded]);
 
   const hasOptions = product.modifierGroups.length > 0;
+  const unavailable = !product.availability.available;
 
   return (
     <button
       type="button"
       data-slug={product.slug}
-      disabled={disabled}
+      disabled={disabled || unavailable}
       onClick={() => {
         onTap();
         // A product with options opens the picker rather than adding
@@ -92,6 +130,11 @@ function ProductTile({
         "hover:border-border-strong focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50",
       )}
     >
+      {unavailable && (
+        <span className="absolute inset-x-1.5 top-1.5 z-10 rounded-md bg-[var(--destructive)] px-1.5 py-0.5 text-center text-[11px] font-bold leading-tight text-white">
+          {product.availability.status === "SOLD_OUT_TODAY" ? "Sold out today" : product.availability.reason ?? "Unavailable"}
+        </span>
+      )}
       {product.image ? (
         <div className="flex h-24 shrink-0 items-center justify-center bg-surface-muted">
           <Image

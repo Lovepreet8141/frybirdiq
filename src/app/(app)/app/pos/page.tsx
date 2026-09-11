@@ -20,6 +20,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function PosPage() {
   const canCreate = await staffCan("orders.create");
+  const canLookupCustomers = await staffCan("customers.view");
 
   if (!canCreate) {
     return (
@@ -41,5 +42,5 @@ export default async function PosPage() {
     );
   }
 
-  return <PosShell categories={menu} />;
+  return <PosShell categories={menu} canLookupCustomers={canLookupCustomers} />;
 }

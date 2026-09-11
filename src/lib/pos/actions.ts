@@ -16,10 +16,14 @@ import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
 import { cartLineSchema } from "@/lib/cart/schema";
 import { ZERO, formatINR } from "@/lib/money";
+import { findCustomerByPhone } from "@/lib/repositories/customers";
+import { getStampConfig } from "@/lib/loyalty/config";
+import { getStampAccountState } from "@/lib/repositories/loyalty";
 import { priceDraft } from "./pricing";
 
 const draftSchema = z.object({
   lines: z.array(cartLineSchema).max(50),
+  channel: z.enum(["DINE_IN", "TAKEAWAY"]).nullable().default(null),
 });
 
 export interface PricedDraftLineView {
@@ -80,7 +84,7 @@ export async function priceDraftOrder(input: unknown): Promise<PriceDraftResult>
 
   if (parsed.data.lines.length === 0) return EMPTY;
 
-  const draft = await priceDraft(parsed.data.lines);
+  const draft = await priceDraft(parsed.data.lines, parsed.data.channel);
 
   return {
     ok: true,
@@ -100,5 +104,52 @@ export async function priceDraftOrder(input: unknown): Promise<PriceDraftResult>
     total: formatINR(draft.totals.gross),
     hasTax: draft.totals.total > ZERO,
     rejected: draft.rejected,
+  };
+}
+
+export interface CustomerLookupResult {
+  readonly ok: true;
+  readonly name: string | null;
+  readonly phone: string;
+  /** null when the stamp program is off, or this customer has never earned toward it. */
+  readonly rewards: { readonly stampCount: number; readonly stampsRequired: number; readonly availableRewardCount: number } | null;
+}
+
+export interface CustomerLookupFail {
+  readonly ok: false;
+  readonly error: string;
+}
+
+const phoneSchema = z.string().trim().regex(/^[6-9]\d{9}$/, "Enter a 10-digit mobile number.");
+
+/**
+ * Looks a customer up by phone for the counter — read-only, no discount is
+ * applied here. Reuses the same FRYBIRD REWARDS ledger the website reads
+ * (`getStampAccountState`), not a parallel POS loyalty system.
+ */
+export async function lookupCustomerAction(phone: string): Promise<CustomerLookupResult | CustomerLookupFail> {
+  const parsed = phoneSchema.safeParse(phone);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Enter a 10-digit mobile number." };
+
+  let staff;
+  try {
+    staff = await requirePermission("customers.view");
+  } catch (error) {
+    if (error instanceof NotSignedIn) return { ok: false, error: "You've been signed out. Sign in again." };
+    if (error instanceof NotPermitted) return { ok: false, error: "You don't have permission to look up customers." };
+    throw error;
+  }
+
+  const customer = await findCustomerByPhone(staff.orgId, parsed.data);
+  if (!customer) return { ok: false, error: "No customer found with that number." };
+
+  const config = await getStampConfig();
+  const state = config.enabled ? await getStampAccountState(customer.id, staff.orgId) : null;
+
+  return {
+    ok: true,
+    name: customer.name,
+    phone: parsed.data,
+    rewards: state ? { stampCount: state.stampCount, stampsRequired: config.stampsRequired, availableRewardCount: state.availableRewards.length } : null,
   };
 }

@@ -10,7 +10,7 @@ import { getAllProducts, getProduct } from "@/lib/repositories/menu";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const product = await getProduct(slug);
+  const product = await getProduct(slug, "ONLINE");
   if (!product) return { title: "Not found" };
 
   return {
@@ -20,13 +20,13 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 }
 
 export async function generateStaticParams() {
-  const products = await getAllProducts();
+  const products = await getAllProducts("ONLINE");
   return products.map((product) => ({ slug: product.slug }));
 }
 
 export default async function ProductPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const product = await getProduct(slug);
+  const product = await getProduct(slug, "ONLINE");
   if (!product) notFound();
 
   return (

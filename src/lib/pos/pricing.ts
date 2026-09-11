@@ -47,9 +47,9 @@ export interface PricedDraft {
   readonly rejected: readonly { slug: string; reason: string }[];
 }
 
-/** Nothing on the counter yet. */
-export async function priceDraft(lines: readonly CartLine[]): Promise<PricedDraft> {
-  const menu = await getMenu();
+/** Nothing on the counter yet. `channel` is null until the cashier picks dine-in or takeaway. */
+export async function priceDraft(lines: readonly CartLine[], channel: string | null = null): Promise<PricedDraft> {
+  const menu = await getMenu(channel);
   const bySlug = new Map(menu.flatMap((category) => category.products).map((product) => [product.slug, product]));
   const context = await resolvePricingContext();
 
@@ -68,6 +68,15 @@ export async function priceDraft(lines: readonly CartLine[]): Promise<PricedDraf
     const product = bySlug.get(line.slug);
     if (!product) {
       rejected.push({ slug: line.slug, reason: "No longer on the menu" });
+      continue;
+    }
+
+    // Server-authoritative: a tile that looked orderable when the grid last
+    // rendered can have been 86'd since. Reject here rather than trusting
+    // that the tile was disabled — the same reasoning as resolveLineModifiers
+    // not trusting the client's chosen modifiers. §41.
+    if (!product.availability.available) {
+      rejected.push({ slug: line.slug, reason: product.availability.reason ?? "Not available right now" });
       continue;
     }
 

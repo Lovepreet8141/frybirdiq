@@ -28,7 +28,7 @@ interface SearchParams {
 
 export default async function MenuPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const { q = "", diet = "" } = await searchParams;
-  const menu = await getMenu();
+  const menu = await getMenu("ONLINE");
 
   const query = q.trim().toLowerCase();
   const vegOnly = diet === "veg";

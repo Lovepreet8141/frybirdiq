@@ -34,7 +34,7 @@ const HERO_STATS = [
 ] as const;
 
 export default async function HomePage() {
-  const products = await getAllProducts();
+  const products = await getAllProducts("ONLINE");
   const bySlug = new Map(products.map((product) => [product.slug, product]));
 
   const picks = PICKS.map((slug) => bySlug.get(slug)).filter((p) => p !== undefined);

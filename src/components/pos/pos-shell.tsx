@@ -15,6 +15,7 @@ import { lineKey } from "@/lib/cart/schema";
 import { type PriceDraftOk, priceDraftOrder } from "@/lib/pos/actions";
 import type { MenuCategory, MenuProduct } from "@/lib/repositories/menu";
 import { CategoryRail } from "./category-rail";
+import { CustomerLookup } from "./customer-lookup";
 import { ModifierPicker } from "./modifier-picker";
 import { OrderBuilder } from "./order-builder";
 import { ProductGrid } from "./product-grid";
@@ -31,11 +32,12 @@ interface DraftLine {
 
 const PRICE_DEBOUNCE_MS = 200;
 
-export function PosShell({ categories }: { categories: readonly MenuCategory[] }) {
+export function PosShell({ categories, canLookupCustomers }: { categories: readonly MenuCategory[]; canLookupCustomers: boolean }) {
   const [activeCategory, setActiveCategory] = useState<string | null>(categories[0]?.slug ?? null);
   const [channel, setChannel] = useState<OrderChannel | null>(null);
   const [lines, setLines] = useState<readonly DraftLine[]>([]);
   const [pickerProduct, setPickerProduct] = useState<MenuProduct | null>(null);
+  const [search, setSearch] = useState("");
 
   const [priced, setPriced] = useState<PriceDraftOk | null>(null);
   const [pricingError, setPricingError] = useState<string | null>(null);
@@ -48,7 +50,12 @@ export function PosShell({ categories }: { categories: readonly MenuCategory[] }
     [categories],
   );
 
-  const activeProducts = categories.find((category) => category.slug === activeCategory)?.products ?? [];
+  const normalisedSearch = search.trim().toLowerCase();
+  const allProducts = useMemo(() => categories.flatMap((category) => category.products), [categories]);
+  const activeProducts =
+    normalisedSearch !== ""
+      ? allProducts.filter((product) => product.name.toLowerCase().includes(normalisedSearch) || (product.sku ?? "").toLowerCase().includes(normalisedSearch))
+      : (categories.find((category) => category.slug === activeCategory)?.products ?? []);
 
   const quantities = useMemo(() => {
     const map = new Map<string, number>();
@@ -64,6 +71,7 @@ export function PosShell({ categories }: { categories: readonly MenuCategory[] }
     startPricing(async () => {
       const result = await priceDraftOrder({
         lines: lines.map((line) => ({ slug: line.slug, quantity: line.quantity, modifiers: [...line.modifierSlugs] })),
+        channel,
       });
       if (id !== requestId.current) return;
       if (result.ok) {
@@ -85,7 +93,7 @@ export function PosShell({ categories }: { categories: readonly MenuCategory[] }
     const timer = setTimeout(reprice, PRICE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines, online]);
+  }, [lines, online, channel]);
 
   function addLine(input: { slug: string; quantity: number; modifierSlugs: readonly string[] }) {
     const product = bySlug.get(input.slug);
@@ -119,7 +127,7 @@ export function PosShell({ categories }: { categories: readonly MenuCategory[] }
   }
 
   function handleTap(product: MenuProduct) {
-    if (!online || channel === null) return;
+    if (!online || channel === null || !product.availability.available) return;
     if (product.modifierGroups.length > 0) {
       setPickerProduct(product);
       return;
@@ -202,21 +210,28 @@ export function PosShell({ categories }: { categories: readonly MenuCategory[] }
         quantities={quantities}
         disabled={gridDisabled}
         disabledReason={disabledReason}
+        search={search}
+        onSearchChange={setSearch}
         onTap={handleTap}
       />
 
-      <OrderBuilder
-        channel={channel}
-        onChannelChange={setChannel}
-        lines={lines}
-        onQuantityChange={changeQuantity}
-        onRemove={removeLine}
-        priced={priced}
-        isPricing={isPricing}
-        pricingError={pricingError}
-        onRetry={reprice}
-        online={online}
-      />
+      <div className="flex h-full min-h-0 flex-col">
+        {canLookupCustomers && <CustomerLookup />}
+        <div className="min-h-0 flex-1">
+          <OrderBuilder
+            channel={channel}
+            onChannelChange={setChannel}
+            lines={lines}
+            onQuantityChange={changeQuantity}
+            onRemove={removeLine}
+            priced={priced}
+            isPricing={isPricing}
+            pricingError={pricingError}
+            onRetry={reprice}
+            online={online}
+          />
+        </div>
+      </div>
 
       <ModifierPicker product={pickerProduct} onClose={() => setPickerProduct(null)} onAdd={addLine} />
     </div>

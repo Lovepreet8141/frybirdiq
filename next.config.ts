@@ -20,6 +20,16 @@ const nextConfig: NextConfig = {
 
   // Do not advertise the framework and version to every visitor.
   poweredByHeader: false,
+
+  /**
+   * The Menu Manager's media library stores photos in Supabase Storage, on
+   * this project's own subdomain — `next/image` refuses any remote host that
+   * is not explicitly allow-listed, so a photo picked there would otherwise
+   * 400 rather than render.
+   */
+  images: {
+    remotePatterns: [{ protocol: "https", hostname: "*.supabase.co", pathname: "/storage/v1/object/public/**" }],
+  },
 };
 
 export default nextConfig;

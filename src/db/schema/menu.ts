@@ -1,8 +1,36 @@
 /** Categories, products, variants, modifiers, combos, tax. BUILD-PLAN.md §11, §12, §23, §58. */
 
-import { boolean, index, integer, jsonb, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { locations, organizations } from "./tenancy";
 import { ZERO_MONEY, money, primaryId, timestamps } from "./_shared";
+
+/**
+ * Draft vs published, for the Menu Manager. §"draft/publish" in the Menu
+ * Manager spec.
+ *
+ * Deliberately simple: a new category/product/modifier group can be
+ * prepared as a draft and reviewed before it reaches `getMenu()`. Editing an
+ * item that is already PUBLISHED takes effect immediately on save, the same
+ * as every other admin form in this app — this is not a staging/versioning
+ * system for live edits.
+ */
+export const menuItemStatusEnum = pgEnum("menu_item_status", ["DRAFT", "PUBLISHED"]);
+
+/**
+ * What "available" means for a product right now.
+ *
+ * Distinct from `isActive` (permanently on the menu or not) and from a
+ * boolean "in stock" — see `productAvailability` below for why staff choose
+ * one of these explicitly rather than the system inferring one. Never derive
+ * SOLD_OUT_TODAY or any other value from inventory counts that do not exist
+ * yet; only a person sets these.
+ */
+export const productAvailabilityStatusEnum = pgEnum("product_availability_status", [
+  "AVAILABLE",
+  "TEMPORARILY_UNAVAILABLE",
+  "SOLD_OUT_TODAY",
+  "SCHEDULED_UNAVAILABLE",
+]);
 
 /**
  * A GST rate with its HSN/SAC code.
@@ -43,6 +71,8 @@ export const categories = pgTable(
     imageUrl: text("image_url"),
     position: integer("position").notNull().default(0),
     isActive: boolean("is_active").notNull().default(true),
+    /** Existing categories default PUBLISHED so nothing already live disappears. */
+    status: menuItemStatusEnum("status").notNull().default("PUBLISHED"),
     ...timestamps,
   },
   (table) => [unique("categories_org_slug_unique").on(table.orgId, table.slug), index("categories_org_idx").on(table.orgId)],
@@ -77,8 +107,17 @@ export const products = pgTable(
     images: jsonb("images").$type<{ url: string; alt: string; focalPoint?: [number, number] }[]>().notNull().default([]),
     seo: jsonb("seo").$type<{ title?: string; description?: string }>(),
 
+    /** Stock-keeping code for the counter and reporting. Optional — not every item needs one. */
+    sku: text("sku"),
+    /** Kitchen prep time in minutes. Feeds order ETAs and, later, the KDS. */
+    prepMinutes: integer("prep_minutes"),
+    /** Which kitchen station makes this — fry, grill, assembly. Read by the KDS once it exists; unused today. */
+    kdsStation: text("kds_station"),
+
     isActive: boolean("is_active").notNull().default(true),
     position: integer("position").notNull().default(0),
+    /** Existing products default PUBLISHED so nothing already live disappears. */
+    status: menuItemStatusEnum("status").notNull().default("PUBLISHED"),
     ...timestamps,
   },
   (table) => [
@@ -89,11 +128,24 @@ export const products = pgTable(
 );
 
 /**
- * Per-location availability and price.
+ * Per-location, per-channel availability.
  *
- * Separate from the product so a location can 86 an item at 9pm without
- * touching the menu everyone else sees, and so a second outlet can price
- * differently later without a schema change.
+ * A product can be off at one location without touching the menu everyone
+ * else sees, and — separately — off on one channel without being off at the
+ * counter: "sold out for delivery" is not the same fact as "sold out",
+ * because the kitchen may still be happy to serve it dine-in. `locationId`
+ * and `channel` are both nullable: null means "every location" / "every
+ * channel", so a single wildcard row can 86 a product everywhere without one
+ * row per location per channel. `channel` is loose `text`, not the closed
+ * `OrderChannel` enum, matching `productChannelPrices.channel` — an
+ * aggregator or a kiosk gets a channel value the day it is real, with no
+ * migration needed then either.
+ *
+ * `status` is never inferred from stock counts — see `products.sku`'s
+ * comment and BUILD-PLAN's "do not invent inventory quantities": a human
+ * sets SOLD_OUT_TODAY, and it is the repository layer's job to expire it at
+ * the next business-date rollover, not a number computed from real stock
+ * that does not exist yet.
  */
 export const productAvailability = pgTable(
   "product_availability",
@@ -105,14 +157,45 @@ export const productAvailability = pgTable(
     productId: uuid("product_id")
       .notNull()
       .references(() => products.id, { onDelete: "cascade" }),
-    locationId: uuid("location_id")
-      .notNull()
-      .references(() => locations.id, { onDelete: "cascade" }),
-    isAvailable: boolean("is_available").notNull().default(true),
-    priceOverride: money("price_override"),
+    locationId: uuid("location_id").references(() => locations.id, { onDelete: "cascade" }),
+    /** An `OrderChannel` value, or null for every channel. */
+    channel: text("channel"),
+    status: productAvailabilityStatusEnum("status").notNull().default("AVAILABLE"),
+    /** For SCHEDULED_UNAVAILABLE — "back at 8pm". Ignored by every other status. */
+    unavailableUntil: timestamp("unavailable_until", { withTimezone: true }),
+    /** Shown to staff and, for SOLD_OUT_TODAY, to the customer. Never required. */
+    reason: text("reason"),
     ...timestamps,
   },
-  (table) => [unique("product_availability_unique").on(table.productId, table.locationId)],
+  (table) => [
+    unique("product_availability_unique").on(table.productId, table.locationId, table.channel),
+    index("product_availability_product_idx").on(table.productId),
+  ],
+);
+
+/**
+ * Uploaded media — product photos, category banners.
+ *
+ * One row per file, one file in storage: every place that needs a photo
+ * picks from this table rather than uploading its own copy, which is what
+ * makes "upload once, reuse everywhere" true instead of aspirational. The
+ * actual bytes live in Supabase Storage; this row is the catalogue entry.
+ */
+export const media = pgTable(
+  "media",
+  {
+    id: primaryId(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    url: text("url").notNull(),
+    alt: text("alt").notNull().default(""),
+    width: integer("width"),
+    height: integer("height"),
+    uploadedBy: uuid("uploaded_by"),
+    ...timestamps,
+  },
+  (table) => [index("media_org_idx").on(table.orgId)],
 );
 
 /**
@@ -167,6 +250,8 @@ export const modifierGroups = pgTable(
     minSelections: integer("min_selections").notNull().default(0),
     maxSelections: integer("max_selections"),
     position: integer("position").notNull().default(0),
+    /** Existing groups default PUBLISHED. Individual modifiers inherit their group's state — no separate column. */
+    status: menuItemStatusEnum("status").notNull().default("PUBLISHED"),
     ...timestamps,
   },
   (table) => [

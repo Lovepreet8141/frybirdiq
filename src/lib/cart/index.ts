@@ -131,7 +131,7 @@ export interface PricedCart {
  * every figure the customer sees without touching this function.
  */
 export async function priceCart(cart: Cart): Promise<PricedCart> {
-  const menu = await getMenu();
+  const menu = await getMenu("ONLINE");
   const bySlug = new Map(menu.flatMap((category) => category.products).map((product) => [product.slug, product]));
 
   const resolved: PricedCartLine[] = [];
@@ -150,6 +150,14 @@ export async function priceCart(cart: Cart): Promise<PricedCart> {
     const product = bySlug.get(line.slug);
     if (!product) {
       rejected.push({ slug: line.slug, reason: "No longer on the menu" });
+      continue;
+    }
+
+    // Server-authoritative, same as the counter: a product 86'd since the
+    // page was last rendered must not silently reprice as if nothing
+    // changed. §41.
+    if (!product.availability.available) {
+      rejected.push({ slug: line.slug, reason: product.availability.reason ?? "Not available right now" });
       continue;
     }
 
