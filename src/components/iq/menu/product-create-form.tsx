@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { useActionState, useEffect } from "react";
 import { useFormStatus } from "react-dom";
 import { type CreateProductResult, createProductAction } from "@/lib/menu-admin/actions";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 
 const IDLE: CreateProductResult = { ok: true };
 
@@ -34,7 +36,8 @@ export function ProductCreateForm({
   initialCategoryId?: string;
 }) {
   const router = useRouter();
-  const [state, formAction] = useActionState<CreateProductResult, FormData>(createProductAction, IDLE);
+  const action = (prev: CreateProductResult, formData: FormData) => recoverFromStaleDeployment(() => createProductAction(prev, formData));
+  const [state, formAction] = useActionState<CreateProductResult, FormData>(action, IDLE);
 
   useEffect(() => {
     if (state.ok && state.id) router.push(`/app/iq/menu/products/${state.id}`);
@@ -43,9 +46,10 @@ export function ProductCreateForm({
   return (
     <form action={formAction} className="flex flex-col gap-3">
       {!state.ok && state.error && (
-        <p role="alert" className="text-sm text-[var(--destructive)]">
+        <div role="alert" className="flex flex-col items-start gap-1.5 text-sm text-[var(--destructive)]">
           {state.error}
-        </p>
+          {state.error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton />}
+        </div>
       )}
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm font-semibold">

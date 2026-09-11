@@ -6,7 +6,7 @@ import { ArrowLeft } from "lucide-react";
 import { Customizer } from "@/components/menu/customizer";
 import { SpiceMark, VegMark } from "@/components/menu/marks";
 import { Price } from "@/components/menu/price";
-import { getAllProducts, getProduct } from "@/lib/repositories/menu";
+import { getProduct } from "@/lib/repositories/menu";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -19,11 +19,18 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   };
 }
 
-export async function generateStaticParams() {
-  const products = await getAllProducts("ONLINE");
-  return products.map((product) => ({ slug: product.slug }));
-}
-
+/**
+ * No `generateStaticParams` here. Investigation into a "Menu Manager edit
+ * didn't reach the website" report (see that report for the full trace)
+ * confirmed this route already builds and serves fully dynamic — a
+ * `generateStaticParams` that was here previously produced zero static
+ * routes (`prerender-manifest.json` showed 0 entries for `/item/*`, and the
+ * production build output marked this route "ƒ Dynamic", not static) — so
+ * it had no effect and only implied a caching behaviour this route doesn't
+ * actually have. Every request already calls `getProduct` fresh; that's the
+ * correct behaviour for a route revalidated by `revalidateMenuSurfaces()`
+ * after every menu mutation and is being kept exactly as-is.
+ */
 export default async function ProductPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const product = await getProduct(slug, "ONLINE");

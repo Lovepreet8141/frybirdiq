@@ -4,6 +4,8 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { AVAILABILITY_STATUSES, type AvailabilityStatus } from "@/domain/menu-availability";
 import { type ActionResult, deleteAvailabilityRuleAction, setAvailabilityRuleAction } from "@/lib/menu-admin/actions";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 import { ActionButton } from "./action-button";
 
 const STATUS_LABELS: Record<AvailabilityStatus, string> = {
@@ -56,7 +58,8 @@ const IDLE: ActionResult = { ok: true };
  * nothing to choose — every rule here implicitly applies to it.
  */
 export function ProductAvailabilityForm({ productId, rules }: { productId: string; rules: readonly AvailabilityRuleView[] }) {
-  const action = setAvailabilityRuleAction.bind(null, productId);
+  const boundAction = setAvailabilityRuleAction.bind(null, productId);
+  const action = (prev: ActionResult, formData: FormData) => recoverFromStaleDeployment(() => boundAction(prev, formData));
   const [state, formAction] = useActionState<ActionResult, FormData>(action, IDLE);
 
   return (
@@ -82,9 +85,10 @@ export function ProductAvailabilityForm({ productId, rules }: { productId: strin
 
       <form action={formAction} className="flex flex-wrap items-end gap-2 border-t border-border pt-3">
         {!state.ok && state.error && (
-          <p role="alert" className="w-full text-sm text-[var(--destructive)]">
+          <div role="alert" className="flex w-full flex-col items-start gap-1.5 text-sm text-[var(--destructive)]">
             {state.error}
-          </p>
+            {state.error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton />}
+          </div>
         )}
         <label className="flex flex-col gap-1 text-sm font-semibold">
           Channel

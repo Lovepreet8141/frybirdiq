@@ -4,6 +4,8 @@ import { useActionState, useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { type ActionResult, addModifierAction, deleteModifierAction, updateModifierAction } from "@/lib/menu-admin/actions";
 import { type Paise, formatINR, toRupeesFloat } from "@/lib/money";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 import { ActionButton } from "./action-button";
 
 const IDLE: ActionResult = { ok: true };
@@ -25,9 +27,11 @@ function Submit({ label, pendingLabel }: { label: string; pendingLabel: string }
 
 /** One option's inline edit form — collapsed to a row until "Edit" is clicked. */
 function ModifierEditForm({ modifier, onDone }: { modifier: ModifierRow; onDone: () => void }) {
-  const action = updateModifierAction.bind(null, modifier.id);
+  const boundAction = updateModifierAction.bind(null, modifier.id);
+  const action = (prev: ActionResult, formData: FormData) => recoverFromStaleDeployment(() => boundAction(prev, formData));
   const [state, formAction] = useActionState<ActionResult, FormData>(action, IDLE);
-  const isConflict = !state.ok && state.error?.includes("changed by someone else") === true;
+  const isStale = !state.ok && state.error === STALE_DEPLOYMENT_MESSAGE;
+  const isConflict = !state.ok && !isStale && state.error?.includes("changed by someone else") === true;
   const justSaved = state !== IDLE && state.ok;
 
   useEffect(() => {
@@ -38,18 +42,21 @@ function ModifierEditForm({ modifier, onDone }: { modifier: ModifierRow; onDone:
     <form action={formAction} className="flex flex-wrap items-end gap-2 bg-surface-muted px-3 py-2">
       <input type="hidden" name="expectedUpdatedAt" value={modifier.updatedAt.toISOString()} />
       {!state.ok && state.error && (
-        <p role="alert" className="w-full text-sm text-[var(--destructive)]">
-          {state.error}
-          {isConflict && (
-            <>
-              {" "}
-              <a href="" className="underline">
-                Reload the page
-              </a>
-              .
-            </>
-          )}
-        </p>
+        <div role="alert" className="flex w-full flex-col items-start gap-1.5 text-sm text-[var(--destructive)]">
+          <p>
+            {state.error}
+            {isConflict && (
+              <>
+                {" "}
+                <a href="" className="underline">
+                  Reload the page
+                </a>
+                .
+              </>
+            )}
+          </p>
+          {isStale && <ReloadAppButton />}
+        </div>
       )}
       <label className="flex flex-col gap-1 text-sm font-semibold">
         Name
@@ -80,7 +87,8 @@ function ModifierEditForm({ modifier, onDone }: { modifier: ModifierRow; onDone:
 }
 
 export function ModifierList({ groupId, modifiers }: { groupId: string; modifiers: readonly ModifierRow[] }) {
-  const action = addModifierAction.bind(null, groupId);
+  const boundAction = addModifierAction.bind(null, groupId);
+  const action = (prev: ActionResult, formData: FormData) => recoverFromStaleDeployment(() => boundAction(prev, formData));
   const [state, formAction] = useActionState<ActionResult, FormData>(action, IDLE);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -120,9 +128,10 @@ export function ModifierList({ groupId, modifiers }: { groupId: string; modifier
 
       <form action={formAction} className="flex flex-wrap items-end gap-2 border-t border-border pt-3">
         {!state.ok && state.error && (
-          <p role="alert" className="w-full text-sm text-[var(--destructive)]">
+          <div role="alert" className="flex w-full flex-col items-start gap-1.5 text-sm text-[var(--destructive)]">
             {state.error}
-          </p>
+            {state.error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton />}
+          </div>
         )}
         <label className="flex flex-col gap-1 text-sm font-semibold">
           Name

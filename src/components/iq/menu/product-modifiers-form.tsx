@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { setProductModifierGroupsAction } from "@/lib/menu-admin/actions";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 
 export function ProductModifiersForm({
   productId,
@@ -30,7 +32,7 @@ export function ProductModifiersForm({
 
   function save() {
     startTransition(async () => {
-      const result = await setProductModifierGroupsAction(productId, [...selected]);
+      const result = await recoverFromStaleDeployment(() => setProductModifierGroupsAction(productId, [...selected]));
       if (!result.ok) {
         setError(result.error ?? "Could not save.");
         return;
@@ -55,9 +57,10 @@ export function ProductModifiersForm({
   return (
     <div className="flex flex-col gap-3">
       {error && (
-        <p role="alert" className="text-sm text-[var(--destructive)]">
+        <div role="alert" className="flex flex-col items-start gap-1.5 text-sm text-[var(--destructive)]">
           {error}
-        </p>
+          {error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton />}
+        </div>
       )}
       {saved && (
         <p role="status" className="text-sm text-[var(--success)]">

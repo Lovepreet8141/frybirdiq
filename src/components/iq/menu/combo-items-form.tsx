@@ -2,6 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { addComboItemAction, removeComboItemAction } from "@/lib/menu-admin/actions";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 import { ActionButton } from "./action-button";
 
 export function ComboItemsForm({
@@ -38,9 +40,10 @@ export function ComboItemsForm({
       )}
 
       {error && (
-        <p role="alert" className="text-sm text-[var(--destructive)]">
+        <div role="alert" className="flex flex-col items-start gap-1.5 text-sm text-[var(--destructive)]">
           {error}
-        </p>
+          {error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton />}
+        </div>
       )}
 
       {candidates.length > 0 && (
@@ -64,7 +67,7 @@ export function ComboItemsForm({
             disabled={isPending || !productId}
             onClick={() =>
               startTransition(async () => {
-                const result = await addComboItemAction(comboProductId, productId, quantity);
+                const result = await recoverFromStaleDeployment(() => addComboItemAction(comboProductId, productId, quantity));
                 if (!result.ok) setError(result.error ?? "Could not add.");
                 else setError(null);
               })

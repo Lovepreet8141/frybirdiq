@@ -3,6 +3,8 @@
 import Image from "next/image";
 import { useRef, useState, useTransition } from "react";
 import { setProductImagesAction, uploadMediaAction } from "@/lib/menu-admin/actions";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 
 interface Img {
   readonly url: string;
@@ -26,7 +28,7 @@ export function ProductMediaForm({
   function persist(next: Img[]) {
     setImages(next);
     startTransition(async () => {
-      const result = await setProductImagesAction(productId, next);
+      const result = await recoverFromStaleDeployment(() => setProductImagesAction(productId, next));
       if (!result.ok) setError(result.error ?? "Could not save.");
       else setError(null);
     });
@@ -43,7 +45,7 @@ export function ProductMediaForm({
 
   function upload(formData: FormData) {
     startTransition(async () => {
-      const result = await uploadMediaAction(formData);
+      const result = await recoverFromStaleDeployment(() => uploadMediaAction(formData));
       if (!result.ok) {
         setError(result.error ?? "Upload failed.");
         return;
@@ -57,9 +59,10 @@ export function ProductMediaForm({
   return (
     <div className="flex flex-col gap-4">
       {error && (
-        <p role="alert" className="text-sm text-[var(--destructive)]">
+        <div role="alert" className="flex flex-col items-start gap-1.5 text-sm text-[var(--destructive)]">
           {error}
-        </p>
+          {error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton />}
+        </div>
       )}
 
       <div>

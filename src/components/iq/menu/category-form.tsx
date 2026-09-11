@@ -3,6 +3,8 @@
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { type ActionResult, createCategoryAction, updateCategoryAction } from "@/lib/menu-admin/actions";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 
 function Submit({ label }: { label: string }) {
   const { pending } = useFormStatus();
@@ -26,27 +28,32 @@ export function CategoryForm({
   id?: string;
   initial?: { name: string; slug: string; description: string | null; imageUrl: string | null; updatedAt: Date };
 }) {
-  const action = id ? updateCategoryAction.bind(null, id) : createCategoryAction;
+  const boundAction = id ? updateCategoryAction.bind(null, id) : createCategoryAction;
+  const action = (prev: ActionResult, formData: FormData) => recoverFromStaleDeployment(() => boundAction(prev, formData));
   const [state, formAction] = useActionState<ActionResult, FormData>(action, IDLE);
   const justSaved = state !== IDLE && state.ok;
-  const isConflict = !state.ok && state.error?.includes("changed by someone else") === true;
+  const isStale = !state.ok && state.error === STALE_DEPLOYMENT_MESSAGE;
+  const isConflict = !state.ok && !isStale && state.error?.includes("changed by someone else") === true;
 
   return (
     <form action={formAction} className="flex flex-col gap-3">
       {id && initial && <input type="hidden" name="expectedUpdatedAt" value={initial.updatedAt.toISOString()} />}
       {!state.ok && state.error && (
-        <p role="alert" className="text-sm text-[var(--destructive)]">
-          {state.error}
-          {isConflict && (
-            <>
-              {" "}
-              <a href="" className="underline">
-                Reload the page
-              </a>
-              .
-            </>
-          )}
-        </p>
+        <div role="alert" className="flex flex-col items-start gap-1.5 text-sm text-[var(--destructive)]">
+          <p>
+            {state.error}
+            {isConflict && (
+              <>
+                {" "}
+                <a href="" className="underline">
+                  Reload the page
+                </a>
+                .
+              </>
+            )}
+          </p>
+          {isStale && <ReloadAppButton />}
+        </div>
       )}
       {justSaved && (
         <p role="status" className="text-sm text-[var(--success)]">

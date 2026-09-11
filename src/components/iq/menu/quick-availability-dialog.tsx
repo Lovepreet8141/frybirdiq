@@ -2,8 +2,10 @@
 
 import { useState, useTransition } from "react";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { ReloadAppButton } from "@/components/reload-app-button";
 import { quickSetAvailabilityAction } from "@/lib/menu-admin/actions";
 import { REACTIVATION_PRESETS, UNAVAILABLE_REASON_PRESETS, type ReactivationPreset } from "@/lib/menu-admin/constants";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 
 const REACTIVATION_LABELS: Record<ReactivationPreset, string> = {
   "2h": "Back in 2 hours",
@@ -30,7 +32,7 @@ export function QuickAvailabilityDialog({ productId, productName, trigger }: { p
 
   function submit() {
     startTransition(async () => {
-      const result = await quickSetAvailabilityAction({ productId, reason, customReason, reactivation, customUntil });
+      const result = await recoverFromStaleDeployment(() => quickSetAvailabilityAction({ productId, reason, customReason, reactivation, customUntil }));
       if (!result.ok) {
         setError(result.error ?? "Could not update availability.");
         return;
@@ -49,9 +51,10 @@ export function QuickAvailabilityDialog({ productId, productName, trigger }: { p
         </DialogHeader>
 
         {error && (
-          <p role="alert" className="text-sm text-[var(--destructive)]">
+          <div role="alert" className="flex flex-col items-start gap-2 text-sm text-[var(--destructive)]">
             {error}
-          </p>
+            {error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton />}
+          </div>
         )}
 
         <fieldset className="flex flex-col gap-1.5">

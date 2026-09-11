@@ -14,6 +14,8 @@ import {
   setProductActiveAction,
 } from "@/lib/menu-admin/actions";
 import type { ProductAdminRow } from "@/lib/repositories/menu-admin";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 import { AvailabilityBadge } from "./availability-badge";
 import { QuickAvailabilityDialog } from "./quick-availability-dialog";
 
@@ -36,7 +38,7 @@ export function ProductAdminCard({
   function run(action: () => Promise<{ ok: boolean; error?: string }>) {
     setMenuOpen(false);
     startTransition(async () => {
-      const result = await action();
+      const result = await recoverFromStaleDeployment(action);
       if (!result.ok) setError(result.error ?? "Something went wrong.");
       else setError(null);
     });
@@ -76,9 +78,10 @@ export function ProductAdminCard({
       </div>
 
       {error && (
-        <p role="alert" className="px-3 pb-2 text-xs text-[var(--destructive)]">
+        <div role="alert" className="flex flex-col items-start gap-1.5 px-3 pb-2 text-xs text-[var(--destructive)]">
           {error}
-        </p>
+          {error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton className="min-h-[32px] px-3 text-xs" />}
+        </div>
       )}
 
       <div className="flex items-center gap-1 border-t border-border p-2">

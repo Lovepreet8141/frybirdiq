@@ -2,6 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { createBareRecipeAction } from "@/lib/menu-admin/actions";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 
 /**
  * Recipe status only — no ingredient-line editor here. Costing and stock
@@ -13,6 +15,7 @@ export function ProductRecipeSection({ productId, status }: { productId: string;
   const [linked, setLinked] = useState(status.linked);
   const [yieldQuantity, setYieldQuantity] = useState(1);
   const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
   if (linked) {
     return (
@@ -43,14 +46,25 @@ export function ProductRecipeSection({ productId, status }: { productId: string;
         disabled={isPending}
         onClick={() =>
           startTransition(async () => {
-            const result = await createBareRecipeAction(productId, yieldQuantity);
-            if (result.ok) setLinked(true);
+            const result = await recoverFromStaleDeployment(() => createBareRecipeAction(productId, yieldQuantity));
+            if (result.ok) {
+              setError(null);
+              setLinked(true);
+            } else {
+              setError(result.error ?? "Could not create the recipe.");
+            }
           })
         }
         className="inline-flex min-h-[36px] items-center rounded-md border border-border px-3 text-sm font-semibold hover:bg-surface-muted disabled:opacity-60"
       >
         {isPending ? "Creating…" : "Create recipe"}
       </button>
+      {error && (
+        <div role="alert" className="flex w-full flex-col items-start gap-1.5 text-xs text-[var(--destructive)]">
+          {error}
+          {error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton className="min-h-[32px] px-3 text-xs" />}
+        </div>
+      )}
     </div>
   );
 }

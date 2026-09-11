@@ -2,6 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { cn } from "@/lib/utils";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 
 export interface ActionButtonResult {
   readonly ok: boolean;
@@ -37,7 +39,7 @@ export function ActionButton({
   function run() {
     if (confirmMessage && !window.confirm(confirmMessage)) return;
     startTransition(async () => {
-      const result = await action();
+      const result = await recoverFromStaleDeployment(action);
       if (!result.ok) {
         setError(result.error ?? "Something went wrong.");
         return;
@@ -64,8 +66,9 @@ export function ActionButton({
         {isPending ? (pendingLabel ?? "…") : children}
       </button>
       {error && (
-        <span role="alert" className="text-xs text-[var(--destructive)]">
+        <span role="alert" className="flex flex-col items-start gap-1.5 text-xs text-[var(--destructive)]">
           {error}
+          {error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton className="min-h-[32px] px-3 text-xs" />}
         </span>
       )}
     </span>

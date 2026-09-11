@@ -4,6 +4,8 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { AVAILABILITY_STATUSES, type AvailabilityStatus } from "@/domain/menu-availability";
 import { type ActionResult, deleteCategoryAvailabilityRuleAction, setCategoryAvailabilityRuleAction } from "@/lib/menu-admin/actions";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 import { ActionButton } from "./action-button";
 
 const STATUS_LABELS: Record<AvailabilityStatus, string> = {
@@ -48,7 +50,8 @@ export function CategoryAvailabilityForm({
   categoryId: string;
   rules: readonly { id: string; channel: string | null; status: AvailabilityStatus; unavailableUntil: Date | null; reason: string | null }[];
 }) {
-  const action = setCategoryAvailabilityRuleAction.bind(null, categoryId);
+  const boundAction = setCategoryAvailabilityRuleAction.bind(null, categoryId);
+  const action = (prev: ActionResult, formData: FormData) => recoverFromStaleDeployment(() => boundAction(prev, formData));
   const [state, formAction] = useActionState<ActionResult, FormData>(action, IDLE);
 
   return (
@@ -74,9 +77,10 @@ export function CategoryAvailabilityForm({
 
       <form action={formAction} className="flex flex-wrap items-end gap-2 border-t border-border pt-3">
         {!state.ok && state.error && (
-          <p role="alert" className="w-full text-sm text-[var(--destructive)]">
+          <div role="alert" className="flex w-full flex-col items-start gap-1.5 text-sm text-[var(--destructive)]">
             {state.error}
-          </p>
+            {state.error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton />}
+          </div>
         )}
         <label className="flex flex-col gap-1 text-sm font-semibold">
           Channel

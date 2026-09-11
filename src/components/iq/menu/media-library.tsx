@@ -4,6 +4,8 @@ import Image from "next/image";
 import { useRef, useState, useTransition } from "react";
 import { deleteMediaAction, uploadMediaAction } from "@/lib/menu-admin/actions";
 import type { MediaRow } from "@/lib/repositories/media";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 
 /**
  * The standalone media library — upload, search, and delete (refused by the
@@ -24,7 +26,7 @@ export function MediaLibrary({ initialItems }: { initialItems: readonly MediaRow
 
   function upload(formData: FormData) {
     startTransition(async () => {
-      const result = await uploadMediaAction(formData);
+      const result = await recoverFromStaleDeployment(() => uploadMediaAction(formData));
       if (!result.ok) {
         setError(result.error ?? "Upload failed.");
         return;
@@ -38,7 +40,7 @@ export function MediaLibrary({ initialItems }: { initialItems: readonly MediaRow
   function remove(id: string) {
     if (!window.confirm("Delete this photo? This can't be undone.")) return;
     startTransition(async () => {
-      const result = await deleteMediaAction(id);
+      const result = await recoverFromStaleDeployment(() => deleteMediaAction(id));
       if (!result.ok) {
         setError(result.error ?? "Could not delete.");
         return;
@@ -65,9 +67,10 @@ export function MediaLibrary({ initialItems }: { initialItems: readonly MediaRow
       </form>
 
       {error && (
-        <p role="alert" className="text-sm text-[var(--destructive)]">
+        <div role="alert" className="flex flex-col items-start gap-1.5 text-sm text-[var(--destructive)]">
           {error}
-        </p>
+          {error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton />}
+        </div>
       )}
 
       <input

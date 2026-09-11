@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { useActionState, useEffect } from "react";
 import { useFormStatus } from "react-dom";
 import { type CreateGroupResult, createModifierGroupAction, updateModifierGroupAction } from "@/lib/menu-admin/actions";
+import { ReloadAppButton } from "@/components/reload-app-button";
+import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 
 const IDLE: CreateGroupResult = { ok: true };
 
@@ -28,10 +30,12 @@ export function ModifierGroupForm({
   initial?: { name: string; slug: string; minSelections: number; maxSelections: number | null; updatedAt: Date };
 }) {
   const router = useRouter();
-  const action = id ? updateModifierGroupAction.bind(null, id) : createModifierGroupAction;
+  const boundAction = id ? updateModifierGroupAction.bind(null, id) : createModifierGroupAction;
+  const action = (prev: CreateGroupResult, formData: FormData) => recoverFromStaleDeployment(() => boundAction(prev, formData));
   const [state, formAction] = useActionState<CreateGroupResult, FormData>(action, IDLE);
   const justSaved = state !== IDLE && state.ok;
-  const isConflict = !state.ok && state.error?.includes("changed by someone else") === true;
+  const isStale = !state.ok && state.error === STALE_DEPLOYMENT_MESSAGE;
+  const isConflict = !state.ok && !isStale && state.error?.includes("changed by someone else") === true;
 
   useEffect(() => {
     if (!id && state.ok && state.id) router.push(`/app/iq/menu/modifiers/${state.id}`);
@@ -41,18 +45,21 @@ export function ModifierGroupForm({
     <form action={formAction} className="flex flex-col gap-3">
       {id && initial && <input type="hidden" name="expectedUpdatedAt" value={initial.updatedAt.toISOString()} />}
       {!state.ok && state.error && (
-        <p role="alert" className="text-sm text-[var(--destructive)]">
-          {state.error}
-          {isConflict && (
-            <>
-              {" "}
-              <a href="" className="underline">
-                Reload the page
-              </a>
-              .
-            </>
-          )}
-        </p>
+        <div role="alert" className="flex flex-col items-start gap-1.5 text-sm text-[var(--destructive)]">
+          <p>
+            {state.error}
+            {isConflict && (
+              <>
+                {" "}
+                <a href="" className="underline">
+                  Reload the page
+                </a>
+                .
+              </>
+            )}
+          </p>
+          {isStale && <ReloadAppButton />}
+        </div>
       )}
       {justSaved && (
         <p role="status" className="text-sm text-[var(--success)]">
