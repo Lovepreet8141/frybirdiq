@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Archivo, Baloo_2, Manrope } from "next/font/google";
+import { Archivo, Baloo_2, Inter } from "next/font/google";
 import "./globals.css";
 
 /**
@@ -16,7 +16,7 @@ const archivo = Archivo({
   display: "swap",
 });
 
-const manrope = Manrope({
+const inter = Inter({
   variable: "--font-body",
   subsets: ["latin"],
   display: "swap",
@@ -46,7 +46,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${archivo.variable} ${manrope.variable} ${baloo.variable} h-full`}>
+    <html lang="en" className={`${archivo.variable} ${inter.variable} ${baloo.variable} h-full`}>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

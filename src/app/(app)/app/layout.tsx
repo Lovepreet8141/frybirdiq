@@ -37,7 +37,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     /* The whole staff area is the IQ surface: light, where the customer
        site is dark. They are different rooms. */
-    <div data-surface="iq" className="flex min-h-full flex-col bg-background text-foreground">
+    <div data-surface="iq" className="surface-dark flex min-h-full flex-col bg-background text-foreground">
       <header className="border-b border-border">
         <div className="mx-auto flex h-[68px] w-full max-w-6xl items-center justify-between gap-4 px-[var(--gutter)]">
           <div className="flex items-center gap-2 sm:gap-6">

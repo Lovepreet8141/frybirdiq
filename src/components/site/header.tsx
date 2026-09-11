@@ -26,7 +26,7 @@ export async function Header() {
             the 4.5:1 artwork, so nothing shifts as it loads.
           */}
           <Image
-            src="/frybird-wordmark.svg"
+            src="/frybird-wordmark-ink.svg"
             alt="FRYBIRD"
             width={132}
             height={30}

@@ -1,158 +1,304 @@
+import Image from "next/image";
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
-import { HeroBadge } from "@/components/hero/hero-badge";
+import { Bike, Clock, Flame, MapPin, Phone, ShoppingBag, Timer } from "lucide-react";
+
+import { StageMotion } from "@/components/hero/stage";
 import { ProductCard } from "@/components/menu/product-card";
+import { Price } from "@/components/menu/price";
 import { getAllProducts, getMenu } from "@/lib/repositories/menu";
 import { restaurantSchema } from "@/lib/seo/restaurant";
 
 /**
  * Home. BUILD-PLAN.md §10.
  *
- * "The home page is a conversion surface, not a portfolio piece." Primary goal
- * is to order, so the hero has one clear action and the menu is one tap away.
+ * "The home page is a conversion surface, not a portfolio piece." Built to the
+ * FRYBIRD site design: cream stage, perspective floor, the burger itself as
+ * the hero, then the order routes, then the food.
  *
- * The hero carries the 3D badge as of Phase 4, under the terms in
- * design-system/3d.md: dynamically imported, mounted after paint, poster
- * fallback, desktop only. The caveat in that document still stands — real food
- * photography would outsell a spinning logo, and the badge is not a substitute
- * for it. It is here because the layout was already confident without an image
- * and the badge fills the space the photograph will eventually take.
- *
- * No AI concierge yet either; §10 lists one but it is Phase 11.
+ * Every price and every product on this page is read from the database. The
+ * design comp carries its own numbers; hardcoding them would give a homepage
+ * that promises ₹139 while the checkout charges something else, and the drift
+ * would be invisible until a customer complained.
  */
 
-/**
- * The four the menu leads with.
- *
- * A curatorial choice, not a sales statistic. There is no order history yet,
- * so calling anything a "bestseller" would be inventing a fact — §33 applies
- * to marketing copy as much as to the model.
- */
-const SIGNATURES = ["og-frybird-classic", "nashville-bomb", "og-smash", "frybird-loaded-fries"];
+/** The four the menu leads with. A curatorial choice — §33: not called bestsellers. */
+const PICKS = ["nashville-bomb", "chicken-wings", "paneer-champ", "frybird-loaded-fries"];
+
+/** Categories shown as scroll rows, in order. */
+const ROWS = ["burgers", "chicken", "wraps", "fries"];
 
 export default async function HomePage() {
   const [menu, products] = await Promise.all([getMenu(), getAllProducts()]);
   const bySlug = new Map(products.map((product) => [product.slug, product]));
-  const signatures = SIGNATURES.map((slug) => bySlug.get(slug)).filter((product) => product !== undefined);
+
+  const picks = PICKS.map((slug) => bySlug.get(slug)).filter((p) => p !== undefined);
+  const hero = bySlug.get("og-smash") ?? bySlug.get("nashville-bomb");
+  const rows = ROWS.map((slug) => menu.find((c) => c.slug === slug)).filter((c) => c !== undefined);
+  const itemCount = products.length;
 
   return (
     <>
-      {/* Local-business structured data. A search result that carries the
-          address, the hours and the price range is the difference between
-          being found in Ambala and not. */}
       <script
         type="application/ld+json"
-        // The payload is built from constants in this repo, never from user
-        // input, so there is nothing here for a string to break out of.
         dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema()) }}
       />
 
-      {/* Hero */}
-      <section className="relative overflow-hidden border-b border-border">
-        <HeroBadge />
-        {/* On desktop the copy keeps to the left half so the badge has a
-            column of its own. Without the cap the lede runs under the coin and
-            the one paragraph that explains the food becomes unreadable. */}
-        <div className="relative z-10 mx-auto flex w-full max-w-6xl flex-col gap-8 px-[var(--gutter)] py-16 sm:py-24 lg:max-w-[min(72rem,100%)] [&>*]:lg:max-w-[50%]">
-          <div className="flex flex-col gap-5">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-primary">
-              Sector 9 · Ambala City
-            </p>
-            <h1 className="max-w-3xl text-balance font-heading text-5xl font-bold leading-[0.95] tracking-tight sm:text-7xl">
-              Born crispy.
-              <br />
-              Built bold.
-            </h1>
-            <p className="max-w-prose text-lg leading-relaxed text-muted-foreground">
-              Chicken brined overnight, double-dredged, fried to order. Burgers, wraps, wings and loaded fries.
-            </p>
-          </div>
+      {/* ───────────── hero ───────────── */}
+      <section className="fb-stage" id="fb-stage">
+        <div className="fb-horizon" />
+        <div className="fb-watermark" aria-hidden="true">F</div>
+        <div className="fb-floor" id="fb-floor" aria-hidden="true" />
 
-          <div className="flex flex-wrap gap-3">
-            <Link
-              href="/menu"
-              className="inline-flex min-h-[52px] items-center gap-2 rounded-md bg-primary px-6 font-semibold text-primary-foreground transition-opacity duration-[var(--duration-micro)] hover:opacity-90"
-            >
-              Order now
-              <ArrowRight className="size-4" aria-hidden="true" />
-            </Link>
-            <Link
-              href="#menu-preview"
-              className="inline-flex min-h-[52px] items-center rounded-md border border-border-strong px-6 font-semibold transition-colors duration-[var(--duration-standard)] hover:bg-surface"
-            >
-              See the menu
-            </Link>
+        <div className="mx-auto w-full max-w-[1180px] px-5">
+          <div className="fb-scene">
+            <h1 className="fb-mark">FRYBIRD</h1>
+            <p className="fb-tagline">BORN CRISPY. BUILT BOLD.</p>
+
+            {hero?.image && (
+              <div className="fb-shot" id="fb-shot">
+                <div className="fb-shot-shadow" />
+                <Image
+                  src={hero.image.url}
+                  alt={hero.image.alt}
+                  width={800}
+                  height={800}
+                  priority
+                  sizes="(min-width: 640px) 360px, 64vw"
+                />
+              </div>
+            )}
+
+            <div className="fb-cta-block">
+              <div className="fb-cta-panel" />
+              <div className="fb-cta">
+                <Link className="fb-btn" href="/menu">Order now</Link>
+                <Link className="fb-btn ghost" href="#picks">See the menu</Link>
+              </div>
+              <p className="fb-meta">
+                Sector 9, Ambala City &nbsp;·&nbsp; Open till 11 PM &nbsp;·&nbsp; Fried to order in <b>about 15 min</b>
+              </p>
+            </div>
           </div>
         </div>
+        <StageMotion />
       </section>
 
-      {/* Signatures */}
-      <section aria-labelledby="signatures" className="border-b border-border">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-14 sm:py-20">
-          <h2 id="signatures" className="font-heading text-2xl font-bold tracking-tight sm:text-3xl">
-            Start here
+      {/* ───────────── ticker ───────────── */}
+      <div className="fb-ticker" aria-hidden="true">
+        <span>
+          <span>
+            NASHVILLE HOT <i>✦</i> SMASHED DAILY <i>✦</i> FRIED TO ORDER <i>✦</i> 12-HOUR BRINE{" "}
+            <i>✦</i> LOADED FRIES <i>✦</i> BORN CRISPY BUILT BOLD <i>✦</i>{" "}
+          </span>
+          <span>
+            NASHVILLE HOT <i>✦</i> SMASHED DAILY <i>✦</i> FRIED TO ORDER <i>✦</i> 12-HOUR BRINE{" "}
+            <i>✦</i> LOADED FRIES <i>✦</i> BORN CRISPY BUILT BOLD <i>✦</i>{" "}
+          </span>
+        </span>
+      </div>
+
+      {/* ───────────── the heavy hitters ───────────── */}
+      <section id="picks" aria-labelledby="picks-heading" className="border-b border-border">
+        <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-16 sm:py-20">
+          <h2
+            id="picks-heading"
+            className="text-center font-heading text-[clamp(2rem,6vw,3.4rem)] font-black italic leading-none tracking-[-0.03em] text-primary"
+          >
+            The heavy hitters
           </h2>
-          <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {signatures.map((product, index) => (
+          <p className="mt-2 text-center text-muted-foreground">What Ambala keeps coming back for.</p>
+
+          <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {picks.map((product, index) => (
               <li key={product.slug} className="flex">
-                <div className="flex w-full">
-                  <ProductCard product={product} priority={index < 4} />
-                </div>
+                <ProductCard product={product} priority={index < 4} />
               </li>
             ))}
           </ul>
         </div>
       </section>
 
-      {/* Categories */}
-      <section aria-labelledby="menu-preview" className="border-b border-border">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-14 sm:py-20">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <h2 id="menu-preview" className="font-heading text-2xl font-bold tracking-tight sm:text-3xl">
-              The whole menu
-            </h2>
-            <Link href="/menu" className="inline-flex items-center gap-1 text-sm font-semibold text-primary">
-              See everything
-              <ArrowRight className="size-4" aria-hidden="true" />
-            </Link>
-          </div>
+      {/* ───────────── how to get it ───────────── */}
+      <section aria-labelledby="how-heading" className="border-b border-border">
+        <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 sm:py-16">
+          <h2 id="how-heading" className="font-heading text-2xl font-extrabold">How to get it</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Pick whatever&rsquo;s fastest from where you are.</p>
 
-          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {menu.map((category) => (
-              <li key={category.slug}>
-                <Link
-                  href={`/menu#${category.slug}`}
-                  className="flex min-h-[72px] flex-col justify-center gap-1 rounded-lg border border-border bg-surface px-5 py-4 transition-colors duration-[var(--duration-standard)] hover:border-border-strong"
-                >
-                  <span className="font-heading font-semibold">{category.name}</span>
-                  <span className="tabular text-sm text-muted-foreground">
-                    {category.products.length} {category.products.length === 1 ? "item" : "items"}
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </section>
-
-      {/* Story */}
-      <section aria-labelledby="story">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-[var(--gutter)] py-14 sm:py-20">
-          <h2 id="story" className="font-heading text-2xl font-bold tracking-tight sm:text-3xl">
-            How it&rsquo;s made
-          </h2>
-          <div className="grid gap-6 sm:grid-cols-3">
+          {/*
+            Two routes, not three. The design comp has a Zomato row; FRYBIRD
+            sells direct, so a link handing the order to an aggregator — and
+            its commission — has no place on the page.
+          */}
+          <div className="mt-6 flex flex-col gap-3">
             {[
-              ["Brined overnight", "Thigh, not breast. Twelve hours in buttermilk before it ever sees flour."],
-              ["Double-dredged", "Dipped, rested, dipped again. That is where the crust comes from."],
-              ["Fried to order", "Nothing sits under a lamp. It goes in when you order it."],
-            ].map(([title, detail]) => (
-              <div key={title} className="flex flex-col gap-2 border-t border-border pt-5">
-                <h3 className="font-heading text-lg font-semibold">{title}</h3>
-                <p className="text-sm leading-relaxed text-muted-foreground">{detail}</p>
+              {
+                href: "/menu?fulfilment=takeaway",
+                icon: ShoppingBag,
+                title: "Pick up from Sector 9",
+                detail: "No delivery fee · ready in about 15 minutes",
+              },
+              {
+                href: "/menu?fulfilment=delivery",
+                icon: Bike,
+                title: "Delivery across Ambala City",
+                detail: "Free within 3 km · ₹30 to 5 km · ₹10/km beyond",
+              },
+            ].map((option) => (
+              <Link
+                key={option.href}
+                href={option.href}
+                className="flex min-h-[76px] items-center gap-4 rounded-[var(--radius)] border border-border bg-card p-4 shadow-[0_1px_2px_rgba(44,33,27,0.06)] transition-transform duration-[var(--duration-micro)] hover:-translate-y-0.5"
+              >
+                <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground">
+                  <option.icon className="size-5" aria-hidden="true" />
+                </span>
+                <span className="flex flex-col">
+                  <span className="font-semibold">{option.title}</span>
+                  <span className="mt-0.5 text-sm text-muted-foreground">{option.detail}</span>
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ───────────── on the menu ───────────── */}
+      <section aria-labelledby="menu-heading" className="border-b border-border">
+        <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 sm:py-16">
+          <h2 id="menu-heading" className="font-heading text-2xl font-extrabold">On the menu</h2>
+          <p className="mt-1 text-sm text-muted-foreground">A taste of what&rsquo;s in the full lineup.</p>
+
+          <div className="mt-6 flex flex-col gap-8">
+            {rows.map((category) => (
+              <div key={category.slug}>
+                <div className="flex items-baseline justify-between">
+                  <h3 className="font-heading text-lg font-extrabold">{category.name}</h3>
+                  <Link
+                    href={`/menu#${category.slug}`}
+                    className="text-sm font-semibold text-primary-strong underline-offset-4 hover:underline"
+                  >
+                    See all
+                  </Link>
+                </div>
+
+                {/* A scroll row rather than a wrapped grid: it is a preview, and
+                    a row that runs off the edge says "there is more" in a way a
+                    tidy grid of four does not. */}
+                <ul className="mt-3 flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {category.products.slice(0, 8).map((product) => (
+                    <li key={product.slug} className="snap-start">
+                      <Link href={`/item/${product.slug}`} className="block w-32 shrink-0">
+                        <div className="relative aspect-square w-32 overflow-hidden rounded-lg border border-border bg-card">
+                          {product.image ? (
+                            <Image
+                              src={product.image.url}
+                              alt=""
+                              fill
+                              sizes="128px"
+                              className="object-contain p-2"
+                            />
+                          ) : (
+                            <span
+                              aria-hidden="true"
+                              className="flex size-full items-center justify-center font-heading text-3xl font-black italic text-secondary"
+                            >
+                              F
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-2 truncate text-sm font-semibold">{product.name}</p>
+                        <Price amount={product.price} className="text-sm font-bold" />
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
               </div>
             ))}
           </div>
+
+          <Link
+            href="/menu"
+            className="mt-8 flex h-14 items-center justify-center rounded-lg bg-primary text-base font-bold text-primary-foreground shadow-[0_2px_6px_rgba(44,33,27,0.08)] transition-transform duration-[var(--duration-micro)] active:scale-[0.98]"
+          >
+            See all {itemCount} items
+          </Link>
+        </div>
+      </section>
+
+      {/* ───────────── why frybird ───────────── */}
+      <section id="why" aria-labelledby="why-heading" className="border-b border-border">
+        <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 sm:py-16">
+          <h2 id="why-heading" className="font-heading text-2xl font-extrabold">Why FRYBIRD</h2>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+            {[
+              {
+                icon: Flame,
+                title: "Fried when you order, not before",
+                body: "No heat lamps, no holding trays. Every piece hits the fryer after your order comes in — that's the wait, and it's not negotiable.",
+              },
+              {
+                icon: Clock,
+                title: "Brined twelve hours, not twenty minutes",
+                body: "Buttermilk brine, overnight, every batch. The difference between chicken seasoned through and chicken that just tastes salty outside.",
+              },
+              {
+                icon: Timer,
+                title: "Heat that builds, not just burns",
+                body: "Cayenne oil brushed on hot, layered rather than dumped. First bite is flavour. Third bite is when you reach for the drink.",
+              },
+            ].map((card) => (
+              <div
+                key={card.title}
+                className="rounded-[var(--radius)] border border-border bg-card p-5 shadow-[0_1px_2px_rgba(44,33,27,0.06)]"
+              >
+                <span className="flex size-10 items-center justify-center rounded-full bg-accent text-accent-foreground">
+                  <card.icon className="size-5" aria-hidden="true" />
+                </span>
+                <h3 className="mt-3 font-bold">{card.title}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{card.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ───────────── find us ───────────── */}
+      <section id="visit" aria-labelledby="find-heading">
+        <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 sm:py-16">
+          <h2 id="find-heading" className="font-heading text-2xl font-extrabold">Find us</h2>
+
+          <ul className="mt-6 flex flex-col gap-4 text-sm">
+            <li className="flex gap-3">
+              <MapPin className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
+              <span>
+                Sector 9, Ambala City, Haryana 134003
+                <span className="block text-muted-foreground">Fried to order — give us about fifteen minutes.</span>
+              </span>
+            </li>
+            <li className="flex gap-3">
+              <Clock className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
+              <span>
+                11:30 AM – 11:00 PM
+                <span className="block text-muted-foreground">Every day</span>
+              </span>
+            </li>
+            <li className="flex gap-3">
+              <Phone className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
+              <span className="text-muted-foreground">
+                Phone number not published yet — order through the site and we&rsquo;ll call you if we need to.
+              </span>
+            </li>
+          </ul>
+
+          <a
+            href="https://maps.google.com/?q=Sector+9+Ambala+City+Haryana"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-6 inline-flex min-h-[44px] items-center rounded-lg border border-border-strong px-5 font-semibold transition-colors hover:bg-secondary"
+          >
+            Open in Google Maps
+          </a>
         </div>
       </section>
     </>

@@ -62,7 +62,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
           <div>
             {/* The wordmark is cream on transparent, so it needs its own ground. */}
             <span className="inline-flex rounded bg-[#C21F11] px-3 py-2 print:bg-[#C21F11]">
-              <Image src="/frybird-wordmark.svg" alt="FRYBIRD" width={150} height={33} className="h-[26px] w-auto" />
+              <Image src="/frybird-wordmark-ink.svg" alt="FRYBIRD" width={150} height={33} className="h-[26px] w-auto" />
             </span>
             {invoice.seller.legalName && <p className="mt-2 text-sm font-semibold">{invoice.seller.legalName}</p>}
             <p className="mt-1 max-w-xs text-sm leading-relaxed opacity-80">{invoice.seller.address}</p>

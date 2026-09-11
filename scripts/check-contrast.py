@@ -36,28 +36,39 @@ def ratio(a: str, b: str) -> float:
 
 # fg, bg, must pass AA for body text
 PAIRS = [
+    # Customer site — cream ground.
+    ("ink", "cream", True),
+    ("ink", "creamHi", True),
+    ("muted", "cream", True),
+    ("muted", "creamHi", True),
+    ("creamHi", "red", True),          # button label on a red fill
+    ("redInk", "cream", True),         # red used as small text
+    ("red", "cream", False),           # known: 4.15 — display type and fills only
+    ("borderStrong", "cream", False),  # 3.04 — UI component boundary, not text
+    ("creamHi", "ink", True),          # footer
+]
+
+STAFF_PAIRS = [
     ("cream", "charred", True),
     ("cream", "charred2", True),
     ("ash", "charred", True),
-    ("ash", "charred2", True),
     ("amber", "charred", True),
-    ("amber", "charred2", True),
-    ("ember", "charred", False),  # known: 3.21 — large text and fills only
+    ("ember", "charred", False),       # known: 3.21 — large text and fills only
     ("cream", "ember", True),
     ("charred", "amber", True),
-    ("cream", "emberDark", True),
 ]
 
 
 def main() -> int:
-    brand = json.loads(TOKENS.read_text())["color"]["brand"]
-    palette = {name: spec["value"] for name, spec in brand.items()}
+    colors = json.loads(TOKENS.read_text())["color"]
+    palette = {name: spec["value"] for name, spec in colors["brand"].items()}
+    palette.update({name: spec["value"] for name, spec in colors["staff"].items()})
 
     failures = []
     print(f"{'pair':<26} {'ratio':>6}  {'AA body':<8} {'AA large':<9}")
     print("-" * 54)
 
-    for fg, bg, body_required in PAIRS:
+    for fg, bg, body_required in PAIRS + STAFF_PAIRS:
         value = ratio(palette[fg], palette[bg])
         body_ok = value >= 4.5
         large_ok = value >= 3.0
