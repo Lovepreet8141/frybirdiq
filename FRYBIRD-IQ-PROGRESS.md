@@ -7,6 +7,31 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice: Customer segments + Orders channel filter (read-only refinements)
+
+**Status:** Complete. Gates green. Deployed (see deployment record).
+
+**What it is:**
+- **Customers › Segments** — pills on the customer list: *Ordered
+  recently* (a paid order in the last 30 days), *Lapsed* (last paid order
+  more than 30 days ago), *Never ordered*, *Regulars* (five or more paid
+  orders), each with a count and a one-line definition. Facts about the
+  rows already on screen — no model, no churn score. The reference "now"
+  is captured once on mount so a boundary cannot drift under a reader.
+- **Orders › channel filter** — dine-in / takeaway / website pills beside
+  the status pills, shown only when more than one channel is present. The
+  roadmap's "Online orders" as a view, not a separate screen.
+
+**Data / permissions:** both client-side over rows already fetched; zero
+queries, zero schema, no permission touched. Only `customers-table.tsx`
+and `orders-table.tsx` changed. **Tests / build:** 340/340, build (45
+routes), RSC — green.
+
+**Purchased kit:** none newly inspected — both reuse the segmented-pill
+idiom adopted from `tables9` for Orders.
+
+---
+
 ## Slice: Connect the surfaces — Overview "Right now", deep links, customer links
 
 **Status:** Complete. Gates green. Deployed (see deployment record).
@@ -842,6 +867,14 @@ clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (45
 routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record
+
+### 2026-09-12 — Segments + channel filter slice
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `81683d3`. Gates in-script green (tests 340/340). Post-deploy:
+`active`; smoke `HTTP 200`; `/app/customers`, `/app/orders` → `307` to
+`/sign-in`; `/app/pos` control → `307`; logs `Started` / `✓ Ready`, no
+runtime errors, usual stale-tab noise.
 
 ### 2026-09-12 — Integration slice (Right now / deep links / customer links)
 
