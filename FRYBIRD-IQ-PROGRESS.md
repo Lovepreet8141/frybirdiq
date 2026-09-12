@@ -7,6 +7,48 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice: Connect the surfaces — Overview "Right now", deep links, customer links
+
+**Status:** Complete. Gates green. Deployed (see deployment record).
+
+**What it is:** integration, not a new screen — the directive's "one
+restaurant, one source of truth" applied to the surfaces that now exist:
+- `/app/iq` gains a **Right now** strip — awaiting decision · in the
+  kitchen · late — the same three facts Live operations leads with, each a
+  card that opens the surface acting on it (Orders, the kitchen display,
+  Live). Urgent counts read in the destructive colour *and* in words.
+- The Orders workspace accepts **`?open=<orderId>`** and arrives with that
+  order's sheet open. Live operations (late, awaiting, kitchen rows) and
+  the Activity feed link every order number there.
+- Inside the order sheet, the customer's name links to their **Customer
+  360** page when the viewer holds `customers.view` (the page re-checks it).
+
+**Data:** zero new queries, zero schema. The Overview reuses
+`listActiveOrders` + the tested `toKitchenTickets` mapper. The only
+data-layer change is `listActiveOrders` exposing `customerId` — a column
+its `SELECT` already fetched — in the mapped view: **three additive
+lines** in `orders.ts`, in the read mapping, no transaction code touched
+(printed in the gate output before committing).
+
+**Permissions:** the customer link is gated on `customers.view` via a new
+optional `canSeeCustomers` prop, defaulting to off, threaded from the
+page's own `staffCan()`. Nothing added or changed.
+
+**Files:** `iq/page.tsx`, `orders/page.tsx`, `iq/live/page.tsx`,
+`orders-table.tsx` (`initialSelectedId`), `order-card.tsx`
+(`canSeeCustomers`), `activity-feed.tsx` (`orderId` + link),
+`repositories/orders.ts` (`customerId` in `StaffOrderView`).
+
+**Scope guard:** schema, payments, tax, pricing, `lib/iq`, domain,
+`payments.ts`, POS, KDS, auth — **empty**. **Tests / build:** typecheck,
+lint, 340/340, build (45 routes), RSC — green.
+
+**Known limitation:** `?open=` only opens an order that is in the active
+list; a completed order's id simply results in a closed sheet — correct,
+since the workspace lists active orders only.
+
+---
+
 ## Slice: Admin › Restaurant — read-only business configuration
 
 **Status:** Complete. Gates green. Deployed (see deployment record).
@@ -801,6 +843,14 @@ routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record
 
+### 2026-09-12 — Integration slice (Right now / deep links / customer links)
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `192cedb`. Gates in-script green (tests 340/340). Post-deploy:
+`active`; smoke `HTTP 200`; `/app/iq`, `/app/orders?open=<id>`,
+`/app/iq/live` → `307` to `/sign-in`; `/app/pos` control → `307`; logs
+`Started` / `✓ Ready`, no runtime errors, usual stale-tab noise.
+
 ### 2026-09-12 — Restaurant settings slice
 
 Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
@@ -932,15 +982,17 @@ Unchanged from the prior analysis — still accurate after this batch:
   reconciliation all remain explicit-approval items; the Payments ledger
   itself shipped on the approved `finance.view`.
 
-**Recommended next safe slice — "connect the systems":** now that the
-surfaces exist, wire them together so the Overview is the one screen of
-truth: a "Right now" strip on `/app/iq` (awaiting decision · in kitchen ·
-late) from the same three queries Live uses, with each figure linking to
-its surface; the Orders sheet linking a phone number to its Customer 360
-page; Live's late list linking into the Orders workspace. Zero new
-queries, zero schema — pure integration, which is the directive's own
-"one restaurant, one source of truth" test. Previously queued and now
-shipped: **Admin › Restaurant** and the **Channels analytics view** —
+**Recommended next safe slice — filters that match the IA:** two small
+read-only refinements, both client-side over data already fetched: (1)
+**Customers › Segments** — pills on the customer list for *ordered in the
+last 30 days / not in 30+ days / never ordered / 5+ orders*, computed from
+the `lastOrderAt` and `orderCount` the list already carries (the
+directive's Segments item, honestly scoped to facts); (2) **Orders ›
+channel filter** — dine-in / takeaway / website pills beside the status
+pills, which is the roadmap's "Online Orders" as a view rather than a
+separate screen. Zero schema, zero new queries. Previously queued and now
+shipped: the **integration slice**, **Admin › Restaurant** and the
+**Channels analytics view** —
 revenue / orders / AOV split by DINE_IN / TAKEAWAY / ONLINE over a chosen
 range. `orders.channel` is already indexed with `placedAt` for exactly this
 question (`orders_channel_placed_idx`), it reuses `analytics.ts`'s existing
