@@ -74,7 +74,19 @@ function nextStep(
   }
 }
 
-function statusLabel(status: OrderStatus, fulfilment: StaffOrder["fulfilment"]): string {
+/**
+ * The three-tier colour a status reads as, shared by every surface that
+ * shows a status badge (this card, the orders table) so the mapping can
+ * never drift between them. Ready/out-for-delivery reads as done; an unpaid
+ * new order reads as needing attention; everything in between is neutral.
+ */
+export function statusTone(status: OrderStatus): "success" | "warning" | "neutral" {
+  if (status === "READY" || status === "OUT_FOR_DELIVERY") return "success";
+  if (status === "PENDING_PAYMENT") return "warning";
+  return "neutral";
+}
+
+export function statusLabel(status: OrderStatus, fulfilment: StaffOrder["fulfilment"]): string {
   switch (status) {
     case "PENDING_PAYMENT":
       return "New";
@@ -150,9 +162,9 @@ export function OrderCard({
             <span
               className={cn(
                 "rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em]",
-                order.status === "READY" || order.status === "OUT_FOR_DELIVERY"
+                statusTone(order.status) === "success"
                   ? "bg-[#3F9D52]/20 text-foreground"
-                  : order.status === "PENDING_PAYMENT"
+                  : statusTone(order.status) === "warning"
                     ? "bg-warning/20 text-foreground"
                     : "bg-surface-muted text-muted-foreground",
               )}

@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
-import { OrderCard, type StaffOrder } from "@/components/staff/order-card";
+import type { StaffOrder } from "@/components/staff/order-card";
+import { OrdersTable } from "@/components/staff/orders-table";
+import { PageHeader } from "@/components/staff/page-header";
 import { EmptyState } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
 import { listActiveOrders } from "@/lib/repositories/orders";
@@ -19,42 +21,36 @@ export default async function StaffOrdersPage() {
   ]);
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-[var(--gutter)] py-8">
-      <div className="flex items-baseline justify-between gap-4">
-        <h1 className="font-heading text-3xl font-bold tracking-tight">Orders</h1>
-        <p className="tabular text-sm text-muted-foreground" aria-live="polite">
-          {orders.length} open
-        </p>
-      </div>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
+      <PageHeader
+        title="Orders"
+        actions={
+          <p className="tabular text-sm text-muted-foreground" aria-live="polite">
+            {orders.length} open
+          </p>
+        }
+      />
 
       {orders.length === 0 ? (
-        <EmptyState
-          className="mt-8"
-          title="No open orders."
-          detail="New website orders appear here."
-        />
+        <EmptyState title="No open orders." detail="New website orders appear here." />
       ) : (
-        <ul className="mt-6 flex flex-col gap-4">
-          {orders.map((order) => (
-            <OrderCard
-              key={order.id}
-              canSettle={canSettle}
-              canAdvance={canAdvance}
-              canPrintKot={canPrintKot}
-              order={
-                {
-                  ...order,
-                  placedAt: order.placedAt?.toISOString() ?? null,
-                  fulfilment: order.fulfilment,
-                  invoiceNumber: order.invoiceNumber,
-                  estimatedReadyAt: order.estimatedReadyAt?.toISOString() ?? null,
-                  delivery: order.delivery ? { ...order.delivery } : null,
-                  items: [...order.items].map((item) => ({ ...item, modifiers: [...item.modifiers] })),
-                } as StaffOrder
-              }
-            />
-          ))}
-        </ul>
+        <OrdersTable
+          orders={orders.map(
+            (order) =>
+              ({
+                ...order,
+                placedAt: order.placedAt?.toISOString() ?? null,
+                fulfilment: order.fulfilment,
+                invoiceNumber: order.invoiceNumber,
+                estimatedReadyAt: order.estimatedReadyAt?.toISOString() ?? null,
+                delivery: order.delivery ? { ...order.delivery } : null,
+                items: [...order.items].map((item) => ({ ...item, modifiers: [...item.modifiers] })),
+              }) as StaffOrder,
+          )}
+          canSettle={canSettle}
+          canAdvance={canAdvance}
+          canPrintKot={canPrintKot}
+        />
       )}
 
       {/*
@@ -62,9 +58,7 @@ export default async function StaffOrdersPage() {
         beats a screen that looks live and silently isn't, which is how a
         counter misses an order.
       */}
-      <p className="mt-8 text-sm text-muted-foreground">
-        This list updates when you reload. Live updates are not built yet.
-      </p>
+      <p className="text-sm text-muted-foreground">This list updates when you reload. Live updates are not built yet.</p>
     </div>
   );
 }
