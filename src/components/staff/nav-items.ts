@@ -2,6 +2,7 @@ import {
   Activity,
   ChefHat,
   ClipboardList,
+  History,
   Image as ImageIcon,
   LayoutGrid,
   LayoutList,
@@ -73,8 +74,11 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
       id: "operations",
       label: "Operations",
       items: [
-        ...(canSeeAnalytics ? [{ href: "/app/iq", label: "Overview", icon: LayoutGrid, exclude: ["/app/iq/menu", "/app/iq/live"] }] : []),
+        ...(canSeeAnalytics
+          ? [{ href: "/app/iq", label: "Overview", icon: LayoutGrid, exclude: ["/app/iq/menu", "/app/iq/live", "/app/iq/activity"] }]
+          : []),
         ...(canSeeAnalytics ? [{ href: "/app/iq/live", label: "Live operations", icon: Activity }] : []),
+        ...(canSeeAnalytics ? [{ href: "/app/iq/activity", label: "Activity", icon: History }] : []),
         ...(canSeeOrders ? [{ href: "/app/orders", label: "Orders", icon: ClipboardList }] : []),
         ...(canSeePos ? [{ href: "/app/pos", label: "POS", icon: ShoppingBag }] : []),
         ...(canSeeKitchen ? [{ href: "/app/kds", label: "Kitchen", icon: ChefHat }] : []),
