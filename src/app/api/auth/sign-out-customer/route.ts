@@ -5,11 +5,12 @@ import { revalidatePath } from "next/cache";
 import { clientEnv, isSupabaseConfigured } from "@/lib/env";
 
 /**
- * Customer sign-out. Same fix as `/api/auth/sign-out`, same reason — see that
- * route's comment. The only difference is the redirect target.
+ * Customer sign-out. Same fix as `/api/auth/sign-out`, same reason and same
+ * relative-`Location` fix — see that route's comment. The only difference is
+ * the redirect target.
  */
-export async function POST(request: Request) {
-  const response = NextResponse.redirect(new URL("/", request.url));
+export async function POST() {
+  const response = new NextResponse(null, { status: 307, headers: { Location: "/" } });
   if (!isSupabaseConfigured()) return response;
 
   const cookieStore = await cookies();
