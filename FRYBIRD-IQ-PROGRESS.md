@@ -7,6 +7,52 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice: Analytics › Channels (Phase J, read-only)
+
+**Status:** Complete. Gates green. Deployed (see deployment record).
+
+**What it is:** `/app/iq/channels` under `analytics.view` — for a chosen
+range (today / yesterday / 7d / 30d / this month): a `StatTile` per channel
+(dine-in · takeaway · website) with revenue, the change against the
+previous period of equal length, share of revenue and order count; a
+stacked revenue-by-day chart; and a breakdown table (revenue, orders,
+average order, share, each with its vs-previous delta). Direct channels
+only — no aggregators exist in this build, so no commission line.
+
+**Revenue definition — unchanged, verified:** built on the same
+`paidOrders()` rows as the Overview. The only change to that function is
+one *selected* column (`channel`); the diff of `analytics.ts` is purely
+additive (no `-` lines), so its join and where — what "revenue" means —
+are byte-for-byte the same. `getChannelBreakdown()` reuses `changeBps`,
+`previousPeriod`, `daysInRange`, `businessDate` exactly as `getDashboard`
+does. `orders_channel_placed_idx` already exists for this question.
+
+**Purchased kit inspection:** `@shadcnuikit/ecommerce-chart1` ("Charts for
+store visits, sales, and revenue, donut, bar, and trend views") — adapted
+its Card + `BarChart` + `XAxis` + tooltip composition; grouped bars became
+a stack (the question is share-of-the-day), its demo months became real
+business days. Chart colours are `--chart-1/-4/-3` — deliberately **not**
+the success green, which `design-system/MASTER.md` reserves for status.
+Paise is carried alongside the float recharts needs for geometry, the same
+technique `CostBreakdownDonut` already uses, so every figure a person reads
+is formatted from real Paise.
+
+**Files:** `src/lib/repositories/analytics.ts` (+`getChannelBreakdown`,
++`channel` in `paidOrders` select), `src/components/iq/channel-chart.tsx`,
+`src/app/(app)/app/iq/channels/page.tsx` (new); `nav-items.ts`
+("Channels", Overview exclude), `section-breadcrumb.tsx`, `iq/page.tsx`.
+
+**Permissions:** `analytics.view` only. **Scope guard:** schema, payments,
+tax, pricing, domain, `orders.ts`, `payments.ts`, POS, KDS, auth — empty.
+**Tests / build:** typecheck, lint, 340/340, build (43 routes), RSC — green.
+
+**Known limitations:** no per-channel product breakdown yet; "previous
+period" for "This month" is the previous calendar month (per
+`previousPeriod`), which is the honest comparison for a partial month but
+reads low early in the month — same behaviour the Overview already has.
+
+---
+
 ## Slice: Command Center › Activity — the order event feed (Phase K seed, read-only)
 
 **Status:** Complete. Gates green. Deployed (see deployment record).
@@ -634,10 +680,18 @@ shipped to production so far.
 ## Cumulative state of validation
 
 As of the most recent slice above: `pnpm typecheck` clean, `pnpm lint`
-clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (42
+clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (43
 routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record
+
+### 2026-09-12 — Channels slice
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `31b1239`. Gates in-script green (tests 340/340). Post-deploy:
+`active`; smoke `HTTP 200`; `/app/iq/channels` and `?range=30d` → `307` to
+`/sign-in`; `/app/iq/activity` and `/app/pos` controls → `307`; logs
+`Started` / `✓ Ready`, no runtime errors, usual stale-tab noise.
 
 ### 2026-09-12 — Activity slice
 
