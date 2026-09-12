@@ -236,6 +236,21 @@ describe("permissions", () => {
     expect(can(["ANALYST"], "menu.edit")).toBe(false);
   });
 
+  it("keeps the payments ledger to the owner and manager — admin deliberately excluded", () => {
+    expect(can(["OWNER"], "finance.view")).toBe(true);
+    expect(can(["MANAGER"], "finance.view")).toBe(true);
+    expect(can(["ADMIN"], "finance.view")).toBe(false);
+    expect(can(["CASHIER"], "finance.view")).toBe(false);
+    expect(can(["ANALYST"], "finance.view")).toBe(false);
+  });
+
+  it("adding finance.view took nothing away from admin", () => {
+    for (const permission of ["audit.view", "staff.manage", "orders.refund", "analytics.view", "menu.price"] as const) {
+      expect(can(["ADMIN"], permission), permission).toBe(true);
+    }
+    expect(can(["ADMIN"], "settings.manage")).toBe(false);
+  });
+
   it("unions permissions across roles", () => {
     expect(can(["KITCHEN", "INVENTORY"], "purchasing.manage")).toBe(true);
     expect(can(["KITCHEN"], "purchasing.manage")).toBe(false);

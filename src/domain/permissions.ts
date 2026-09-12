@@ -46,6 +46,8 @@ export const PERMISSIONS = [
   "customers.edit",
   "analytics.view",
   "reports.export",
+  /** The payments ledger — every capture, by whom, by method. Read only. */
+  "finance.view",
   "staff.manage",
   "settings.manage",
   "integrations.manage",
@@ -71,7 +73,10 @@ export type Permission = (typeof PERMISSIONS)[number];
 const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
   OWNER: PERMISSIONS,
 
-  ADMIN: PERMISSIONS.filter((permission) => permission !== "settings.manage"),
+  // finance.view is deliberately OWNER and MANAGER only — the people who run
+  // the till day to day — and was added as an explicit decision, not by
+  // letting it fall through this "everything but settings" rule.
+  ADMIN: PERMISSIONS.filter((permission) => permission !== "settings.manage" && permission !== "finance.view"),
 
   MANAGER: [
     "orders.view",
@@ -95,6 +100,7 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     "customers.edit",
     "analytics.view",
     "reports.export",
+    "finance.view",
   ],
 
   CASHIER: [
