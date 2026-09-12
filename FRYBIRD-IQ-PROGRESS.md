@@ -7,6 +7,82 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice: Finance > Payments ledger (Phase I, read-only) + `finance.view`
+
+**Status:** Complete. Gates green. Deployed (see deployment record).
+
+**Authorization decision (explicitly approved, not autonomous):** A new
+`finance.view` permission, **OWNER and MANAGER only**, additive. Evaluated
+and deliberately *not* added: `finance.manage` (would re-gate
+`recordExpense`/`setFoodCostTarget`, which today sit — loosely — on
+`analytics.view`; a separate tightening decision), `finance.refund`
+(`orders.refund` already exists with the right roles; the real gap is that
+no refund *write path* exists — a payment-architecture stop condition),
+`finance.reconcile` (needs register/till schema that doesn't exist).
+
+**Worth the reviewer's eye:** `ADMIN`'s permissions are derived as
+"everything except `settings.manage`", so the new permission would have
+flowed to ADMIN *silently*. To honour "OWNER and MANAGER only" it is
+excluded from ADMIN explicitly in `permissions.ts`, with a comment saying
+why. Tests assert the exact role set **and** that ADMIN lost nothing it
+already had. If ADMIN was meant to have it, it's a one-token change.
+
+**What it is:** `/app/finance` — every payment in a chosen range
+(today / yesterday / 7d / 30d / this month): method, status, provider fee,
+who took it, when; method-filter pills with counts; a by-method breakdown;
+and a Refunds section. Nav group "Finance › Payments".
+
+**Purchased kit inspection:** `@shadcnuikit/tables16` ("Payment list with
+card style rows…") is a SaaS subscription-billing list — Monthly/Yearly
+cycles, "Mark as paid", a hard `min-w-[1250px]` non-table layout that would
+be hostile on the tablet. `tables10` ("Transaction history…") is personal
+banking — Visa/Mastercard logos, ± signed amounts. Adopted three ideas that
+map to *real* FRYBIRD columns — a status badge (1:1 with the real
+`paymentStatusEnum`), a method filter, and a fee column (`payments.feeAmount`)
+— onto the same Card+Table+pill shell `tables9` gave Orders. Dropped bulk
+mark-paid/delete and card brands (fake actions / not FRYBIRD data).
+
+**Files changed:**
+- `src/domain/permissions.ts`, `src/domain/domain.test.ts` — `finance.view`
+  (+2 tests → 334).
+- `src/lib/repositories/finance.ts` (new) — `getPaymentsLedger()`.
+- `src/components/staff/payments-table.tsx`, `mini-stat.tsx` (new; MiniStat
+  factored out of the Customer 360 page so both use one card).
+- `src/app/(app)/app/finance/page.tsx` (new); `customers/[id]/page.tsx`
+  (import the shared MiniStat).
+- `nav-items.ts`, `app-chrome.tsx`, `layout.tsx` — `canSeeFinance` threaded
+  like every prior group.
+
+**Business logic preserved / not invented:** This is **not** a second
+definition of revenue. Revenue stays `analytics.ts`'s (order `grandTotal`
+once captured); this shows the payment *records* and is labelled
+"captured", never "revenue". "Who took it" is read from the
+`payment_captured` audit row `recordCashPayment` already writes. Every
+query is a `SELECT`. Cash capture stays on `orders.update`; payment
+processing, refunds, tax and pricing untouched (verified with a scoped
+`git diff --stat` over `src/db`, `src/lib/payments`, `src/lib/tax`,
+`src/lib/pricing`, `repositories/payments.ts`, `repositories/orders.ts` —
+empty).
+
+**Real data:** `payments` ⨝ `orders` (order number, channel), `refunds`
+⨝ `orders`, `auditLogs` (actor), `memberships` (names). Refunds will show
+empty in production today — no refund path writes that table yet; that is
+the honest state, not a bug.
+
+**Tests / build:** typecheck, lint, `pnpm test` **334/334**, build (39
+routes), RSC boundary check — all green.
+
+**Known limitations:** bounded to 500 payments / 200 refunds per range (no
+pagination — same tradeoff as every table so far); no CSV export
+(`reports.export` exists, unused — a natural follow-up); by-method totals
+sum *captured* rows only, pending/failed are listed, never summed.
+
+**Next slice this unlocks:** a Channels analytics view (revenue/orders/AOV
+by DINE_IN/TAKEAWAY/ONLINE) — `orders.channel` is already indexed for
+exactly this, gated on the existing `analytics.view`, zero schema.
+
+---
+
 ## Slice: Staff roster + Audit log (Phase H / Admin, read-only)
 
 **Status:** Complete. Gates green.
@@ -349,7 +425,20 @@ clean, `pnpm test` 332/332 passing, `pnpm build` succeeds (38 routes),
 
 ## Deployment record
 
-Deployed 2026-09-12 via `./deploy/deploy.sh root@194.238.16.200`, from
+### 2026-09-12 (later) — Finance slice
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `906e2ba` (`c8561ec` finance.view permission, `906e2ba` Finance view).
+Gates in-script: typecheck, lint, tests **334/334**, RSC check, build —
+green. Post-deploy: `systemctl is-active` → `active`; smoke test `HTTP 200`;
+`/app/finance` and `/app/finance?range=7d` → `307` to `/sign-in`
+(unauthenticated, correct), `/app/pos` control → `307` (unchanged); logs
+show only the same two pre-deploy stale-tab server-action hashes as the
+previous deploy — no crash, no restart loop.
+
+### 2026-09-12 — shell / Orders / Customers / Staff / Audit batch
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200`, from
 `iq-dashboard` at commit `f2c6634` (five focused feature commits,
 `ee8bf28`..`160282c`, plus this doc):
 
@@ -382,11 +471,11 @@ green, run by `deploy.sh` itself.
 POS (`src/components/pos/*`), the dine-in floor plan/table grid, all
 payment/pricing/tax/GST logic, all repositories' write paths (every new
 repository function across every slice is a `SELECT`, never an
-`INSERT`/`UPDATE`), the permissions vocabulary in `src/domain/permissions.ts`
-(four existing permissions — `customers.view`, `staff.manage`, `audit.view`,
-and, if the next slice proceeds, `analytics.view` — were read via
-`staffCan()`; none added, none weakened), the database schema, and every
-server action's actual behavior.
+`INSERT`/`UPDATE`), every server action's actual behavior, and the database schema. In
+`src/domain/permissions.ts`, three existing permissions (`customers.view`,
+`staff.manage`, `audit.view`) were only *read* via `staffCan()`; exactly one
+permission was **added** — `finance.view`, by explicit approval, additive,
+OWNER + MANAGER — and none were weakened.
 
 ## Where the roadmap hits a real stop condition next
 
@@ -407,16 +496,15 @@ Unchanged from the prior analysis — still accurate after this batch:
 - **Phase H — Staff/Access beyond the read-only list already shipped.**
   Roles, shifts, invitations all need new schema — still gated.
 
-**Recommended next safe slice:** a **Finance/Payments view** — real
-`payments` and `refunds` tables already exist and are fully written today
-(cash capture, the idempotent settlement path); there is no repository read
-function over them yet for staff to see recent payments/refunds outside of
-what's embedded in the order detail. No schema change, no payment-processing
-change (read-only), and it's an explicit top-level roadmap area (`FINANCE >
-Sales, Payments, Refunds`) with zero UI today. Likely gated on `analytics.view`
-(no dedicated finance permission exists yet — worth flagging rather than
-silently deciding, since the directive is explicit about not reusing an
-unrelated permission; `analytics.view` is a defensible fit since this is
-fundamentally a reporting view of transaction data, the same justification
-`/app/iq`'s own revenue figures already rest on, but it is a judgment call
-worth surfacing, not a certainty).
+- **Finance beyond the read-only ledger** — `finance.manage` (re-gating
+  expense writes off `analytics.view`), a refund write path, and
+  reconciliation all remain explicit-approval items; the Payments ledger
+  itself shipped on the approved `finance.view`.
+
+**Recommended next safe slice:** a **Channels analytics view** —
+revenue / orders / AOV split by DINE_IN / TAKEAWAY / ONLINE over a chosen
+range. `orders.channel` is already indexed with `placedAt` for exactly this
+question (`orders_channel_placed_idx`), it reuses `analytics.ts`'s existing
+`paidOrders()` revenue definition unchanged, it's gated on the existing
+`analytics.view`, needs zero schema, and `FRYBIRD-ADMIN-ARCHITECTURE.md`
+already flags channel performance as "revisit if it becomes a real need."
