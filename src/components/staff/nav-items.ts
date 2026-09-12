@@ -1,4 +1,5 @@
 import {
+  Activity,
   ChefHat,
   ClipboardList,
   Image as ImageIcon,
@@ -20,8 +21,8 @@ export interface NavItem {
   readonly href: string;
   readonly label: string;
   readonly icon: LucideIcon;
-  /** A path prefix this item should NOT match even though it starts with `href` — mirrors AppNavLink's `exclude`. */
-  readonly exclude?: string;
+  /** Path prefixes this item should NOT match even though they start with `href` — sibling pages that have their own item. */
+  readonly exclude?: readonly string[];
 }
 
 export interface NavGroup {
@@ -72,7 +73,8 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
       id: "operations",
       label: "Operations",
       items: [
-        ...(canSeeAnalytics ? [{ href: "/app/iq", label: "Overview", icon: LayoutGrid, exclude: "/app/iq/menu" }] : []),
+        ...(canSeeAnalytics ? [{ href: "/app/iq", label: "Overview", icon: LayoutGrid, exclude: ["/app/iq/menu", "/app/iq/live"] }] : []),
+        ...(canSeeAnalytics ? [{ href: "/app/iq/live", label: "Live operations", icon: Activity }] : []),
         ...(canSeeOrders ? [{ href: "/app/orders", label: "Orders", icon: ClipboardList }] : []),
         ...(canSeePos ? [{ href: "/app/pos", label: "POS", icon: ShoppingBag }] : []),
         ...(canSeeKitchen ? [{ href: "/app/kds", label: "Kitchen", icon: ChefHat }] : []),

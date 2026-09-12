@@ -38,7 +38,7 @@ export function AppSidebar(permissions: NavPermissions) {
 
   const isActive = (item: NavItem) => {
     const on = pathname === item.href || pathname.startsWith(`${item.href}/`);
-    const excluded = item.exclude ? pathname === item.exclude || pathname.startsWith(`${item.exclude}/`) : false;
+    const excluded = (item.exclude ?? []).some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
     return on && !excluded;
   };
 
