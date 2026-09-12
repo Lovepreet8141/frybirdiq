@@ -7,6 +7,95 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice: Kitchen display — station-less KDS foundation (Phase G)
+
+**Status:** Complete. Gates green. Deployed (see deployment record).
+
+**Why this, now:** the directive asked for the highest-value missing
+*operational* area rather than another analytics screen. The kitchen had
+nothing — only KOT printing and the back-office Orders table. The domain
+already anticipates a KDS explicitly (`isLiveInKitchen()` in
+`order-status.ts`, "§21 whether the kitchen should see this order on the
+KDS"), `kitchen.view`/`kitchen.update` exist, and `advanceOrderAction`
+already moves tickets. So a station-less board is buildable entirely from
+what exists.
+
+**Stop condition respected, precisely:** the directive gates "KDS
+routing/station schema". No station, route, or priority concept exists in
+the schema or domain, and none was invented — the board has three columns
+that are simply the three `isLiveInKitchen` statuses. Adding stations later
+is an architectural review, not a change to this screen.
+
+**What it is:** `/app/kds`, full-bleed like POS (no sidebar; `AppChrome`'s
+`isFullBleed` now covers `/app/pos` and `/app/kds`, POS branch itself
+unchanged). Columns New (ACCEPTED) / Cooking (PREPARING) / Ready, oldest
+ticket first. Each ticket: order number in 3xl type, table / collection /
+delivery, whole minutes waiting, promised time, items with modifiers in
+large type, notes highlighted, one 64px button. Polls every 10s via a new
+permission-checked server action (`pollKitchenTickets`, `kitchen.view`),
+with the POS's offline and stale-deployment handling. **Nothing animates.**
+
+**Purchased kit inspection:** searched "kanban", "ticket", "queue board" —
+the registry has no board/ticket block (only task-card rows, stat cards,
+accordions). Per the master directive, POS/KDS are bespoke operational UI
+where the kit doesn't improve the workflow; composed from the kit's
+primitives instead. `FRYBIRD-ADMIN-ARCHITECTURE.md` had earlier noted a
+"Kanban primitive… pending a Radix-free rewrite" — nothing of the sort is
+in the purchased registry today.
+
+**Files changed:**
+- `src/lib/kitchen/tickets.ts` (new, pure, **tested — 6 cases**):
+  `toKitchenTickets`, `waitingMinutes`, `isLate`, `nextKitchenStatus`.
+- `src/lib/auth/kitchen-action.ts` (new) — `pollKitchenTickets()`.
+- `src/components/kds/kds-board.tsx`, `src/app/(app)/app/kds/page.tsx` (new).
+- `nav-items.ts`, `app-chrome.tsx`, `layout.tsx` — `canSeeKitchen`
+  (from existing `kitchen.view`); "Kitchen" in the sidebar Operations group
+  and in the POS/KDS full-bleed header nav.
+
+**Business logic preserved / not invented:**
+- The only write is `advanceOrderAction` — **unchanged**; it already
+  re-checks `kitchen.update` on every call and the server decides legality
+  via `assertTransition`. The board asks for exactly one move per column
+  (`ACCEPTED→PREPARING`, `PREPARING→READY`) and nothing else.
+- Handover (`READY→COMPLETED`) is deliberately **not** on the board — it is
+  payment-gated and belongs to the counter. A READY ticket says "Waiting for
+  the counter to hand over." Payment logic therefore never enters this
+  screen.
+- "Late" is a fact (`estimatedReadyAt < now`), not a score; there is no
+  amber because "nearly late" needs a threshold nobody has decided. This is
+  the same signal the Command Center already uses.
+- Tickets carry **no money and no phone number** (tested), the rule the KOT
+  already follows.
+- Scoped `git diff --stat` over `src/db`, `src/lib/payments`, `src/lib/tax`,
+  `src/lib/pricing`, `src/domain`, `src/lib/repositories`,
+  `src/components/pos`, `staff-actions.ts` — **empty**.
+
+**Real data:** `listActiveOrders` (orders, items, modifiers, table names)
+filtered by `isLiveInKitchen`; timestamps `placedAt`/`estimatedReadyAt`.
+
+**Permissions:** `kitchen.view` (board) and `kitchen.update` (button) — both
+pre-existing; none added or changed. KITCHEN, CASHIER, MANAGER, ADMIN,
+OWNER can see it; only those with `kitchen.update` get the button, and the
+server re-checks regardless.
+
+**Tests / build:** typecheck, lint, `pnpm test` **340/340** (23 files),
+build (40 routes), RSC check — green.
+
+**Known limitations (honest):** polling at 10s, not push — same as the
+new-order alert, and the right call until realtime is built deliberately;
+no per-station view, prep targets, expo, or throughput (all need domain
+decisions); no sound on a new ticket (the counter's `NewOrderAlert` already
+chimes at accept; a kitchen chime is a small follow-up); the screen renders
+in the IQ light palette like everything under `/app` — the dark-KDS
+question noted in the very first audit is still open.
+
+**Next slice this unlocks:** Command Center **Live Operations** — the
+manager's read-only mirror of this board (awaiting decision · new · cooking
+· ready · late), reusing `toKitchenTickets`, `ordersAwaitingDecision` and
+`ordersRunningLate` with zero new queries.
+
+---
+
 ## Slice: Finance > Payments ledger (Phase I, read-only) + `finance.view`
 
 **Status:** Complete. Gates green. Deployed (see deployment record).
@@ -425,6 +514,17 @@ clean, `pnpm test` 332/332 passing, `pnpm build` succeeds (38 routes),
 
 ## Deployment record
 
+### 2026-09-12 (later still) — KDS slice
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `4ec9f1b`. Gates in-script: typecheck, lint, tests **340/340**, RSC
+check, build — green. Post-deploy: `systemctl is-active` → `active`; smoke
+test `HTTP 200`; `/app/kds` → `307` to `/sign-in` (unauthenticated,
+correct); `/app/pos` control and `/app/finance` → `307` (unchanged); logs
+show the old process stopping (exit 143) then `Started` / `✓ Ready`, plus
+the same pre-deploy stale-tab server-action noise — no crash, no restart
+loop.
+
 ### 2026-09-12 (later) — Finance slice
 
 Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
@@ -490,9 +590,11 @@ Unchanged from the prior analysis — still accurate after this batch:
   consumption-logic decisions (how a purchase-order receipt affects
   `inventoryItems`, what "low stock" means) that are business calls, not
   styling — "inventory write-path" territory the directive gates.
-- **Phase G — KDS.** No station/routing concept exists anywhere in schema
-  or domain layer. The directive is explicit: stop before inventing that
-  schema.
+- **Phase G — KDS beyond the station-less board now shipped.** Stations,
+  routing, prep targets, expo and throughput all need a station/routing
+  concept that exists nowhere in schema or domain. The directive is
+  explicit: stop before inventing that schema. The board itself needed none
+  of it.
 - **Phase H — Staff/Access beyond the read-only list already shipped.**
   Roles, shifts, invitations all need new schema — still gated.
 
@@ -501,7 +603,11 @@ Unchanged from the prior analysis — still accurate after this batch:
   reconciliation all remain explicit-approval items; the Payments ledger
   itself shipped on the approved `finance.view`.
 
-**Recommended next safe slice:** a **Channels analytics view** —
+**Recommended next safe slice:** Command Center **Live Operations** — the
+manager's read-only mirror of the kitchen board plus what's awaiting a
+decision and what's late, reusing `toKitchenTickets`,
+`ordersAwaitingDecision` and `ordersRunningLate` with no new queries and
+the existing `analytics.view`. After that, a **Channels analytics view** —
 revenue / orders / AOV split by DINE_IN / TAKEAWAY / ONLINE over a chosen
 range. `orders.channel` is already indexed with `placedAt` for exactly this
 question (`orders_channel_placed_idx`), it reuses `analytics.ts`'s existing
