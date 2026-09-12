@@ -7,6 +7,64 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice: Inventory — migration 0022 (recipe versions + movement traceability)
+
+**Status:** Applied to production 2026-09-13 under approval D13. Gates
+green. **Schema only — no inventory write path, repository, or screen
+exists yet.**
+
+**Authorisation:** `docs/INVENTORY-ARCHITECTURE.md` decisions D1–D13
+approved as recommended; D7 condition met by the worked reconciliation in
+§12a of that document (P&L is expense-based only; inventory ledgers never
+feed it; `expenses.purchase_order_id` + unique `(purchase_order_id,
+category_id)` guard the one real double-count path).
+
+**What 0022 adds (all additive, 44 statements, no DROP / type change /
+new NOT NULL on existing columns):**
+- tables `recipe_versions`, `recipe_version_items` (with org FKs, unique
+  `(recipe_id, version)` and `(version_id, ingredient_id)`, indexes);
+- columns `recipes.current_version_id`, `inventory_movements.order_item_id`
+  / `recipe_version_id` / `reversal_of_movement_id`,
+  `ingredient_prices.cost_per_base_unit_milli`, `waste_entries.order_id`,
+  `expenses.purchase_order_id` — all nullable;
+- partial unique index `inventory_movements_sale_line_unique`
+  `(order_item_id, ingredient_id) WHERE type = 'SALE'` — consumption
+  idempotent at the database;
+- check `purchase_orders_status_check` (DRAFT/ORDERED/RECEIVED/CANCELLED);
+- enum value `waste_reason.CANCELLED_ORDER` (D2).
+
+**One shape change vs the proposal, flagged and approved-compatible:**
+version lines live in a new `recipe_version_items` table, not a
+`version_id` column on `recipe_items`, because that table's existing
+`(recipe_id, ingredient_id)` unique constraint would forbid two versions
+containing the same ingredient and dropping it is not additive.
+`recipe_items` stays (empty) for a later, separate cleanup.
+
+**Verification (`scripts/inventory-migration-verify.ts`, read-only):**
+baseline before — 36 orders, 37 order lines, 36 payments, 49 products, 22
+audit rows, every inventory table and `expenses` at 0 rows, new objects
+absent, 22 migrations applied. After — **identical counts**, both tables
+present, 7/7 columns, 5/5 constraints/indexes, enum value present, 23
+migrations applied. typecheck / lint / 340 tests / build / RSC — green.
+
+**Recovery:** `supabase/rollback/0022_….down.sql` (hand-run only, outside
+the migrations dir). Everything reverses cleanly except the enum value —
+Postgres cannot remove one; it is harmless while nothing writes it.
+**Note:** Postgres truncated the self-referencing FK name to 63 chars
+(`inventory_movements_reversal_of_movement_id_inventory_movements`); the
+rollback script uses the truncated name.
+
+**Untouched, verified:** order/payment/tax/pricing logic, POS, KDS,
+`kdsStation`/`prepMinutes` (D12), existing role assignments (D8).
+
+**Next slice (per architecture §12):** master data — suppliers,
+ingredients, price records: read-only screens first under
+`inventory.view`, then the create/update actions under `purchasing.manage`
+— the first inventory *write path*, so it stops for a look before the
+action code lands.
+
+---
+
 ## Slice: Customers › Promotions — read-only list with real performance
 
 **Status:** Complete. Gates green. Deployed (see deployment record).

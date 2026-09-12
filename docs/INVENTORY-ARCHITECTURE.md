@@ -195,6 +195,78 @@ Already shaped for it (`inventory_items` and movements per location, `orders.loc
 
 ---
 
+## 12a. D7 verification — no double counting (approved condition, 2026-09-13)
+
+**What the P&L actually does today** (`src/lib/repositories/expenses.ts`,
+verified): `getProfitAndLoss` = paid revenue − Σ DIRECT expenses − Σ FIXED
+expenses, with categories from `expense_categories` (seeded DIRECT ones:
+*Food supplies*, *Packaging*, *Delivery rider costs*). `foodCostWeeklySeries`
+= DIRECT expenses ÷ revenue. **No inventory table is read by either.** The
+only door into the P&L is an `expenses` row.
+
+**The model, stated as ledgers that never feed each other:**
+
+| Ledger | Rows | Feeds |
+|---|---|---|
+| Expenses (cash out) | one row per (received PO, category) — plus any manual expense | **P&L** (the only thing that does) |
+| Inventory movements | PURCHASE +, SALE −, WASTE −, ADJUSTMENT ± | stock on hand, **theoretical** cost, variance |
+| Inventory value | Σ on-hand × rate | a balance figure; **never** a P&L line |
+
+**Worked week** — chicken bought 10 kg @ ₹2,800 (yield 80 %, waste 3 %),
+boxes 100 @ ₹500; 40 Nashville burgers sold (150 g usable chicken + 1 box
+each); revenue ₹20,000; 200 g chicken spoiled.
+
+| Step | Movement / row | Amount |
+|---|---|---|
+| Receive PO | PURCHASE chicken +10,000 g valued ₹2,800; PURCHASE boxes +100 valued ₹500 | — |
+| …and the expense side | `expenses`: Food supplies ₹2,800, Packaging ₹500 (`purchase_order_id` set) | **₹3,300 → P&L** |
+| Usable rate | 280,000 paise ÷ (10,000 × 0.80 × 0.97) = 36.082 paise/g → `costPerBaseUnitMilli` 36,082 | — |
+| 40 burgers start cooking | SALE chicken −7,500 g raw-equivalent (150 g usable ÷ 0.8 per burger), `totalCost` 40 × 150 × 36,082 mp = **₹2,164.92**; SALE boxes −40, ₹200 | theoretical COGS **₹2,364.92** |
+| Spoilage | WASTE chicken −200 g, ₹72.16 at the current rate | variance |
+| End of week | on hand: chicken 2,300 g, boxes 60 → inventory value ₹644 + ₹300 = **₹944** (at purchase rates) | balance, not P&L |
+
+**P&L for the week:** revenue ₹20,000 − DIRECT ₹3,300 = gross ₹16,700;
+food cost % = 16.5 %. Consumption, waste and inventory value appear
+**nowhere** in it — by construction, not by convention.
+
+**Reconciliation identity (raw purchase-cost basis, exact):** chicken
+₹2,800 purchased = ₹2,100 consumed (7,500 g × 28 p) + ₹56 wasted (200 g ×
+28 p) + ₹644 on hand (2,300 g × 28 p). Boxes ₹500 = ₹200 + ₹0 + ₹300. Every
+rupee purchased is counted exactly once across the three inventory
+buckets, and exactly once in the P&L. The gap between theoretical COGS on
+the *usable* rate (₹2,164.92) and consumption on the *raw* rate (₹2,100)
+is the 3 % expected-spoilage premium the costing library deliberately
+prices in — a modelling choice, not a double count.
+
+**The one real double-count risk and its guard:** a person recording the
+same supplier bill *manually* via `recordExpense` after the PO was
+received. Guard: `expenses.purchase_order_id` (new, nullable) with a unique
+`(purchase_order_id, category_id)` — a PO can produce each category's
+expense at most once — and the Expenses list will label PO-written rows.
+A UX warning on manual entry against a same-supplier same-day PO is a
+follow-up, not a schema matter.
+
+**Two implementation notes fixed by this verification (within D1–D13):**
+- SALE quantity is deducted in **raw** base units (usable ÷ yield, rounded
+  half-up) so trim loss leaves stock as cooking happens; `totalCost` is the
+  usable quantity × usable rate — i.e. the recipe cost. WASTE entries are
+  for explicit spoilage/spillage events only; expected spoilage is already
+  in the rate.
+- PO receipt writes its expense rows with `paidOn` = the receipt's
+  business date, category chosen by `ingredients.isPackaging` (Packaging vs
+  Food supplies), `supplierId` and `reference` = the PO reference.
+
+**Verdict:** the existing accounting model supports the proposal without
+double counting; the P&L definition is unchanged; migration proceeds.
+
+**One adjustment to D3's shape, flagged:** version lines go in a **new
+`recipe_version_items` table** rather than a `version_id` column on
+`recipe_items`, because that table's existing `(recipe_id, ingredient_id)`
+unique constraint would forbid two versions of one recipe both containing
+chicken, and dropping a constraint is not additive. `recipe_items` stays,
+empty, for a later separately-approved cleanup. Immutable historical
+version references — the substance of D3 — are unchanged.
+
 ## 13. Decisions requiring approval
 
 | # | Decision | Recommendation |
