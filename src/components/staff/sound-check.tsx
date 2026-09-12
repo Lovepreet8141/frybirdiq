@@ -20,7 +20,7 @@ export function SoundCheck() {
       type="button"
       onClick={play}
       title={ready ? "Play the new-order alarm" : "Press to enable sound on this device"}
-      className="flex min-h-[44px] items-center gap-2 rounded-md border border-border px-3 text-sm font-semibold transition-colors hover:bg-surface-muted"
+      className="flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-md border border-border px-3 text-sm font-semibold transition-colors hover:bg-surface-muted"
     >
       {ready ? <Volume2 className="size-4" aria-hidden="true" /> : <VolumeX className="size-4" aria-hidden="true" />}
       <span className="hidden sm:inline">{ready ? "Test alarm" : "Enable sound"}</span>

@@ -1,3 +1,4 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getStaff, staffCan } from "@/lib/auth";
 import { AppChrome } from "@/components/staff/app-chrome";
@@ -56,12 +57,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     redirect(home.kind === "customer" ? "/account" : "/sign-in");
   }
 
+  // The sidebar remembers whether it was collapsed (the primitive writes
+  // `sidebar_state`); reading it here means the first paint is already right.
+  const sidebarState = (await cookies()).get("sidebar_state")?.value;
+  const sidebarDefaultOpen = sidebarState === undefined || sidebarState === "true";
+
   return (
     /* The whole staff area is the IQ surface: light, where the customer
        site is dark. They are different rooms. */
     <div data-surface="iq" className="surface-dark flex min-h-full flex-col bg-background text-foreground">
       <AppChrome
         staff={{ displayName: staff.displayName, roles: staff.roles }}
+        sidebarDefaultOpen={sidebarDefaultOpen}
         permissions={{
           canSeeOrders,
           canSeePos,

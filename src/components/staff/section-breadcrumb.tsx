@@ -50,8 +50,10 @@ export function SectionBreadcrumb() {
 
   return (
     <Breadcrumb>
-      <BreadcrumbList>
-        <BreadcrumbItem>
+      <BreadcrumbList className="flex-nowrap">
+        {/* On a phone the header is 56px and the sidebar already carries the
+            brand; the root crumb would only wrap. The section alone is enough. */}
+        <BreadcrumbItem className={section ? "hidden sm:inline-flex" : undefined}>
           {section ? (
             <BreadcrumbLink asChild><Link href="/app/iq">FRYBIRD IQ</Link></BreadcrumbLink>
           ) : (
@@ -60,8 +62,8 @@ export function SectionBreadcrumb() {
         </BreadcrumbItem>
         {section && (
           <>
-            <BreadcrumbSeparator />
-            <BreadcrumbItem>
+            <BreadcrumbSeparator className="hidden sm:block" />
+            <BreadcrumbItem className="whitespace-nowrap">
               <BreadcrumbPage>{section}</BreadcrumbPage>
             </BreadcrumbItem>
           </>

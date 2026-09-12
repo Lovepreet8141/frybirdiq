@@ -5,14 +5,11 @@ import { usePathname } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { AppNavLink } from "@/components/staff/app-nav-link";
 import { AppSidebar } from "@/components/staff/app-sidebar";
-import { CommandPalette } from "@/components/staff/command-palette";
 import { NewOrderAlert } from "@/components/staff/new-order-alert";
 import { buildNavGroups } from "@/components/staff/nav-items";
-import { SectionBreadcrumb } from "@/components/staff/section-breadcrumb";
+import { SiteHeader } from "@/components/staff/site-header";
 import { SoundCheck } from "@/components/staff/sound-check";
-import { UserMenu } from "@/components/staff/user-menu";
-import { Separator } from "@/components/ui/separator";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import type { Role } from "@/domain/permissions";
 
 interface StaffSummary {
@@ -45,7 +42,18 @@ interface Permissions {
  * touch grid. `usePathname` lives here, in the one place that needs it, same
  * reasoning as `AppNavLink` already documents for itself.
  */
-export function AppChrome({ staff, permissions, children }: { staff: StaffSummary; permissions: Permissions; children: React.ReactNode }) {
+export function AppChrome({
+  staff,
+  permissions,
+  sidebarDefaultOpen,
+  children,
+}: {
+  staff: StaffSummary;
+  permissions: Permissions;
+  /** Read from the `sidebar_state` cookie by the layout, so a collapsed sidebar stays collapsed across loads without a flash. */
+  sidebarDefaultOpen: boolean;
+  children: React.ReactNode;
+}) {
   const pathname = usePathname();
   const {
     canSeeOrders,
@@ -72,7 +80,7 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
     return (
       <>
         <header className="border-b border-border print:hidden">
-          <div className="mx-auto flex h-[68px] w-full max-w-6xl items-center justify-between gap-4 px-[var(--gutter)]">
+          <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-4 px-[var(--gutter)]">
             <div className="flex items-center gap-2 sm:gap-6">
               <Link
                 href={canSeeOrders ? "/app/orders" : "/app/deliveries"}
@@ -103,7 +111,7 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
               <form action="/api/auth/sign-out" method="POST">
                 <button
                   type="submit"
-                  className="flex min-h-[44px] items-center gap-2 rounded-md border border-border px-3 text-sm font-semibold transition-colors hover:bg-surface"
+                  className="flex min-h-[44px] items-center gap-2 whitespace-nowrap rounded-md border border-border px-3 text-sm font-semibold transition-colors hover:bg-surface"
                 >
                   <LogOut className="size-4" aria-hidden="true" />
                   Sign out
@@ -141,7 +149,19 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
   });
 
   return (
-    <SidebarProvider className="min-h-full flex-1">
+    <SidebarProvider
+      defaultOpen={sidebarDefaultOpen}
+      className="min-h-full flex-1"
+      style={
+        {
+          // The kit's measurements (components/layout: (auth)/layout.tsx),
+          // as spacing multiples so they scale with the root font size.
+          "--sidebar-width": "calc(var(--spacing) * 64)",
+          "--header-height": "calc(var(--spacing) * 14)",
+          "--content-padding": "calc(var(--spacing) * 6)",
+        } as React.CSSProperties
+      }
+    >
       <AppSidebar
         canSeeOrders={canSeeOrders}
         canSeePos={canSeePos}
@@ -158,16 +178,7 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
         canSeeInventory={canSeeInventory}
       />
       <SidebarInset>
-        <header className="flex h-[68px] items-center gap-3 border-b border-border px-[var(--gutter)] print:hidden">
-          <SidebarTrigger />
-          <Separator orientation="vertical" className="h-4" />
-          <SectionBreadcrumb />
-          <div className="ml-auto flex items-center gap-3">
-            <CommandPalette groups={navGroups} />
-            {canSeeOrders && <SoundCheck />}
-            <UserMenu displayName={staff.displayName} roles={staff.roles} />
-          </div>
-        </header>
+        <SiteHeader groups={navGroups} canSeeOrders={canSeeOrders} staff={staff} />
 
         {canSeeOrders && (
           <div className="print:hidden">
@@ -175,7 +186,12 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
           </div>
         )}
 
-        <main className="flex-1">{children}</main>
+        {/* `SidebarInset` is already the <main>; this is the kit's content
+            column. Pages keep their own gutter and max-width for now, so no
+            `--content-padding` here or every screen would double up. */}
+        <div className="flex flex-1 flex-col">
+          <div className="@container/main flex flex-1 flex-col">{children}</div>
+        </div>
       </SidebarInset>
     </SidebarProvider>
   );
