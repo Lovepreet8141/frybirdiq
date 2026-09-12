@@ -46,3 +46,8 @@ next-env.d.ts
 # The uploaded Frybird IQ repo, kept for reference while its costing engine
 # is ported into src/. Not part of this build.
 frybird-iq/
+
+# The purchased Shadcn UI Kit dashboard source, kept at the repo root for
+# reference (its blocks are re-composed over our own primitives, never copied
+# in). Licensed, and carries its own node_modules — never committed.
+shadcn-ui-kit-dashboard/

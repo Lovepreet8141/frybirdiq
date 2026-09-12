@@ -32,5 +32,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "frybird-iq"]
+  "exclude": ["node_modules", "frybird-iq", "shadcn-ui-kit-dashboard"]
 }

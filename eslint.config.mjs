@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Reference copies that live in the tree but are not part of this build
+    // (see .gitignore and tsconfig "exclude").
+    "frybird-iq/**",
+    "shadcn-ui-kit-dashboard/**",
   ]),
 ]);
 
