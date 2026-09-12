@@ -11,6 +11,7 @@ import {
   Layers3,
   type LucideIcon,
   Package,
+  PackageSearch,
   Settings2,
   ShieldCheck,
   ShoppingBag,
@@ -49,6 +50,7 @@ export interface NavPermissions {
   readonly canSeeKitchen: boolean;
   readonly canSeeSettings: boolean;
   readonly canSeePromotions: boolean;
+  readonly canSeeInventory: boolean;
 }
 
 /**
@@ -75,6 +77,7 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
     canSeeKitchen,
     canSeeSettings,
     canSeePromotions,
+    canSeeInventory,
   } = permissions;
 
   const groups: NavGroup[] = [
@@ -111,6 +114,16 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
             { href: "/app/iq/menu/combos", label: "Combos", icon: LayoutList },
             { href: "/app/iq/menu/media", label: "Media", icon: ImageIcon },
             { href: "/app/iq/menu/review", label: "Review queue", icon: ClipboardList },
+          ]
+        : [],
+    },
+    {
+      id: "inventory",
+      label: "Inventory",
+      items: canSeeInventory
+        ? [
+            { href: "/app/inventory", label: "Ingredients", icon: PackageSearch, exclude: ["/app/inventory/suppliers"] },
+            { href: "/app/inventory/suppliers", label: "Suppliers", icon: Truck },
           ]
         : [],
     },
