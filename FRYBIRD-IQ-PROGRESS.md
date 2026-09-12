@@ -7,6 +7,46 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Incident: staff app crashed after sign-in following the radix-nova switch
+
+**Status:** Fixed and deployed (`9e4ca19`, 2026-09-12 23:39 UTC). Cause
+was in `b6d2aaa` ("Adopt the shadcn UI Kit: switch ui layer to
+radix-nova"), committed and deployed from another session at 01:30 +0200
+— not part of this log's slices.
+
+**Symptom:** "login page not working". `/sign-in` itself rendered (200,
+`no-store`), and `signIn` succeeded — it redirects to `/app/orders`, and
+*that* threw on the server: `` `Tooltip` must be used within
+`TooltipProvider` `` from the staff chrome, 12 times in the log. Every
+`/app` page with the sidebar was affected.
+
+**Cause:** the Radix `sidebar.tsx` renders a `<Tooltip>` per menu button;
+Radix tooltips require a provider. The kit's copy of the file drops the
+provider because the kit's own root layout has a global one; FRYBIRD's
+root layout has none. **Fix:** wrap the sidebar wrapper in
+`<TooltipProvider delayDuration={0}>` inside `SidebarProvider` — the
+canonical shadcn Radix sidebar structure. One file.
+
+**Noise, not a fault:** 1,084 × "Failed to find Server Action" and 16 ×
+"Server Reference ID did not match" in the same window are staff tabs
+opened before the 23:30 UTC deploy still polling with the old build's
+action ids (counts match the KDS/orders refresh loops). They stop when
+those tabs are reloaded.
+
+**What `b6d2aaa` changed (for the record):** `components.json` style
+`base-nova → radix-nova`; all 22 `src/components/ui/*` files replaced
+with the kit's Radix versions; deps `radix-ui`, `clsx`, `tailwind-merge`
+added, `recharts` 3.8 → 3.10; `src/lib/utils.ts` now defines `cn` via
+clsx + twMerge; six app files moved from `render={}` to `asChild`;
+`.mcp.json` committed (shadcn MCP server config — command/args only, no
+credentials). Gates were green — the crash is runtime-only, which no
+existing test exercises. **Consequence for the UI migration analysis:**
+the primitive engine is now Radix, so the kit's `components/ui` files are
+drop-in from here on; the "port the look, keep Base UI" recommendation is
+superseded by that decision.
+
+---
+
 ## Slice: Inventory — master data (suppliers, ingredients, price records)
 
 **Status:** Complete. Gates green. Committed `0de2154` on `iq-dashboard`
@@ -1064,6 +1104,20 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-12 23:39 UTC — TooltipProvider hotfix
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `9e4ca19`. Gates in-script green (tests 340/340). Post-deploy:
+`active`; smoke `HTTP 200`; `/sign-in` and `/menu` → `200`; `/app/orders`,
+`/app/iq`, `/app/inventory`, `/app/pos` → `307` to `/sign-in`. Tooltip
+error count strictly after the restart: 0 (the last one, 23:39:26, came
+from the previous process).
+
+### 2026-09-12 23:30 UTC — radix-nova switch (other session, `b6d2aaa`)
+
+Not deployed from this session; recorded because it is what production
+ran between 23:30 and 23:39 and it is the build the hotfix above repairs.
 
 ### 2026-09-13 — Inventory master data slice
 
