@@ -7,6 +7,61 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice: Admin › Restaurant — read-only business configuration
+
+**Status:** Complete. Gates green. Deployed (see deployment record).
+
+**What it is:** `/app/admin/restaurant` under `settings.manage` (OWNER):
+Business (trading/legal name, GSTIN, whether menu prices include GST with
+a one-line explanation of what that means, currency, business-day
+timezone); GST rates (name, HSN/SAC, rate, default); Location (outlet,
+address, GST state/code, phone, map pin); Delivery (enabled?, free-above,
+road factor, fee bands); FRYBIRD REWARDS (every stamp and points value,
+linking to the existing Rewards form). "Not set" is said plainly; a
+missing GSTIN or map pin is flagged in red because those two silently
+degrade invoices and delivery quotes.
+
+**Why this slice:** every value shown already drives the product —
+`gstin` on invoices, `price_basis` behind every margin, `stampsRequired`
+behind every free item, the bands behind every quote — and an owner could
+not *see* any of it without a database client.
+
+**Read-only, deliberately:** no edit forms, no fake "Edit" buttons.
+Changing `price_basis` retroactively misstates revenue by the tax rate on
+every order (CLAUDE.md); each edit form is therefore its own approval.
+The only link out is to the Rewards form that already exists.
+
+**Data:** a `SELECT` over `organizations`, `locations` (first outlet) and
+`taxRates`, plus the existing `getDeliverySettings()` reused unchanged —
+no second copy of the delivery-band read.
+
+**Purchased kit inspection:** `switch-card1` ("Settings-style cards that
+pair a label and short description with a switch") and `dashboard-modal22`
+(company-profile form dialog with logo upload). Adopted `switch-card1`'s
+row layout (label + description left, control right) as `SettingRow`, with
+a value where the switch was — these are read, not toggled. The form
+dialog was not appropriate for a read-only page.
+
+**Files:** `src/lib/repositories/settings.ts`,
+`src/components/staff/setting-row.tsx`,
+`src/app/(app)/app/admin/restaurant/page.tsx` (new); `nav-items.ts`
+("Restaurant" in Admin; `canSeeSettings` from the existing
+`settings.manage`), `app-chrome.tsx`, `layout.tsx`,
+`section-breadcrumb.tsx` (Admin pages now named in the crumb).
+
+**Permissions:** `settings.manage` only — pre-existing, none added.
+**Scope guard:** schema, payments, tax, pricing, `lib/iq`, domain,
+`orders.ts`, `payments.ts`, `org.ts`, `delivery.ts`, POS, KDS, auth —
+**empty**. **Tests / build:** typecheck, lint, 340/340, build (45 routes),
+RSC — green.
+
+**Known limitations:** shows the first outlet only (single-location shop;
+`locations` is already a table, so a second outlet is a loop, not a
+redesign); `integrations` and `feature_flags` tables exist but are not
+surfaced — nothing populates them yet.
+
+---
+
 ## Slice: Analytics › Products — menu performance (Phase E/J, read-only)
 
 **Status:** Complete. Gates green. Deployed (see deployment record).
@@ -741,10 +796,18 @@ shipped to production so far.
 ## Cumulative state of validation
 
 As of the most recent slice above: `pnpm typecheck` clean, `pnpm lint`
-clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (44
+clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (45
 routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record
+
+### 2026-09-12 — Restaurant settings slice
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `52b4721`. Gates in-script green (tests 340/340). Post-deploy:
+`active`; smoke `HTTP 200`; `/app/admin/restaurant` → `307` to `/sign-in`;
+`/app/admin/audit` and `/app/pos` controls → `307`; logs `Started` /
+`✓ Ready`, no runtime errors, usual stale-tab noise.
 
 ### 2026-09-12 — Products slice
 
@@ -869,16 +932,15 @@ Unchanged from the prior analysis — still accurate after this batch:
   reconciliation all remain explicit-approval items; the Payments ledger
   itself shipped on the approved `finance.view`.
 
-**Recommended next safe slice:** **Admin › Restaurant** — a read-only
-settings view of what the `organizations` and `locations` rows already
-hold (name, legal name, GSTIN, price basis, timezone, loyalty programme
-values, delivery bands, opening/address), under the existing
-`settings.manage`. Every value is already live business configuration
-with no screen showing it — an owner currently cannot *see* their own
-stamp threshold or GSTIN without a database client. Read-only: changing
-any of these (especially `price_basis`) is a business decision with
-consequences CLAUDE.md spells out, so edit forms are a separate approval.
-Previously queued and now shipped: the **Channels analytics view** —
+**Recommended next safe slice — "connect the systems":** now that the
+surfaces exist, wire them together so the Overview is the one screen of
+truth: a "Right now" strip on `/app/iq` (awaiting decision · in kitchen ·
+late) from the same three queries Live uses, with each figure linking to
+its surface; the Orders sheet linking a phone number to its Customer 360
+page; Live's late list linking into the Orders workspace. Zero new
+queries, zero schema — pure integration, which is the directive's own
+"one restaurant, one source of truth" test. Previously queued and now
+shipped: **Admin › Restaurant** and the **Channels analytics view** —
 revenue / orders / AOV split by DINE_IN / TAKEAWAY / ONLINE over a chosen
 range. `orders.channel` is already indexed with `placedAt` for exactly this
 question (`orders_channel_placed_idx`), it reuses `analytics.ts`'s existing
