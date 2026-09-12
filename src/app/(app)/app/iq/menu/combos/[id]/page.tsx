@@ -73,7 +73,7 @@ export default async function ComboItemsPage({ params }: { params: Promise<{ id:
           , then assign it here.
         </p>
         <div className="mt-3">
-          <ProductModifiersForm productId={id} groups={groups.map((g) => ({ id: g.id, name: g.name, status: g.status }))} initialSelected={comboDetail.modifierGroupIds} />
+          <ProductModifiersForm productId={id} groups={groups.map((g) => ({ id: g.id, name: g.name, slug: g.slug, status: g.status }))} initialSelected={comboDetail.modifierGroupIds} />
         </div>
       </section>
     </div>

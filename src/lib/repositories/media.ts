@@ -12,9 +12,9 @@ import "server-only";
  * when bypassing row-level security is justified.
  */
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { media, products } from "@/db/schema";
+import { categories, media, products } from "@/db/schema";
 import { createAdminClient } from "@/lib/supabase/server";
 
 export const MEDIA_BUCKET = "media";
@@ -30,6 +30,51 @@ export interface MediaRow {
 
 export async function listMedia(orgId: string): Promise<MediaRow[]> {
   return db().select({ id: media.id, url: media.url, alt: media.alt, width: media.width, height: media.height, createdAt: media.createdAt }).from(media).where(eq(media.orgId, orgId)).orderBy(desc(media.createdAt));
+}
+
+export interface MediaUsage {
+  readonly productId: string;
+  readonly productName: string;
+  readonly categoryName: string | null;
+}
+
+export interface MediaUsageRow extends MediaRow {
+  /** Every product (archived ones included — they still reference the file) currently carrying this photo. Empty means orphaned. */
+  readonly usedBy: readonly MediaUsage[];
+}
+
+/**
+ * The library plus, for each photo, which products currently carry it.
+ *
+ * Derived at read time from `products.images` — jsonb, not a foreign key —
+ * with the same predicate `deleteMedia` uses to refuse a delete, so "is
+ * this photo in use" has exactly one definition. Powers the library's
+ * search-by-product/category and shows which uploads nothing uses.
+ */
+export async function listMediaWithUsage(orgId: string): Promise<MediaUsageRow[]> {
+  const database = db();
+  const [rows, usage] = await Promise.all([
+    listMedia(orgId),
+    database
+      .select({ mediaId: media.id, productId: products.id, productName: products.name, categoryName: categories.name })
+      .from(media)
+      .innerJoin(
+        products,
+        and(eq(products.orgId, media.orgId), sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${products.images}) AS elem WHERE elem->>'url' = ${media.url})`),
+      )
+      .leftJoin(categories, eq(products.categoryId, categories.id))
+      .where(eq(media.orgId, orgId))
+      .orderBy(asc(products.name)),
+  ]);
+
+  const byMedia = new Map<string, MediaUsage[]>();
+  for (const use of usage) {
+    const list = byMedia.get(use.mediaId) ?? [];
+    list.push({ productId: use.productId, productName: use.productName, categoryName: use.categoryName });
+    byMedia.set(use.mediaId, list);
+  }
+
+  return rows.map((row) => ({ ...row, usedBy: byMedia.get(row.id) ?? [] }));
 }
 
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
@@ -75,8 +120,9 @@ export async function uploadMedia(input: {
  * function that can actually delete the file, rather than trusted to
  * whichever caller remembers to check first.
  *
- * Not wired to any Server Action or UI yet — see the Menu Manager's
- * "orphaned media" note — but is self-sufficient the day it is.
+ * Wired to `deleteMediaAction` from the media library, which also shows
+ * each photo's usage (`listMediaWithUsage`) and disables delete on the ones
+ * still in use — so this refusal is the backstop, not how anyone finds out.
  */
 export async function deleteMedia(orgId: string, id: string): Promise<{ ok: boolean; error?: string }> {
   const database = db();

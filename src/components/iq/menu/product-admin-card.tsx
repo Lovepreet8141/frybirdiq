@@ -24,11 +24,16 @@ export function ProductAdminCard({
   categories,
   canPublish,
   showCategoryName,
+  selected = false,
+  onToggleSelect,
 }: {
   product: ProductAdminRow;
   categories: readonly { id: string; name: string }[];
   canPublish: boolean;
   showCategoryName: boolean;
+  /** Ticked for a bulk action. Only rendered when `onToggleSelect` is given, i.e. the viewer can edit. */
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const [isPending, startTransition] = useTransition();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -47,7 +52,7 @@ export function ProductAdminCard({
   const unavailable = product.availabilityStatus !== "AVAILABLE";
 
   return (
-    <div className="group relative flex flex-col overflow-hidden rounded-lg border border-border bg-surface">
+    <div className={`group relative flex flex-col overflow-hidden rounded-lg border bg-surface ${selected ? "border-primary ring-2 ring-primary/40" : "border-border"}`}>
       <div className="relative flex h-28 shrink-0 items-center justify-center bg-surface-muted">
         {product.image ? (
           <Image src={product.image} alt="" fill sizes="240px" className="object-cover" />
@@ -58,6 +63,11 @@ export function ProductAdminCard({
           <AvailabilityBadge status={product.availabilityStatus} isActive={product.isActive} />
           {product.status === "DRAFT" && <span className="inline-flex items-center rounded-full bg-[var(--warning)]/20 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-[var(--warning)]">Draft</span>}
         </div>
+        {onToggleSelect && (
+          <label className="absolute right-1.5 top-1.5 flex size-7 cursor-pointer items-center justify-center rounded-md bg-surface/90 shadow-sm">
+            <input type="checkbox" checked={selected} onChange={onToggleSelect} aria-label={`Select ${product.name}`} className="size-4 accent-primary" />
+          </label>
+        )}
       </div>
 
       <div className="flex flex-1 flex-col gap-1 p-3">

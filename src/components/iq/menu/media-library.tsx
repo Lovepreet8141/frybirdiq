@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useRef, useState, useTransition } from "react";
 import { deleteMediaAction, uploadMediaAction } from "@/lib/menu-admin/actions";
-import type { MediaRow } from "@/lib/repositories/media";
+import type { MediaUsageRow } from "@/lib/repositories/media";
 import { ReloadAppButton } from "@/components/reload-app-button";
 import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 
@@ -13,16 +13,28 @@ import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/erro
  * photo pickers (`ProductMediaForm`) read from the same `media` table, so a
  * photo uploaded here shows up there immediately, and vice versa — one
  * catalogue, not two.
+ *
+ * Search matches alt text and the names of the products and categories that
+ * actually carry each photo (`listMediaWithUsage`), so "find the Zinger
+ * photo" works whether or not anyone wrote alt text. "Unused only" is the
+ * orphan finder — what was uploaded and never attached to anything.
  */
-export function MediaLibrary({ initialItems }: { initialItems: readonly MediaRow[] }) {
-  const [items, setItems] = useState<readonly MediaRow[]>(initialItems);
+function matches(item: MediaUsageRow, needle: string): boolean {
+  if (item.alt.toLowerCase().includes(needle)) return true;
+  return item.usedBy.some((use) => use.productName.toLowerCase().includes(needle) || (use.categoryName ?? "").toLowerCase().includes(needle));
+}
+
+export function MediaLibrary({ initialItems }: { initialItems: readonly MediaUsageRow[] }) {
+  const [items, setItems] = useState<readonly MediaUsageRow[]>(initialItems);
   const [search, setSearch] = useState("");
+  const [unusedOnly, setUnusedOnly] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const normalised = search.trim().toLowerCase();
-  const filtered = normalised ? items.filter((item) => item.alt.toLowerCase().includes(normalised)) : items;
+  const filtered = items.filter((item) => (!normalised || matches(item, normalised)) && (!unusedOnly || item.usedBy.length === 0));
+  const unusedCount = items.filter((item) => item.usedBy.length === 0).length;
 
   function upload(formData: FormData) {
     startTransition(async () => {
@@ -32,7 +44,10 @@ export function MediaLibrary({ initialItems }: { initialItems: readonly MediaRow
         return;
       }
       setError(null);
-      setItems((current) => [{ id: result.id, url: result.url, alt: String(formData.get("alt") ?? ""), width: null, height: null, createdAt: new Date() }, ...current]);
+      setItems((current) => [
+        { id: result.id, url: result.url, alt: String(formData.get("alt") ?? ""), width: null, height: null, createdAt: new Date(), usedBy: [] },
+        ...current,
+      ]);
       if (fileRef.current) fileRef.current.value = "";
     });
   }
@@ -73,33 +88,51 @@ export function MediaLibrary({ initialItems }: { initialItems: readonly MediaRow
         </div>
       )}
 
-      <input
-        type="search"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search by alt text"
-        className="h-[40px] max-w-sm rounded-md border border-border bg-surface px-3 text-sm"
-      />
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search by product, category or alt text"
+          aria-label="Search photos"
+          className="h-[40px] w-full max-w-sm rounded-md border border-border bg-surface px-3 text-sm"
+        />
+        <label className="flex h-[40px] cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-sm">
+          <input type="checkbox" checked={unusedOnly} onChange={(event) => setUnusedOnly(event.target.checked)} className="size-4 accent-primary" />
+          Unused only <span className="tabular text-muted-foreground">({unusedCount})</span>
+        </label>
+      </div>
 
       {filtered.length === 0 ? (
-        <p className="py-12 text-center text-sm text-muted-foreground">{items.length === 0 ? "No photos uploaded yet." : "Nothing matches that search."}</p>
+        <p className="py-12 text-center text-sm text-muted-foreground">
+          {items.length === 0 ? "No photos uploaded yet." : unusedOnly && !normalised ? "Every photo is in use." : "Nothing matches that search."}
+        </p>
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
-          {filtered.map((item) => (
-            <div key={item.id} className="group relative aspect-square overflow-hidden rounded-md border border-border">
-              <Image src={item.url} alt={item.alt} fill sizes="180px" className="object-cover" />
-              <button
-                type="button"
-                onClick={() => remove(item.id)}
-                disabled={isPending}
-                className="absolute right-1 top-1 flex size-6 items-center justify-center rounded-full bg-black/60 text-xs font-bold text-white opacity-0 transition-opacity group-hover:opacity-100"
-                aria-label={`Delete ${item.alt || "photo"}`}
-              >
-                ×
-              </button>
-              {item.alt && <p className="absolute inset-x-0 bottom-0 truncate bg-black/50 px-1.5 py-0.5 text-[10px] text-white">{item.alt}</p>}
-            </div>
-          ))}
+          {filtered.map((item) => {
+            const inUse = item.usedBy.length > 0;
+            return (
+              <div key={item.id} className="flex flex-col gap-1">
+                <div className="group relative aspect-square overflow-hidden rounded-md border border-border">
+                  <Image src={item.url} alt={item.alt} fill sizes="180px" className="object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => remove(item.id)}
+                    disabled={isPending || inUse}
+                    title={inUse ? "Remove it from its products first" : undefined}
+                    className="absolute right-1 top-1 flex size-6 items-center justify-center rounded-full bg-black/60 text-xs font-bold text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-0 group-hover:disabled:opacity-40"
+                    aria-label={`Delete ${item.alt || "photo"}`}
+                  >
+                    ×
+                  </button>
+                  {item.alt && <p className="absolute inset-x-0 bottom-0 truncate bg-black/50 px-1.5 py-0.5 text-[10px] text-white">{item.alt}</p>}
+                </div>
+                <p className={`truncate text-[11px] ${inUse ? "text-muted-foreground" : "font-semibold text-[var(--warning)]"}`} title={inUse ? item.usedBy.map((use) => use.productName).join(", ") : undefined}>
+                  {inUse ? item.usedBy.map((use) => use.productName).join(", ") : "Not used by any product"}
+                </p>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

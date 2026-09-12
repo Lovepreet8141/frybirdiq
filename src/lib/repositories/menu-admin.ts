@@ -33,6 +33,7 @@ import {
 import { type AvailabilityStatus, resolveAvailability } from "@/domain/menu-availability";
 import { businessDate } from "@/lib/dates";
 import { type Paise } from "@/lib/money";
+import { planSwap } from "@/lib/menu-admin/reorder";
 
 /**
  * Thrown when an edit's `expectedUpdatedAt` no longer matches the row —
@@ -353,18 +354,13 @@ export async function deleteCategory(orgId: string, id: string, actorUserId: str
  * back.
  */
 export async function moveCategory(orgId: string, id: string, direction: "up" | "down"): Promise<void> {
-  const all = await listCategoriesAdmin(orgId);
-  const index = all.findIndex((row) => row.id === id);
-  if (index === -1) return;
-  const swapWith = direction === "up" ? index - 1 : index + 1;
-  if (swapWith < 0 || swapWith >= all.length) return;
-
-  const a = all[index]!;
-  const b = all[swapWith]!;
+  const writes = planSwap(await listCategoriesAdmin(orgId), id, direction);
+  if (!writes) return;
 
   await db().transaction(async (tx) => {
-    await tx.update(categories).set({ position: b.position, updatedAt: new Date() }).where(and(eq(categories.id, a.id), eq(categories.orgId, orgId)));
-    await tx.update(categories).set({ position: a.position, updatedAt: new Date() }).where(and(eq(categories.id, b.id), eq(categories.orgId, orgId)));
+    for (const write of writes) {
+      await tx.update(categories).set({ position: write.position, updatedAt: new Date() }).where(and(eq(categories.id, write.id), eq(categories.orgId, orgId)));
+    }
   });
 }
 
@@ -724,18 +720,15 @@ export async function moveProductPosition(orgId: string, id: string, direction: 
     .select({ id: products.id, position: products.position })
     .from(products)
     .where(and(eq(products.orgId, orgId), target.categoryId ? eq(products.categoryId, target.categoryId) : isNull(products.categoryId)))
-    .orderBy(asc(products.position));
+    .orderBy(asc(products.position), asc(products.createdAt));
 
-  const index = siblings.findIndex((row) => row.id === id);
-  if (index === -1) return;
-  const swapWith = direction === "up" ? index - 1 : index + 1;
-  if (swapWith < 0 || swapWith >= siblings.length) return;
+  const writes = planSwap(siblings, id, direction);
+  if (!writes) return;
 
-  const a = siblings[index]!;
-  const b = siblings[swapWith]!;
   await db().transaction(async (tx) => {
-    await tx.update(products).set({ position: b.position, updatedAt: new Date() }).where(and(eq(products.id, a.id), eq(products.orgId, orgId)));
-    await tx.update(products).set({ position: a.position, updatedAt: new Date() }).where(and(eq(products.id, b.id), eq(products.orgId, orgId)));
+    for (const write of writes) {
+      await tx.update(products).set({ position: write.position, updatedAt: new Date() }).where(and(eq(products.id, write.id), eq(products.orgId, orgId)));
+    }
   });
 }
 
@@ -981,6 +974,27 @@ export async function addModifier(orgId: string, groupId: string, input: Modifie
   const [max] = await db().select({ position: sql<number>`coalesce(max(${modifiers.position}), -1)` }).from(modifiers).where(eq(modifiers.groupId, groupId));
   const [row] = await db().insert(modifiers).values({ orgId, groupId, ...input, position: (max?.position ?? -1) + 1 }).returning({ id: modifiers.id });
   if (row) await auditCreate({ orgId, entityType: "modifier", entityId: row.id, entityName: input.name, actorUserId });
+}
+
+/** Reorders an option within its group — the group editor's "move up/down", the same swap products and categories use. */
+export async function moveModifierPosition(orgId: string, id: string, direction: "up" | "down"): Promise<void> {
+  const [target] = await db().select({ groupId: modifiers.groupId }).from(modifiers).where(and(eq(modifiers.id, id), eq(modifiers.orgId, orgId))).limit(1);
+  if (!target) return;
+
+  const siblings = await db()
+    .select({ id: modifiers.id, position: modifiers.position })
+    .from(modifiers)
+    .where(and(eq(modifiers.orgId, orgId), eq(modifiers.groupId, target.groupId)))
+    .orderBy(asc(modifiers.position), asc(modifiers.createdAt));
+
+  const writes = planSwap(siblings, id, direction);
+  if (!writes) return;
+
+  await db().transaction(async (tx) => {
+    for (const write of writes) {
+      await tx.update(modifiers).set({ position: write.position, updatedAt: new Date() }).where(and(eq(modifiers.id, write.id), eq(modifiers.orgId, orgId)));
+    }
+  });
 }
 
 /** Concurrency-guarded (§0.2) — a modifier option's full edit form. */

@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import type { CategoryAdminRow, ProductAdminRow } from "@/lib/repositories/menu-admin";
 import { moveCategoryAction, publishCategoryAction, setCategoryActiveAction } from "@/lib/menu-admin/actions";
 import { ActionButton } from "./action-button";
+import { BulkActionBar } from "./bulk-action-bar";
 import { ProductAdminCard } from "./product-admin-card";
 
 type AvailabilityFilter = "all" | "available" | "unavailable";
@@ -28,6 +29,9 @@ export function MenuControlCenter({
   const [draftOnly, setDraftOnly] = useState(false);
   const [noPhotoOnly, setNoPhotoOnly] = useState(false);
   const [sort, setSort] = useState<SortKey>("menu-order");
+  // Selection survives a filter change on purpose — ticking six items across
+  // two categories and then archiving them is the whole point of bulk.
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 
   const categoryOptions = useMemo(() => categories.map((c) => ({ id: c.id, name: c.name })), [categories]);
 
@@ -64,6 +68,29 @@ export function MenuControlCenter({
     }
     return list;
   }, [products, selectedCategory, normalisedSearch, availability, vegOnly, draftOnly, noPhotoOnly, sort]);
+
+  const selectedProducts = useMemo(() => products.filter((p) => selectedIds.has(p.id)), [products, selectedIds]);
+  const allShownSelected = filtered.length > 0 && filtered.every((p) => selectedIds.has(p.id));
+
+  function toggleSelected(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllShown() {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      for (const p of filtered) {
+        if (allShownSelected) next.delete(p.id);
+        else next.add(p.id);
+      }
+      return next;
+    });
+  }
 
   const selectedCategoryName = selectedCategory === "all" ? null : categories.find((c) => c.id === selectedCategory)?.name;
   const addProductHref = selectedCategory === "all" ? "/app/iq/menu/products/new" : `/app/iq/menu/products/new?category=${selectedCategory}`;
@@ -181,6 +208,12 @@ export function MenuControlCenter({
             <input type="checkbox" checked={noPhotoOnly} onChange={(e) => setNoPhotoOnly(e.target.checked)} className="size-4 accent-primary" />
             Missing photo
           </label>
+          {canEdit && (
+            <label className="flex h-[40px] cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-sm">
+              <input type="checkbox" checked={allShownSelected} onChange={toggleAllShown} disabled={filtered.length === 0} className="size-4 accent-primary" />
+              Select all shown
+            </label>
+          )}
 
           {canEdit && (
             <Link href={addProductHref} className="ml-auto inline-flex h-[40px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground">
@@ -188,6 +221,16 @@ export function MenuControlCenter({
             </Link>
           )}
         </div>
+
+        {canEdit && selectedProducts.length > 0 && (
+          <BulkActionBar
+            selected={selectedProducts.map((p) => ({ id: p.id, status: p.status, isActive: p.isActive }))}
+            categories={categoryOptions}
+            canPublish={canPublish}
+            onDone={() => setSelectedIds(new Set())}
+            onClear={() => setSelectedIds(new Set())}
+          />
+        )}
 
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border py-16 text-center">
@@ -203,7 +246,15 @@ export function MenuControlCenter({
         ) : (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
             {filtered.map((product) => (
-              <ProductAdminCard key={product.id} product={product} categories={categoryOptions} canPublish={canPublish} showCategoryName={selectedCategory === "all"} />
+              <ProductAdminCard
+                key={product.id}
+                product={product}
+                categories={categoryOptions}
+                canPublish={canPublish}
+                showCategoryName={selectedCategory === "all"}
+                selected={selectedIds.has(product.id)}
+                onToggleSelect={canEdit ? () => toggleSelected(product.id) : undefined}
+              />
             ))}
           </div>
         )}

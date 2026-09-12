@@ -21,7 +21,7 @@ const REACTIVATION_LABELS: Record<ReactivationPreset, string> = {
  * turns these presets into the same status + timestamp the full
  * availability form would produce, so both paths write through one rule.
  */
-export function QuickAvailabilityDialog({ productId, productName, trigger }: { productId: string; productName: string; trigger: React.ReactNode }) {
+export function QuickAvailabilityDialog({ productId, productName, trigger }: { productId: string; productName: string; trigger: React.ReactElement }) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState<(typeof UNAVAILABLE_REASON_PRESETS)[number]>("Sold out");
   const [customReason, setCustomReason] = useState("");
@@ -44,7 +44,8 @@ export function QuickAvailabilityDialog({ productId, productName, trigger }: { p
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<span>{trigger}</span>} />
+      {/* The trigger is the caller's real <button>; wrapping it in a <span> made Base UI warn that its nativeButton had no native button. */}
+      <DialogTrigger render={trigger} />
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Mark &quot;{productName}&quot; unavailable</DialogTitle>

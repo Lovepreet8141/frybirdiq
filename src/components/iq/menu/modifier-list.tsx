@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
-import { type ActionResult, addModifierAction, deleteModifierAction, updateModifierAction } from "@/lib/menu-admin/actions";
+import { type ActionResult, addModifierAction, deleteModifierAction, moveModifierPositionAction, updateModifierAction } from "@/lib/menu-admin/actions";
 import { type Paise, formatINR, toRupeesFloat } from "@/lib/money";
 import { ReloadAppButton } from "@/components/reload-app-button";
 import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
@@ -64,7 +64,7 @@ function ModifierEditForm({ modifier, onDone }: { modifier: ModifierRow; onDone:
       </label>
       <label className="flex flex-col gap-1 text-sm font-semibold">
         Slug
-        <input name="slug" required pattern="[a-z0-9-]+" defaultValue={modifier.slug} className="min-h-[36px] w-32 rounded-md border border-border bg-surface px-3 font-normal" />
+        <input name="slug" required pattern="[a-z0-9\-]+" defaultValue={modifier.slug} className="min-h-[36px] w-32 rounded-md border border-border bg-surface px-3 font-normal" />
       </label>
       <label className="flex flex-col gap-1 text-sm font-semibold">
         Price change
@@ -113,6 +113,16 @@ export function ModifierList({ groupId, modifiers }: { groupId: string; modifier
                   <span className="tabular text-muted-foreground">
                     {modifier.priceDelta === 0n ? "No charge" : formatINR(modifier.priceDelta)}
                   </span>
+                  <span className="flex items-center">
+                    <ActionButton action={() => moveModifierPositionAction(modifier.id, "up")} variant="ghost" className="!min-h-0 !px-1.5 !py-1 text-xs" pendingLabel="…">
+                      <span aria-hidden="true">↑</span>
+                      <span className="sr-only">Move {modifier.name} up</span>
+                    </ActionButton>
+                    <ActionButton action={() => moveModifierPositionAction(modifier.id, "down")} variant="ghost" className="!min-h-0 !px-1.5 !py-1 text-xs" pendingLabel="…">
+                      <span aria-hidden="true">↓</span>
+                      <span className="sr-only">Move {modifier.name} down</span>
+                    </ActionButton>
+                  </span>
                   <button type="button" onClick={() => setEditingId(modifier.id)} className="inline-flex min-h-[36px] items-center rounded-md border border-border px-3 text-sm font-semibold hover:bg-surface-muted">
                     Edit
                   </button>
@@ -139,7 +149,7 @@ export function ModifierList({ groupId, modifiers }: { groupId: string; modifier
         </label>
         <label className="flex flex-col gap-1 text-sm font-semibold">
           Slug
-          <input name="slug" required pattern="[a-z0-9-]+" className="min-h-[36px] w-32 rounded-md border border-border bg-surface px-3 font-normal" />
+          <input name="slug" required pattern="[a-z0-9\-]+" className="min-h-[36px] w-32 rounded-md border border-border bg-surface px-3 font-normal" />
         </label>
         <label className="flex flex-col gap-1 text-sm font-semibold">
           Price change

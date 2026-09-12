@@ -73,7 +73,7 @@ export function ModifierGroupForm({
         </label>
         <label className="flex flex-col gap-1 text-sm font-semibold">
           Slug
-          <input name="slug" required pattern="[a-z0-9-]+" defaultValue={initial?.slug} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal" />
+          <input name="slug" required pattern="[a-z0-9\-]+" defaultValue={initial?.slug} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal" />
         </label>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">

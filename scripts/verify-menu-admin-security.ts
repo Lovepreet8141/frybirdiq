@@ -33,6 +33,7 @@ import {
   getRecentChanges,
   listPriceHistory,
   moveCategory,
+  moveModifierPosition,
   moveProductToCategory,
   publishCategory,
   publishProduct,
@@ -45,7 +46,7 @@ import {
   updateProductDetails,
   updateProductPrice,
 } from "../src/lib/repositories/menu-admin";
-import { deleteMedia } from "../src/lib/repositories/media";
+import { deleteMedia, listMediaWithUsage } from "../src/lib/repositories/media";
 import { getMenu } from "../src/lib/repositories/menu";
 
 let ok = true;
@@ -146,12 +147,19 @@ async function main() {
     if (!mediaRow) throw new Error("Could not create test media row.");
     await database.update(products).set({ images: [{ url: photoUrl, alt: "audit" }] }).where(eq(products.id, prodA.id));
 
+    const usageWhileReferenced = await listMediaWithUsage(orgA.id);
+    const auditPhoto = usageWhileReferenced.find((m) => m.id === mediaRow.id);
+    assert("listMediaWithUsage reports the product that carries the photo", auditPhoto?.usedBy.some((u) => u.productId === prodA.id && u.productName === "A product") === true);
+    assert("listMediaWithUsage names the carrying product's category", auditPhoto?.usedBy[0]?.categoryName === "A category");
+
     const refusedDelete = await deleteMedia(orgA.id, mediaRow.id);
     assert("deleteMedia refuses while the product still references the photo", refusedDelete.ok === false);
     const [stillThere] = await database.select({ id: media.id }).from(media).where(eq(media.id, mediaRow.id));
     assert("the media row survives the refused delete", stillThere !== undefined);
 
     await database.update(products).set({ images: [] }).where(eq(products.id, prodA.id));
+    const usageAfterClearing = await listMediaWithUsage(orgA.id);
+    assert("listMediaWithUsage shows the photo as unused once nothing references it", usageAfterClearing.find((m) => m.id === mediaRow.id)?.usedBy.length === 0);
     const allowedDelete = await deleteMedia(orgA.id, mediaRow.id);
     assert("deleteMedia succeeds once nothing references the photo", allowedDelete.ok === true);
 
@@ -239,6 +247,26 @@ async function main() {
       const [afterStaleAttempt] = await database.select({ name: modifiers.name }).from(modifiers).where(eq(modifiers.id, mayoOption.id));
       assert("the stale write did not change the row", afterStaleAttempt?.name === "Mayo (updated)");
     }
+    console.log("\n--- moveModifierPosition: reorders within the group, no-op at the edge, foreign-org untouched ---");
+    await addModifier(orgA.id, newGroupId, { name: "Ketchup", slug: `ketchup-${suffix}`, priceDelta: 0n as never, isDefault: false, isAvailable: true });
+    const [ketchupOption] = await database.select({ id: modifiers.id, position: modifiers.position }).from(modifiers).where(and(eq(modifiers.groupId, newGroupId), eq(modifiers.slug, `ketchup-${suffix}`)));
+    assert("a second option is appended after the first", ketchupOption?.position === 1);
+    if (mayoOption && ketchupOption) {
+      await moveModifierPosition(orgA.id, ketchupOption.id, "up");
+      const orderAfterMove = await database.select({ id: modifiers.id, position: modifiers.position }).from(modifiers).where(eq(modifiers.groupId, newGroupId));
+      const positionOf = (id: string) => orderAfterMove.find((m) => m.id === id)?.position;
+      assert("moving the second option up swaps it with the first", positionOf(ketchupOption.id) === 0 && positionOf(mayoOption.id) === 1);
+      assert("no two options in the group share a position after the move", new Set(orderAfterMove.map((m) => m.position)).size === orderAfterMove.length);
+
+      await moveModifierPosition(orgA.id, ketchupOption.id, "up"); // already first — must no-op
+      const [stillFirst] = await database.select({ position: modifiers.position }).from(modifiers).where(eq(modifiers.id, ketchupOption.id));
+      assert("moving the first option up is a no-op", stillFirst?.position === 0);
+
+      await moveModifierPosition(orgB.id, ketchupOption.id, "down"); // wrong org — must not touch it
+      const [afterForeign] = await database.select({ position: modifiers.position }).from(modifiers).where(eq(modifiers.id, ketchupOption.id));
+      assert("moveModifierPosition through the wrong org leaves the option untouched", afterForeign?.position === 0);
+    }
+
     console.log("\n--- Audit log: modifier group and option lifecycle ---");
     const groupChanges = await getRecentChanges(orgA.id, 200);
     assert("creating the modifier group wrote a create entry", groupChanges.some((c) => c.entityId === newGroupId && c.field === "created"));

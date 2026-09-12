@@ -170,7 +170,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
         </Section>
 
         <Section title="Modifiers" hint="Which option groups this product offers, and in what order.">
-          <ProductModifiersForm productId={id} groups={groups.map((g) => ({ id: g.id, name: g.name, status: g.status }))} initialSelected={product.modifierGroupIds} />
+          <ProductModifiersForm productId={id} groups={groups.map((g) => ({ id: g.id, name: g.name, slug: g.slug, status: g.status }))} initialSelected={product.modifierGroupIds} />
         </Section>
 
         {product.isCombo && (

@@ -32,6 +32,7 @@ import {
   getProductAdmin,
   listDraftItems,
   moveCategory,
+  moveModifierPosition,
   moveProductPosition,
   moveProductToCategory,
   publishCategory,
@@ -52,7 +53,9 @@ import {
 } from "@/lib/repositories/menu-admin";
 import { deleteMedia, uploadMedia } from "@/lib/repositories/media";
 import { AVAILABILITY_STATUSES } from "@/domain/menu-availability";
+import { summariseBulk } from "./bulk";
 import { revalidateMenuSurfaces } from "./cache";
+import { checkbox, optionalInt } from "./form-fields";
 import { MENU_VISIBILITY_CHANNELS, UNAVAILABLE_REASON_PRESETS, type ReactivationPreset } from "./constants";
 
 export interface ActionResult {
@@ -198,11 +201,11 @@ const productDetailsSchema = z.object({
   categoryId: z.string().trim().uuid().optional().or(z.literal("")),
   taxRateId: z.string().trim().uuid().optional().or(z.literal("")),
   spiceLevel: z.coerce.number().int().min(0).max(5),
-  isVegetarian: z.coerce.boolean(),
+  isVegetarian: checkbox,
   allergens: z.string().optional(),
   tags: z.string().optional(),
   sku: z.string().trim().max(60).optional(),
-  prepMinutes: z.coerce.number().int().min(0).max(240).optional().or(z.literal("")),
+  prepMinutes: optionalInt(0, 240),
   kdsStation: z.string().trim().max(60).optional(),
   servingInfo: z.string().trim().max(100).optional(),
   productType: z.enum(["SIMPLE", "COMBO"]).optional().default("SIMPLE"),
@@ -393,6 +396,84 @@ export async function setProductImagesAction(id: string, images: readonly { url:
   }
 }
 
+/* ---------------------------------- Bulk ---------------------------------- */
+
+/**
+ * Bulk actions loop the very repository call the single-item action uses —
+ * per item ownership check, per item audit row — and revalidate once at the
+ * end (the split ./cache.ts was designed for). Sequential on purpose: a QSR
+ * catalogue is small, and the audit log then reads in the order things
+ * actually happened. A per-item failure is collected, not fatal — the owner
+ * is told exactly how many went through and why the rest didn't.
+ */
+const bulkIdsSchema = z.array(z.string().uuid()).min(1, "Select at least one product.").max(200, "Select fewer than 200 products at once.");
+
+async function forEachProduct(
+  ids: readonly string[],
+  permission: "menu.edit" | "menu.publish",
+  apply: (orgId: string, id: string, actorUserId: string) => Promise<void>,
+): Promise<ActionResult> {
+  const parsed = bulkIdsSchema.safeParse(ids);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the selection." };
+
+  try {
+    const staff = await requirePermission(permission);
+    const failures: string[] = [];
+    for (const id of parsed.data) {
+      try {
+        await apply(staff.orgId, id, staff.userId);
+      } catch (error) {
+        // `explain` rethrows anything that isn't a known, user-facing failure.
+        failures.push(explain(error).error ?? "Something went wrong.");
+      }
+    }
+    revalidateMenuSurfaces();
+    return summariseBulk(parsed.data.length, failures);
+  } catch (error) {
+    return explain(error);
+  }
+}
+
+export async function bulkSetProductActiveAction(ids: readonly string[], isActive: boolean): Promise<ActionResult> {
+  return forEachProduct(ids, "menu.edit", (orgId, id, actor) => setProductActive(orgId, id, isActive, actor));
+}
+
+export async function bulkPublishProductsAction(ids: readonly string[]): Promise<ActionResult> {
+  return forEachProduct(ids, "menu.publish", (orgId, id, actor) => publishProduct(orgId, id, actor));
+}
+
+export async function bulkMoveProductsToCategoryAction(ids: readonly string[], categoryId: string | null): Promise<ActionResult> {
+  return forEachProduct(ids, "menu.edit", (orgId, id, actor) => moveProductToCategory(orgId, id, categoryId, actor));
+}
+
+/** Clears each product's wildcard rule back to AVAILABLE — the same write as the card's "Make available". */
+export async function bulkMarkAvailableAction(ids: readonly string[]): Promise<ActionResult> {
+  return forEachProduct(ids, "menu.edit", (orgId, id, actor) =>
+    setAvailabilityRule(orgId, id, { locationId: null, channel: null, status: "AVAILABLE", unavailableUntil: null, reason: null }, actor),
+  );
+}
+
+/** 86s each product everywhere, indefinitely, with one shared reason — scheduling a return time is per-product work. */
+export async function bulkMarkUnavailableAction(ids: readonly string[], reason: (typeof UNAVAILABLE_REASON_PRESETS)[number]): Promise<ActionResult> {
+  const parsedReason = z.enum(UNAVAILABLE_REASON_PRESETS).safeParse(reason);
+  if (!parsedReason.success) return { ok: false, error: "Pick a reason." };
+  return forEachProduct(ids, "menu.edit", (orgId, id, actor) =>
+    setAvailabilityRule(orgId, id, { locationId: null, channel: null, status: "TEMPORARILY_UNAVAILABLE", unavailableUntil: null, reason: parsedReason.data }, actor),
+  );
+}
+
+/** The group editor's "move up/down" on one option — same shape as the product and category reorders. */
+export async function moveModifierPositionAction(id: string, direction: "up" | "down"): Promise<ActionResult> {
+  try {
+    const staff = await requirePermission("menu.edit");
+    await moveModifierPosition(staff.orgId, id, direction);
+    revalidateMenuSurfaces();
+    return { ok: true };
+  } catch (error) {
+    return explain(error);
+  }
+}
+
 /* ---------------------------------- Media ---------------------------------- */
 
 export type MediaUploadResult = { ok: true; id: string; url: string } | { ok: false; error: string };
@@ -534,8 +615,8 @@ const modifierSchema = z.object({
   name: z.string().trim().min(1, "Needs a name."),
   slug: slugField,
   priceDelta: z.string().trim().regex(/^-?\d+(\.\d{1,2})?$/, "Enter an amount like 0, 30 or -20."),
-  isDefault: z.coerce.boolean(),
-  isAvailable: z.coerce.boolean(),
+  isDefault: checkbox,
+  isAvailable: checkbox,
 });
 
 export async function addModifierAction(groupId: string, _prev: ActionResult, formData: FormData): Promise<ActionResult> {
