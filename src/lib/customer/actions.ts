@@ -163,9 +163,7 @@ export async function signInCustomer(
   redirect("/account");
 }
 
-export async function signOutCustomer(): Promise<void> {
-  const supabase = await createServerClient();
-  await supabase.auth.signOut();
-  revalidatePath("/", "layout");
-  redirect("/");
-}
+// Sign-out lives at `/api/auth/sign-out-customer` (a Route Handler), not
+// here. See `src/app/api/auth/sign-out/route.ts`'s comment: a Server Action
+// that calls `cookies().set()` and then `redirect()` does not reliably carry
+// the cookie deletion onto the redirect response on this Next.js version.

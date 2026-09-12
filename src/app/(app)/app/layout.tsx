@@ -2,7 +2,6 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { getStaff, staffCan } from "@/lib/auth";
-import { signOut } from "@/lib/auth/actions";
 import { AppNavLink } from "@/components/staff/app-nav-link";
 import { NewOrderAlert } from "@/components/staff/new-order-alert";
 import { SoundCheck } from "@/components/staff/sound-check";
@@ -73,7 +72,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             </span>
             {canSeeOrders && <SoundCheck />}
 
-            <form action={signOut}>
+            <form action="/api/auth/sign-out" method="POST">
               <button
                 type="submit"
                 className="flex min-h-[44px] items-center gap-2 rounded-md border border-border px-3 text-sm font-semibold transition-colors hover:bg-surface"

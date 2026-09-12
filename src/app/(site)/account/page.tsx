@@ -6,7 +6,6 @@ import { EmptyState } from "@/components/states";
 import { OrderHistoryList } from "@/components/account/order-history";
 import { getCustomer } from "@/lib/customer";
 import { resolveHome } from "@/lib/auth/route-home";
-import { signOutCustomer } from "@/lib/customer/actions";
 import { isLoyaltyEnabled, pointsValue } from "@/lib/loyalty";
 import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
 import { isStampProgramEnabled } from "@/lib/loyalty/stamps";
@@ -46,7 +45,7 @@ export default async function AccountPage() {
             {customer.phone} · {customer.email}
           </p>
         </div>
-        <form action={signOutCustomer}>
+        <form action="/api/auth/sign-out-customer" method="POST">
           <button
             type="submit"
             className="flex min-h-[44px] items-center gap-2 rounded-md border border-border px-3 text-sm font-semibold transition-colors hover:bg-surface"
