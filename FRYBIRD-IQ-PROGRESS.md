@@ -7,6 +7,54 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice: Customers › Promotions — read-only list with real performance
+
+**Status:** Complete. Gates green. Deployed (see deployment record).
+
+**What it is:** `/app/customers/promotions` under `orders.discount` (if
+you may apply a code at the counter, you may see the codes): every
+promotion's offer (percent or amount, minimum, cap), when it runs, how
+often it was applied, and **what it actually did** — paid, not-cancelled
+orders that carried it, their revenue, and the discount given. Four
+headline figures (live now, orders with a code, revenue on those orders,
+discount given). State — Live / Scheduled / Expired / Used up / Off — is
+four facts on the row plus the clock, captured with the data snapshot.
+
+**Why performance comes from orders, not `usageCount`:** the counter is
+incremented at placement; a placed order can still be abandoned or
+refunded. Paid, not-cancelled is the same definition every revenue figure
+in the app uses (`analytics.ts` `paidOrders`; replicated with a comment,
+the way `customers.ts` already does).
+
+**Read-only, deliberately:** creating or editing a promotion changes what
+an order costs — a pricing decision — and gets its own approval. No edit
+buttons. `promotions.ts` gains one `SELECT`-based `listPromotions()`;
+`findPromotion` and the `countPromotionUse` write path are untouched
+(the diff's only removed lines are three widened imports; verified).
+
+**Purchased kit inspection:** searched "promotion", "coupon", "discount"
+— `promo-section` is a marketing hero, `shopping-cart3` a customer cart
+with a coupon box; neither is an admin list. Composed from the established
+`tables9`-derived shell and `MiniStat`.
+
+**Files:** `src/lib/repositories/promotions.ts` (+`listPromotions`),
+`src/app/(app)/app/customers/promotions/page.tsx` (new); `nav-items.ts`
+("Promotions" under Customers, `canSeePromotions` from the existing
+`orders.discount`), `app-chrome.tsx`, `layout.tsx`,
+`section-breadcrumb.tsx` (Customers, Promotions, Staff, Payments, Kitchen
+now named in the crumb).
+
+**Permissions:** `orders.discount` — pre-existing (OWNER/ADMIN/MANAGER/
+CASHIER), none added. **Scope guard:** schema, payments, tax, pricing,
+`lib/iq`, `lib/promotions`, domain, `orders.ts`, `payments.ts`, POS, KDS,
+auth — **empty**. **Tests / build:** 340/340, build (46 routes), RSC —
+green.
+
+**Known limitation:** in production this may well list zero codes today —
+nothing has created one yet — and says so plainly.
+
+---
+
 ## Slice: Customer segments + Orders channel filter (read-only refinements)
 
 **Status:** Complete. Gates green. Deployed (see deployment record).
@@ -863,10 +911,18 @@ shipped to production so far.
 ## Cumulative state of validation
 
 As of the most recent slice above: `pnpm typecheck` clean, `pnpm lint`
-clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (45
+clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (46
 routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record
+
+### 2026-09-12 — Promotions slice
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `d36d614`. Gates in-script green (tests 340/340). Post-deploy:
+`active`; smoke `HTTP 200`; `/app/customers/promotions` → `307` to
+`/sign-in`; `/app/customers` and `/app/pos` controls → `307`; logs
+`Started` / `✓ Ready`, no runtime errors, usual stale-tab noise.
 
 ### 2026-09-12 — Segments + channel filter slice
 
@@ -1015,17 +1071,80 @@ Unchanged from the prior analysis — still accurate after this batch:
   reconciliation all remain explicit-approval items; the Payments ledger
   itself shipped on the approved `finance.view`.
 
-**Recommended next safe slice — filters that match the IA:** two small
-read-only refinements, both client-side over data already fetched: (1)
-**Customers › Segments** — pills on the customer list for *ordered in the
-last 30 days / not in 30+ days / never ordered / 5+ orders*, computed from
-the `lastOrderAt` and `orderCount` the list already carries (the
-directive's Segments item, honestly scoped to facts); (2) **Orders ›
-channel filter** — dine-in / takeaway / website pills beside the status
-pills, which is the roadmap's "Online Orders" as a view rather than a
-separate screen. Zero schema, zero new queries. Previously queued and now
-shipped: the **integration slice**, **Admin › Restaurant** and the
-**Channels analytics view** —
+## Safe roadmap complete — what needs a decision to continue
+
+Every remaining roadmap item now requires one of the mandatory-stop
+decisions. Each is stated the way the directive asks — requirement, why,
+what exists, options, recommendation — so it can be approved or declined
+in one line.
+
+**1. Menu Control Center visual pass (Phase E).** *Requirement:* a scoped
+definition of what changes. *Why:* it is the app's most mature module; an
+autonomous "significant redesign" risks the best-working surface.
+*Exists:* the full CRUD, review queue, media library. *Options:* (a)
+chrome-only pass — Card/Table/PageHeader consistency, no form changes; (b)
+full redesign. *Recommend (a)*, as one slice, then review.
+
+**2. Product cost & margin (Menu Engineering, second half).** *Requirement:*
+a net-of-tax margin path. *Why:* `basePrice` is GST-inclusive; CLAUDE.md
+requires margins on net-of-tax revenue via `src/lib/pricing`; new
+financial logic. *Exists:* pure, tested `lib/iq/costing.ts` / `profit.ts`
+/ `pricing.ts`; `recipes`/`recipe_items` schema; **no recipe lines in
+production and no UI to enter them** — so this also needs the Inventory
+write path (next item). *Recommend:* approve as one designed slice after
+item 3, not before.
+
+**3. Inventory (Phase F).** *Requirement:* write paths — ingredients,
+suppliers, stock movements, recipe lines — and the order→consumption
+decision. *Why:* explicit stop condition. *Exists:* complete, excellent
+schema, zero repository layer, zero data. *Options:* (a) ingredients +
+suppliers + recipe-line CRUD first (no consumption); (b) consumption on
+order completion too. *Recommend (a)* first; consumption is its own review.
+
+**4. KDS stations / routing (Phase G).** *Requirement:* a station model.
+*Why:* explicit stop condition. *Exists:* `products.kdsStation` (text) and
+`prepMinutes` columns, unused; the station-less board is live.
+*Recommend:* decide whether `kdsStation` free-text on products is the
+model, or a `stations` table; then a KDS station filter is a small slice.
+
+**5. Staff & Access writes (Phase H).** *Requirement:* invitations, role
+assignment, deactivation; shifts/attendance need new schema. *Why:*
+permission-architecture stop condition. *Exists:* `memberships`, the CLI
+`pnpm staff:grant`. *Recommend:* approve role assign/deactivate on
+`staff.manage` (writes to `memberships` + an `auditLogs` row, no schema);
+defer shifts until a register/shift schema is designed with cash.
+
+**6. Finance writes.** *Requirement:* `finance.manage` (re-gating
+`recordExpense`/`setFoodCostTarget` off `analytics.view` — a tightening
+that removes ANALYST's current write), a refund write path (`refunds`
+table is never written), cash-register/reconciliation schema. *Why:*
+payment/financial stop conditions. *Recommend:* approve `finance.manage`
+now (pure tightening, zero schema); design refunds and registers together.
+
+**7. Settings edit forms.** *Requirement:* forms for what
+`/app/admin/restaurant` now shows. *Why:* `price_basis` in particular
+misstates revenue retroactively if flipped. *Recommend:* approve forms for
+the safe fields (legal name, GSTIN, phone, address) first; keep
+`price_basis` read-only behind an explicit, separate approval.
+
+**8. POS UX refinement (Phase C of the master roadmap).** *Requirement:*
+a scope. *Why:* money-touching, tablet-only, "never slower". *Exists:* a
+working POS untouched by this session. *Recommend:* approve a
+measurement-first pass — no visual change without a timed comparison.
+
+**9. AI (Phase L).** *Requirement:* a tool/service layer over the existing
+repositories, writing to the existing `ai_conversations`/`ai_tool_calls`
+tables; an `ai.use` permission. *Why:* explicit stop condition. *Exists:*
+schema only. *Recommend:* approve the tool layer design first, read-only
+tools only, Daily Brief before Ask FRYBIRD.
+
+**Not recommended yet:** Devices/Printers (no telemetry exists — anything
+shown would be fake), Integrations (table exists, nothing populates it),
+Inventory read-only screens before item 3 (they would render empty).
+
+Previously queued and shipped in this session: the **integration slice**,
+**Admin › Restaurant**, **Promotions**, **segments/channel filters**, and
+the **Channels analytics view** —
 revenue / orders / AOV split by DINE_IN / TAKEAWAY / ONLINE over a chosen
 range. `orders.channel` is already indexed with `placedAt` for exactly this
 question (`orders_channel_placed_idx`), it reuses `analytics.ts`'s existing
