@@ -6,13 +6,30 @@ import { resolveHome } from "@/lib/auth/route-home";
 
 export const metadata: Metadata = { title: "Sign in" };
 
-export default async function CustomerSignInPage() {
+export default async function CustomerSignInPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ confirm?: string }>;
+}) {
   const home = await resolveHome();
   if (home.path) redirect(home.path);
+
+  const { confirm } = await searchParams;
 
   return (
     <div className="mx-auto w-full max-w-sm px-[var(--gutter)] py-14">
       <h1 className="font-heading text-3xl font-bold tracking-tight">Sign in</h1>
+
+      {/* A used or expired confirmation link lands back here — a plain
+          state, not a crash, per content.md: say what happened, then what
+          to do. */}
+      {confirm === "error" && (
+        <p role="alert" className="mt-6 rounded-md border border-border bg-surface px-4 py-3 text-sm">
+          That confirmation link didn&rsquo;t work. It may have expired or already been used. If your account is
+          already confirmed, sign in below.
+        </p>
+      )}
+
       <div className="mt-8">
         <CustomerSignInForm />
       </div>
