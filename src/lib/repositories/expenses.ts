@@ -13,8 +13,8 @@ import { and, asc, desc, eq, gte, lt, lte, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { accounts, expenseCategories, expenses, orders, payments, targets } from "@/db/schema";
-import { type DateRange } from "@/lib/dates";
-import { type Bps, type Paise, ZERO, paise } from "@/lib/money";
+import { type DateRange, addDays, businessDate, daysInRange, endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
+import { type Bps, type Paise, ZERO, add, paise, ratioBps } from "@/lib/money";
 import { profit, type ProfitResult } from "@/lib/iq/profit";
 
 export interface ExpenseRow {
@@ -191,6 +191,86 @@ export async function listExpenses(orgId: string, range: DateRange, limit = 100)
     .limit(limit);
 
   return rows.map((r) => ({ ...r, amount: paise(r.amount) }));
+}
+
+export interface FoodCostPoint {
+  readonly weekStart: string;
+  readonly weekLabel: string;
+  readonly revenue: Paise;
+  readonly directCost: Paise;
+  /** Null when the week had no revenue — a closed week is not a 0% week. */
+  readonly foodCostBps: Bps | null;
+}
+
+const shortDate = (date: string) =>
+  new Date(`${date}T12:00:00+05:30`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+
+/**
+ * Food cost % by week, most recent last.
+ *
+ * Bucketed by week rather than by day because `expenses.paidOn` records when
+ * an owner pays for a delivery, not when it is used — a week's flour bought on
+ * Monday is one row, not seven. A daily ratio would swing from 0% to some huge
+ * spike on purchase days and say nothing true about any single day; a week is
+ * close to the shortest window an owner actually restocks on, so it is the
+ * shortest window this ratio means anything meaningful in.
+ */
+export async function foodCostWeeklySeries(orgId: string, weeks = 8): Promise<readonly FoodCostPoint[]> {
+  const today = businessDate();
+  const totalDays = weeks * 7;
+  const range: DateRange = {
+    from: startOfBusinessDay(addDays(today, -(totalDays - 1))),
+    to: endOfBusinessDay(today),
+    label: "",
+  };
+  const days = daysInRange(range);
+
+  const [revenueRows, expenseRows] = await Promise.all([
+    db()
+      .select({ grandTotal: orders.grandTotal, createdAt: orders.createdAt })
+      .from(orders)
+      .innerJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, "CAPTURED")))
+      .where(
+        and(
+          eq(orders.orgId, orgId),
+          gte(orders.createdAt, range.from),
+          lt(orders.createdAt, range.to),
+          sql`${orders.status} NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')`,
+        ),
+      ),
+    db()
+      .select({ amount: expenses.amount, paidOn: expenses.paidOn, behaviour: expenseCategories.behaviour, isNonOperating: expenseCategories.isNonOperating })
+      .from(expenses)
+      .innerJoin(expenseCategories, eq(expenseCategories.id, expenses.categoryId))
+      .where(and(eq(expenses.orgId, orgId), gte(expenses.paidOn, days[0]!), lte(expenses.paidOn, today))),
+  ]);
+
+  const revenueByDay = new Map<string, Paise>();
+  for (const row of revenueRows) {
+    const day = businessDate(row.createdAt);
+    revenueByDay.set(day, paise((revenueByDay.get(day) ?? ZERO) + paise(row.grandTotal)));
+  }
+
+  const directByDay = new Map<string, Paise>();
+  for (const row of expenseRows) {
+    if (row.behaviour !== "DIRECT" || row.isNonOperating) continue;
+    directByDay.set(row.paidOn, paise((directByDay.get(row.paidOn) ?? ZERO) + paise(row.amount)));
+  }
+
+  const points: FoodCostPoint[] = [];
+  for (let w = 0; w < weeks; w++) {
+    const bucket = days.slice(w * 7, w * 7 + 7);
+    const weekRevenue = add(...bucket.map((d) => revenueByDay.get(d) ?? ZERO));
+    const weekDirect = add(...bucket.map((d) => directByDay.get(d) ?? ZERO));
+    points.push({
+      weekStart: bucket[0]!,
+      weekLabel: bucket.length > 1 ? `${shortDate(bucket[0]!)} – ${shortDate(bucket[bucket.length - 1]!)}` : shortDate(bucket[0]!),
+      revenue: weekRevenue,
+      directCost: weekDirect,
+      foodCostBps: weekRevenue > ZERO ? ratioBps(weekDirect, weekRevenue) : null,
+    });
+  }
+  return points;
 }
 
 export async function listCategories(orgId: string) {

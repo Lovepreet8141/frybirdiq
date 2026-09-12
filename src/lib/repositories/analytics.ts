@@ -13,11 +13,19 @@ import "server-only";
  * nobody has paid for.
  */
 
-import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { orderItems, orders, payments } from "@/db/schema";
+import { orderItems, orders, payments, products } from "@/db/schema";
 import { type Paise, ZERO, add, paise, ratioBps } from "@/lib/money";
-import { type DateRange, businessDate, daysInRange, previousPeriod } from "@/lib/dates";
+import {
+  type DateRange,
+  addDays,
+  businessDate,
+  daysInRange,
+  endOfBusinessDay,
+  previousPeriod,
+  startOfBusinessDay,
+} from "@/lib/dates";
 
 export interface Metric {
   readonly value: Paise;
@@ -61,7 +69,7 @@ export interface Dashboard {
   readonly empty: boolean;
 }
 
-function changeBps(current: bigint | number, previous: bigint | number): number | null {
+export function changeBps(current: bigint | number, previous: bigint | number): number | null {
   const now = typeof current === "bigint" ? current : BigInt(Math.round(current));
   const before = typeof previous === "bigint" ? previous : BigInt(Math.round(previous));
   // A rise from nothing is not a percentage. Reporting "+∞%" or "+100%" from a
@@ -206,4 +214,99 @@ export async function ordersAwaitingDecision(orgId: string) {
       ),
     )
     .orderBy(orders.createdAt);
+}
+
+export interface DayTotal {
+  readonly revenue: Paise;
+  readonly orders: number;
+}
+
+/** Revenue and order count for one arbitrary window — lighter than {@link getDashboard} when neither AOV nor a product breakdown is needed. */
+async function periodTotals(orgId: string, range: DateRange): Promise<DayTotal> {
+  const rows = await paidOrders(orgId, range);
+  return { revenue: add(...rows.map((row) => paise(row.grandTotal))), orders: rows.length };
+}
+
+export interface TodayComparison {
+  readonly today: DayTotal;
+  readonly yesterday: DayTotal;
+  /** Same weekday, one week back — the comparison a Saturday actually wants, not two days ago. */
+  readonly lastWeek: DayTotal;
+  readonly vsYesterdayBps: number | null;
+  readonly vsLastWeekBps: number | null;
+  readonly ordersVsYesterdayBps: number | null;
+  readonly ordersVsLastWeekBps: number | null;
+}
+
+/**
+ * "How did today go" needs two comparisons at once, not one at a time behind a
+ * switcher — a Monday's revenue means little next to Sunday's, but a lot next
+ * to last Monday's. Always anchored to the current business day regardless of
+ * which range the rest of the page is showing.
+ */
+export async function getTodayComparison(orgId: string): Promise<TodayComparison> {
+  const today = businessDate();
+  const yesterday = addDays(today, -1);
+  const lastWeek = addDays(today, -7);
+
+  const dayRange = (date: string): DateRange => ({
+    from: startOfBusinessDay(date),
+    to: endOfBusinessDay(date),
+    label: date,
+  });
+
+  const [todayTotals, yesterdayTotals, lastWeekTotals] = await Promise.all([
+    periodTotals(orgId, dayRange(today)),
+    periodTotals(orgId, dayRange(yesterday)),
+    periodTotals(orgId, dayRange(lastWeek)),
+  ]);
+
+  return {
+    today: todayTotals,
+    yesterday: yesterdayTotals,
+    lastWeek: lastWeekTotals,
+    vsYesterdayBps: changeBps(todayTotals.revenue, yesterdayTotals.revenue),
+    vsLastWeekBps: changeBps(todayTotals.revenue, lastWeekTotals.revenue),
+    ordersVsYesterdayBps: changeBps(todayTotals.orders, yesterdayTotals.orders),
+    ordersVsLastWeekBps: changeBps(todayTotals.orders, lastWeekTotals.orders),
+  };
+}
+
+export interface SellingGap {
+  readonly name: string;
+  readonly slug: string;
+  readonly price: Paise;
+}
+
+/**
+ * Published, active products with no paid sale in the range — the other half
+ * of "what's selling", which a top-N list can never show by itself. Matched by
+ * `productId`, not name: order lines snapshot the name at sale time (§51), so
+ * a renamed product would otherwise show up as its own gap.
+ */
+export async function notSelling(orgId: string, range: DateRange, limit = 6): Promise<readonly SellingGap[]> {
+  const rows = await db()
+    .select({ name: products.name, slug: products.slug, price: products.basePrice })
+    .from(products)
+    .where(
+      and(
+        eq(products.orgId, orgId),
+        eq(products.isActive, true),
+        eq(products.status, "PUBLISHED"),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${orderItems}
+          INNER JOIN ${orders} ON ${orders.id} = ${orderItems.orderId}
+          INNER JOIN ${payments} ON ${payments.orderId} = ${orders.id} AND ${payments.status} = 'CAPTURED'
+          WHERE ${orderItems.productId} = ${products.id}
+            AND ${orders.orgId} = ${orgId}
+            AND ${orders.createdAt} >= ${range.from.toISOString()}
+            AND ${orders.createdAt} < ${range.to.toISOString()}
+            AND ${orders.status} NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')
+        )`,
+      ),
+    )
+    .orderBy(asc(products.position), asc(products.name))
+    .limit(limit);
+
+  return rows.map((row) => ({ name: row.name, slug: row.slug, price: paise(row.price) }));
 }
