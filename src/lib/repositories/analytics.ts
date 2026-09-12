@@ -15,9 +15,9 @@ import "server-only";
 
 import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { orderItems, orders, payments, products } from "@/db/schema";
+import { categories, orderItems, orders, payments, products, recipeItems, recipes } from "@/db/schema";
 import { ORDER_CHANNELS, type OrderChannel } from "@/domain/order-channel";
-import { type Paise, ZERO, add, paise, ratioBps } from "@/lib/money";
+import { type Paise, ZERO, add, paise, ratioBps, scale } from "@/lib/money";
 import {
   type DateRange,
   addDays,
@@ -251,6 +251,144 @@ export async function getChannelBreakdown(orgId: string, range: DateRange): Prom
   }));
 
   return { range, total, channels, series, empty: current.length === 0 };
+}
+
+export interface ProductPerformance {
+  /** Null when the product has since been deleted; the snapshot name still identifies it. */
+  readonly productId: string | null;
+  readonly name: string;
+  readonly category: string | null;
+  readonly imageUrl: string | null;
+  readonly isActive: boolean;
+  readonly quantity: number;
+  /** Distinct paid orders containing it. */
+  readonly orders: number;
+  readonly revenue: Metric;
+  readonly shareBps: number;
+  /** What a unit actually fetched on average, GST-inclusive, after modifiers and discounts. */
+  readonly averagePaid: Paise;
+  /** Whether a recipe is linked, and with how many ingredient lines — the prerequisite for a cost. */
+  readonly recipe: { linked: boolean; ingredientCount: number };
+}
+
+export interface CategoryPerformance {
+  readonly name: string;
+  readonly quantity: number;
+  readonly revenue: Paise;
+  readonly shareBps: number;
+}
+
+export interface MenuPerformance {
+  readonly range: DateRange;
+  readonly total: Paise;
+  readonly products: readonly ProductPerformance[];
+  readonly categories: readonly CategoryPerformance[];
+  readonly empty: boolean;
+}
+
+/**
+ * What each product actually did — units, revenue, share, average paid —
+ * over a range, against the previous period. Same `paidOrders` rows and the
+ * same `lineTotal` aggregation `getDashboard`'s top-products uses, extended
+ * to every product and joined to today's catalogue for category, image and
+ * recipe status.
+ *
+ * Deliberately no margin or contribution column yet. A margin needs the
+ * product's cost (no recipe has ingredient lines in production) *and*
+ * net-of-tax revenue through `src/lib/pricing` (`basePrice` is
+ * GST-inclusive) — both are real work with real rules, not a column to add
+ * here. `recipe` says honestly how far each product is from having one.
+ */
+export async function getMenuPerformance(orgId: string, range: DateRange): Promise<MenuPerformance> {
+  const database = db();
+  const [current, prior] = await Promise.all([paidOrders(orgId, range), paidOrders(orgId, previousPeriod(range))]);
+
+  const itemsFor = async (rows: typeof current) => {
+    const ids = rows.map((row) => row.id);
+    return ids.length > 0 ? database.select().from(orderItems).where(inArray(orderItems.orderId, ids)) : [];
+  };
+  const [items, priorItems] = await Promise.all([itemsFor(current), itemsFor(prior)]);
+
+  // Keyed by product id when the product still exists, else by its snapshot
+  // name — a deleted product's sales are still real sales.
+  const keyOf = (item: { productId: string | null; productName: string }) => item.productId ?? `name:${item.productName}`;
+
+  const byKey = new Map<string, { productId: string | null; name: string; quantity: number; revenue: Paise; orderIds: Set<string> }>();
+  for (const item of items) {
+    const key = keyOf(item);
+    const found = byKey.get(key) ?? { productId: item.productId, name: item.productName, quantity: 0, revenue: ZERO, orderIds: new Set<string>() };
+    found.quantity += item.quantity;
+    found.revenue = add(found.revenue, paise(item.lineTotal));
+    found.orderIds.add(item.orderId);
+    byKey.set(key, found);
+  }
+  const priorRevenue = new Map<string, Paise>();
+  for (const item of priorItems) {
+    const key = keyOf(item);
+    priorRevenue.set(key, add(priorRevenue.get(key) ?? ZERO, paise(item.lineTotal)));
+  }
+
+  const productIds = [...byKey.values()].map((value) => value.productId).filter((id): id is string => id !== null);
+  const [catalogue, recipeRows] = await Promise.all([
+    productIds.length > 0
+      ? database
+          .select({
+            id: products.id,
+            name: products.name,
+            images: products.images,
+            isActive: products.isActive,
+            category: categories.name,
+          })
+          .from(products)
+          .leftJoin(categories, eq(categories.id, products.categoryId))
+          .where(and(eq(products.orgId, orgId), inArray(products.id, productIds)))
+      : [],
+    productIds.length > 0
+      ? database
+          .select({ productId: recipes.productId, lines: sql<number>`count(${recipeItems.id})::int` })
+          .from(recipes)
+          .leftJoin(recipeItems, eq(recipeItems.recipeId, recipes.id))
+          .where(and(eq(recipes.orgId, orgId), inArray(recipes.productId, productIds)))
+          .groupBy(recipes.productId)
+      : [],
+  ]);
+  const catalogueById = new Map(catalogue.map((row) => [row.id, row]));
+  const recipeByProduct = new Map(recipeRows.map((row) => [row.productId, row.lines]));
+
+  const total = add(...[...byKey.values()].map((value) => value.revenue));
+
+  const productList: ProductPerformance[] = [...byKey.entries()]
+    .map(([key, value]) => {
+      const live = value.productId ? catalogueById.get(value.productId) : undefined;
+      const before = priorRevenue.get(key) ?? ZERO;
+      const lines = value.productId ? recipeByProduct.get(value.productId) : undefined;
+      return {
+        productId: value.productId,
+        name: live?.name ?? value.name,
+        category: live?.category ?? null,
+        imageUrl: live?.images?.[0]?.url ?? null,
+        isActive: live?.isActive ?? false,
+        quantity: value.quantity,
+        orders: value.orderIds.size,
+        revenue: { value: value.revenue, previous: before, changeBps: changeBps(value.revenue, before) },
+        shareBps: total === 0n ? 0 : ratioBps(value.revenue, total),
+        averagePaid: value.quantity === 0 ? ZERO : scale(value.revenue, 1, value.quantity),
+        recipe: { linked: lines !== undefined, ingredientCount: lines ?? 0 },
+      };
+    })
+    .sort((a, b) => (b.revenue.value === a.revenue.value ? b.quantity - a.quantity : b.revenue.value > a.revenue.value ? 1 : -1));
+
+  const byCategory = new Map<string, { quantity: number; revenue: Paise }>();
+  for (const product of productList) {
+    const name = product.category ?? (product.productId ? "Uncategorised" : "Removed products");
+    const found = byCategory.get(name) ?? { quantity: 0, revenue: ZERO };
+    byCategory.set(name, { quantity: found.quantity + product.quantity, revenue: add(found.revenue, product.revenue.value) });
+  }
+  const categoryList: CategoryPerformance[] = [...byCategory.entries()]
+    .map(([name, value]) => ({ name, ...value, shareBps: total === 0n ? 0 : ratioBps(value.revenue, total) }))
+    .sort((a, b) => (b.revenue > a.revenue ? 1 : b.revenue < a.revenue ? -1 : 0));
+
+  return { range, total, products: productList, categories: categoryList, empty: items.length === 0 };
 }
 
 /**

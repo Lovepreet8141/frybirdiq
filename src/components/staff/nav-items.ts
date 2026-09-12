@@ -1,5 +1,6 @@
 import {
   Activity,
+  BarChart3,
   ChefHat,
   ClipboardList,
   History,
@@ -76,11 +77,17 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
       label: "Operations",
       items: [
         ...(canSeeAnalytics
-          ? [{ href: "/app/iq", label: "Overview", icon: LayoutGrid, exclude: ["/app/iq/menu", "/app/iq/live", "/app/iq/activity", "/app/iq/channels"] }]
+          ? [
+              {
+                href: "/app/iq",
+                label: "Overview",
+                icon: LayoutGrid,
+                exclude: ["/app/iq/menu", "/app/iq/live", "/app/iq/activity", "/app/iq/channels", "/app/iq/products"],
+              },
+            ]
           : []),
         ...(canSeeAnalytics ? [{ href: "/app/iq/live", label: "Live operations", icon: Activity }] : []),
         ...(canSeeAnalytics ? [{ href: "/app/iq/activity", label: "Activity", icon: History }] : []),
-        ...(canSeeAnalytics ? [{ href: "/app/iq/channels", label: "Channels", icon: Store }] : []),
         ...(canSeeOrders ? [{ href: "/app/orders", label: "Orders", icon: ClipboardList }] : []),
         ...(canSeePos ? [{ href: "/app/pos", label: "POS", icon: ShoppingBag }] : []),
         ...(canSeeKitchen ? [{ href: "/app/kds", label: "Kitchen", icon: ChefHat }] : []),
@@ -98,6 +105,16 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
             { href: "/app/iq/menu/combos", label: "Combos", icon: LayoutList },
             { href: "/app/iq/menu/media", label: "Media", icon: ImageIcon },
             { href: "/app/iq/menu/review", label: "Review queue", icon: ClipboardList },
+          ]
+        : [],
+    },
+    {
+      id: "analytics",
+      label: "Analytics",
+      items: canSeeAnalytics
+        ? [
+            { href: "/app/iq/products", label: "Products", icon: BarChart3 },
+            { href: "/app/iq/channels", label: "Channels", icon: Store },
           ]
         : [],
     },

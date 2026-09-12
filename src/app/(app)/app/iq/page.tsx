@@ -88,6 +88,9 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
             <Link href="/app/iq/channels" className="text-muted-foreground transition-colors hover:text-foreground">
               Channels
             </Link>
+            <Link href="/app/iq/products" className="text-muted-foreground transition-colors hover:text-foreground">
+              Products
+            </Link>
             <Link href="/app/iq/pnl" className="text-muted-foreground transition-colors hover:text-foreground">
               Profit and loss
             </Link>
