@@ -349,11 +349,33 @@ clean, `pnpm test` 332/332 passing, `pnpm build` succeeds (38 routes),
 
 ## Deployment record
 
-All six slices above (shell, Orders, Command Center, Customer 360, Staff +
-Audit) were committed as five focused commits on `iq-dashboard` and
-deployed together via `./deploy/deploy.sh` — see the deployment entry
-appended below this section once that run completes, with exact commit
-hashes, smoke-test result, and route verification.
+Deployed 2026-09-12 via `./deploy/deploy.sh root@194.238.16.200`, from
+`iq-dashboard` at commit `f2c6634` (five focused feature commits,
+`ee8bf28`..`160282c`, plus this doc):
+
+- `ee8bf28` — app shell (breadcrumb, command palette, user menu, nav model)
+- `bd65f32` — Orders workspace
+- `8eda56b` — Command Center card tiles + orders-running-late signal
+- `a7bf9f8` — Customer 360
+- `160282c` — Staff roster + Audit log
+
+**Gates before deploy:** `pnpm typecheck`, `pnpm lint`, `pnpm test`
+(332/332), `scripts/check-rsc-boundaries.sh`, `pnpm build` (38 routes) — all
+green, run by `deploy.sh` itself.
+
+**Post-deploy verification:**
+- `systemctl is-active frybird` → `active`
+- Deploy script's own smoke test → `HTTP 200`
+- `https://frybirdiq.tech/` → `HTTP 200`
+- `/app/iq`, `/app/orders`, `/app/customers`, `/app/staff`,
+  `/app/admin/audit`, `/app/pos` → all `HTTP 307` to `/sign-in` (correct:
+  unauthenticated requests to `staffCan`-gated pages; POS included as an
+  unchanged control to confirm nothing regressed there)
+- `journalctl -u frybird` post-restart: clean startup, only expected
+  `NotSignedIn` entries (from the route checks above) and one stale
+  `Failed to find Server Action` from a browser tab left open from before
+  the deploy (expected — Next.js server-action IDs change every build;
+  resolves on reload). No crash, no restart loop.
 
 ## What has NOT been touched (by design)
 
