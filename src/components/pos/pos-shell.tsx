@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import type { OrderChannel } from "@/domain/order-channel";
 import { lineKey } from "@/lib/cart/schema";
 import { type PriceDraftOk, placeCounterOrderAction, pollPosMenu, priceDraftOrder } from "@/lib/pos/actions";
@@ -67,6 +68,7 @@ export function PosShell({
   const [isPricing, startPricing] = useTransition();
 
   const online = useOnline();
+  const router = useRouter();
 
   // Refresh the grid against the same shared menu path everything else
   // reads (§ pollPosMenu) — a price change, a photo, or someone marking an
@@ -251,6 +253,9 @@ export function PosShell({
    * attaches a stranger's phone number or seats two bills at one table.
    */
   function startNextOrder() {
+    // Now, not during the sale: the table that order was seated at is
+    // occupied and the next cashier tapping this screen must see that.
+    router.refresh();
     requestId.current += 1;
     setPayingFor(null);
     setLines([]);

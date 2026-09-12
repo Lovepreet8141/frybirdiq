@@ -194,8 +194,13 @@ export async function placeCounterOrderAction(input: unknown): Promise<CounterCh
   if (!placed.ok) return placed;
 
   const payment = await recordCashPayment({ orderId: placed.orderId, actorUserId: staff.userId, actorRoles: staff.roles, tendered });
+
+  // The kitchen and the orders list need this ticket now. The counter screen
+  // deliberately is not revalidated here: refreshing the route the till is
+  // standing on, mid-transition, would re-render the tree holding the
+  // receipt the cashier is still reading the change off. It refreshes itself
+  // when they tap Next order instead — see `startNextOrder` in PosShell.
   revalidatePath("/app/orders");
-  revalidatePath("/app/pos");
 
   const base = {
     orderId: placed.orderId,
