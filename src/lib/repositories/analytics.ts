@@ -22,7 +22,6 @@ import {
   addDays,
   businessDate,
   daysInRange,
-  endOfBusinessDay,
   previousPeriod,
   startOfBusinessDay,
 } from "@/lib/dates";
@@ -229,8 +228,12 @@ async function periodTotals(orgId: string, range: DateRange): Promise<DayTotal> 
 
 export interface TodayComparison {
   readonly today: DayTotal;
+  /** Yesterday, truncated to the same elapsed time as `today` — not the full day. */
   readonly yesterday: DayTotal;
-  /** Same weekday, one week back — the comparison a Saturday actually wants, not two days ago. */
+  /**
+   * Same weekday, one week back — the comparison a Saturday actually wants,
+   * not two days ago. Also truncated to the same elapsed time as `today`.
+   */
   readonly lastWeek: DayTotal;
   readonly vsYesterdayBps: number | null;
   readonly vsLastWeekBps: number | null;
@@ -243,22 +246,34 @@ export interface TodayComparison {
  * switcher — a Monday's revenue means little next to Sunday's, but a lot next
  * to last Monday's. Always anchored to the current business day regardless of
  * which range the rest of the page is showing.
+ *
+ * Today is necessarily a partial day — comparing it against a *complete*
+ * yesterday or last week reads as a collapse every single morning: at 4am,
+ * zero orders so far against a full day of them is "-100%" and means nothing.
+ * Every comparison window is truncated to the same elapsed time since the
+ * business day started, so 4am is measured against 4am, not against
+ * midnight-to-midnight. `changeBps` already returns `null` rather than a
+ * number when the base is zero (both days quiet at this hour), which is the
+ * right way to suppress a delta that has nothing to be a percentage of.
  */
 export async function getTodayComparison(orgId: string): Promise<TodayComparison> {
-  const today = businessDate();
+  const now = new Date();
+  const today = businessDate(now);
   const yesterday = addDays(today, -1);
   const lastWeek = addDays(today, -7);
 
-  const dayRange = (date: string): DateRange => ({
-    from: startOfBusinessDay(date),
-    to: endOfBusinessDay(date),
-    label: date,
-  });
+  const elapsedMs = now.getTime() - startOfBusinessDay(today).getTime();
+
+  /** The same window of the business day, on a different date — 00:00–04:12 yesterday, not all of it. */
+  const asOfNow = (date: string): DateRange => {
+    const from = startOfBusinessDay(date);
+    return { from, to: new Date(from.getTime() + elapsedMs), label: date };
+  };
 
   const [todayTotals, yesterdayTotals, lastWeekTotals] = await Promise.all([
-    periodTotals(orgId, dayRange(today)),
-    periodTotals(orgId, dayRange(yesterday)),
-    periodTotals(orgId, dayRange(lastWeek)),
+    periodTotals(orgId, { from: startOfBusinessDay(today), to: now, label: today }),
+    periodTotals(orgId, asOfNow(yesterday)),
+    periodTotals(orgId, asOfNow(lastWeek)),
   ]);
 
   return {

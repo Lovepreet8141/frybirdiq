@@ -1,3 +1,8 @@
+"use client";
+
+import { CartesianGrid, Line, LineChart, ReferenceLine, XAxis, YAxis } from "recharts";
+import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { type Bps, type Paise, formatBps, formatINR } from "@/lib/money";
 
 export interface FoodCostPoint {
@@ -7,6 +12,10 @@ export interface FoodCostPoint {
   readonly directCost: Paise;
   readonly foodCostBps: Bps | null;
 }
+
+const chartConfig = {
+  foodCostPct: { label: "Food cost", color: "var(--primary)" },
+} satisfies ChartConfig;
 
 /**
  * Food cost % by week, with an optional dashed target.
@@ -41,81 +50,81 @@ export function FoodCostChart({
   // frame and a flat week doesn't look like it grazed the target.
   const min = Math.max(0, Math.floor((rawMin - 2) / 2) * 2);
   const max = Math.ceil((rawMax + 2) / 2) * 2;
-  const span = Math.max(max - min, 1);
 
-  const width = 100;
-  const height = 34;
-  const slot = points.length > 1 ? width / (points.length - 1) : 0;
-  const y = (pct: number) => height - ((pct - min) / span) * height;
-
-  const linePath = points
-    .map((p, i) => (p.foodCostBps === null ? null : `${i * slot},${y(p.foodCostBps / 100)}`))
-    .reduce<string[]>((segments, coord, i) => {
-      if (coord === null) return segments;
-      const prevKnown = i > 0 && points[i - 1]!.foodCostBps !== null;
-      segments.push(`${prevKnown ? "L" : "M"}${coord}`);
-      return segments;
-    }, [])
-    .join(" ");
+  const chartData = points.map((p) => ({
+    week: p.weekLabel,
+    weekStart: p.weekStart,
+    foodCostPct: p.foodCostBps === null ? null : p.foodCostBps / 100,
+    revenue: p.revenue,
+    directCost: p.directCost,
+  }));
 
   const latest = known[known.length - 1]!;
   const overTarget = targetBps !== null && latest.foodCostBps > targetBps;
 
-  const labelled = new Set([0, points.length - 1]);
-
   return (
     <figure className={className}>
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="h-40 w-full overflow-visible"
-        preserveAspectRatio="none"
-        role="img"
-        aria-label={`Food cost by week. Most recent week ${formatBps(latest.foodCostBps, 1)}.${
-          targetBps !== null ? ` Target ${formatBps(targetBps, 1)}.` : ""
-        }`}
-      >
-        {targetBps !== null && (
-          <>
-            <line
-              x1="0"
-              y1={y(targetBps / 100)}
-              x2={width}
-              y2={y(targetBps / 100)}
+      <ChartContainer config={chartConfig} className="aspect-21/9 w-full">
+        <LineChart
+          accessibilityLayer
+          data={chartData}
+          margin={{ left: 4, right: 12, top: targetBps !== null ? 16 : 4 }}
+        >
+          <CartesianGrid vertical={false} />
+          <XAxis dataKey="week" tickLine={false} axisLine={false} tickMargin={8} />
+          <YAxis
+            domain={[min, max]}
+            tickLine={false}
+            axisLine={false}
+            tickMargin={4}
+            tickFormatter={(value: number) => `${value}%`}
+            width={40}
+          />
+          <ChartTooltip
+            cursor={false}
+            content={
+              <ChartTooltipContent
+                indicator="line"
+                labelKey="week"
+                formatter={(value, _name, item) => {
+                  const point = item.payload as (typeof chartData)[number];
+                  return (
+                    <div className="flex w-full flex-col gap-0.5">
+                      <span className="tabular font-medium text-foreground">
+                        {value === null ? "No revenue" : `${formatBps(Math.round(Number(value) * 100), 1)} food cost`}
+                      </span>
+                      <span className="tabular text-muted-foreground">
+                        {formatINR(point.directCost, "whole")} on {formatINR(point.revenue, "whole")} revenue
+                      </span>
+                    </div>
+                  );
+                }}
+              />
+            }
+          />
+          {targetBps !== null && (
+            <ReferenceLine
+              y={targetBps / 100}
               stroke="var(--border-strong)"
-              strokeWidth="0.4"
-              strokeDasharray="1.6 1.2"
-              vectorEffect="non-scaling-stroke"
+              strokeWidth={1}
+              strokeDasharray="4 3"
+              label={{
+                value: `Target ${formatBps(targetBps, 0)}`,
+                position: "insideTopRight",
+                fill: "var(--muted-foreground)",
+                fontSize: 11,
+              }}
             />
-            <text x={width} y={y(targetBps / 100) - 1} textAnchor="end" fontSize="3.2" fill="var(--muted-foreground)">
-              Target {formatBps(targetBps, 0)}
-            </text>
-          </>
-        )}
-
-        <path
-          d={linePath}
-          fill="none"
-          stroke="var(--primary)"
-          strokeWidth="0.8"
-          strokeLinejoin="round"
-          strokeLinecap="round"
-          vectorEffect="non-scaling-stroke"
-        />
-
-        {points.map((p, i) =>
-          p.foodCostBps === null ? null : (
-            <circle key={p.weekStart} cx={i * slot} cy={y(p.foodCostBps / 100)} r="0.9" fill="var(--primary)">
-              <title>
-                {p.weekLabel} — {formatBps(p.foodCostBps, 1)} food cost on {formatINR(p.revenue, "whole")} revenue
-              </title>
-            </circle>
-          ),
-        )}
-      </svg>
-
-      <figcaption className="mt-2 flex justify-between text-xs text-muted-foreground">
-        {points.map((p, i) => (labelled.has(i) ? <span key={p.weekStart}>{p.weekLabel}</span> : null))}
-      </figcaption>
+          )}
+          <Line
+            dataKey="foodCostPct"
+            stroke="var(--color-foodCostPct)"
+            strokeWidth={2}
+            dot={{ r: 3, fill: "var(--color-foodCostPct)" }}
+            connectNulls
+          />
+        </LineChart>
+      </ChartContainer>
 
       <p className="tabular mt-3 text-sm">
         Most recent week: <strong className={overTarget ? "text-destructive" : "text-foreground"}>{formatBps(latest.foodCostBps, 1)}</strong>
@@ -124,28 +133,29 @@ export function FoodCostChart({
         )}
       </p>
 
+      {/* A chart is never the only way to read the numbers. */}
       <details className="mt-3">
         <summary className="cursor-pointer text-sm font-semibold text-muted-foreground">See the figures</summary>
-        <table className="mt-2 w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-border text-left">
-              <th scope="col" className="py-1.5 font-semibold">Week</th>
-              <th scope="col" className="py-1.5 text-right font-semibold">Revenue</th>
-              <th scope="col" className="py-1.5 text-right font-semibold">Direct cost</th>
-              <th scope="col" className="py-1.5 text-right font-semibold">Food cost %</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table className="mt-2">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Week</TableHead>
+              <TableHead className="text-right">Revenue</TableHead>
+              <TableHead className="text-right">Direct cost</TableHead>
+              <TableHead className="text-right">Food cost %</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {points.map((p) => (
-              <tr key={p.weekStart} className="border-b border-border/60">
-                <td className="py-1.5">{p.weekLabel}</td>
-                <td className="tabular py-1.5 text-right">{formatINR(p.revenue, "whole")}</td>
-                <td className="tabular py-1.5 text-right">{formatINR(p.directCost, "whole")}</td>
-                <td className="tabular py-1.5 text-right">{p.foodCostBps === null ? "—" : formatBps(p.foodCostBps, 1)}</td>
-              </tr>
+              <TableRow key={p.weekStart}>
+                <TableCell>{p.weekLabel}</TableCell>
+                <TableCell className="tabular text-right">{formatINR(p.revenue, "whole")}</TableCell>
+                <TableCell className="tabular text-right">{formatINR(p.directCost, "whole")}</TableCell>
+                <TableCell className="tabular text-right">{p.foodCostBps === null ? "—" : formatBps(p.foodCostBps, 1)}</TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </details>
     </figure>
   );

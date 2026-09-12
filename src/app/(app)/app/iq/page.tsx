@@ -2,8 +2,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AlertTriangle, Clock, CreditCard } from "lucide-react";
+import { CostBreakdownDonut } from "@/components/iq/cost-breakdown-donut";
 import { FoodCostChart } from "@/components/iq/food-cost-chart";
+import { NotSellingTable } from "@/components/iq/not-selling-table";
 import { StatTile } from "@/components/iq/stat-tile";
+import { TopSellersTable } from "@/components/iq/top-sellers-table";
 import { EmptyState, PermissionDenied } from "@/components/states";
 import { MotionReveal, MotionStagger, MotionStaggerItem } from "@/components/motion";
 import { getStaff, staffCan } from "@/lib/auth";
@@ -57,8 +60,6 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     ordersAwaitingDecision(staff.orgId),
   ]);
 
-  const directBps = pnl.revenue > 0n ? Number((pnl.direct.reduce((s, r) => s + r.amount, 0n) * 10_000n) / pnl.revenue) : null;
-  const fixedBps = pnl.revenue > 0n ? Number((pnl.fixed.reduce((s, r) => s + r.amount, 0n) * 10_000n) / pnl.revenue) : null;
   const directTotal = pnl.direct.reduce((s, r) => s + r.amount, 0n);
   const fixedTotal = pnl.fixed.reduce((s, r) => s + r.amount, 0n);
 
@@ -117,8 +118,10 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
       {/* 1. How did today go — always today, always both comparisons. */}
       <section aria-labelledby="today-heading" className="flex flex-col gap-4">
         <h2 id="today-heading" className="font-heading text-lg font-semibold">Today</h2>
+        {/* grid-cols-1 straight to lg:grid-cols-3 — a sm:2-column step
+            orphans an empty grey cell with exactly three tiles. */}
         <MotionStagger each={0.04} count={3}>
-          <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-3">
             <MotionStaggerItem>
               <StatTile
                 label="Revenue"
@@ -198,22 +201,11 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
           )}
 
           {pnl.hasExpenses && (
-            <dl className="tabular mt-6 grid gap-4 border-t border-border pt-5 sm:grid-cols-2">
-              <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-sm">Direct costs</dt>
-                <dd className="text-right text-sm">
-                  <strong className="font-semibold">{formatINR(directTotal as never, "whole")}</strong>
-                  {directBps !== null && <span className="ml-1.5 text-muted-foreground">{formatBps(directBps, 1)} of revenue</span>}
-                </dd>
-              </div>
-              <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-sm">Operating expenses</dt>
-                <dd className="text-right text-sm">
-                  <strong className="font-semibold">{formatINR(fixedTotal as never, "whole")}</strong>
-                  {fixedBps !== null && <span className="ml-1.5 text-muted-foreground">{formatBps(fixedBps, 1)} of revenue</span>}
-                </dd>
-              </div>
-            </dl>
+            <CostBreakdownDonut
+              directTotal={directTotal as never}
+              fixedTotal={fixedTotal as never}
+              className="mt-6 border-t border-border pt-5"
+            />
           )}
 
           <p className="mt-4 text-sm">
@@ -233,16 +225,9 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
             {dashboard.topProducts.length === 0 ? (
               <p className="mt-4 text-sm text-muted-foreground">Nothing sold in this period.</p>
             ) : (
-              <ol className="mt-4 flex flex-col gap-2.5 text-sm">
-                {dashboard.topProducts.map((product) => (
-                  <li key={product.name} className="flex items-baseline justify-between gap-4">
-                    <span className="min-w-0 truncate">{product.name}</span>
-                    <span className="tabular shrink-0 text-muted-foreground">
-                      {product.quantity} · <strong className="text-foreground">{formatINR(product.revenue, "whole")}</strong>
-                    </span>
-                  </li>
-                ))}
-              </ol>
+              <div className="mt-4">
+                <TopSellersTable products={dashboard.topProducts} />
+              </div>
             )}
           </div>
 
@@ -252,14 +237,9 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
             {gaps.length === 0 ? (
               <p className="mt-4 text-sm text-muted-foreground">Everything on the menu sold at least once.</p>
             ) : (
-              <ul className="mt-4 flex flex-col gap-2.5 text-sm">
-                {gaps.map((product) => (
-                  <li key={product.slug} className="flex items-baseline justify-between gap-4">
-                    <span className="min-w-0 truncate">{product.name}</span>
-                    <span className="tabular shrink-0 text-muted-foreground">{formatINR(product.price, "whole")}</span>
-                  </li>
-                ))}
-              </ul>
+              <div className="mt-4">
+                <NotSellingTable products={gaps} />
+              </div>
             )}
           </div>
         </section>
