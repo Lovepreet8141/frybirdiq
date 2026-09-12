@@ -7,6 +7,96 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice: Inventory — master data (suppliers, ingredients, price records)
+
+**Status:** Complete. Gates green. Committed `0de2154` on `iq-dashboard`
+(local, not pushed). Deployed (see deployment record). **First inventory
+write path** — limited to the three master-data paths the architecture
+names (§4 write paths 1–3); no stock movement, purchase, waste or
+consumption code exists.
+
+**Authorisation:** "After the migration passes validation, continue with
+the next safe Inventory slice according to the architecture document."
+Everything here follows `docs/INVENTORY-ARCHITECTURE.md` as approved;
+nothing deviates from it.
+
+**What it is:**
+- `/app/inventory` — Ingredients: name/SKU, base unit, **usable cost per
+  base unit** (₹ / g, ml or pc), yield · waste, usual supplier, on hand
+  (0 until stock exists — labelled as such), status. Four headline counts
+  (ingredients, priced, packaging items, active suppliers). Filter pills
+  All / Active / No price yet / Packaging, search across name, SKU and
+  supplier, and an **Add ingredient** dialog — the purchased `tables12`
+  block's shape (add-in-dialog + status filter), re-composed on the app's
+  own `Table`/`Dialog`/`Input`. Bulk, duplicate and CSV controls from that
+  block were not adopted.
+- `/app/inventory/ingredients/[id]` — one ingredient: **Record a price**
+  ("10 kg for ₹2,800" — quantity, unit limited to what `units.ts` can
+  convert to this base unit, never PACK, and the supplier), the details
+  form, and the price history (when, bought, paid, usable cost, from).
+  The exact millipaise rate is shown under the rounded ₹ figure.
+- `/app/inventory/suppliers` — suppliers with contact, GSTIN, how many
+  ingredients name them, status; add/edit in a dialog.
+
+**Permissions (D8, unchanged assignments):** screens read under
+`inventory.view` (OWNER, MANAGER, ANALYST…); the add/edit/record controls
+render only with `purchasing.manage`, and every server action calls
+`requirePermission("purchasing.manage")` regardless of what rendered.
+Nav group **Inventory** (Ingredients, Suppliers) appears for
+`inventory.view`; threaded `layout → AppChrome → nav-items` like every
+other group; breadcrumb entries added.
+
+**Money and units — the part that must be right:**
+- A price record is the *only* way an ingredient's cost changes.
+  `recordIngredientPrice` converts the purchase to base units with
+  `toBaseUnits` (integer, exact), refuses a unit that doesn't convert to
+  the ingredient's base unit, then costs it with the existing
+  `usableCostPerBaseUnit` (purchase cost ÷ quantity that survives yield
+  and waste) → `MilliPaise`, stored in `cost_per_base_unit_milli` with the
+  `rateToPaise` rounding beside it. Same arithmetic as §12a's worked
+  example (chicken 10 kg ₹2,800, 80 % yield, 3 % waste → 36,082 millipaise).
+- Yield and waste are typed as percentages (one decimal allowed) and
+  converted with `bps()` at the boundary; stored as basis points.
+- Rupee input goes through `fromRupees` (string, digit-parsed, no float).
+- **A base unit locks** once a price or a recipe-version line exists in
+  it — the server refuses the change (re-reading "150" as ml instead of g
+  would silently mis-cost every recipe); the form disables the field and
+  says why.
+- Every write is one transaction and leaves an `audit_logs` row
+  (`supplier_created/updated`, `ingredient_created/updated`,
+  `ingredient_price_recorded`) with before/after.
+
+**Files:** `src/lib/repositories/inventory.ts` (new), `src/lib/inventory/
+actions.ts` (new; Zod at the boundary, `useActionState` form-state shape
+shared with `expense-form.tsx`), `src/components/inventory/*` (field,
+supplier-form, ingredient-form, price-form, suppliers-table,
+ingredients-table), three pages under `src/app/(app)/app/inventory/`,
+plus `nav-items.ts` / `app-chrome.tsx` / `layout.tsx` /
+`section-breadcrumb.tsx` for the nav group.
+
+**Untouched, verified:** all order/payment/tax/pricing code, POS, KDS,
+`recipes`, `inventory_movements`, `purchase_orders`, `waste_entries`,
+`expenses`, `kdsStation`/`prepMinutes`, every existing permission and
+role assignment. No schema change (0022 already provides every column
+used).
+
+**Housekeeping in the same pass (`867194d`):** `shadcn-ui-kit-dashboard/`
+appeared at the repo root during this slice — the purchased kit's full
+source, with its own `node_modules`. `next build` type-checked it via
+tsconfig's `**/*.ts` and failed on its Radix imports. Treated exactly as
+the existing `frybird-iq/` reference copy: excluded from `tsconfig`,
+ignored by ESLint, gitignored. Nothing imports from it; the deploy ships
+only `.next/standalone`. Left in place, not deleted.
+
+**Next slice (per architecture §12):** recipes — the versioned recipe
+editor (`recipe_versions` + `recipe_version_items`, current version
+pointer, immutable history, per-product food cost from the recorded
+rates). Still no stock movement. Stops for review before the consumption
+hook, purchasing receipt (which writes `expenses`), waste or adjustments —
+each is a consequential write path.
+
+---
+
 ## Slice: Inventory — migration 0022 (recipe versions + movement traceability)
 
 **Status:** Applied to production 2026-09-13 under approval D13. Gates
@@ -969,10 +1059,24 @@ shipped to production so far.
 ## Cumulative state of validation
 
 As of the most recent slice above: `pnpm typecheck` clean, `pnpm lint`
-clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (46
-routes), `scripts/check-rsc-boundaries.sh` clean.
+clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (49
+routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh`
+clean.
 
 ## Deployment record
+
+### 2026-09-13 — Inventory master data slice
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `0de2154`. First attempt: gates and build green, then rsync died
+mid-ship (`unexpected end of file` — the SSH connection dropped; a health
+check over SSH timed out too). Second run straight after went through
+end to end: `active`; smoke `HTTP 200`. Post-deploy: `/app/inventory`,
+`/app/inventory/suppliers`, `/app/inventory/ingredients/<uuid>` → `307` to
+`/sign-in`; `/app/pos` and `/app/iq` controls → `307`; logs `Started` /
+`✓ Ready`, usual stale-tab server-action notice, and `NotSignedIn` lines
+for the unauthenticated hits — the same `requireStaff()` behaviour as the
+other 15 pages that use it, not new.
 
 ### 2026-09-12 — Promotions slice
 
