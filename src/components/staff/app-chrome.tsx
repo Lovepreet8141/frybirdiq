@@ -29,6 +29,7 @@ interface Permissions {
   readonly canSeeCustomers: boolean;
   readonly canSeeStaff: boolean;
   readonly canSeeAudit: boolean;
+  readonly canSeeFinance: boolean;
   readonly canReject: boolean;
 }
 
@@ -42,8 +43,18 @@ interface Permissions {
  */
 export function AppChrome({ staff, permissions, children }: { staff: StaffSummary; permissions: Permissions; children: React.ReactNode }) {
   const pathname = usePathname();
-  const { canSeeOrders, canSeePos, canSeeDeliveries, canSeeMenu, canSeeAnalytics, canSeeCustomers, canSeeStaff, canSeeAudit, canReject } =
-    permissions;
+  const {
+    canSeeOrders,
+    canSeePos,
+    canSeeDeliveries,
+    canSeeMenu,
+    canSeeAnalytics,
+    canSeeCustomers,
+    canSeeStaff,
+    canSeeAudit,
+    canSeeFinance,
+    canReject,
+  } = permissions;
 
   const isFullBleed = pathname.startsWith("/app/pos");
 
@@ -111,6 +122,7 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
     canSeeCustomers,
     canSeeStaff,
     canSeeAudit,
+    canSeeFinance,
   });
 
   return (
@@ -124,6 +136,7 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
         canSeeCustomers={canSeeCustomers}
         canSeeStaff={canSeeStaff}
         canSeeAudit={canSeeAudit}
+        canSeeFinance={canSeeFinance}
       />
       <SidebarInset>
         <header className="flex h-[68px] items-center gap-3 border-b border-border px-[var(--gutter)] print:hidden">

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { MiniStat } from "@/components/staff/mini-stat";
 import { PageHeader } from "@/components/staff/page-header";
 import { PermissionDenied } from "@/components/states";
 import { ORDER_CHANNEL_LABELS } from "@/domain/order-channel";
@@ -13,17 +14,6 @@ import { getCustomerProfile } from "@/lib/repositories/customers";
 
 export const metadata: Metadata = { title: "Customer", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
-
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <Card>
-      <CardContent className="flex flex-col gap-1">
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</p>
-        <p className="tabular font-heading text-2xl font-bold">{value}</p>
-      </CardContent>
-    </Card>
-  );
-}
 
 function formatDate(date: Date | null): string {
   if (!date) return "Never";

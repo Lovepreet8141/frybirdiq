@@ -14,19 +14,31 @@ import { resolveHome } from "@/lib/auth/route-home";
  * on it.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const [staff, canSeeOrders, canSeePos, canSeeDeliveries, canSeeMenu, canSeeAnalytics, canSeeCustomers, canSeeStaff, canSeeAudit, canReject] =
-    await Promise.all([
-      getStaff(),
-      staffCan("orders.view"),
-      staffCan("orders.create"),
-      staffCan("delivery.view"),
-      staffCan("menu.view"),
-      staffCan("analytics.view"),
-      staffCan("customers.view"),
-      staffCan("staff.manage"),
-      staffCan("audit.view"),
-      staffCan("orders.cancel"),
-    ]);
+  const [
+    staff,
+    canSeeOrders,
+    canSeePos,
+    canSeeDeliveries,
+    canSeeMenu,
+    canSeeAnalytics,
+    canSeeCustomers,
+    canSeeStaff,
+    canSeeAudit,
+    canSeeFinance,
+    canReject,
+  ] = await Promise.all([
+    getStaff(),
+    staffCan("orders.view"),
+    staffCan("orders.create"),
+    staffCan("delivery.view"),
+    staffCan("menu.view"),
+    staffCan("analytics.view"),
+    staffCan("customers.view"),
+    staffCan("staff.manage"),
+    staffCan("audit.view"),
+    staffCan("finance.view"),
+    staffCan("orders.cancel"),
+  ]);
 
   if (!staff) {
     // A signed-in customer who lands here is sent to their own account. Sending
@@ -51,6 +63,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           canSeeCustomers,
           canSeeStaff,
           canSeeAudit,
+          canSeeFinance,
           canReject,
         }}
       >

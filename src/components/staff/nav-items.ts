@@ -12,6 +12,7 @@ import {
   UserCog,
   Users,
   UtensilsCrossed,
+  Wallet,
 } from "lucide-react";
 
 export interface NavItem {
@@ -37,6 +38,7 @@ export interface NavPermissions {
   readonly canSeeCustomers: boolean;
   readonly canSeeStaff: boolean;
   readonly canSeeAudit: boolean;
+  readonly canSeeFinance: boolean;
 }
 
 /**
@@ -50,7 +52,7 @@ export interface NavPermissions {
  * FRYBIRD-ADMIN-ARCHITECTURE.md for what's planned and why it isn't here yet.
  */
 export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[] {
-  const { canSeeOrders, canSeePos, canSeeDeliveries, canSeeMenu, canSeeAnalytics, canSeeCustomers, canSeeStaff, canSeeAudit } =
+  const { canSeeOrders, canSeePos, canSeeDeliveries, canSeeMenu, canSeeAnalytics, canSeeCustomers, canSeeStaff, canSeeAudit, canSeeFinance } =
     permissions;
 
   const groups: NavGroup[] = [
@@ -82,6 +84,11 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
       id: "customers",
       label: "Customers",
       items: canSeeCustomers ? [{ href: "/app/customers", label: "Customers", icon: Users }] : [],
+    },
+    {
+      id: "finance",
+      label: "Finance",
+      items: canSeeFinance ? [{ href: "/app/finance", label: "Payments", icon: Wallet }] : [],
     },
     {
       id: "people",
