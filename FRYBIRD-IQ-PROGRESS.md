@@ -7,6 +7,67 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice: Analytics › Products — menu performance (Phase E/J, read-only)
+
+**Status:** Complete. Gates green. Deployed (see deployment record).
+
+**What it is:** `/app/iq/products` under `analytics.view` — for a chosen
+range: every product's units, distinct orders, revenue with the change
+against the previous period, share of revenue, average paid (GST-inclusive,
+after modifiers/discounts, as the customer paid it), and a **Recipe**
+readiness column; a best-sellers card by units with real catalogue photos;
+a by-category rollup; four headline figures. Deleted products still appear
+as "Removed from menu" — their sales were real. A new **Analytics** sidebar
+group now holds Products and Channels (Channels moved out of Operations).
+
+**Menu engineering, honestly scoped — the judgment call in this slice:**
+this is the *first half* of the signature feature (volume, revenue, share,
+price realised). The second half — cost, margin, contribution — was
+deliberately **not** built, for two verified reasons: (1) no recipe in
+production has ingredient lines (`product-recipe-section.tsx` is recipe
+*status* only; no UI writes `recipe_items`), so there is no real cost to
+show; (2) `products.basePrice` is GST-inclusive and CLAUDE.md requires
+margins on **net-of-tax** revenue through `src/lib/pricing` — building that
+path is new financial logic, a stop condition. The Recipe column ("No
+recipe" / "No lines yet" / "N ingredients") and the "Costed recipes X / Y"
+tile say exactly how far each product is from a margin. `lib/iq/costing.ts`
+and `profit.ts` (pure, tested, unused) are the pieces that slice will use.
+
+**Revenue definition — unchanged:** same `paidOrders` rows and the same
+`lineTotal` aggregation `getDashboard`'s top-products already uses,
+extended to every product and joined to today's catalogue (name, category,
+first image, active flag) and to `recipes ⨝ recipe_items` for the readiness
+count. `analytics.ts` changes are additive (imports widened, one new
+function); the scope guard over `src/lib/iq`, `menu-admin.ts`, schema,
+payments, tax, pricing, domain, POS, KDS, auth was **empty**.
+
+**Purchased kit inspection:** `@shadcnuikit/product-list-card1`
+("Structured product lists with icons, names, and metrics like units
+sold… best-sellers") — adopted as the best-sellers card: thumbnail, name,
+"N sold"; its green "units sold" text was muted (green is status-only per
+`MASTER.md`), its `View All` tooltip button dropped. Tables reuse the
+`tables9`-derived shell.
+
+**Schema observation for the KDS architectural review (not acted on):**
+`products.kdsStation` (text) and `products.prepMinutes` already exist as
+columns, unused anywhere. A station concept therefore has a schema seed;
+routing logic still does not, and remains a stop condition.
+
+**Files:** `src/lib/repositories/analytics.ts` (+`getMenuPerformance`),
+`src/components/iq/best-sellers-card.tsx`, `src/app/(app)/app/iq/products/
+page.tsx` (new); `nav-items.ts` (Analytics group, Overview exclude),
+`section-breadcrumb.tsx`, `iq/page.tsx`.
+
+**Permissions:** `analytics.view` only. **Tests / build:** typecheck,
+lint, 340/340, build (44 routes), RSC — green.
+
+**Known limitations:** no per-product trend chart yet; "average paid" is
+GST-inclusive by design and labelled so; category rollup uses the product's
+*current* category, so a product moved between categories is counted where
+it is now.
+
+---
+
 ## Slice: Analytics › Channels (Phase J, read-only)
 
 **Status:** Complete. Gates green. Deployed (see deployment record).
@@ -680,10 +741,18 @@ shipped to production so far.
 ## Cumulative state of validation
 
 As of the most recent slice above: `pnpm typecheck` clean, `pnpm lint`
-clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (43
+clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (44
 routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record
+
+### 2026-09-12 — Products slice
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `b3972f9`. Gates in-script green (tests 340/340). Post-deploy:
+`active`; smoke `HTTP 200`; `/app/iq/products` and `?range=mtd` → `307` to
+`/sign-in`; `/app/iq/channels` and `/app/pos` controls → `307`; logs
+`Started` / `✓ Ready`, no runtime errors, usual stale-tab noise.
 
 ### 2026-09-12 — Channels slice
 
@@ -800,7 +869,16 @@ Unchanged from the prior analysis — still accurate after this batch:
   reconciliation all remain explicit-approval items; the Payments ledger
   itself shipped on the approved `finance.view`.
 
-**Recommended next safe slice:** a **Channels analytics view** —
+**Recommended next safe slice:** **Admin › Restaurant** — a read-only
+settings view of what the `organizations` and `locations` rows already
+hold (name, legal name, GSTIN, price basis, timezone, loyalty programme
+values, delivery bands, opening/address), under the existing
+`settings.manage`. Every value is already live business configuration
+with no screen showing it — an owner currently cannot *see* their own
+stamp threshold or GSTIN without a database client. Read-only: changing
+any of these (especially `price_basis`) is a business decision with
+consequences CLAUDE.md spells out, so edit forms are a separate approval.
+Previously queued and now shipped: the **Channels analytics view** —
 revenue / orders / AOV split by DINE_IN / TAKEAWAY / ONLINE over a chosen
 range. `orders.channel` is already indexed with `placedAt` for exactly this
 question (`orders_channel_placed_idx`), it reuses `analytics.ts`'s existing
