@@ -62,14 +62,12 @@ export function AppSidebar(permissions: NavPermissions) {
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton
                       isActive={isActive(item)}
-                      tooltip={item.label}
-                      render={
+                      tooltip={item.label} asChild>
                         <Link href={item.href} aria-current={isActive(item) ? "page" : undefined}>
                           <item.icon className="size-4" aria-hidden="true" />
                           <span>{item.label}</span>
                         </Link>
-                      }
-                    />
+                      </SidebarMenuButton>
                   </SidebarMenuItem>
                 ))}
               </SidebarMenu>

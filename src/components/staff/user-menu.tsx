@@ -33,16 +33,14 @@ export function UserMenu({ displayName, roles }: { displayName: string | null; r
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <button type="button" className="flex items-center gap-2 rounded-full outline-none">
+        <DropdownMenuTrigger asChild>
+          <button type="button" className="flex items-center gap-2 rounded-full outline-none">
               <Avatar>
                 <AvatarFallback>{initials(displayName)}</AvatarFallback>
               </Avatar>
               <span className="sr-only">Open account menu</span>
             </button>
-          }
-        />
+        </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuLabel className="p-0 font-normal">
             <div className="flex flex-col gap-0.5 px-1.5 py-1.5 text-left">
@@ -52,14 +50,12 @@ export function UserMenu({ displayName, roles }: { displayName: string | null; r
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem
-            variant="destructive"
-            render={
+            variant="destructive" asChild>
               <button type="button" onClick={() => formRef.current?.requestSubmit()}>
                 <LogOut className="size-4" aria-hidden="true" />
                 Sign out
               </button>
-            }
-          />
+            </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       <form ref={formRef} action="/api/auth/sign-out" method="POST" className="hidden" />

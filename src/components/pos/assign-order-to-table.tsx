@@ -33,7 +33,9 @@ export function AssignOrderToTable({ tableId, tableName, orders }: { tableId: st
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button variant="outline" size="sm">Seat an order</Button>} />
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">Seat an order</Button>
+      </DialogTrigger>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Seat an order at {tableName}</DialogTitle>

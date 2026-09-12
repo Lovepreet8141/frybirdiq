@@ -53,7 +53,7 @@ export function SectionBreadcrumb() {
       <BreadcrumbList>
         <BreadcrumbItem>
           {section ? (
-            <BreadcrumbLink render={<Link href="/app/iq" />}>FRYBIRD IQ</BreadcrumbLink>
+            <BreadcrumbLink asChild><Link href="/app/iq">FRYBIRD IQ</Link></BreadcrumbLink>
           ) : (
             <BreadcrumbPage>FRYBIRD IQ</BreadcrumbPage>
           )}

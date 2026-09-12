@@ -282,17 +282,15 @@ export function OrdersTable({
                     </TableCell>
                     <TableCell onClick={(event) => event.stopPropagation()}>
                       <DropdownMenu>
-                        <DropdownMenuTrigger
-                          render={
-                            <button
+                        <DropdownMenuTrigger asChild>
+                          <button
                               type="button"
                               aria-label={`Actions for order ${order.orderNumber}`}
                               className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground"
                             >
                               <MoreVertical className="size-4" aria-hidden="true" />
                             </button>
-                          }
-                        />
+                        </DropdownMenuTrigger>
 
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => setSelectedOrderId(order.id)}>

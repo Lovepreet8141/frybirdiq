@@ -44,8 +44,8 @@ export function QuickAvailabilityDialog({ productId, productName, trigger }: { p
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      {/* The trigger is the caller's real <button>; wrapping it in a <span> made Base UI warn that its nativeButton had no native button. */}
-      <DialogTrigger render={trigger} />
+      {/* The trigger is the caller's real <button>, passed straight through by asChild. */}
+      <DialogTrigger asChild>{trigger}</DialogTrigger>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Mark &quot;{productName}&quot; unavailable</DialogTitle>

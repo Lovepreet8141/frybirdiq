@@ -38,7 +38,9 @@ export function AddTableDialog() {
         if (next) setState(IDLE);
       }}
     >
-      <DialogTrigger render={<Button variant="secondary">Add table</Button>} />
+      <DialogTrigger asChild>
+        <Button variant="secondary">Add table</Button>
+      </DialogTrigger>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Add a table</DialogTitle>
