@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatINR } from "@/lib/money";
+import { ORDER_CHANNELS, ORDER_CHANNEL_LABELS, type OrderChannel } from "@/domain/order-channel";
 import type { OrderStatus } from "@/domain/order-status";
 import { cn } from "@/lib/utils";
 import { OrderCard, type StaffOrder, statusLabel, statusTone } from "@/components/staff/order-card";
@@ -81,6 +82,7 @@ export function OrdersTable({
 }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<OrderStatus | "all">("all");
+  const [channelFilter, setChannelFilter] = useState<OrderChannel | "all">("all");
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(initialSelectedId);
 
   const counts = useMemo(() => {
@@ -89,10 +91,17 @@ export function OrdersTable({
     return map;
   }, [orders]);
 
+  const channelCounts = useMemo(() => {
+    const map = new Map<OrderChannel, number>();
+    for (const order of orders) map.set(order.channel, (map.get(order.channel) ?? 0) + 1);
+    return map;
+  }, [orders]);
+
   const normalisedSearch = search.trim().toLowerCase();
   const filtered = useMemo(() => {
     return orders.filter((order) => {
       if (statusFilter !== "all" && order.status !== statusFilter) return false;
+      if (channelFilter !== "all" && order.channel !== channelFilter) return false;
       if (normalisedSearch === "") return true;
       return (
         order.orderNumber.toLowerCase().includes(normalisedSearch) ||
@@ -100,7 +109,7 @@ export function OrdersTable({
         (order.customerPhone ?? "").includes(normalisedSearch)
       );
     });
-  }, [orders, statusFilter, normalisedSearch]);
+  }, [orders, statusFilter, channelFilter, normalisedSearch]);
 
   // Looked up fresh from `orders` on every render, never cached — a status
   // change inside the sheet calls `router.refresh()` (in `OrderCard`), the
@@ -147,6 +156,43 @@ export function OrdersTable({
             ))}
           </div>
         </div>
+
+        {/* Where it came from — the roadmap's "Online orders" is this view,
+            not a separate screen. Only shown once more than one channel is
+            in play; a single-channel list has nothing to split. */}
+        {channelCounts.size > 1 && (
+          <div className="max-w-full overflow-x-auto rounded-lg border border-border" role="tablist" aria-label="Filter by channel">
+            <div className="inline-flex divide-x divide-border">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={channelFilter === "all"}
+                onClick={() => setChannelFilter("all")}
+                className={cn(
+                  "whitespace-nowrap px-3.5 py-2 text-sm transition-colors first:rounded-l-lg last:rounded-r-lg",
+                  channelFilter === "all" ? "bg-surface-muted font-semibold text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                Any channel
+              </button>
+              {ORDER_CHANNELS.filter((channel) => (channelCounts.get(channel) ?? 0) > 0).map((channel) => (
+                <button
+                  key={channel}
+                  type="button"
+                  role="tab"
+                  aria-selected={channelFilter === channel}
+                  onClick={() => setChannelFilter(channel)}
+                  className={cn(
+                    "whitespace-nowrap px-3.5 py-2 text-sm transition-colors first:rounded-l-lg last:rounded-r-lg",
+                    channelFilter === channel ? "bg-surface-muted font-semibold text-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {ORDER_CHANNEL_LABELS[channel]} <span className="tabular text-xs">({channelCounts.get(channel) ?? 0})</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="relative ml-auto w-full max-w-xs">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
