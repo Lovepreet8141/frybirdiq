@@ -21,9 +21,10 @@ config({ path: ".env.local", quiet: true });
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { closeDb, db } from "../src/db/connection";
-import { customers, loyaltyAccounts, loyaltyRewards, loyaltyStampEvents, locations, orders, organizations } from "../src/db/schema";
+import { customers, loyaltyAccounts, loyaltyRewards, loyaltyStampEvents, locations, orderEvents, orders, organizations, payments } from "../src/db/schema";
 import { fromRupees } from "../src/lib/money";
 import { awardStampForOrder, getAvailableStampReward, getStampAccountState, redeemStampReward, reverseStampForOrder, qualifyingStampSpend } from "../src/lib/repositories/loyalty";
+import { recordCashPayment } from "../src/lib/repositories/payments";
 import type { StampConfig } from "../src/lib/loyalty/stamps";
 
 const CONFIG: StampConfig = {
@@ -160,12 +161,72 @@ async function main() {
 
     state = await getStampAccountState(customer.id, org.id);
     assert("the other six stamps are handed back to the pool, not lost", state?.stampCount === 6);
+
+    console.log("\n--- Counter orders earn the same way, through the same trigger, as online ---");
+    // Every other order in this file is inserted directly as PAID and fed
+    // straight to awardStampForOrder — that proves the ledger's own rules,
+    // but not that a *real* order-settlement call actually reaches it. This
+    // one is different on purpose: a DINE_IN order (the channel POS will
+    // use, not ONLINE), left in PENDING_PAYMENT like a real newly-placed
+    // order, settled through recordCashPayment — the exact function
+    // `markPaidAction` calls when a cashier taps "Take cash" today, and the
+    // one POS order placement must reuse rather than re-implement. If a
+    // future POS build bypasses this function, this is what would catch it.
+    // Known deterministically from the assertion right above: this script
+    // is sequential, not isolated, and the account sits at 6 stamps here.
+    const beforeCounter = await getStampAccountState(customer.id, org.id);
+    assert("starting from the known 6-stamp state the prior section left behind", beforeCounter?.stampCount === 6);
+    const rewardsBefore = beforeCounter?.availableRewards.length ?? 0;
+
+    const [counterOrder] = await database
+      .insert(orders)
+      .values({
+        orgId: org.id,
+        locationId: location.id,
+        orderNumber: `TEST-COUNTER-${randomUUID().slice(0, 8)}`,
+        businessDate: new Date().toISOString().slice(0, 10),
+        status: "PENDING_PAYMENT",
+        channel: "DINE_IN",
+        fulfilment: "DINE_IN",
+        customerId: customer.id,
+        grandTotal: fromRupees("300"),
+      })
+      .returning();
+    if (!counterOrder) throw new Error("Could not create the counter test order.");
+    orderIds.push(counterOrder.id);
+
+    const settled = await recordCashPayment({
+      orderId: counterOrder.id,
+      actorUserId: randomUUID(),
+      actorRoles: ["OWNER"],
+    });
+    assert("recordCashPayment (the real counter settlement call) succeeds for a DINE_IN order", settled.ok);
+
+    const [counterOrderAfter] = await database.select({ status: orders.status }).from(orders).where(eq(orders.id, counterOrder.id));
+    assert("the order actually moved to PAID", counterOrderAfter?.status === "PAID");
+
+    const afterCounter = await getStampAccountState(customer.id, org.id);
+    // The 7th stamp, so this one unlocks a reward and resets the count —
+    // exactly the same rule a website order would trigger at 7, proven here
+    // through the real counter-settlement call instead of the direct
+    // awardStampForOrder call every other section in this file uses.
+    assert("the stamp moved the count from 6 to the 7-stamp unlock (reset to 0), from the counter settlement path", afterCounter?.stampCount === 0);
+    assert("a new reward unlocked from this exact order", afterCounter?.availableRewards.length === rewardsBefore + 1);
   } finally {
     console.log("\n--- Cleanup ---");
     await database.delete(loyaltyStampEvents).where(eq(loyaltyStampEvents.accountId, (await database.select().from(loyaltyAccounts).where(eq(loyaltyAccounts.customerId, customer.id)).limit(1))[0]?.id ?? ""));
     await database.delete(loyaltyRewards).where(eq(loyaltyRewards.accountId, (await database.select().from(loyaltyAccounts).where(eq(loyaltyAccounts.customerId, customer.id)).limit(1))[0]?.id ?? ""));
     await database.delete(loyaltyAccounts).where(eq(loyaltyAccounts.customerId, customer.id));
-    for (const id of orderIds) await database.delete(orders).where(eq(orders.id, id));
+    // payments and order_events are only ever written by the counter-order
+    // section (recordCashPayment, the real settlement path) — every other
+    // order in this file is inserted directly as PAID and never touches
+    // either table. Deleted first regardless: harmless no-op for the orders
+    // that never created one, required for the one that did.
+    for (const id of orderIds) {
+      await database.delete(payments).where(eq(payments.orderId, id));
+      await database.delete(orderEvents).where(eq(orderEvents.orderId, id));
+      await database.delete(orders).where(eq(orders.id, id));
+    }
     await database.delete(customers).where(eq(customers.id, customer.id));
     console.log("Test data removed.");
   }
