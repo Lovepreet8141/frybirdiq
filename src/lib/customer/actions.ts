@@ -52,17 +52,20 @@ export async function createAccount(_previous: CustomerAuthState, formData: Form
   const database = db();
 
   /*
-   * A phone number already attached to another account cannot be claimed.
+   * A phone number is never how a sign-up gets access to history.
    *
-   * Guest orders are keyed on phone, so a record with that number may already
-   * exist and carry someone's addresses and order history. Linking it to
-   * whoever signs up first would hand that history to a stranger who happened
-   * to know the number.
-   *
-   * A record with no `userId` is an unclaimed guest and is linked. This is
-   * still weaker than it should be — see the OTP item in the README. Until a
-   * number is verified, "unclaimed" means "nobody has signed up with it yet",
-   * not "belongs to the person typing it".
+   * Guest orders are keyed on phone, so a record with this number may already
+   * carry someone's addresses and past orders. Typing a number is not proof
+   * of owning it — there is no verification step yet (see the OTP item in
+   * the README) — so a new account can never be linked to an existing
+   * customer row by phone match alone, claimed or not. Every sign-up gets
+   * its own fresh row. This used to link an "unclaimed" (no `userId`) row on
+   * the theory that nobody else had signed up with it yet; that reasoning
+   * confused "nobody has signed up with it" with "belongs to the person
+   * typing it" and handed a stranger's order history to whoever typed their
+   * number first. Fixed without waiting on OTP: correctness now, convenience
+   * (re-linking a returning guest's own past orders) once a number can
+   * actually be verified.
    */
   const [existing] = await database
     .select()
@@ -89,22 +92,25 @@ export async function createAccount(_previous: CustomerAuthState, formData: Form
     };
   }
 
-  const [customer] = existing
-    ? await database
-        .update(customers)
-        .set({ userId: data.user.id, name: parsed.data.name, email: parsed.data.email, updatedAt: new Date() })
-        .where(eq(customers.id, existing.id))
-        .returning()
-    : await database
-        .insert(customers)
-        .values({
-          orgId: org.id,
-          userId: data.user.id,
-          name: parsed.data.name,
-          phone: parsed.data.phone,
-          email: parsed.data.email,
-        })
-        .returning();
+  // `customers.phone` is unique per org (`customers_org_phone_unique`), and
+  // that constraint stays exactly what makes repeat *guest* orders under one
+  // number consolidate — the thing worth keeping about phone-keyed rows.
+  // What must never happen is a new account silently inheriting whatever
+  // already sits under that number. So: no existing row for this phone at
+  // all → safe to attach it to the new account, nothing to take over. A row
+  // already exists (guest history, unclaimed) → the new account is created
+  // without a phone rather than seizing that row's history; the orphaned
+  // guest row is untouched and unreachable from this session.
+  const [customer] = await database
+    .insert(customers)
+    .values({
+      orgId: org.id,
+      userId: data.user.id,
+      name: parsed.data.name,
+      phone: existing ? null : parsed.data.phone,
+      email: parsed.data.email,
+    })
+    .returning();
 
   if (customer) {
     await database
