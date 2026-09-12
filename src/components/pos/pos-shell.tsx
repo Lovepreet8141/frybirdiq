@@ -214,7 +214,7 @@ export function PosShell({ categories: initialCategories, canLookupCustomers }: 
       : undefined;
 
   return (
-    <div className="grid grid-cols-1 lg:h-[calc(100dvh-68px)] lg:grid-cols-[220px_1fr_400px]">
+    <div className="grid grid-cols-1 lg:h-full lg:grid-cols-[220px_1fr_400px]">
       <div className="hidden lg:block">
         <CategoryRail
           categories={categories.map((category) => ({

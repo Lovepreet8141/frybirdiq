@@ -9,6 +9,7 @@ export * from "./_shared";
 export * from "./tenancy";
 export * from "./menu";
 export * from "./customers";
+export * from "./tables";
 export * from "./orders";
 export * from "./inventory";
 export * from "./platform";

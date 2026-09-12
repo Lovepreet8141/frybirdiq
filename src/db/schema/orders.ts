@@ -7,6 +7,7 @@ import { ORDER_CHANNELS } from "@/domain/order-channel";
 import { customers } from "./customers";
 import { modifiers, products } from "./menu";
 import { locations, organizations } from "./tenancy";
+import { tables } from "./tables";
 import { ZERO_MONEY, money, primaryId, timestamps } from "./_shared";
 
 export const orderStatusEnum = pgEnum("order_status", ORDER_STATUSES);
@@ -82,7 +83,20 @@ export const orders = pgTable(
      * from a pin and a rate table that may both have changed since.
      */
     deliveryDistanceMetres: integer("delivery_distance_metres"),
+    /**
+     * Superseded by `tableId` below — nothing in the app has ever written
+     * this column. Left in place rather than dropped: dropping it is an
+     * unrelated cleanup decision, not part of adding real table management.
+     */
     tableLabel: text("table_label"),
+    /**
+     * The real table entity, dine-in only. A table's "occupied" status is
+     * derived by querying orders with this set and a non-terminal status —
+     * see `src/lib/repositories/tables.ts` — never stored redundantly here
+     * or on `tables`, for the same reason `price_basis` lives in exactly one
+     * place: a second copy of a fact that changes is a fact that can drift.
+     */
+    tableId: uuid("table_id").references(() => tables.id, { onDelete: "set null" }),
 
     /* Money. Every figure is the server's own calculation — §13: "Never trust
        the client for totals." The client sends items, not amounts. */
@@ -188,6 +202,14 @@ export const orders = pgTable(
         OR (${table.channel} = 'ONLINE' AND ${table.fulfilment} IN ('TAKEAWAY', 'DELIVERY'))
       )`,
     ),
+    // A table assignment only makes sense for the order actually being eaten
+    // there. Mirrors the constraint above in spirit: a takeaway order
+    // assigned to table 4 is not a state to recover from either.
+    check(
+      "orders_table_id_only_when_dine_in",
+      sql`(${table.tableId} IS NULL OR ${table.fulfilment} = 'DINE_IN')`,
+    ),
+    index("orders_table_idx").on(table.tableId),
   ],
 );
 

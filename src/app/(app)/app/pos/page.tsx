@@ -1,8 +1,12 @@
 import type { Metadata } from "next";
 import { PosShell } from "@/components/pos/pos-shell";
+import { PosViewTabs } from "@/components/pos/pos-view-tabs";
+import { TablesView } from "@/components/pos/tables-view";
 import { PermissionDenied } from "@/components/states";
-import { staffCan } from "@/lib/auth";
+import { requireStaff, staffCan } from "@/lib/auth";
 import { getMenu } from "@/lib/repositories/menu";
+import { getOrder, type OrderView } from "@/lib/repositories/orders";
+import { listTables, listUnassignedDineInOrders } from "@/lib/repositories/tables";
 
 export const metadata: Metadata = { title: "POS", robots: { index: false, follow: false } };
 
@@ -42,5 +46,25 @@ export default async function PosPage() {
     );
   }
 
-  return <PosShell categories={menu} canLookupCustomers={canLookupCustomers} />;
+  const staff = await requireStaff();
+  const canAddTable = await staffCan("settings.manage");
+  const [tables, unassignedOrders] = await Promise.all([
+    listTables(staff.orgId),
+    listUnassignedDineInOrders(staff.orgId),
+  ]);
+
+  const openOrders = await Promise.all(
+    tables.flatMap((table) => (table.openOrder ? [getOrder(table.openOrder.id)] : [])),
+  );
+  const orderDetails = new Map<string, OrderView>();
+  for (const order of openOrders) if (order) orderDetails.set(order.id, order);
+
+  return (
+    <PosViewTabs
+      order={<PosShell categories={menu} canLookupCustomers={canLookupCustomers} />}
+      tables={
+        <TablesView tables={tables} orderDetails={orderDetails} unassignedOrders={unassignedOrders} canAddTable={canAddTable} />
+      }
+    />
+  );
 }
