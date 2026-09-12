@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { AlertTriangle, Clock, CreditCard } from "lucide-react";
+import { AlarmClock, AlertTriangle, Clock, CreditCard } from "lucide-react";
 import { CostBreakdownDonut } from "@/components/iq/cost-breakdown-donut";
 import { FoodCostChart } from "@/components/iq/food-cost-chart";
 import { NotSellingTable } from "@/components/iq/not-selling-table";
@@ -12,7 +12,7 @@ import { MotionReveal, MotionStagger, MotionStaggerItem } from "@/components/mot
 import { getStaff, staffCan } from "@/lib/auth";
 import { type RangeKey, resolveRange } from "@/lib/dates";
 import { type Paise, ZERO, formatBps, formatINR, paise } from "@/lib/money";
-import { changeBps, getDashboard, getTodayComparison, notSelling, ordersAwaitingDecision } from "@/lib/repositories/analytics";
+import { changeBps, getDashboard, getTodayComparison, notSelling, ordersAwaitingDecision, ordersRunningLate } from "@/lib/repositories/analytics";
 import { foodCostWeeklySeries, getProfitAndLoss } from "@/lib/repositories/expenses";
 
 export const metadata: Metadata = { title: "FRYBIRD IQ", robots: { index: false, follow: false } };
@@ -51,13 +51,14 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
   const range = resolveRange(key);
   const monthRange = resolveRange("mtd");
 
-  const [dashboard, today, pnl, foodCost, gaps, awaiting] = await Promise.all([
+  const [dashboard, today, pnl, foodCost, gaps, awaiting, late] = await Promise.all([
     getDashboard(staff.orgId, range),
     getTodayComparison(staff.orgId),
     getProfitAndLoss(staff.orgId, monthRange),
     foodCostWeeklySeries(staff.orgId),
     notSelling(staff.orgId, range),
     ordersAwaitingDecision(staff.orgId),
+    ordersRunningLate(staff.orgId),
   ]);
 
   const directTotal = pnl.direct.reduce((s, r) => s + r.amount, 0n);
@@ -66,7 +67,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
   const overTarget =
     pnl.foodCostTargetBps !== null && pnl.result.foodCostBps !== null && pnl.result.foodCostBps > pnl.foodCostTargetBps;
 
-  const needsAttention = awaiting.length > 0 || dashboard.openOrders > 0 || overTarget;
+  const needsAttention = awaiting.length > 0 || late.length > 0 || dashboard.openOrders > 0 || overTarget;
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-[var(--gutter)] py-8">
@@ -119,9 +120,11 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
       <section aria-labelledby="today-heading" className="flex flex-col gap-4">
         <h2 id="today-heading" className="font-heading text-lg font-semibold">Today</h2>
         {/* grid-cols-1 straight to lg:grid-cols-3 — a sm:2-column step
-            orphans an empty grey cell with exactly three tiles. */}
+            orphans an empty grey cell with exactly three tiles. Each tile is
+            its own Card now, so the gap is a real gap, not the hairline
+            (gap-px over a coloured background) trick a flush grid needed. */}
         <MotionStagger each={0.04} count={3}>
-          <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <MotionStaggerItem>
               <StatTile
                 label="Revenue"
@@ -254,6 +257,18 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
             <p className="mt-4 text-sm text-muted-foreground">Nothing needs your attention right now.</p>
           ) : (
             <ul className="mt-4 flex flex-col gap-3 text-sm">
+              {late.length > 0 && (
+                <li className="flex items-center gap-3">
+                  <AlarmClock className="size-4 shrink-0 text-destructive" aria-hidden="true" />
+                  <span className="flex-1">
+                    <strong>{late.length}</strong> {late.length === 1 ? "order is past its" : "orders are past their"}{" "}
+                    promised time.
+                  </span>
+                  <Link href="/app/orders" className="shrink-0 font-semibold underline underline-offset-2">
+                    Review
+                  </Link>
+                </li>
+              )}
               {awaiting.length > 0 && (
                 <li className="flex items-center gap-3">
                   <Clock className="size-4 shrink-0 text-destructive" aria-hidden="true" />

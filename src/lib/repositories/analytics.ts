@@ -215,6 +215,38 @@ export async function ordersAwaitingDecision(orgId: string) {
     .orderBy(orders.createdAt);
 }
 
+/**
+ * Orders already accepted, still in flight, whose promised time has passed.
+ *
+ * The only "order health" signal that doesn't need a schema change or a new
+ * domain concept to be real: `estimatedReadyAt` is written once at accept
+ * time (§ order-status ACCEPTED) and never touched again, so comparing it to
+ * now is a fact, not a forecast. Deliberately excludes PENDING_PAYMENT/PAID —
+ * those have no promised time yet and are already the counter's separate
+ * "awaiting decision" alert above.
+ */
+export async function ordersRunningLate(orgId: string) {
+  return db()
+    .select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      grandTotal: orders.grandTotal,
+      fulfilment: orders.fulfilment,
+      customerName: orders.customerName,
+      estimatedReadyAt: orders.estimatedReadyAt,
+    })
+    .from(orders)
+    .where(
+      and(
+        eq(orders.orgId, orgId),
+        sql`${orders.status} IN ('ACCEPTED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY')`,
+        sql`${orders.estimatedReadyAt} IS NOT NULL`,
+        lt(orders.estimatedReadyAt, sql`now()`),
+      ),
+    )
+    .orderBy(asc(orders.estimatedReadyAt));
+}
+
 export interface DayTotal {
   readonly revenue: Paise;
   readonly orders: number;

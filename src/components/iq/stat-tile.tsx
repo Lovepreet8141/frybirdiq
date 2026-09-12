@@ -1,4 +1,5 @@
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
 import { formatBps } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
@@ -65,23 +66,25 @@ export function StatTile({
   inverted?: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-1.5 bg-surface px-5 py-5">
-      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</p>
-      <p className="tabular font-heading text-3xl font-bold leading-none">{value}</p>
+    <Card>
+      <CardContent className="flex flex-col gap-1.5">
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</p>
+        <p className="tabular font-heading text-3xl font-bold leading-none">{value}</p>
 
-      {typeof changeBps === "number" ? (
-        <Delta changeBps={changeBps} comparedTo={comparedTo} inverted={inverted} />
-      ) : (
-        /* No base to compare against. "+100%" from zero is a number that means
-           nothing, so nothing is shown. */
-        <p className="text-sm text-muted-foreground">{detail ?? "No earlier period to compare"}</p>
-      )}
+        {typeof changeBps === "number" ? (
+          <Delta changeBps={changeBps} comparedTo={comparedTo} inverted={inverted} />
+        ) : (
+          /* No base to compare against. "+100%" from zero is a number that means
+             nothing, so nothing is shown. */
+          <p className="text-sm text-muted-foreground">{detail ?? "No earlier period to compare"}</p>
+        )}
 
-      {typeof secondaryChangeBps === "number" && (
-        <Delta changeBps={secondaryChangeBps} comparedTo={secondaryComparedTo} inverted={inverted} />
-      )}
+        {typeof secondaryChangeBps === "number" && (
+          <Delta changeBps={secondaryChangeBps} comparedTo={secondaryComparedTo} inverted={inverted} />
+        )}
 
-      {detail && typeof changeBps === "number" && <p className="text-sm text-muted-foreground">{detail}</p>}
-    </div>
+        {detail && typeof changeBps === "number" && <p className="text-sm text-muted-foreground">{detail}</p>}
+      </CardContent>
+    </Card>
   );
 }
