@@ -155,6 +155,13 @@
       "when": 1789223818395,
       "tag": "0021_fair_piledriver",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1789252194628,
+      "tag": "0022_inventory_recipe_versions_and_traceability",
+      "breakpoints": true
     }
   ]
 }

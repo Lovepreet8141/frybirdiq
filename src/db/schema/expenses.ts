@@ -15,7 +15,7 @@ import { boolean, date, index, integer, pgEnum, pgTable, text, unique, uuid } fr
 
 import { money, primaryId, timestamps, ZERO_MONEY } from "./_shared";
 import { organizations } from "./tenancy";
-import { suppliers } from "./inventory";
+import { purchaseOrders, suppliers } from "./inventory";
 
 /**
  * Whether a cost moves with volume.
@@ -145,12 +145,23 @@ export const expenses = pgTable(
     }),
     reference: text("reference"),
     notes: text("notes"),
+    /**
+     * Set when this expense was written by receiving a purchase order — the
+     * one way stock purchases reach the P&L, so the same goods are never
+     * counted twice (see docs/INVENTORY-ARCHITECTURE.md §9). One row per
+     * (order, category): food and packaging on one delivery are two lines.
+     */
+    purchaseOrderId: uuid("purchase_order_id").references(() => purchaseOrders.id, { onDelete: "set null" }),
     ...timestamps,
   },
   (table) => [
     index("expenses_org_paid_idx").on(table.orgId, table.paidOn),
     index("expenses_org_category_idx").on(table.orgId, table.categoryId),
     unique("expenses_recurring_period_unique").on(table.recurringExpenseId, table.paidOn),
+    // A received purchase order writes at most one expense per category —
+    // receiving twice cannot count the goods twice. NULLs (manual expenses)
+    // are unconstrained, as Postgres unique semantics already provide.
+    unique("expenses_purchase_order_category_unique").on(table.purchaseOrderId, table.categoryId),
   ],
 );
 
