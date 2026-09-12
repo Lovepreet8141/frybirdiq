@@ -162,6 +162,17 @@ imports. Every function there has a test. This is the part that must be right.
   `design-system/pages/` if one exists.
 - Every interactive feature ships all eight states in §56 — including `offline`
   and `permission denied`.
+- **Verification happens on frybirdiq.tech, not localhost.** Lovepreet does
+  not test on localhost. Nothing is "done" until it is deployed and working
+  on the live site. Never ask him to run `pnpm dev` or check `localhost:3000`
+  — deploy it and tell him what to look at on frybirdiq.tech.
+
+  Consequence, which has already bitten once: anything that differs between a
+  local build and production — absolute URLs, `NEXT_PUBLIC_*` values baked in
+  at build time, redirect targets, email links — cannot be verified locally
+  at all. On localhost the wrong value looks right. Write code that doesn't
+  depend on build-time environment for same-origin behaviour, and verify it
+  on the live site.
 
 ## Commands
 
