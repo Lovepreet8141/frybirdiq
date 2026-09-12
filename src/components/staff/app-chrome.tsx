@@ -31,6 +31,7 @@ interface Permissions {
   readonly canSeeAudit: boolean;
   readonly canSeeFinance: boolean;
   readonly canSeeKitchen: boolean;
+  readonly canSeeSettings: boolean;
   readonly canReject: boolean;
 }
 
@@ -55,6 +56,7 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
     canSeeAudit,
     canSeeFinance,
     canSeeKitchen,
+    canSeeSettings,
     canReject,
   } = permissions;
 
@@ -129,6 +131,7 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
     canSeeAudit,
     canSeeFinance,
     canSeeKitchen,
+    canSeeSettings,
   });
 
   return (
@@ -144,6 +147,7 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
         canSeeAudit={canSeeAudit}
         canSeeFinance={canSeeFinance}
         canSeeKitchen={canSeeKitchen}
+        canSeeSettings={canSeeSettings}
       />
       <SidebarInset>
         <header className="flex h-[68px] items-center gap-3 border-b border-border px-[var(--gutter)] print:hidden">

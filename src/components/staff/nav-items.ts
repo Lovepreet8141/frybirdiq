@@ -10,6 +10,7 @@ import {
   Layers3,
   type LucideIcon,
   Package,
+  Settings2,
   ShieldCheck,
   ShoppingBag,
   Store,
@@ -45,6 +46,7 @@ export interface NavPermissions {
   readonly canSeeAudit: boolean;
   readonly canSeeFinance: boolean;
   readonly canSeeKitchen: boolean;
+  readonly canSeeSettings: boolean;
 }
 
 /**
@@ -69,6 +71,7 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
     canSeeAudit,
     canSeeFinance,
     canSeeKitchen,
+    canSeeSettings,
   } = permissions;
 
   const groups: NavGroup[] = [
@@ -136,7 +139,10 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
     {
       id: "admin",
       label: "Admin",
-      items: canSeeAudit ? [{ href: "/app/admin/audit", label: "Audit log", icon: ShieldCheck }] : [],
+      items: [
+        ...(canSeeSettings ? [{ href: "/app/admin/restaurant", label: "Restaurant", icon: Settings2 }] : []),
+        ...(canSeeAudit ? [{ href: "/app/admin/audit", label: "Audit log", icon: ShieldCheck }] : []),
+      ],
     },
   ];
 
