@@ -1,5 +1,6 @@
 import {
   Activity,
+  BadgePercent,
   BarChart3,
   ChefHat,
   ClipboardList,
@@ -47,6 +48,7 @@ export interface NavPermissions {
   readonly canSeeFinance: boolean;
   readonly canSeeKitchen: boolean;
   readonly canSeeSettings: boolean;
+  readonly canSeePromotions: boolean;
 }
 
 /**
@@ -72,6 +74,7 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
     canSeeFinance,
     canSeeKitchen,
     canSeeSettings,
+    canSeePromotions,
   } = permissions;
 
   const groups: NavGroup[] = [
@@ -124,7 +127,10 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
     {
       id: "customers",
       label: "Customers",
-      items: canSeeCustomers ? [{ href: "/app/customers", label: "Customers", icon: Users }] : [],
+      items: [
+        ...(canSeeCustomers ? [{ href: "/app/customers", label: "Customers", icon: Users, exclude: ["/app/customers/promotions"] }] : []),
+        ...(canSeePromotions ? [{ href: "/app/customers/promotions", label: "Promotions", icon: BadgePercent }] : []),
+      ],
     },
     {
       id: "finance",

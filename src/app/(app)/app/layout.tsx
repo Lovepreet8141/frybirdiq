@@ -27,6 +27,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     canSeeFinance,
     canSeeKitchen,
     canSeeSettings,
+    canSeePromotions,
     canReject,
   ] = await Promise.all([
     getStaff(),
@@ -41,6 +42,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     staffCan("finance.view"),
     staffCan("kitchen.view"),
     staffCan("settings.manage"),
+    staffCan("orders.discount"),
     staffCan("orders.cancel"),
   ]);
 
@@ -70,6 +72,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           canSeeFinance,
           canSeeKitchen,
           canSeeSettings,
+          canSeePromotions,
           canReject,
         }}
       >
