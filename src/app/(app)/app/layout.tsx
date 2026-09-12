@@ -1,10 +1,6 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
-import { LogOut } from "lucide-react";
 import { getStaff, staffCan } from "@/lib/auth";
-import { AppNavLink } from "@/components/staff/app-nav-link";
-import { NewOrderAlert } from "@/components/staff/new-order-alert";
-import { SoundCheck } from "@/components/staff/sound-check";
+import { AppChrome } from "@/components/staff/app-chrome";
 import { resolveHome } from "@/lib/auth/route-home";
 
 /**
@@ -40,61 +36,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     /* The whole staff area is the IQ surface: light, where the customer
        site is dark. They are different rooms. */
     <div data-surface="iq" className="surface-dark flex min-h-full flex-col bg-background text-foreground">
-      <header className="border-b border-border print:hidden">
-        <div className="mx-auto flex h-[68px] w-full max-w-6xl items-center justify-between gap-4 px-[var(--gutter)]">
-          <div className="flex items-center gap-2 sm:gap-6">
-            <Link
-              href={canSeeOrders ? "/app/orders" : "/app/deliveries"}
-              className="flex min-h-[44px] items-center font-heading text-lg font-bold tracking-tight"
-            >
-              FRYBIRD <span className="text-primary">IQ</span>
-            </Link>
-
-            {/* Nav follows permissions: a rider sees deliveries and nothing else. */}
-            <nav className="flex items-center gap-1 overflow-x-auto" aria-label="Sections">
-              {canSeeOrders && <AppNavLink href="/app/orders">Orders</AppNavLink>}
-              {canSeePos && <AppNavLink href="/app/pos">POS</AppNavLink>}
-              {canSeeDeliveries && <AppNavLink href="/app/deliveries">Deliveries</AppNavLink>}
-              {canSeeMenu && <AppNavLink href="/app/iq/menu">Menu</AppNavLink>}
-              {/* `exclude` keeps this from also lighting up on /app/iq/menu, which has its own link above. */}
-              {canSeeAnalytics && (
-                <AppNavLink href="/app/iq" exclude="/app/iq/menu">
-                  IQ
-                </AppNavLink>
-              )}
-            </nav>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <span className="hidden text-sm text-muted-foreground sm:inline">
-              {staff.displayName}
-              <span className="ml-2 text-xs uppercase tracking-[0.08em]">{staff.roles.join(" · ")}</span>
-            </span>
-            {canSeeOrders && <SoundCheck />}
-
-            <form action="/api/auth/sign-out" method="POST">
-              <button
-                type="submit"
-                className="flex min-h-[44px] items-center gap-2 rounded-md border border-border px-3 text-sm font-semibold transition-colors hover:bg-surface"
-              >
-                <LogOut className="size-4" aria-hidden="true" />
-                Sign out
-              </button>
-            </form>
-          </div>
-        </div>
-      </header>
-
-      {/* Above the content, so an order that has arrived is the first thing
-          seen rather than something to scroll for. Hidden on print — a
-          kitchen ticket printing must never pop this dialog onto paper. */}
-      {canSeeOrders && (
-        <div className="print:hidden">
-          <NewOrderAlert canReject={canReject} />
-        </div>
-      )}
-
-      <main className="flex-1">{children}</main>
+      <AppChrome
+        staff={{ displayName: staff.displayName, roles: staff.roles }}
+        permissions={{ canSeeOrders, canSeePos, canSeeDeliveries, canSeeMenu, canSeeAnalytics, canReject }}
+      >
+        {children}
+      </AppChrome>
     </div>
   );
 }
