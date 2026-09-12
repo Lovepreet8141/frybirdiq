@@ -5,8 +5,13 @@ import { usePathname } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { AppNavLink } from "@/components/staff/app-nav-link";
 import { AppSidebar } from "@/components/staff/app-sidebar";
+import { CommandPalette } from "@/components/staff/command-palette";
 import { NewOrderAlert } from "@/components/staff/new-order-alert";
+import { buildNavGroups } from "@/components/staff/nav-items";
+import { SectionBreadcrumb } from "@/components/staff/section-breadcrumb";
 import { SoundCheck } from "@/components/staff/sound-check";
+import { UserMenu } from "@/components/staff/user-menu";
+import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import type { Role } from "@/domain/permissions";
 
@@ -21,6 +26,9 @@ interface Permissions {
   readonly canSeeDeliveries: boolean;
   readonly canSeeMenu: boolean;
   readonly canSeeAnalytics: boolean;
+  readonly canSeeCustomers: boolean;
+  readonly canSeeStaff: boolean;
+  readonly canSeeAudit: boolean;
   readonly canReject: boolean;
 }
 
@@ -34,7 +42,8 @@ interface Permissions {
  */
 export function AppChrome({ staff, permissions, children }: { staff: StaffSummary; permissions: Permissions; children: React.ReactNode }) {
   const pathname = usePathname();
-  const { canSeeOrders, canSeePos, canSeeDeliveries, canSeeMenu, canSeeAnalytics, canReject } = permissions;
+  const { canSeeOrders, canSeePos, canSeeDeliveries, canSeeMenu, canSeeAnalytics, canSeeCustomers, canSeeStaff, canSeeAudit, canReject } =
+    permissions;
 
   const isFullBleed = pathname.startsWith("/app/pos");
 
@@ -93,6 +102,17 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
     );
   }
 
+  const navGroups = buildNavGroups({
+    canSeeOrders,
+    canSeePos,
+    canSeeDeliveries,
+    canSeeMenu,
+    canSeeAnalytics,
+    canSeeCustomers,
+    canSeeStaff,
+    canSeeAudit,
+  });
+
   return (
     <SidebarProvider className="min-h-full flex-1">
       <AppSidebar
@@ -101,25 +121,19 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
         canSeeDeliveries={canSeeDeliveries}
         canSeeMenu={canSeeMenu}
         canSeeAnalytics={canSeeAnalytics}
+        canSeeCustomers={canSeeCustomers}
+        canSeeStaff={canSeeStaff}
+        canSeeAudit={canSeeAudit}
       />
       <SidebarInset>
-        <header className="flex h-[68px] items-center justify-between gap-4 border-b border-border px-[var(--gutter)] print:hidden">
+        <header className="flex h-[68px] items-center gap-3 border-b border-border px-[var(--gutter)] print:hidden">
           <SidebarTrigger />
-          <div className="flex items-center gap-4">
-            <span className="hidden text-sm text-muted-foreground sm:inline">
-              {staff.displayName}
-              <span className="ml-2 text-xs uppercase tracking-[0.08em]">{staff.roles.join(" · ")}</span>
-            </span>
+          <Separator orientation="vertical" className="h-4" />
+          <SectionBreadcrumb />
+          <div className="ml-auto flex items-center gap-3">
+            <CommandPalette groups={navGroups} />
             {canSeeOrders && <SoundCheck />}
-            <form action="/api/auth/sign-out" method="POST">
-              <button
-                type="submit"
-                className="flex min-h-[44px] items-center gap-2 rounded-md border border-border px-3 text-sm font-semibold transition-colors hover:bg-surface"
-              >
-                <LogOut className="size-4" aria-hidden="true" />
-                Sign out
-              </button>
-            </form>
+            <UserMenu displayName={staff.displayName} roles={staff.roles} />
           </div>
         </header>
 
