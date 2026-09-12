@@ -13,14 +13,14 @@ import { cn } from "@/lib/utils";
  * for what it is compared against — green and red are the last signal, not the
  * only one.
  */
-function Delta({
+export function Delta({
   changeBps,
   comparedTo,
-  inverted,
+  inverted = false,
 }: {
   changeBps: number;
   comparedTo?: string;
-  inverted: boolean;
+  inverted?: boolean;
 }) {
   const flat = changeBps === 0;
   const up = changeBps > 0;

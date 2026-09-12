@@ -5,13 +5,13 @@ import { AlarmClock, AlertTriangle, Clock, CreditCard } from "lucide-react";
 import { CostBreakdownDonut } from "@/components/iq/cost-breakdown-donut";
 import { FoodCostChart } from "@/components/iq/food-cost-chart";
 import { NotSellingTable } from "@/components/iq/not-selling-table";
-import { StatTile } from "@/components/iq/stat-tile";
+import { AverageOrderCard, OrdersCard, RevenueCard, type SparkPoint } from "@/components/iq/overview-kpis";
 import { TopSellersTable } from "@/components/iq/top-sellers-table";
 import { EmptyState, PermissionDenied } from "@/components/states";
 import { MotionReveal, MotionStagger, MotionStaggerItem } from "@/components/motion";
 import { getStaff, staffCan } from "@/lib/auth";
 import { type RangeKey, resolveRange } from "@/lib/dates";
-import { type Paise, ZERO, formatBps, formatINR, paise } from "@/lib/money";
+import { type Paise, ZERO, formatBps, formatINR, paise, toRupeesFloat } from "@/lib/money";
 import { Card, CardContent } from "@/components/ui/card";
 import { toKitchenTickets } from "@/lib/kitchen/tickets";
 import { changeBps, getDashboard, getTodayComparison, notSelling, ordersAwaitingDecision, ordersRunningLate } from "@/lib/repositories/analytics";
@@ -54,9 +54,12 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
   const range = resolveRange(key);
   const monthRange = resolveRange("mtd");
 
-  const [dashboard, today, pnl, foodCost, gaps, awaiting, late, active] = await Promise.all([
+  const [dashboard, today, week, pnl, foodCost, gaps, awaiting, late, active] = await Promise.all([
     getDashboard(staff.orgId, range),
     getTodayComparison(staff.orgId),
+    // The shape behind today's figures: the last seven business days, today
+    // included, from the same `getDashboard` that drives the rest of the page.
+    getDashboard(staff.orgId, resolveRange("7d")),
     getProfitAndLoss(staff.orgId, monthRange),
     foodCostWeeklySeries(staff.orgId),
     notSelling(staff.orgId, range),
@@ -65,6 +68,16 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     listActiveOrders(staff.orgId),
   ]);
   const inKitchen = toKitchenTickets(active).length;
+
+  // Formatted here, on the server, from paise; the float is chart geometry only.
+  const spark: SparkPoint[] = week.series.map((point) => ({
+    date: point.date,
+    label: new Date(`${point.date}T12:00:00+05:30`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" }),
+    rupees: toRupeesFloat(point.revenue),
+    formatted: formatINR(point.revenue, "whole"),
+    orders: point.orders,
+  }));
+  const todayAverage = averageOrder(today.today.revenue, today.today.orders);
 
   const directTotal = pnl.direct.reduce((s, r) => s + r.amount, 0n);
   const fixedTotal = pnl.fixed.reduce((s, r) => s + r.amount, 0n);
@@ -76,13 +89,34 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-[var(--gutter)] py-8">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      {/* The kit's page title row: heading left, the period control right.
+          Kit height for the control on a pointer; 44px on a phone, where a
+          thumb is doing the tapping. */}
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-row flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="font-heading text-xl font-bold tracking-tight lg:text-2xl">Overview</h1>
+            <p className="text-sm text-muted-foreground">{range.label} · Sector 9</p>
+          </div>
+          <nav aria-label="Period" className="inline-flex max-w-full overflow-x-auto rounded-lg border border-border bg-surface p-0.5">
+            {RANGES.map((option) => (
+              <Link
+                key={option.key}
+                href={`/app/iq?range=${option.key}`}
+                aria-current={option.key === key ? "page" : undefined}
+                className={
+                  option.key === key
+                    ? "flex min-h-[44px] items-center whitespace-nowrap rounded-md bg-secondary px-3.5 text-sm font-semibold text-secondary-foreground md:min-h-0 md:h-8"
+                    : "flex min-h-[44px] items-center whitespace-nowrap rounded-md px-3.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground md:min-h-0 md:h-8"
+                }
+              >
+                {option.label}
+              </Link>
+            ))}
+          </nav>
+        </div>
         <div>
-          <h1 className="font-heading text-3xl font-bold tracking-tight">
-            FRYBIRD <span className="text-primary">IQ</span>
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">{range.label}, Sector 9</p>
-          <nav aria-label="FRYBIRD IQ sections" className="mt-3 flex flex-wrap gap-4 text-sm font-semibold">
+          <nav aria-label="FRYBIRD IQ sections" className="flex flex-wrap gap-4 text-sm font-semibold">
             <span aria-current="page" className="text-foreground">Sales</span>
             <Link href="/app/iq/live" className="text-muted-foreground transition-colors hover:text-foreground">
               Live
@@ -114,69 +148,45 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
             )}
           </nav>
         </div>
-
-        <nav className="flex flex-wrap gap-1" aria-label="Period">
-          {RANGES.map((option) => (
-            <Link
-              key={option.key}
-              href={`/app/iq?range=${option.key}`}
-              aria-current={option.key === key ? "page" : undefined}
-              className={
-                option.key === key
-                  ? "flex min-h-[44px] items-center rounded-md bg-secondary px-4 text-sm font-semibold text-secondary-foreground"
-                  : "flex min-h-[44px] items-center rounded-md px-4 text-sm font-semibold text-muted-foreground transition-colors hover:bg-surface"
-              }
-            >
-              {option.label}
-            </Link>
-          ))}
-        </nav>
       </div>
 
-      {/* 1. How did today go — always today, always both comparisons. */}
+      {/* 1. How did today go — always today, always both comparisons, on the
+          kit's Default dashboard cards (revenue sparkline, order bars, stat
+          card). Same figures as before; the last 7 days give them a shape. */}
       <section aria-labelledby="today-heading" className="flex flex-col gap-4">
         <h2 id="today-heading" className="font-heading text-lg font-semibold">Today</h2>
         {/* grid-cols-1 straight to lg:grid-cols-3 — a sm:2-column step
-            orphans an empty grey cell with exactly three tiles. Each tile is
-            its own Card now, so the gap is a real gap, not the hairline
-            (gap-px over a coloured background) trick a flush grid needed. */}
+            orphans an empty grey cell with exactly three tiles. */}
         <MotionStagger each={0.04} count={3}>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6">
             <MotionStaggerItem>
-              <StatTile
-                label="Revenue"
-                value={formatINR(today.today.revenue, "whole")}
-                changeBps={today.vsYesterdayBps}
-                comparedTo="yesterday"
-                secondaryChangeBps={today.vsLastWeekBps}
-                secondaryComparedTo="the same day last week"
+              <RevenueCard
+                figure={{
+                  value: formatINR(today.today.revenue, "whole"),
+                  changeBps: today.vsYesterdayBps,
+                  secondaryChangeBps: today.vsLastWeekBps,
+                }}
+                series={spark}
               />
             </MotionStaggerItem>
             <MotionStaggerItem>
-              <StatTile
-                label="Orders"
-                value={String(today.today.orders)}
-                changeBps={today.ordersVsYesterdayBps}
-                comparedTo="yesterday"
-                secondaryChangeBps={today.ordersVsLastWeekBps}
-                secondaryComparedTo="the same day last week"
+              <OrdersCard
+                figure={{
+                  value: String(today.today.orders),
+                  changeBps: today.ordersVsYesterdayBps,
+                  secondaryChangeBps: today.ordersVsLastWeekBps,
+                }}
+                series={spark}
               />
             </MotionStaggerItem>
             <MotionStaggerItem>
-              <StatTile
-                label="Average order"
-                value={today.today.orders === 0 ? "—" : formatINR(averageOrder(today.today.revenue, today.today.orders), "whole")}
-                changeBps={changeBps(
-                  averageOrder(today.today.revenue, today.today.orders),
-                  averageOrder(today.yesterday.revenue, today.yesterday.orders),
-                )}
-                comparedTo="yesterday"
-                secondaryChangeBps={changeBps(
-                  averageOrder(today.today.revenue, today.today.orders),
-                  averageOrder(today.lastWeek.revenue, today.lastWeek.orders),
-                )}
-                secondaryComparedTo="the same day last week"
-                detail={today.today.orders === 0 ? "No orders yet today" : undefined}
+              <AverageOrderCard
+                figure={{
+                  value: today.today.orders === 0 ? "—" : formatINR(todayAverage, "whole"),
+                  changeBps: changeBps(todayAverage, averageOrder(today.yesterday.revenue, today.yesterday.orders)),
+                  secondaryChangeBps: changeBps(todayAverage, averageOrder(today.lastWeek.revenue, today.lastWeek.orders)),
+                  detail: today.today.orders === 0 ? "No orders yet today" : undefined,
+                }}
               />
             </MotionStaggerItem>
           </div>
