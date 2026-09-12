@@ -20,8 +20,12 @@ export default async function CartPage() {
   const [cart, customer, stampConfig] = await Promise.all([getPricedCart(), getCustomer(), getStampConfig()]);
 
   const org = customer ? await getOrg() : null;
+  // Withheld until the email is confirmed — same reasoning as everywhere else
+  // a rewards balance is shown or spent.
   const availableReward =
-    customer && org && isStampProgramEnabled(stampConfig) ? await getAvailableStampReward(customer.id, org.id) : null;
+    customer?.emailVerified && org && isStampProgramEnabled(stampConfig)
+      ? await getAvailableStampReward(customer.id, org.id)
+      : null;
 
   return (
     <div className="mx-auto w-full max-w-4xl px-[var(--gutter)] py-10 sm:py-14">

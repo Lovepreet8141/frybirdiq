@@ -32,7 +32,10 @@ export async function LoyaltySection() {
   if (!pointsOn && !stampsOn) return null;
 
   const bothOn = pointsOn && stampsOn;
-  const stampState = customer && org ? await getStampAccountState(customer.id, org.id) : null;
+  // Withheld until the email is confirmed — same as the account page and
+  // checkout. An unconfirmed address hasn't proven this session owns the
+  // balance being shown.
+  const stampState = customer?.emailVerified && org ? await getStampAccountState(customer.id, org.id) : null;
   const stampCount = stampState?.stampCount ?? 0;
   const availableRewards = stampState?.availableRewards.length ?? 0;
 
@@ -69,7 +72,7 @@ export async function LoyaltySection() {
                   Points land the moment you pay. Spend them on anything, any time — no minimum order{loyalty.minRedeemPoints > 0 ? ` once you've got ${loyalty.minRedeemPoints}` : ""}.
                 </p>
 
-                {customer ? (
+                {customer?.emailVerified ? (
                   <div className="mt-6 rounded-lg bg-secondary px-4 py-3">
                     <p className="tabular font-heading text-2xl font-bold">
                       {customer.points} <span className="text-sm font-semibold text-muted-foreground">points</span>
@@ -115,11 +118,11 @@ export async function LoyaltySection() {
                   stampsRequired={stampConfig.stampsRequired}
                   stampCount={stampCount}
                   availableRewards={availableRewards}
-                  personal={customer !== null}
+                  personal={customer?.emailVerified === true}
                   className="mt-6"
                 />
 
-                {customer && availableRewards === 0 && (
+                {customer?.emailVerified && availableRewards === 0 && (
                   <p className="tabular mt-4 text-sm text-muted-foreground">
                     {stampConfig.stampsRequired - stampCount} more order{stampConfig.stampsRequired - stampCount === 1 ? "" : "s"} over{" "}
                     {formatINR(stampConfig.minOrderValue)} to go.

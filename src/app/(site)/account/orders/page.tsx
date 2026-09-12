@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { EmptyState } from "@/components/states";
 import { OrderHistoryList } from "@/components/account/order-history";
+import { UnverifiedNotice } from "@/components/account/unverified-notice";
 import { getCustomer } from "@/lib/customer";
 import { resolveHome } from "@/lib/auth/route-home";
 import { listCustomerOrders } from "@/lib/repositories/orders";
@@ -20,7 +21,6 @@ export default async function CustomerOrdersPage() {
   }
 
   const org = await requireOrg();
-  const orders = await listCustomerOrders({ customerId: customer.id, orgId: org.id });
 
   return (
     <div className="mx-auto w-full max-w-3xl px-[var(--gutter)] py-10 sm:py-14">
@@ -34,11 +34,21 @@ export default async function CustomerOrdersPage() {
 
       <h1 className="mt-4 font-heading text-4xl font-bold tracking-tight">Your orders</h1>
 
-      {orders.length === 0 ? (
-        <EmptyState className="mt-8" title="No orders yet." detail="When you order, it'll show up here." />
+      {!customer.emailVerified ? (
+        <UnverifiedNotice email={customer.email} className="mt-8" />
       ) : (
-        <OrderHistoryList orders={orders.map((order) => ({ ...order, placedAt: order.placedAt?.toISOString() ?? null }))} />
+        <OrdersList customerId={customer.id} orgId={org.id} />
       )}
     </div>
+  );
+}
+
+async function OrdersList({ customerId, orgId }: { customerId: string; orgId: string }) {
+  const orders = await listCustomerOrders({ customerId, orgId });
+
+  return orders.length === 0 ? (
+    <EmptyState className="mt-8" title="No orders yet." detail="When you order, it'll show up here." />
+  ) : (
+    <OrderHistoryList orders={orders.map((order) => ({ ...order, placedAt: order.placedAt?.toISOString() ?? null }))} />
   );
 }

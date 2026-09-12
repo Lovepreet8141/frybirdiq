@@ -6,7 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { customers, loyaltyAccounts } from "@/db/schema";
-import { isSupabaseConfigured } from "@/lib/env";
+import { isSupabaseConfigured, serverEnv } from "@/lib/env";
 import { createServerClient } from "@/lib/supabase/server";
 import { requireOrg } from "@/lib/repositories/org";
 import { resolveHome } from "@/lib/auth/route-home";
@@ -14,7 +14,13 @@ import { resolveHome } from "@/lib/auth/route-home";
 export type CustomerAuthState =
   | { status: "idle" }
   | { status: "error"; message: string }
-  | { status: "check-email"; message: string };
+  | { status: "check-email"; email: string };
+
+/** Where a confirmation link lands. `SITE_URL` is unset only in a shell with no Supabase project yet. */
+function confirmRedirectUrl(): string | undefined {
+  const site = serverEnv().SITE_URL;
+  return site ? `${site.replace(/\/$/, "")}/auth/confirm` : undefined;
+}
 
 const joinSchema = z.object({
   name: z.string().trim().min(1, "Tell us your name.").max(80),
@@ -81,6 +87,7 @@ export async function createAccount(_previous: CustomerAuthState, formData: Form
   const { data, error } = await supabase.auth.signUp({
     email: parsed.data.email,
     password: parsed.data.password,
+    options: { emailRedirectTo: confirmRedirectUrl() },
   });
 
   if (error || !data.user) {
@@ -119,15 +126,48 @@ export async function createAccount(_previous: CustomerAuthState, formData: Form
       .onConflictDoNothing();
   }
 
-  // Supabase can be configured to require a confirmation click. When it is,
-  // there is no session yet — say so rather than bouncing to a page that will
-  // redirect straight back to sign-in.
-  if (!data.session) {
-    return { status: "check-email", message: "Check your email to confirm your account, then sign in." };
+  // Confirm email is on for this project, so there is no session yet — say so
+  // rather than bouncing to a page that will redirect straight back to
+  // sign-in. `email_confirmed_at` unset is the real signal; `data.session`
+  // can be present even pre-confirmation for other Supabase configurations,
+  // so this doesn't assume which flavour of "unconfirmed" is running.
+  if (!data.user.email_confirmed_at) {
+    return { status: "check-email", email: parsed.data.email };
   }
 
   revalidatePath("/", "layout");
   redirect("/account");
+}
+
+export type ResendState = { status: "idle" | "sent" | "error"; message?: string };
+
+/**
+ * Resends the confirmation email. Supabase's own endpoint is rate-limited —
+ * nothing here re-implements that, matching how `signIn` treats sign-in
+ * attempts (§ the comment on `signIn`). The error it returns on a limit hit
+ * is passed straight through.
+ */
+export async function resendConfirmation(_previous: ResendState, formData: FormData): Promise<ResendState> {
+  if (!isSupabaseConfigured()) return { status: "error", message: "Accounts aren't connected yet." };
+
+  const email = String(formData.get("email") ?? "").trim();
+  if (!email) return { status: "error", message: "Missing email address." };
+
+  const supabase = await createServerClient();
+  const { error } = await supabase.auth.resend({
+    type: "signup",
+    email,
+    options: { emailRedirectTo: confirmRedirectUrl() },
+  });
+
+  if (error) {
+    return {
+      status: "error",
+      message: error.status === 429 ? "Too many requests. Wait a few minutes and try again." : "Couldn't resend that email. Try again shortly.",
+    };
+  }
+
+  return { status: "sent", message: "Email sent. Check your inbox." };
 }
 
 export async function signInCustomer(
@@ -143,9 +183,16 @@ export async function signInCustomer(
   const supabase = await createServerClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
 
-  // Deliberately does not say which was wrong — that tells an attacker which
-  // addresses have accounts.
-  if (error) return { status: "error", message: "That email and password don't match." };
+  if (error) {
+    // Supabase refuses this sign-in outright until the email is confirmed —
+    // there is no session to gate here, the account can't get in at all. That
+    // is a different fact from a wrong password, so it gets the same
+    // check-email panel a fresh sign-up sees, not a generic "didn't match".
+    if (error.code === "email_not_confirmed") return { status: "check-email", email };
+    // Otherwise deliberately does not say which was wrong — that tells an
+    // attacker which addresses have accounts.
+    return { status: "error", message: "That email and password don't match." };
+  }
 
   revalidatePath("/", "layout");
 

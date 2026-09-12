@@ -48,7 +48,11 @@ export default async function CheckoutPage() {
       ? { name: customer.name, phone: customer.phone, email: customer.email }
       : remembered;
 
-  const savedAddresses: SavedAddressOption[] = customer
+  // An unverified account's saved addresses are withheld the same as its
+  // order history — an unconfirmed email hasn't proven this session owns
+  // that customer row yet. Checkout still works: it falls through to the
+  // same on-device remembered address a guest gets, never blocking the order.
+  const savedAddresses: SavedAddressOption[] = customer?.emailVerified
     ? (await listSavedAddresses(customer.id)).map((address) => ({
         id: address.id,
         line1: address.line1,
@@ -64,7 +68,7 @@ export default async function CheckoutPage() {
   // balance to be worth a line on the page.
   const loyalty = await getLoyaltyConfig();
   const offer =
-    customer && isLoyaltyEnabled(loyalty) && customer.points > 0
+    customer?.emailVerified && isLoyaltyEnabled(loyalty) && customer.points > 0
       ? maxRedeemable(customer.points, cart.totals.gross, loyalty)
       : null;
 

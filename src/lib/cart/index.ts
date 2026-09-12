@@ -210,6 +210,11 @@ export async function priceCart(cart: Cart): Promise<PricedCart> {
   if (redeemStampIndex >= 0) {
     if (!customer) {
       stampRewardError = "Sign in to redeem your FRYBIRD REWARDS free item.";
+    } else if (!customer.emailVerified) {
+      // A stamp reward is real value on an account that hasn't yet proven
+      // this session owns it — the same reason order history and the points
+      // balance are withheld until the email is confirmed.
+      stampRewardError = "Confirm your email to redeem FRYBIRD REWARDS.";
     } else if (!org) {
       stampRewardError = "Rewards aren't available right now.";
     } else {
@@ -265,7 +270,9 @@ export async function priceCart(cart: Cart): Promise<PricedCart> {
    */
   let points: AppliedPoints | null = null;
 
-  if (customer && cart.points && cart.points > 0) {
+  // Same reasoning as the stamp reward above: an unverified account's points
+  // balance is withheld from redemption, not only from display.
+  if (customer?.emailVerified && cart.points && cart.points > 0) {
     const config = await getLoyaltyConfig();
     const redemption = redeem({
       requestedPoints: cart.points,

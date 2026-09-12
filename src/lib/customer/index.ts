@@ -29,6 +29,13 @@ export interface Customer {
   readonly points: number;
   /** Stamps since the last free item — the "buy 7, get the 8th free" card. */
   readonly stampCount: number;
+  /**
+   * From Supabase Auth's own `email_confirmed_at`, never a column we own —
+   * a second copy of this fact could drift from what actually gated sign-in.
+   * Order history, rewards balance and saved addresses are withheld until
+   * this is true; guest checkout is untouched by it.
+   */
+  readonly emailVerified: boolean;
 }
 
 export const getCustomer = cache(async (): Promise<Customer | null> => {
@@ -66,6 +73,7 @@ export const getCustomer = cache(async (): Promise<Customer | null> => {
     marketingConsent: row.marketingConsent,
     points: account?.pointsBalance ?? 0,
     stampCount: account?.stampCount ?? 0,
+    emailVerified: user.email_confirmed_at != null,
   };
 });
 

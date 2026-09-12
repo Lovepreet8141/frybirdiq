@@ -2,8 +2,8 @@
 
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
-import { Loader2 } from "lucide-react";
-import { type CustomerAuthState, createAccount, signInCustomer } from "@/lib/customer/actions";
+import { Loader2, MailCheck } from "lucide-react";
+import { type CustomerAuthState, type ResendState, createAccount, resendConfirmation, signInCustomer } from "@/lib/customer/actions";
 
 function Submit({ label, busy }: { label: string; busy: string }) {
   const { pending } = useFormStatus();
@@ -26,11 +26,58 @@ function Submit({ label, busy }: { label: string; busy: string }) {
 }
 
 function Message({ state }: { state: CustomerAuthState }) {
-  if (state.status === "idle") return null;
+  if (state.status !== "error") return null;
   return (
-    <p role={state.status === "error" ? "alert" : "status"} className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
+    <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
       {state.message}
     </p>
+  );
+}
+
+function ResendButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition-colors hover:bg-surface disabled:opacity-50"
+    >
+      {pending ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+      Resend the email
+    </button>
+  );
+}
+
+/**
+ * The state a sign-up lands in when Supabase requires email confirmation.
+ * Its own panel, not a message above the form the person just filled in —
+ * the form is done, this is what happens next.
+ */
+function CheckEmail({ email }: { email: string }) {
+  const [state, action] = useActionState<ResendState, FormData>(resendConfirmation, { status: "idle" });
+
+  return (
+    <div className="flex flex-col items-center gap-4 rounded-md border border-border bg-surface px-6 py-8 text-center">
+      <MailCheck className="size-8 text-primary" aria-hidden="true" />
+      <div className="flex flex-col gap-1.5">
+        <p className="font-heading text-lg font-semibold">Check your email</p>
+        <p className="text-sm text-muted-foreground">
+          We sent a confirmation link to <strong className="text-foreground">{email}</strong>. Click it, then sign
+          in.
+        </p>
+      </div>
+
+      <form action={action}>
+        <input type="hidden" name="email" value={email} />
+        <ResendButton />
+      </form>
+
+      {state.status !== "idle" && (
+        <p role={state.status === "error" ? "alert" : "status"} className="text-sm text-muted-foreground">
+          {state.message}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -39,6 +86,8 @@ const field =
 
 export function JoinForm() {
   const [state, action] = useActionState<CustomerAuthState, FormData>(createAccount, { status: "idle" });
+
+  if (state.status === "check-email") return <CheckEmail email={state.email} />;
 
   return (
     <form action={action} className="flex flex-col gap-5">
@@ -90,6 +139,8 @@ export function JoinForm() {
 
 export function CustomerSignInForm() {
   const [state, action] = useActionState<CustomerAuthState, FormData>(signInCustomer, { status: "idle" });
+
+  if (state.status === "check-email") return <CheckEmail email={state.email} />;
 
   return (
     <form action={action} className="flex flex-col gap-5">
