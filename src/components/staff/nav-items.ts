@@ -11,6 +11,7 @@ import {
   Package,
   ShieldCheck,
   ShoppingBag,
+  Store,
   Truck,
   UserCog,
   Users,
@@ -75,10 +76,11 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
       label: "Operations",
       items: [
         ...(canSeeAnalytics
-          ? [{ href: "/app/iq", label: "Overview", icon: LayoutGrid, exclude: ["/app/iq/menu", "/app/iq/live", "/app/iq/activity"] }]
+          ? [{ href: "/app/iq", label: "Overview", icon: LayoutGrid, exclude: ["/app/iq/menu", "/app/iq/live", "/app/iq/activity", "/app/iq/channels"] }]
           : []),
         ...(canSeeAnalytics ? [{ href: "/app/iq/live", label: "Live operations", icon: Activity }] : []),
         ...(canSeeAnalytics ? [{ href: "/app/iq/activity", label: "Activity", icon: History }] : []),
+        ...(canSeeAnalytics ? [{ href: "/app/iq/channels", label: "Channels", icon: Store }] : []),
         ...(canSeeOrders ? [{ href: "/app/orders", label: "Orders", icon: ClipboardList }] : []),
         ...(canSeePos ? [{ href: "/app/pos", label: "POS", icon: ShoppingBag }] : []),
         ...(canSeeKitchen ? [{ href: "/app/kds", label: "Kitchen", icon: ChefHat }] : []),

@@ -19,6 +19,7 @@ const SECTIONS: readonly { readonly prefix: string; readonly label: string }[] =
   { prefix: "/app/iq/menu", label: "Menu" },
   { prefix: "/app/iq/live", label: "Live operations" },
   { prefix: "/app/iq/activity", label: "Activity" },
+  { prefix: "/app/iq/channels", label: "Channels" },
   { prefix: "/app/iq/pnl", label: "Profit and loss" },
   { prefix: "/app/iq/expenses", label: "Expenses" },
   { prefix: "/app/iq/rewards", label: "Rewards" },

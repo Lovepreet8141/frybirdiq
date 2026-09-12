@@ -16,6 +16,7 @@ import "server-only";
 import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { orderItems, orders, payments, products } from "@/db/schema";
+import { ORDER_CHANNELS, type OrderChannel } from "@/domain/order-channel";
 import { type Paise, ZERO, add, paise, ratioBps } from "@/lib/money";
 import {
   type DateRange,
@@ -85,6 +86,7 @@ async function paidOrders(orgId: string, range: DateRange) {
       id: orders.id,
       grandTotal: orders.grandTotal,
       fulfilment: orders.fulfilment,
+      channel: orders.channel,
       placedAt: orders.placedAt,
       createdAt: orders.createdAt,
     })
@@ -182,6 +184,73 @@ export async function getDashboard(orgId: string, range: DateRange): Promise<Das
     series,
     empty: current.length === 0 && open.length === 0,
   };
+}
+
+export interface ChannelStat {
+  readonly channel: OrderChannel;
+  readonly revenue: Metric;
+  readonly orders: CountMetric;
+  readonly averageOrder: Metric;
+  /** This channel's share of the range's revenue, in basis points. */
+  readonly shareBps: number;
+}
+
+export interface ChannelDayPoint {
+  readonly date: string;
+  readonly byChannel: Readonly<Record<OrderChannel, Paise>>;
+}
+
+export interface ChannelBreakdown {
+  readonly range: DateRange;
+  readonly total: Paise;
+  readonly channels: readonly ChannelStat[];
+  readonly series: readonly ChannelDayPoint[];
+  readonly empty: boolean;
+}
+
+/**
+ * Revenue, orders and average order by channel — dine-in, takeaway, the
+ * website — over a range, each against the preceding period of equal
+ * length. Built on the same `paidOrders` rows as everything else here, so
+ * "revenue" means exactly what the Overview means by it; `orders.channel`
+ * is indexed with `placedAt` for this question (`orders_channel_placed_idx`).
+ */
+export async function getChannelBreakdown(orgId: string, range: DateRange): Promise<ChannelBreakdown> {
+  const [current, prior] = await Promise.all([paidOrders(orgId, range), paidOrders(orgId, previousPeriod(range))]);
+
+  const revenueOf = (rows: typeof current) => add(...rows.map((row) => paise(row.grandTotal)));
+  const mean = (total: Paise, count: number) => (count === 0 ? ZERO : ((total / BigInt(count)) as Paise));
+  const total = revenueOf(current);
+
+  const channels = ORDER_CHANNELS.map((channel): ChannelStat => {
+    const rows = current.filter((row) => row.channel === channel);
+    const before = prior.filter((row) => row.channel === channel);
+    const revenue = revenueOf(rows);
+    const priorRevenue = revenueOf(before);
+    const aov = mean(revenue, rows.length);
+    const priorAov = mean(priorRevenue, before.length);
+    return {
+      channel,
+      revenue: { value: revenue, previous: priorRevenue, changeBps: changeBps(revenue, priorRevenue) },
+      orders: { value: rows.length, previous: before.length, changeBps: changeBps(rows.length, before.length) },
+      averageOrder: { value: aov, previous: priorAov, changeBps: changeBps(aov, priorAov) },
+      shareBps: total === 0n ? 0 : ratioBps(revenue, total),
+    };
+  });
+
+  const byDay = new Map<string, Record<OrderChannel, Paise>>();
+  for (const row of current) {
+    const day = businessDate(row.createdAt);
+    const found = byDay.get(day) ?? { DINE_IN: ZERO, TAKEAWAY: ZERO, ONLINE: ZERO };
+    found[row.channel] = add(found[row.channel], paise(row.grandTotal));
+    byDay.set(day, found);
+  }
+  const series = daysInRange(range).map((date) => ({
+    date,
+    byChannel: byDay.get(date) ?? { DINE_IN: ZERO, TAKEAWAY: ZERO, ONLINE: ZERO },
+  }));
+
+  return { range, total, channels, series, empty: current.length === 0 };
 }
 
 /**
