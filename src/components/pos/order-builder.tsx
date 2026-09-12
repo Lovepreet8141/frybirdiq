@@ -1,10 +1,17 @@
 "use client";
 
-import { Loader2, Minus, Plus, Trash2 } from "lucide-react";
+import { Banknote, Loader2, Minus, Plus, Trash2 } from "lucide-react";
 import { ORDER_CHANNELS, ORDER_CHANNEL_LABELS, type OrderChannel, fulfilmentsFor } from "@/domain/order-channel";
 import type { PriceDraftOk } from "@/lib/pos/actions";
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState, LoadingState, OfflineState } from "@/components/states";
+
+export interface PosTableOption {
+  readonly id: string;
+  readonly name: string;
+  /** False when someone is already seated there with an open bill. */
+  readonly available: boolean;
+}
 
 export interface DraftLine {
   readonly key: string;
@@ -30,6 +37,10 @@ export function OrderBuilder({
   pricingError,
   onRetry,
   online,
+  tables,
+  tableId,
+  onTableChange,
+  onCharge,
 }: {
   channel: OrderChannel | null;
   onChannelChange: (channel: OrderChannel) => void;
@@ -41,6 +52,10 @@ export function OrderBuilder({
   pricingError: string | null;
   onRetry: () => void;
   online: boolean;
+  tables: readonly PosTableOption[];
+  tableId: string | null;
+  onTableChange: (tableId: string | null) => void;
+  onCharge: () => void;
 }) {
   return (
     <div className="flex h-full flex-col border-l border-border bg-surface">
@@ -68,6 +83,32 @@ export function OrderBuilder({
           })}
         </div>
         {channel && <p className="text-xs text-muted-foreground">{fulfilmentLabel(channel)}</p>}
+
+        {/* Seating is a dine-in idea, so the control only exists for dine-in —
+            and the server refuses a table on a takeaway order regardless.
+            Tables with an open bill are listed but not selectable: hiding them
+            would leave the counter wondering where a table went. */}
+        {channel === "DINE_IN" && tables.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="pos-table" className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              Table
+            </label>
+            <select
+              id="pos-table"
+              value={tableId ?? ""}
+              onChange={(event) => onTableChange(event.target.value === "" ? null : event.target.value)}
+              className="h-[44px] w-full rounded-md border border-border bg-background px-3 text-sm font-semibold"
+            >
+              <option value="">No table</option>
+              {tables.map((table) => (
+                <option key={table.id} value={table.id} disabled={!table.available}>
+                  {table.name}
+                  {table.available ? "" : " — occupied"}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {!online && <OfflineState className="m-4" />}
@@ -196,6 +237,21 @@ export function OrderBuilder({
                 // to be worth its own copy, so it borrows the loading look.
                 <LoadingState rows={2} />
               )}
+
+              {/* The one way money is taken. Disabled until the server has
+                  returned a total for the current draft, so the sheet can
+                  never open against a figure this screen invented, and while
+                  a reprice is in flight, so it cannot open against a stale
+                  one either. */}
+              <button
+                type="button"
+                onClick={onCharge}
+                disabled={!online || priced === null || isPricing || pricingError !== null}
+                className="mt-3 flex min-h-[56px] w-full items-center justify-center gap-2 rounded-md bg-primary px-4 text-base font-bold text-primary-foreground transition-opacity disabled:opacity-50"
+              >
+                <Banknote className="size-5" aria-hidden="true" />
+                {priced ? `Charge ${priced.total}` : "Charge"}
+              </button>
             </div>
           )}
         </>

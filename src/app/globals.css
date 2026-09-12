@@ -431,3 +431,31 @@
     display: none;
   }
 }
+
+/**
+ * Printing a counter receipt.
+ *
+ * The till's payment sheet renders the customer's slip inside the dialog it
+ * already has, so the receipt always matches the order that was just
+ * settled — nothing is re-fetched or re-derived for the printer. Blanking
+ * the rest of the page with `visibility` rather than `display` keeps the
+ * receipt's ancestors laid out, which is what lets it stay nested in the
+ * dialog instead of needing a portal at the document root.
+ */
+@media print {
+  body:has([data-print-receipt]) * {
+    visibility: hidden;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+  body:has([data-print-receipt]) [data-print-receipt],
+  body:has([data-print-receipt]) [data-print-receipt] * {
+    visibility: visible;
+    color: #000;
+  }
+  [data-print-receipt] {
+    position: fixed;
+    inset-block-start: 0;
+    inset-inline-start: 0;
+  }
+}

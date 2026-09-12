@@ -21,6 +21,9 @@ export interface StaffOrder {
   grandTotal: Paise;
   isPaid: boolean;
   fulfilment: "DINE_IN" | "TAKEAWAY" | "DELIVERY";
+  channel: "DINE_IN" | "TAKEAWAY" | "ONLINE";
+  tableName: string | null;
+  placedBy: string | null;
   placedAt: string | null;
   notes: string | null;
   items: { name: string; quantity: number; modifiers: string[] }[];

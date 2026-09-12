@@ -76,6 +76,8 @@ export interface PaymentProvider {
     orderId: string;
     amount: Paise;
     actorUserId: string | null;
+    /** Cash handed over at the counter, when it differs from the amount due — the change is recorded with the payment. */
+    tendered?: Paise;
     providerPaymentId?: string;
     signature?: string;
   }): Promise<PaymentResult>;

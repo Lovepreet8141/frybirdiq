@@ -12,13 +12,14 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { OrderChannel } from "@/domain/order-channel";
 import { lineKey } from "@/lib/cart/schema";
-import { type PriceDraftOk, pollPosMenu, priceDraftOrder } from "@/lib/pos/actions";
+import { type PriceDraftOk, placeCounterOrderAction, pollPosMenu, priceDraftOrder } from "@/lib/pos/actions";
 import type { MenuCategory, MenuProduct } from "@/lib/repositories/menu";
 import { recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 import { CategoryRail } from "./category-rail";
 import { CustomerLookup } from "./customer-lookup";
 import { ModifierPicker } from "./modifier-picker";
-import { OrderBuilder } from "./order-builder";
+import { OrderBuilder, type PosTableOption } from "./order-builder";
+import { PaymentSheet } from "./payment-sheet";
 import { ProductGrid } from "./product-grid";
 import { useOnline } from "./use-online";
 
@@ -40,13 +41,26 @@ const PRICE_DEBOUNCE_MS = 200;
  */
 const MENU_POLL_MS = 25_000;
 
-export function PosShell({ categories: initialCategories, canLookupCustomers }: { categories: readonly MenuCategory[]; canLookupCustomers: boolean }) {
+export function PosShell({
+  categories: initialCategories,
+  canLookupCustomers,
+  tables,
+  shopName,
+}: {
+  categories: readonly MenuCategory[];
+  canLookupCustomers: boolean;
+  tables: readonly PosTableOption[];
+  shopName: string;
+}) {
   const [categories, setCategories] = useState<readonly MenuCategory[]>(initialCategories);
   const [activeCategory, setActiveCategory] = useState<string | null>(initialCategories[0]?.slug ?? null);
   const [channel, setChannel] = useState<OrderChannel | null>(null);
   const [lines, setLines] = useState<readonly DraftLine[]>([]);
   const [pickerProduct, setPickerProduct] = useState<MenuProduct | null>(null);
   const [search, setSearch] = useState("");
+  const [tableId, setTableId] = useState<string | null>(null);
+  const [customer, setCustomer] = useState<{ phone: string; name: string | null } | null>(null);
+  const [payingFor, setPayingFor] = useState<PriceDraftOk | null>(null);
 
   const [priced, setPriced] = useState<PriceDraftOk | null>(null);
   const [pricingError, setPricingError] = useState<string | null>(null);
@@ -206,6 +220,46 @@ export function PosShell({ categories: initialCategories, canLookupCustomers }: 
     clearPricingIfEmpty(next);
   }
 
+  /**
+   * Opens the till against the total the server most recently returned —
+   * frozen at this moment, so a menu poll landing mid-payment cannot move
+   * the figure the cashier is holding cash against. The sale itself is
+   * still priced again on the server inside `placeCounterOrderAction`; if
+   * the two disagree, that call is the one that wins and it says so.
+   */
+  function openPayment() {
+    if (priced === null || pricingError !== null) return;
+    setPayingFor(priced);
+  }
+
+  async function confirmPayment(cashReceived: string, idempotencyKey: string) {
+    return placeCounterOrderAction({
+      lines: lines.map((line) => ({ slug: line.slug, quantity: line.quantity, modifiers: [...line.modifierSlugs] })),
+      channel,
+      tableId: channel === "DINE_IN" ? tableId : null,
+      customerPhone: customer?.phone ?? null,
+      idempotencyKey,
+      cashReceived,
+    });
+  }
+
+  /**
+   * Back to an empty till after a settled order. The channel is kept — a
+   * counter does a run of takeaways, and re-picking it every time is the
+   * kind of friction that gets a POS abandoned — but the customer and the
+   * table are not, since carrying either into the next order silently
+   * attaches a stranger's phone number or seats two bills at one table.
+   */
+  function startNextOrder() {
+    requestId.current += 1;
+    setPayingFor(null);
+    setLines([]);
+    setPriced(null);
+    setPricingError(null);
+    setTableId(null);
+    setCustomer(null);
+  }
+
   const gridDisabled = !online || channel === null;
   const disabledReason = !online
     ? "You're offline. New items can't be priced until connection returns."
@@ -259,7 +313,7 @@ export function PosShell({ categories: initialCategories, canLookupCustomers }: 
       />
 
       <div className="flex h-full min-h-0 flex-col">
-        {canLookupCustomers && <CustomerLookup />}
+        {canLookupCustomers && <CustomerLookup onCustomer={setCustomer} />}
         <div className="min-h-0 flex-1">
           <OrderBuilder
             channel={channel}
@@ -272,11 +326,28 @@ export function PosShell({ categories: initialCategories, canLookupCustomers }: 
             pricingError={pricingError}
             onRetry={reprice}
             online={online}
+            tables={tables}
+            tableId={tableId}
+            onTableChange={setTableId}
+            onCharge={openPayment}
           />
         </div>
       </div>
 
       <ModifierPicker product={pickerProduct} onClose={() => setPickerProduct(null)} onAdd={addLine} />
+
+      {payingFor !== null && (
+        <PaymentSheet
+          priced={payingFor}
+          shopName={shopName}
+          channelLabel={channel === "DINE_IN" ? "Dine-in" : "Takeaway"}
+          tableName={(channel === "DINE_IN" && tables.find((table) => table.id === tableId)?.name) || null}
+          customerName={customer?.name ?? customer?.phone ?? null}
+          onCancel={() => setPayingFor(null)}
+          onConfirm={confirmPayment}
+          onDone={startNextOrder}
+        />
+      )}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { TablesView } from "@/components/pos/tables-view";
 import { PermissionDenied } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
 import { getMenu } from "@/lib/repositories/menu";
+import { requireOrg } from "@/lib/repositories/org";
 import { getOrder, type OrderView } from "@/lib/repositories/orders";
 import { listTables, listUnassignedDineInOrders } from "@/lib/repositories/tables";
 
@@ -16,11 +17,12 @@ export const dynamic = "force-dynamic";
 /**
  * The POS shell and product grid. BUILD-PLAN.md Phase 4.
  *
- * Payment, receipts and order history are not built here — this screen only
- * builds and prices an order. `orders.create` gates it: a role that cannot
- * create an order (KITCHEN, RIDER, INVENTORY, ANALYST) is told so rather than
- * shown an empty grid. §41 — hiding the page is not the check; the pricing
- * action re-checks the same permission on every call.
+ * Builds an order, prices it, takes the cash and prints the slip.
+ * `orders.create` gates the screen: a role that cannot create an order
+ * (KITCHEN, RIDER, INVENTORY, ANALYST) is told so rather than shown an empty
+ * grid. §41 — hiding the page is not the check; every action behind it
+ * re-checks the same permission on each call, and the money itself is gated
+ * separately on `orders.update` inside `recordCashPayment`.
  */
 export default async function PosPage() {
   const canCreate = await staffCan("orders.create");
@@ -47,6 +49,7 @@ export default async function PosPage() {
   }
 
   const staff = await requireStaff();
+  const org = await requireOrg();
   const canAddTable = await staffCan("settings.manage");
   const [tables, unassignedOrders] = await Promise.all([
     listTables(staff.orgId),
@@ -61,7 +64,14 @@ export default async function PosPage() {
 
   return (
     <PosViewTabs
-      order={<PosShell categories={menu} canLookupCustomers={canLookupCustomers} />}
+      order={
+        <PosShell
+          categories={menu}
+          canLookupCustomers={canLookupCustomers}
+          shopName={org.name}
+          tables={tables.map((table) => ({ id: table.id, name: table.name, available: table.openOrder === null }))}
+        />
+      }
       tables={
         <TablesView tables={tables} orderDetails={orderDetails} unassignedOrders={unassignedOrders} canAddTable={canAddTable} />
       }

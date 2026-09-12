@@ -10,7 +10,7 @@
  * in the order flow changes.
  */
 
-import { type Paise, ZERO, formatINR } from "@/lib/money";
+import { type Paise, ZERO, formatINR, subtract } from "@/lib/money";
 import {
   type PaymentIntent,
   type PaymentProvider,
@@ -46,7 +46,7 @@ export const cashProvider: PaymentProvider = {
    * only accountability is knowing who took it. §52 logs the change; this
    * refuses to make one anonymously.
    */
-  async capture({ amount, actorUserId }): Promise<PaymentResult> {
+  async capture({ amount, actorUserId, tendered }): Promise<PaymentResult> {
     if (!actorUserId) {
       return {
         ok: false,
@@ -65,11 +65,28 @@ export const cashProvider: PaymentProvider = {
       };
     }
 
+    // The till can only take what covers the bill. A short tender is refused
+    // here, before anything is recorded, rather than booked as a full payment.
+    if (tendered !== undefined && tendered < amount) {
+      return {
+        ok: false,
+        providerPaymentId: null,
+        capturedAmount: ZERO,
+        error: `Cash received (${formatINR(tendered)}) is less than ${formatINR(amount)}.`,
+      };
+    }
+
     return {
       ok: true,
       providerPaymentId: null,
       capturedAmount: amount,
-      payload: { takenBy: actorUserId, takenAt: new Date().toISOString() },
+      payload: {
+        takenBy: actorUserId,
+        takenAt: new Date().toISOString(),
+        // Recorded with the payment so a receipt or a till count can show what
+        // was handed over and what went back, from the row, not from memory.
+        ...(tendered !== undefined ? { tendered: tendered.toString(), change: subtract(tendered, amount).toString() } : {}),
+      },
     };
   },
 

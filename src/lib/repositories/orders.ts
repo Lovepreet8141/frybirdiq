@@ -15,19 +15,23 @@ import "server-only";
 import { and, desc, eq, inArray, isNull, max, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { addresses, customers, locations, loyaltyAccounts, loyaltyStampEvents, loyaltyTransactions, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
-import { assertChannelFulfilment, type OrderChannel } from "@/domain/order-channel";
+import { addresses, customers, locations, loyaltyAccounts, loyaltyStampEvents, loyaltyTransactions, memberships, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments, tables } from "@/db/schema";
+import { assertChannelFulfilment, fulfilmentsFor, type OrderChannel } from "@/domain/order-channel";
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition } from "@/domain/order-status";
 import type { Role } from "@/domain/permissions";
 import { REJECTION_LABELS, type RejectionReason } from "@/domain/rejection";
 import { businessDate } from "@/lib/dates";
 import { isSupabaseConfigured } from "@/lib/env";
-import { type Paise, ZERO, paise, subtract } from "@/lib/money";
-import { priceOrder } from "@/lib/pricing";
+import { type Paise, ZERO, formatINR, paise, subtract } from "@/lib/money";
+import { type PricedOrder, priceOrder } from "@/lib/pricing";
 import { fromMicro, toPoint } from "@/lib/delivery";
+import { type SnapshotLineInput, snapshotLines } from "@/lib/orders/snapshot";
+import type { CartLine } from "@/lib/cart/schema";
+import { priceDraft } from "@/lib/pos/pricing";
 import { quoteForPin } from "./delivery";
 import { countPromotionUse } from "./promotions";
-import { resolvePricingContext } from "./org";
+import { requireOrg, resolvePricingContext } from "./org";
+import { findCustomerByPhone } from "./customers";
 import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
 import { createPendingPayment, recordCashPayment } from "./payments";
@@ -270,8 +274,6 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   }
 
   async function writeOrder(): Promise<PlaceOrderResult> {
-  const businessDay = businessDate(new Date());
-  let orderNumber = await nextOrderNumber(orgId, businessDay);
   const now = new Date();
 
   /*
@@ -319,28 +321,28 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     })
     .returning();
 
-  /*
-   * Reading the highest number and then inserting is two statements, so two
-   * checkouts in the same moment can read the same number. Rather than lock
-   * the table for every order at a single outlet, the unique constraint is
-   * allowed to catch it and the number is recomputed — the second attempt
-   * reads the row the first one just wrote.
-   */
-  const insertOrder = () =>
-    database
-      .insert(orders)
-      .values({
-      orgId,
-      locationId,
-      orderNumber,
-      businessDate: businessDay,
-      customerId: customer?.id,
-      status: "PENDING_PAYMENT",
-      channel,
-      fulfilment,
-      customerName: details.name,
-      customerPhone: details.phone,
-      notes: details.notes,
+  // The row, the §51 snapshots, the placement event and the pending payment —
+  // through the same core the counter uses, so a website order and a till
+  // order record exactly the same things. What is actually charged is the
+  // fee-inclusive, fully discounted total less any points spent: points are
+  // tender rather than a discount, so the payment row and `grandTotal` agree
+  // with the cash that changes hands.
+  const persisted = await persistOrder({
+    orgId,
+    locationId,
+    channel,
+    fulfilment,
+    customerId: customer?.id ?? null,
+    customerName: details.name,
+    customerPhone: details.phone,
+    notes: details.notes ?? null,
+    tableId: null,
+    lines: cart.lines,
+    totals,
+    payable,
+    actorUserId: null,
+    eventReason: `Placed on the website for ${fulfilment === "DELIVERY" ? "delivery" : "collection"}`,
+    extra: {
       deliveryAddress:
         fulfilment === "DELIVERY"
           ? { line1: details.addressLine1 ?? "", landmark: details.landmark ?? "" }
@@ -349,86 +351,16 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       deliveryLngMicro: pin?.lngMicro ?? null,
       deliveryDistanceMetres: deliveryDistance,
       deliveryFee,
-      subtotal: totals.listed,
-      discountTotal: totals.discount,
       promotionCode: cart.promotion?.code,
       pointsRedeemed: cart.points?.points ?? 0,
-      taxableTotal: totals.taxable,
-      cgstTotal: totals.cgst,
-      sgstTotal: totals.sgst,
-      igstTotal: totals.igst,
-      taxTotal: totals.total,
       stampRewardId: cart.stampReward?.rewardId,
       stampRewardProductSlug: cart.stampReward?.productSlug,
       stampRewardDiscount: cart.stampReward?.discount ?? ZERO,
-      // What is actually charged: the fee-inclusive, fully discounted total,
-      // less any points spent. Points are tender rather than a discount, so
-      // the payment row and this figure agree with the cash that changes
-      // hands.
-      grandTotal: payable,
-      placedAt: now,
-      })
-      .returning();
-
-  let order: Awaited<ReturnType<typeof insertOrder>>[number] | undefined;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      [order] = await insertOrder();
-      break;
-    } catch (error) {
-      // 23505 is unique_violation. Anything else is a real failure.
-      const code = (error as { cause?: { code?: string }; code?: string }).cause?.code
-        ?? (error as { code?: string }).code;
-      if (code !== "23505" || attempt === 3) throw error;
-      orderNumber = await nextOrderNumber(orgId, businessDay);
-    }
-  }
-
-  if (!order) return { ok: false, error: "The order could not be saved. Nothing has been charged." };
-
-  for (const [index, line] of cart.lines.entries()) {
-    // Name, price and tax rate are copied onto the line. Repricing the menu
-    // tomorrow must not rewrite this order. §51.
-    const [item] = await database
-      .insert(orderItems)
-      .values({
-        orgId,
-        orderId: order.id,
-        productId: null,
-        productName: line.product.name,
-        quantity: line.quantity,
-        unitPrice: line.unitPrice,
-        lineSubtotal: line.priced.listed,
-        lineDiscount: line.priced.discount,
-        taxRateBps: line.product.taxRateBps,
-        hsnCode: line.product.hsnCode,
-        lineTaxable: line.priced.taxable,
-        lineTax: line.priced.total,
-        lineTotal: line.priced.gross,
-        position: index,
-      })
-      .returning();
-
-    if (item && line.modifiers.length > 0) {
-      await database.insert(orderItemModifiers).values(
-        line.modifiers.map((modifier) => ({
-          orgId,
-          orderItemId: item.id,
-          groupName: "Options",
-          modifierName: modifier.name,
-          priceDelta: modifier.priceDelta,
-        })),
-      );
-    }
-  }
-
-  await database.insert(orderEvents).values({
-    orgId,
-    orderId: order.id,
-    fromStatus: "DRAFT",
-    toStatus: "PENDING_PAYMENT",
-    reason: `Placed on the website for ${fulfilment === "DELIVERY" ? "delivery" : "collection"}`,
+    },
   });
+  if (!persisted.ok) return persisted;
+  const order = persisted.order;
+  const orderNumber = order.orderNumber;
 
   /*
    * Remember the address, so it never has to be typed twice.
@@ -468,12 +400,6 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     }
   }
 
-  // What the order is waiting on. Cash at the counter, recorded now so the
-  // till has a row to settle against rather than an implicit expectation.
-  // `payable`, not `cart.payable` — the cart's own figure never carries a
-  // delivery fee, because priceCart prices the food before the fee is known.
-  await createPendingPayment({ orgId, orderId: order.id, amount: payable });
-
   /*
    * Spend the points, and count the code.
    *
@@ -508,6 +434,237 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   }
 
   return { ok: true, orderId: order.id, orderNumber };
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Writing an order — one core, shared by the website and the counter  */
+/* ------------------------------------------------------------------ */
+
+export interface PersistOrderInput {
+  readonly orgId: string;
+  readonly locationId: string;
+  readonly channel: OrderChannel;
+  readonly fulfilment: FulfilmentType;
+  readonly customerId: string | null;
+  readonly customerName: string | null;
+  readonly customerPhone: string | null;
+  readonly notes: string | null;
+  /** Dine-in only. Verified against the org by the caller. */
+  readonly tableId: string | null;
+  readonly lines: readonly SnapshotLineInput[];
+  readonly totals: PricedOrder;
+  /** What is actually charged — the pending payment row is opened for this. */
+  readonly payable: Paise;
+  /** The member of staff who rang it up; null for a customer on the website. */
+  readonly actorUserId: string | null;
+  readonly eventReason: string;
+  /** Channel-specific columns (delivery pin, promo, points, stamp reward) the core does not decide. */
+  readonly extra?: Partial<typeof orders.$inferInsert>;
+}
+
+export type PersistOrderResult = { ok: true; order: typeof orders.$inferSelect } | { ok: false; error: string };
+
+/**
+ * The one write path for a new order: today's number, the order row, the
+ * §51 snapshots of every line and modifier, the placement event, and the
+ * pending payment the till settles against. The website's checkout and the
+ * counter both come through here, so what an order *records* cannot differ
+ * by where it was placed. No permission check — callers do that.
+ *
+ * Reading the highest number and then inserting is two statements, so two
+ * checkouts in the same moment can read the same number. Rather than lock
+ * the table for every order at a single outlet, the unique constraint is
+ * allowed to catch it and the number is recomputed — the second attempt
+ * reads the row the first one just wrote.
+ */
+export async function persistOrder(input: PersistOrderInput): Promise<PersistOrderResult> {
+  const database = db();
+  assertChannelFulfilment(input.channel, input.fulfilment);
+
+  const businessDay = businessDate(new Date());
+  const now = new Date();
+  let orderNumber = await nextOrderNumber(input.orgId, businessDay);
+
+  const insertOrder = () =>
+    database
+      .insert(orders)
+      .values({
+        ...input.extra,
+        orgId: input.orgId,
+        locationId: input.locationId,
+        orderNumber,
+        businessDate: businessDay,
+        customerId: input.customerId,
+        status: "PENDING_PAYMENT",
+        channel: input.channel,
+        fulfilment: input.fulfilment,
+        tableId: input.tableId,
+        customerName: input.customerName,
+        customerPhone: input.customerPhone,
+        notes: input.notes,
+        subtotal: input.totals.listed,
+        discountTotal: input.totals.discount,
+        taxableTotal: input.totals.taxable,
+        cgstTotal: input.totals.cgst,
+        sgstTotal: input.totals.sgst,
+        igstTotal: input.totals.igst,
+        taxTotal: input.totals.total,
+        grandTotal: input.payable,
+        placedAt: now,
+      })
+      .returning();
+
+  let order: typeof orders.$inferSelect | undefined;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      [order] = await insertOrder();
+      break;
+    } catch (error) {
+      // 23505 is unique_violation. Anything else is a real failure.
+      const code = (error as { cause?: { code?: string }; code?: string }).cause?.code ?? (error as { code?: string }).code;
+      if (code !== "23505" || attempt === 3) throw error;
+      orderNumber = await nextOrderNumber(input.orgId, businessDay);
+    }
+  }
+
+  if (!order) return { ok: false, error: "The order could not be saved. Nothing has been charged." };
+
+  // Name, price and tax rate are copied onto the line. Repricing the menu
+  // tomorrow must not rewrite this order. §51.
+  for (const { modifiers, ...columns } of snapshotLines(input.lines)) {
+    const [item] = await database
+      .insert(orderItems)
+      .values({ orgId: input.orgId, orderId: order.id, productId: null, ...columns })
+      .returning();
+
+    if (item && modifiers.length > 0) {
+      await database.insert(orderItemModifiers).values(
+        modifiers.map((modifier) => ({
+          orgId: input.orgId,
+          orderItemId: item.id,
+          groupName: modifier.groupName,
+          modifierName: modifier.modifierName,
+          priceDelta: modifier.priceDelta,
+        })),
+      );
+    }
+  }
+
+  await database.insert(orderEvents).values({
+    orgId: input.orgId,
+    orderId: order.id,
+    fromStatus: "DRAFT",
+    toStatus: "PENDING_PAYMENT",
+    actorUserId: input.actorUserId,
+    reason: input.eventReason,
+  });
+
+  // What the order is waiting on, recorded now so the till has a row to
+  // settle against rather than an implicit expectation.
+  await createPendingPayment({ orgId: input.orgId, orderId: order.id, amount: input.payable });
+
+  return { ok: true, order };
+}
+
+export interface CounterOrderInput {
+  readonly orgId: string;
+  readonly lines: readonly CartLine[];
+  readonly channel: "DINE_IN" | "TAKEAWAY";
+  readonly tableId: string | null;
+  readonly customerPhone: string | null;
+  readonly notes: string | null;
+  /** Minted by the till for this draft and sent with every attempt. §17. */
+  readonly idempotencyKey: string;
+  readonly actorUserId: string;
+  /** Cash the customer handed over. Checked before anything is written. */
+  readonly tendered: Paise;
+}
+
+export type CounterOrderResult =
+  | { ok: true; orderId: string; orderNumber: string; total: Paise; replayed: boolean }
+  | { ok: false; error: string };
+
+/**
+ * Rings an order up at the counter. BUILD-PLAN.md Phase 4.
+ *
+ * Prices the draft on the server (`priceDraft`, the same pass the grid was
+ * shown), refuses anything the menu can no longer honour rather than
+ * silently dropping it, attaches the customer if the till looked one up —
+ * which is what lets FRYBIRD REWARDS act on the order at payment — checks
+ * the cash covers the bill *before* anything is written, then persists
+ * through the same `persistOrder` the website uses. The whole write is
+ * idempotent on the till's key. Payment is the caller's next call —
+ * `recordCashPayment`, unchanged — so an order whose cash somehow cannot be
+ * recorded stays visible as unpaid on the Orders screen instead of vanishing.
+ */
+export async function placeCounterOrder(input: CounterOrderInput): Promise<CounterOrderResult> {
+  const database = db();
+
+  const org = await requireOrg();
+  if (org.id !== input.orgId) return { ok: false, error: "That order does not belong to this shop." };
+  if (input.lines.length === 0) return { ok: false, error: "Nothing has been added to this order." };
+
+  const [location] = await database.select({ id: locations.id }).from(locations).where(eq(locations.orgId, input.orgId)).limit(1);
+  if (!location) return { ok: false, error: "The shop is not set up yet." };
+
+  const draft = await priceDraft(input.lines, input.channel);
+  if (draft.rejected.length > 0) {
+    return { ok: false, error: `Not available right now: ${draft.rejected.map((line) => line.slug).join(", ")}. Remove them and try again.` };
+  }
+  if (draft.lines.length === 0) return { ok: false, error: "Nothing has been added to this order." };
+
+  const total = draft.totals.gross;
+  if (input.tendered < total) return { ok: false, error: `Cash received is less than ${formatINR(total)}.` };
+
+  const [fulfilment] = fulfilmentsFor(input.channel);
+  if (!fulfilment) return { ok: false, error: "That order type is not valid." };
+
+  let tableName: string | null = null;
+  if (input.tableId) {
+    if (fulfilment !== "DINE_IN") return { ok: false, error: "Only a dine-in order can be seated at a table." };
+    const [table] = await database.select({ name: tables.name }).from(tables).where(and(eq(tables.id, input.tableId), eq(tables.orgId, input.orgId))).limit(1);
+    if (!table) return { ok: false, error: "That table could not be found." };
+    tableName = table.name;
+  }
+
+  const customer = input.customerPhone ? await findCustomerByPhone(input.orgId, input.customerPhone) : null;
+
+  try {
+    const { result, replayed } = await withIdempotency(
+      {
+        key: input.idempotencyKey,
+        operation: "placeCounterOrder",
+        orgId: input.orgId,
+        request: { lines: input.lines, channel: input.channel, tableId: input.tableId, phone: input.customerPhone },
+      },
+      async () => {
+        const persisted = await persistOrder({
+          orgId: input.orgId,
+          locationId: location.id,
+          channel: input.channel,
+          fulfilment,
+          customerId: customer?.id ?? null,
+          customerName: customer?.name ?? null,
+          customerPhone: customer?.phone ?? input.customerPhone,
+          notes: input.notes,
+          tableId: input.tableId,
+          lines: draft.lines,
+          totals: draft.totals,
+          payable: total,
+          actorUserId: input.actorUserId,
+          eventReason: `Rung up at the counter — ${input.channel === "DINE_IN" ? (tableName ? `dine-in, ${tableName}` : "dine-in") : "takeaway"}`,
+        });
+        if (!persisted.ok) return { ok: false as const, error: persisted.error };
+        // Stored as the idempotent response, so it must survive JSON: the total travels as a string.
+        return { ok: true as const, orderId: persisted.order.id, orderNumber: persisted.order.orderNumber, total: persisted.order.grandTotal.toString() };
+      },
+    );
+    if (!result.ok) return result;
+    return { ok: true, orderId: result.orderId, orderNumber: result.orderNumber, total: paise(BigInt(result.total)), replayed };
+  } catch (error) {
+    if (error instanceof IdempotencyConflict) return { ok: false, error: "That looks like a repeat of a different order. Start it again." };
+    throw error;
   }
 }
 
@@ -599,6 +756,12 @@ export interface StaffOrderView {
   readonly estimatedReadyAt: Date | null;
   readonly placedAt: Date | null;
   readonly notes: string | null;
+  /** Where it came from — the website, or the counter as dine-in/takeaway. */
+  readonly channel: OrderChannel;
+  /** The table a dine-in order was seated at, if any. */
+  readonly tableName: string | null;
+  /** The member of staff who rang it up; null for a website order. */
+  readonly placedBy: string | null;
   readonly items: readonly { name: string; quantity: number; modifiers: string[] }[];
   /** Set only on a delivery order. */
   readonly delivery: {
@@ -644,11 +807,31 @@ export async function listActiveOrders(orgId: string): Promise<readonly StaffOrd
 
   const paidOrderIds = new Set(paid.map((payment) => payment.orderId));
 
+  const tableIds = rows.map((row) => row.tableId).filter((id): id is string => id !== null);
+  const tableRows = tableIds.length > 0 ? await database.select({ id: tables.id, name: tables.name }).from(tables).where(inArray(tables.id, tableIds)) : [];
+  const tableNames = new Map(tableRows.map((table) => [table.id, table.name]));
+
+  // Who rang it up: the placement event's actor, resolved to a display name.
+  const placements = await database
+    .select({ orderId: orderEvents.orderId, actorUserId: orderEvents.actorUserId })
+    .from(orderEvents)
+    .where(and(inArray(orderEvents.orderId, ids), eq(orderEvents.fromStatus, "DRAFT")));
+  const actorIds = [...new Set(placements.map((event) => event.actorUserId).filter((id): id is string => id !== null))];
+  const staffRows =
+    actorIds.length > 0
+      ? await database.select({ userId: memberships.userId, displayName: memberships.displayName }).from(memberships).where(and(eq(memberships.orgId, orgId), inArray(memberships.userId, actorIds)))
+      : [];
+  const staffNames = new Map(staffRows.map((staff) => [staff.userId, staff.displayName]));
+  const placedBy = new Map(placements.map((event) => [event.orderId, event.actorUserId ? (staffNames.get(event.actorUserId) ?? null) : null]));
+
   return rows.map((row) => ({
     id: row.id,
     orderNumber: row.orderNumber,
     status: row.status,
     fulfilment: row.fulfilment,
+    channel: row.channel,
+    tableName: row.tableId ? (tableNames.get(row.tableId) ?? null) : null,
+    placedBy: placedBy.get(row.id) ?? null,
     customerName: row.customerName,
     customerPhone: row.customerPhone,
     grandTotal: paise(row.grandTotal),

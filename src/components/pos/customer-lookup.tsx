@@ -10,18 +10,22 @@ import { type CustomerLookupFail, type CustomerLookupResult, lookupCustomerActio
  * Read-only: it shows what the customer already has — name, FRYBIRD REWARDS
  * progress — through the same ledger the website reads
  * (`getStampAccountState`), never a second loyalty system for the counter.
- * There is nowhere yet for this lookup to feed into an order — the POS
- * cannot place one yet — so this is purely informational ahead of that
- * piece landing.
+ * A match is handed up to the shell so the order being built is attached to
+ * that customer — the phone travels, never the customer id, so the server
+ * resolves it against this org itself rather than trusting a screen. No
+ * discount is applied here; a reward is still redeemed the way every other
+ * channel redeems one.
  */
-export function CustomerLookup() {
+export function CustomerLookup({ onCustomer }: { onCustomer: (customer: { phone: string; name: string | null } | null) => void }) {
   const [phone, setPhone] = useState("");
   const [result, setResult] = useState<CustomerLookupResult | CustomerLookupFail | null>(null);
   const [isPending, startTransition] = useTransition();
 
   function lookup() {
     startTransition(async () => {
-      setResult(await lookupCustomerAction(phone));
+      const found = await lookupCustomerAction(phone);
+      setResult(found);
+      onCustomer(found.ok ? { phone: found.phone, name: found.name } : null);
     });
   }
 
@@ -42,7 +46,13 @@ export function CustomerLookup() {
           type="tel"
           inputMode="numeric"
           value={phone}
-          onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 10))}
+          onChange={(event) => {
+            setPhone(event.target.value.replace(/\D/g, "").slice(0, 10));
+            // Editing the number drops the match it produced: an order must
+            // never stay attached to a customer the cashier has moved off.
+            setResult(null);
+            onCustomer(null);
+          }}
           placeholder="Customer's phone number"
           className="h-[40px] flex-1 rounded-md border border-border bg-background px-3 text-sm"
         />

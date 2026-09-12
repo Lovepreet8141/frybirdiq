@@ -57,6 +57,16 @@ export async function createPendingPayment(input: {
   return row?.id ?? null;
 }
 
+/** Whether money has actually been captured against an order — answered by the payments table, never by the status. */
+export async function isOrderPaid(orderId: string): Promise<boolean> {
+  const [captured] = await db()
+    .select({ id: payments.id })
+    .from(payments)
+    .where(and(eq(payments.orderId, orderId), eq(payments.status, "CAPTURED")))
+    .limit(1);
+  return captured !== undefined;
+}
+
 /**
  * Records cash taken at the counter and moves the order to PAID.
  *
@@ -72,6 +82,8 @@ export async function recordCashPayment(input: {
   orderId: string;
   actorUserId: string;
   actorRoles: readonly Role[];
+  /** What the customer handed over, when the till knows it. Must cover the amount due; the change is stored with the payment. */
+  tendered?: Paise;
 }): Promise<RecordPaymentResult> {
   try {
     authorize(input.actorRoles, "orders.update");
@@ -118,6 +130,7 @@ export async function recordCashPayment(input: {
         orderId: order.id,
         amount,
         actorUserId: input.actorUserId,
+        tendered: input.tendered,
       });
 
       if (!captured.ok) return { ok: false as const, error: captured.error ?? "The payment could not be recorded." };
