@@ -18,6 +18,7 @@ export interface StaffOrder {
   status: OrderStatus;
   customerName: string | null;
   customerPhone: string | null;
+  customerId: string | null;
   grandTotal: Paise;
   isPaid: boolean;
   fulfilment: "DINE_IN" | "TAKEAWAY" | "DELIVERY";
@@ -110,11 +111,14 @@ export function OrderCard({
   canSettle,
   canAdvance,
   canPrintKot,
+  canSeeCustomers = false,
 }: {
   order: StaffOrder;
   canSettle: boolean;
   canAdvance: boolean;
   canPrintKot: boolean;
+  /** `customers.view` — turns the customer's name into a link to their Customer 360 page. */
+  canSeeCustomers?: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -173,7 +177,13 @@ export function OrderCard({
             </span>
           </div>
           <p className="text-sm text-muted-foreground">
-            {order.customerName}
+            {canSeeCustomers && order.customerId ? (
+              <Link href={`/app/customers/${order.customerId}`} className="font-semibold text-foreground underline-offset-2 hover:underline">
+                {order.customerName ?? "Customer"}
+              </Link>
+            ) : (
+              order.customerName
+            )}
             {order.customerPhone && <span className="tabular"> · {order.customerPhone}</span>}
           </p>
         </div>

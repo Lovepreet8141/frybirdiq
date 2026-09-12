@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
@@ -8,6 +9,7 @@ import { cn } from "@/lib/utils";
 
 export interface ActivityRow {
   readonly id: string;
+  readonly orderId: string;
   readonly orderNumber: string;
   readonly fulfilment: FulfilmentType;
   readonly from: OrderStatus | null;
@@ -117,7 +119,10 @@ export function ActivityFeed({ events }: { events: readonly ActivityRow[] }) {
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
                   <span className="tabular text-xs text-muted-foreground">{TIME.format(new Date(row.at))}</span>
                   <span className="font-semibold">
-                    {verb(row)} <span className="tabular">#{row.orderNumber}</span>
+                    {verb(row)}{" "}
+                    <Link href={`/app/orders?open=${row.orderId}`} className="tabular underline-offset-2 hover:underline">
+                      #{row.orderNumber}
+                    </Link>
                   </span>
                   <span className="text-xs text-muted-foreground">{fulfilmentLabel(row.fulfilment)}</span>
                 </div>

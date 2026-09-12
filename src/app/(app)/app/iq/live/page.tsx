@@ -138,7 +138,9 @@ export default async function LiveOperationsPage() {
                   <TableRow key={row.id}>
                     <TableCell>
                       <div className="flex flex-col gap-0.5">
-                        <span className="tabular font-semibold">#{row.orderNumber}</span>
+                        <Link href={`/app/orders?open=${row.id}`} className="tabular font-semibold underline-offset-2 hover:underline">
+                          #{row.orderNumber}
+                        </Link>
                         <span className="text-xs text-muted-foreground">{fulfilmentLabel(row.fulfilment)}</span>
                       </div>
                     </TableCell>
@@ -184,7 +186,9 @@ export default async function LiveOperationsPage() {
                   <TableRow key={row.id}>
                     <TableCell>
                       <div className="flex flex-col gap-0.5">
-                        <span className="tabular font-semibold">#{row.orderNumber}</span>
+                        <Link href={`/app/orders?open=${row.id}`} className="tabular font-semibold underline-offset-2 hover:underline">
+                          #{row.orderNumber}
+                        </Link>
                         <span className="text-xs text-muted-foreground">{fulfilmentLabel(row.fulfilment)}</span>
                       </div>
                     </TableCell>
@@ -225,7 +229,9 @@ export default async function LiveOperationsPage() {
                     <TableRow key={ticket.id}>
                       <TableCell>
                         <div className="flex flex-col gap-0.5">
-                          <span className="tabular font-semibold">#{ticket.orderNumber}</span>
+                          <Link href={`/app/orders?open=${ticket.id}`} className="tabular font-semibold underline-offset-2 hover:underline">
+                            #{ticket.orderNumber}
+                          </Link>
                           <span className="text-xs text-muted-foreground">{fulfilmentLabel(ticket.fulfilment, ticket.tableName)}</span>
                         </div>
                       </TableCell>

@@ -68,15 +68,20 @@ export function OrdersTable({
   canSettle,
   canAdvance,
   canPrintKot,
+  canSeeCustomers = false,
+  initialSelectedId = null,
 }: {
   orders: readonly StaffOrder[];
   canSettle: boolean;
   canAdvance: boolean;
   canPrintKot: boolean;
+  canSeeCustomers?: boolean;
+  /** An order to open on arrival — how Live operations and Activity deep-link into this screen. */
+  initialSelectedId?: string | null;
 }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<OrderStatus | "all">("all");
-  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(initialSelectedId);
 
   const counts = useMemo(() => {
     const map = new Map<OrderStatus, number>();
@@ -272,7 +277,7 @@ export function OrdersTable({
           </SheetHeader>
           {selectedOrder && (
             <ul className="list-none px-4 pb-4">
-              <OrderCard order={selectedOrder} canSettle={canSettle} canAdvance={canAdvance} canPrintKot={canPrintKot} />
+              <OrderCard order={selectedOrder} canSettle={canSettle} canAdvance={canAdvance} canPrintKot={canPrintKot} canSeeCustomers={canSeeCustomers} />
             </ul>
           )}
         </SheetContent>

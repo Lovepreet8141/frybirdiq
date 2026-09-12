@@ -11,13 +11,15 @@ export const metadata: Metadata = { title: "Orders", robots: { index: false, fol
 // Counter screen: always the live list, never a cached one.
 export const dynamic = "force-dynamic";
 
-export default async function StaffOrdersPage() {
+export default async function StaffOrdersPage({ searchParams }: { searchParams: Promise<{ open?: string }> }) {
   const staff = await requireStaff();
-  const [orders, canSettle, canAdvance, canPrintKot] = await Promise.all([
+  const [{ open }, orders, canSettle, canAdvance, canPrintKot, canSeeCustomers] = await Promise.all([
+    searchParams,
     listActiveOrders(staff.orgId),
     staffCan("orders.update"),
     staffCan("kitchen.update"),
     staffCan("kitchen.view"),
+    staffCan("customers.view"),
   ]);
 
   return (
@@ -50,6 +52,8 @@ export default async function StaffOrdersPage() {
           canSettle={canSettle}
           canAdvance={canAdvance}
           canPrintKot={canPrintKot}
+          canSeeCustomers={canSeeCustomers}
+          initialSelectedId={open ?? null}
         />
       )}
 

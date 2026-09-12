@@ -12,8 +12,11 @@ import { MotionReveal, MotionStagger, MotionStaggerItem } from "@/components/mot
 import { getStaff, staffCan } from "@/lib/auth";
 import { type RangeKey, resolveRange } from "@/lib/dates";
 import { type Paise, ZERO, formatBps, formatINR, paise } from "@/lib/money";
+import { Card, CardContent } from "@/components/ui/card";
+import { toKitchenTickets } from "@/lib/kitchen/tickets";
 import { changeBps, getDashboard, getTodayComparison, notSelling, ordersAwaitingDecision, ordersRunningLate } from "@/lib/repositories/analytics";
 import { foodCostWeeklySeries, getProfitAndLoss } from "@/lib/repositories/expenses";
+import { listActiveOrders } from "@/lib/repositories/orders";
 
 export const metadata: Metadata = { title: "FRYBIRD IQ", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -51,7 +54,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
   const range = resolveRange(key);
   const monthRange = resolveRange("mtd");
 
-  const [dashboard, today, pnl, foodCost, gaps, awaiting, late] = await Promise.all([
+  const [dashboard, today, pnl, foodCost, gaps, awaiting, late, active] = await Promise.all([
     getDashboard(staff.orgId, range),
     getTodayComparison(staff.orgId),
     getProfitAndLoss(staff.orgId, monthRange),
@@ -59,7 +62,9 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     notSelling(staff.orgId, range),
     ordersAwaitingDecision(staff.orgId),
     ordersRunningLate(staff.orgId),
+    listActiveOrders(staff.orgId),
   ]);
+  const inKitchen = toKitchenTickets(active).length;
 
   const directTotal = pnl.direct.reduce((s, r) => s + r.amount, 0n);
   const fixedTotal = pnl.fixed.reduce((s, r) => s + r.amount, 0n);
@@ -176,6 +181,34 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
             </MotionStaggerItem>
           </div>
         </MotionStagger>
+      </section>
+
+      {/* 1b. Right now — the same three facts Live operations leads with,
+          each a door into the surface that acts on it. */}
+      <section aria-labelledby="now-heading" className="flex flex-col gap-4">
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 id="now-heading" className="font-heading text-lg font-semibold">Right now</h2>
+          <Link href="/app/iq/live" className="text-sm font-semibold underline underline-offset-2">
+            Live operations
+          </Link>
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {[
+            { label: "Awaiting decision", value: awaiting.length, hint: "New orders the counter hasn't accepted", href: "/app/orders", urgent: awaiting.length > 0 },
+            { label: "In the kitchen", value: inKitchen, hint: "Accepted, cooking or ready", href: "/app/kds", urgent: false },
+            { label: "Late", value: late.length, hint: "Past the promised time", href: "/app/iq/live", urgent: late.length > 0 },
+          ].map((item) => (
+            <Link key={item.label} href={item.href} className="group rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <Card className="h-full transition-colors group-hover:bg-surface-muted">
+                <CardContent className="flex flex-col gap-1">
+                  <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">{item.label}</p>
+                  <p className={`tabular font-heading text-2xl font-bold ${item.urgent ? "text-destructive" : ""}`}>{item.value}</p>
+                  <p className="text-xs text-muted-foreground">{item.hint}</p>
+                </CardContent>
+              </Card>
+            </Link>
+          ))}
+        </div>
       </section>
 
       {/* 2. Where the money goes — this month so far. */}

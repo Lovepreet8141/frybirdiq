@@ -750,6 +750,8 @@ export interface StaffOrderView {
   readonly fulfilment: FulfilmentType;
   readonly customerName: string | null;
   readonly customerPhone: string | null;
+  /** The customer record, when the order was placed against one — what Customer 360 is keyed on. */
+  readonly customerId: string | null;
   readonly grandTotal: Paise;
   readonly isPaid: boolean;
   readonly invoiceNumber: string | null;
@@ -834,6 +836,7 @@ export async function listActiveOrders(orgId: string): Promise<readonly StaffOrd
     placedBy: placedBy.get(row.id) ?? null,
     customerName: row.customerName,
     customerPhone: row.customerPhone,
+    customerId: row.customerId,
     grandTotal: paise(row.grandTotal),
     isPaid: paidOrderIds.has(row.id),
     invoiceNumber: row.invoiceNumber,
