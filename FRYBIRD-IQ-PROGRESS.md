@@ -7,6 +7,59 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice: Command Center › Activity — the order event feed (Phase K seed, read-only)
+
+**Status:** Complete. Gates green. Deployed (see deployment record).
+
+**What it is:** `/app/iq/activity` under `analytics.view` — the last 150
+order status changes from the **existing append-only `order_events`**
+table, grouped by business day, one line each: the action in words
+("Accepted #007", "Started cooking", "Turned down", "Payment recorded"),
+who (staff display name or "System"), when, and the operational reason
+already stored on the event. Search + "hide system events" are
+client-side. Refreshes every 30s via the page itself.
+
+**Not a second event/audit system:** one `SELECT` over `order_events ⨝
+orders`, both org-scoped, actors resolved through `memberships` the same
+way `listActiveOrders` resolves "placed by". Nothing writes.
+
+**PII check, done against the code, not assumed:** every `reason` string
+written today was traced to its source — placement
+(`"Placed on the website for delivery/collection"`, `"Rung up at the
+counter — dine-in, Table 4"`), cash (`"Cash received — ₹x"`), rejection
+(`REJECTION_LABELS[...] + optional staff note`). All operational, none
+customer-authored. Customer name/phone are neither selected nor rendered;
+`metadata` (nothing writes it) is not surfaced.
+
+**Purchased kit inspection:** `dashboard-modal20` (a notifications
+*dialog* with a status-filter dropdown), `item1` (generic item primitive,
+not installed) and `changelog1` (timeline with rail, ringed dot, timestamp
+line, author). Adopted `changelog1`'s rail-and-dot layout as the closest
+real activity pattern — plain Tailwind, so nothing new was installed; its
+"Follow/Subscribe/Read more" marketing furniture was dropped.
+
+**Files:** `src/lib/repositories/activity.ts`,
+`src/components/staff/activity-feed.tsx`,
+`src/app/(app)/app/iq/activity/page.tsx` (new); `nav-items.ts`
+("Activity" in Operations, Overview's exclude list), `section-breadcrumb.tsx`,
+`iq/page.tsx` (sub-nav link).
+
+**Permissions:** `analytics.view` only — nothing added or changed.
+**Scope guard:** schema, payments, tax, pricing, domain, `orders.ts`,
+`payments.ts`, POS, KDS, auth — **empty diff**.
+**Tests / build:** typecheck, lint, 340/340, build (42 routes), RSC — green.
+
+**Known limitations:** last 150 events, no date-range filter yet; the
+same-status "Payment recorded" reading relies on `recordCashPayment`'s
+convention of writing `toStatus = current status` when cash arrives on an
+already-accepted ticket.
+
+**Next slice this unlocks:** Channels analytics (queued), then the general
+`auditLogs` feed and this feed could share one "Activity" surface once more
+actions start writing audit rows.
+
+---
+
 ## Slice: Command Center › Live operations (Phase B, read-only)
 
 **Status:** Complete. Gates green. Deployed (see deployment record).
@@ -581,10 +634,18 @@ shipped to production so far.
 ## Cumulative state of validation
 
 As of the most recent slice above: `pnpm typecheck` clean, `pnpm lint`
-clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (41
+clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (42
 routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record
+
+### 2026-09-12 — Activity slice
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `63e177d`. Gates in-script green (tests 340/340). Post-deploy:
+`active`; smoke `HTTP 200`; `/app/iq/activity` → `307` to `/sign-in`;
+`/app/iq/live` and `/app/pos` controls → `307`; logs `Started` / `✓ Ready`,
+no runtime errors, usual stale-tab noise.
 
 ### 2026-09-12 — Live operations slice
 
