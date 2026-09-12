@@ -1,4 +1,5 @@
 import {
+  ChefHat,
   ClipboardList,
   Image as ImageIcon,
   LayoutGrid,
@@ -39,6 +40,7 @@ export interface NavPermissions {
   readonly canSeeStaff: boolean;
   readonly canSeeAudit: boolean;
   readonly canSeeFinance: boolean;
+  readonly canSeeKitchen: boolean;
 }
 
 /**
@@ -52,8 +54,18 @@ export interface NavPermissions {
  * FRYBIRD-ADMIN-ARCHITECTURE.md for what's planned and why it isn't here yet.
  */
 export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[] {
-  const { canSeeOrders, canSeePos, canSeeDeliveries, canSeeMenu, canSeeAnalytics, canSeeCustomers, canSeeStaff, canSeeAudit, canSeeFinance } =
-    permissions;
+  const {
+    canSeeOrders,
+    canSeePos,
+    canSeeDeliveries,
+    canSeeMenu,
+    canSeeAnalytics,
+    canSeeCustomers,
+    canSeeStaff,
+    canSeeAudit,
+    canSeeFinance,
+    canSeeKitchen,
+  } = permissions;
 
   const groups: NavGroup[] = [
     {
@@ -63,6 +75,7 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
         ...(canSeeAnalytics ? [{ href: "/app/iq", label: "Overview", icon: LayoutGrid, exclude: "/app/iq/menu" }] : []),
         ...(canSeeOrders ? [{ href: "/app/orders", label: "Orders", icon: ClipboardList }] : []),
         ...(canSeePos ? [{ href: "/app/pos", label: "POS", icon: ShoppingBag }] : []),
+        ...(canSeeKitchen ? [{ href: "/app/kds", label: "Kitchen", icon: ChefHat }] : []),
         ...(canSeeDeliveries ? [{ href: "/app/deliveries", label: "Deliveries", icon: Truck }] : []),
       ],
     },

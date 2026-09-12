@@ -30,6 +30,7 @@ interface Permissions {
   readonly canSeeStaff: boolean;
   readonly canSeeAudit: boolean;
   readonly canSeeFinance: boolean;
+  readonly canSeeKitchen: boolean;
   readonly canReject: boolean;
 }
 
@@ -53,10 +54,13 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
     canSeeStaff,
     canSeeAudit,
     canSeeFinance,
+    canSeeKitchen,
     canReject,
   } = permissions;
 
-  const isFullBleed = pathname.startsWith("/app/pos");
+  // POS and the kitchen display: touch/speed screens that should not spend
+  // 16rem of width on navigation chrome.
+  const isFullBleed = pathname.startsWith("/app/pos") || pathname.startsWith("/app/kds");
 
   if (isFullBleed) {
     return (
@@ -73,6 +77,7 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
               <nav className="flex items-center gap-1 overflow-x-auto" aria-label="Sections">
                 {canSeeOrders && <AppNavLink href="/app/orders">Orders</AppNavLink>}
                 {canSeePos && <AppNavLink href="/app/pos">POS</AppNavLink>}
+                {canSeeKitchen && <AppNavLink href="/app/kds">Kitchen</AppNavLink>}
                 {canSeeDeliveries && <AppNavLink href="/app/deliveries">Deliveries</AppNavLink>}
                 {canSeeMenu && <AppNavLink href="/app/iq/menu">Menu</AppNavLink>}
                 {canSeeAnalytics && (
@@ -123,6 +128,7 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
     canSeeStaff,
     canSeeAudit,
     canSeeFinance,
+    canSeeKitchen,
   });
 
   return (
@@ -137,6 +143,7 @@ export function AppChrome({ staff, permissions, children }: { staff: StaffSummar
         canSeeStaff={canSeeStaff}
         canSeeAudit={canSeeAudit}
         canSeeFinance={canSeeFinance}
+        canSeeKitchen={canSeeKitchen}
       />
       <SidebarInset>
         <header className="flex h-[68px] items-center gap-3 border-b border-border px-[var(--gutter)] print:hidden">
