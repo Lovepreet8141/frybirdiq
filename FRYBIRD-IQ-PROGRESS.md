@@ -7,6 +7,78 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice: Command Center › Live operations (Phase B, read-only)
+
+**Status:** Complete. Gates green. Deployed (see deployment record).
+
+**What it is:** `/app/iq/live` under the existing `analytics.view` — the
+manager's glance that complements the KDS rather than duplicating it: no
+buttons, no columns to work. Four headline figures (awaiting decision · in
+the kitchen with new/cooking/ready split · late · longest wait), then three
+tables: **Late** (order, customer, promised time, *over by* minutes),
+**Awaiting a decision** (order, customer, total, waiting minutes, "Review on
+Orders" link), **In the kitchen** (order, stage pill, item count, promised
+time, waiting minutes with a "· late" mark). Refreshes every 15s by
+re-running the page itself (`AutoRefresh` → `router.refresh()`, paused when
+offline or the tab is hidden). Links out to Orders and, for `kitchen.view`
+holders, the kitchen display — the only "actions", and they are the
+existing ones.
+
+**No new data path, by design.** The refresh re-runs the server page under
+its own permission gate, so no new server action exists that could expose
+kitchen or customer data under a different permission than the page uses.
+
+**Facts only — no invention:** every number is from an existing query —
+`listActiveOrders` via the tested `toKitchenTickets` mapper,
+`ordersAwaitingDecision`, `ordersRunningLate`. "Late" = past the promised
+time. "Longest wait" = the oldest ticket's age since placed. The headline
+sentence only ever restates a count in words ("2 orders are past their
+promised time"; "Nothing in the kitchen and nothing waiting"). No score,
+forecast, threshold, station, routing, prep target, or AI conclusion. The
+`now` used for "waiting" is captured as part of the data snapshot (the
+instant the three queries resolved), not during render — which is also
+what `react-hooks/purity` insisted on.
+
+**Purchased kit inspection:** searched "live", "monitor", "operations" —
+no such block exists (results were testimonials, OTP dialogs, theme
+switchers). Composed from the two substantial back-office patterns already
+adopted from the kit: the `stat-card1`-derived `MiniStat` and the
+`tables9`-derived table shell.
+
+**Files changed:**
+- `src/app/(app)/app/iq/live/page.tsx` (new), `src/components/staff/auto-refresh.tsx` (new).
+- `nav-items.ts` — "Live operations" in the Operations group (gated by the
+  already-threaded `canSeeAnalytics`, so no permission plumbing changed);
+  `NavItem.exclude` became a list so "Overview" no longer lights up on the
+  Live page. `app-sidebar.tsx` — the one-line `isActive` change for that.
+- `section-breadcrumb.tsx` — "Live operations" crumb. `iq/page.tsx` — a
+  "Live" link in the Overview's own sub-nav.
+
+**Permissions:** `analytics.view` (page), `kitchen.view` (only to decide
+whether to show the KDS link). Nothing added or changed.
+
+**Scope guard:** `git diff --stat` over `src/db`, `src/lib/payments`,
+`src/lib/tax`, `src/lib/pricing`, `src/domain`, `src/lib/repositories`,
+`src/components/pos`, `src/components/kds`, `src/lib/auth` — **empty**.
+
+**Tests / build:** typecheck, lint, `pnpm test` **340/340**, build (41
+routes), RSC check — green.
+
+**Known limitations (honest):** 15s page refresh, not push; money (order
+totals) is shown on the awaiting-decision list because `analytics.view`
+already sees revenue on Overview — an ANALYST therefore sees per-order
+totals here, as they already can on Orders (`orders.view`); no "pressure"
+gauge because no threshold has been decided — the counts *are* the
+pressure reading for now.
+
+**Next slice this unlocks:** a Channels analytics view (revenue / orders /
+AOV by DINE_IN / TAKEAWAY / ONLINE) on the existing `paidOrders()`
+definition, existing `analytics.view`, zero schema — flagged in
+`FRYBIRD-ADMIN-ARCHITECTURE.md` as "revisit if channel performance becomes
+a real need."
+
+---
+
 ## Slice: Kitchen display — station-less KDS foundation (Phase G)
 
 **Status:** Complete. Gates green. Deployed (see deployment record).
@@ -509,10 +581,20 @@ shipped to production so far.
 ## Cumulative state of validation
 
 As of the most recent slice above: `pnpm typecheck` clean, `pnpm lint`
-clean, `pnpm test` 332/332 passing, `pnpm build` succeeds (38 routes),
-`scripts/check-rsc-boundaries.sh` clean.
+clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (41
+routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record
+
+### 2026-09-12 — Live operations slice
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `dc84632`. Gates in-script: typecheck, lint, tests **340/340**, RSC
+check, build — green. Post-deploy: `systemctl is-active` → `active`; smoke
+test `HTTP 200`; `/app/iq/live` → `307` to `/sign-in` (unauthenticated,
+correct); `/app/kds` and `/app/pos` controls → `307` (unchanged); logs:
+`Started` / `✓ Ready`, no runtime errors, only the usual pre-deploy
+stale-tab server-action noise.
 
 ### 2026-09-12 (later still) — KDS slice
 
@@ -603,11 +685,7 @@ Unchanged from the prior analysis — still accurate after this batch:
   reconciliation all remain explicit-approval items; the Payments ledger
   itself shipped on the approved `finance.view`.
 
-**Recommended next safe slice:** Command Center **Live Operations** — the
-manager's read-only mirror of the kitchen board plus what's awaiting a
-decision and what's late, reusing `toKitchenTickets`,
-`ordersAwaitingDecision` and `ordersRunningLate` with no new queries and
-the existing `analytics.view`. After that, a **Channels analytics view** —
+**Recommended next safe slice:** a **Channels analytics view** —
 revenue / orders / AOV split by DINE_IN / TAKEAWAY / ONLINE over a chosen
 range. `orders.channel` is already indexed with `placedAt` for exactly this
 question (`orders_channel_placed_idx`), it reuses `analytics.ts`'s existing
