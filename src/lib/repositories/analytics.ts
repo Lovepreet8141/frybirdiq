@@ -409,6 +409,8 @@ export async function ordersAwaitingDecision(orgId: string) {
       orderNumber: orders.orderNumber,
       grandTotal: orders.grandTotal,
       fulfilment: orders.fulfilment,
+      channel: orders.channel,
+      status: orders.status,
       customerName: orders.customerName,
       createdAt: orders.createdAt,
     })

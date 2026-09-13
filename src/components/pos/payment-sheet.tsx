@@ -20,19 +20,13 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Banknote, CheckCircle2, Gift, Loader2, Printer, TriangleAlert } from "lucide-react";
 import { formatINR, paise, subtract } from "@/lib/money";
-import { type CounterCheckoutResult, type PriceDraftOk, lookupCustomerAction } from "@/lib/pos/actions";
-import { rewardsSummary } from "@/lib/pos/rewards-enrolment";
+import type { CounterCheckoutResult, PriceDraftOk } from "@/lib/pos/actions";
 import { changeDue, parseTender, quickTenders } from "@/lib/pos/tender";
 import { cn } from "@/lib/utils";
+import { type PosCustomer, attachCustomerByPhone } from "./attach-customer";
 import { RewardsKeypad } from "./rewards-keypad";
 
-/** The customer this order is for, once they have offered a number. The phone travels; the server resolves it against the org. */
-export interface PosCustomer {
-  readonly phone: string;
-  readonly name: string | null;
-  /** "3/5 stamps · 120 points", or "New — enrolled with this order". */
-  readonly summary: string;
-}
+export type { PosCustomer } from "./attach-customer";
 
 export interface SettledOrder {
   readonly orderNumber: string;
@@ -75,15 +69,11 @@ export function PaymentSheet({
   const [isPending, startTransition] = useTransition();
   const customerName = customer?.name ?? customer?.phone ?? null;
 
-  /** The keypad's submit: look the number up, attach what came back, close. An error sentence goes back to the keypad. */
+  /** The keypad's submit: the same lookup as the Customer control at the top of the till, into the same shell state. */
   async function enrol(phone: string): Promise<string | null> {
-    const result = await lookupCustomerAction(phone);
+    const result = await attachCustomerByPhone(phone);
     if (!result.ok) return result.error;
-    onCustomerChange({
-      phone: result.phone,
-      name: result.found ? result.name : null,
-      summary: result.found ? rewardsSummary({ found: true, rewards: result.rewards, points: result.points }) : rewardsSummary({ found: false, rewards: null, points: null }),
-    });
+    onCustomerChange(result.customer);
     setEnrolling(false);
     return null;
   }

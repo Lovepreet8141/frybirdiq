@@ -1,5 +1,6 @@
 "use server";
 
+import { awaitsCounterDecision } from "@/domain/order-alert";
 import { requirePermission } from "@/lib/auth";
 import { ordersAwaitingDecision } from "@/lib/repositories/analytics";
 import { formatINR, paise } from "@/lib/money";
@@ -38,7 +39,10 @@ export async function pollNewOrders(): Promise<{ orders: NewOrder[] }> {
     return { orders: [] };
   }
 
-  const rows = await ordersAwaitingDecision(staff.orgId);
+  // Source first, status second: only an order placed online can open the
+  // pop-up or sound the alarm. A till order is accepted at placement, and
+  // even one that somehow was not is the cashier's own, not an arrival.
+  const rows = (await ordersAwaitingDecision(staff.orgId)).filter(awaitsCounterDecision);
   const now = Date.now();
 
   return {

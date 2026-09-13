@@ -32,6 +32,7 @@ import { quoteForPin } from "./delivery";
 import { countPromotionUse } from "./promotions";
 import { requireOrg, resolvePricingContext } from "./org";
 import { ensureCustomerByPhone } from "./customers";
+import { COUNTER_PLACED_STATUS } from "@/lib/pos/counter-placement";
 import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
 import { createPendingPayment, recordCashPayment } from "./payments";
@@ -660,6 +661,25 @@ export async function placeCounterOrder(input: CounterOrderInput): Promise<Count
           eventReason: `Rung up at the counter — ${input.channel === "DINE_IN" ? (tableName ? `dine-in, ${tableName}` : "dine-in") : "takeaway"}`,
         });
         if (!persisted.ok) return { ok: false as const, error: persisted.error };
+
+        /*
+         * Accepted at placement. The cashier ringing this up is the person
+         * who would otherwise be asked to accept it, so the order goes
+         * straight onto the kitchen display and never opens the new-order
+         * pop-up. Done here, inside the idempotent placement, so a replay
+         * neither repeats it nor re-creates the order. The transition is the
+         * domain's own (PENDING_PAYMENT → ACCEPTED, legal for both counter
+         * channels) and is recorded as an event with the cashier as actor.
+         *
+         * Best effort, deliberately: the order row exists and the cash is
+         * about to be taken against it. Failing placement because the accept
+         * step hit an infrastructure error would make the till retry — and a
+         * retry that re-ran this callback would ring the order up twice. If
+         * it ever fails the order stays PENDING_PAYMENT and the counter
+         * accepts it by hand, which is what happened before this step.
+         */
+        await advanceOrder({ orderId: persisted.order.id, to: COUNTER_PLACED_STATUS, actorUserId: input.actorUserId, orgId: input.orgId });
+
         // Stored as the idempotent response, so it must survive JSON: the total travels as a string.
         return { ok: true as const, orderId: persisted.order.id, orderNumber: persisted.order.orderNumber, total: persisted.order.grandTotal.toString() };
       },

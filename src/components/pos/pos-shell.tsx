@@ -17,6 +17,7 @@ import { type PriceDraftOk, placeCounterOrderAction, pollPosMenu, priceDraftOrde
 import type { MenuCategory, MenuProduct } from "@/lib/repositories/menu";
 import { recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 import { CategoryRail } from "./category-rail";
+import { CustomerControl } from "./customer-control";
 import { ModifierPicker } from "./modifier-picker";
 import { OrderBuilder, type PosTableOption } from "./order-builder";
 import { PaymentSheet, type PosCustomer } from "./payment-sheet";
@@ -319,6 +320,9 @@ export function PosShell({
       />
 
       <div className="flex h-full min-h-0 flex-col">
+        {/* Attach a customer at any point; the tender step reads the same
+            state and offers the same keypad as a second entry point. */}
+        <CustomerControl customer={customer} onChange={setCustomer} enabled={canLookupCustomers} />
         <div className="min-h-0 flex-1">
           <OrderBuilder
             channel={channel}

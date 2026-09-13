@@ -194,7 +194,9 @@ function DueCell({ due, align = "start" }: { due: Due; align?: "start" | "end" }
 function TypeRail({ order, layout }: { order: StaffOrder; layout: "rail" | "strip" }) {
   const type = orderType(order);
   const spec = TYPE[type];
-  const sub = type === "DINE_IN" ? order.tableName : type === "ONLINE" ? "Website" : null;
+  // Where it came from: the table for dine-in, "Till" for a counter order
+  // without one, "Website" for online. A delivery is always online.
+  const sub = type === "DINE_IN" ? (order.tableName ?? "Till") : type === "TAKEAWAY" ? "Till" : type === "ONLINE" ? "Website" : null;
   return (
     <div
       className={cn(
