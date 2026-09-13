@@ -1,6 +1,7 @@
 /** Customers, addresses, loyalty, consent. BUILD-PLAN.md §29, §30, §83. */
 
-import { boolean, index, integer, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { boolean, check, index, integer, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { organizations } from "./tenancy";
 import { money, primaryId, timestamps } from "./_shared";
 
@@ -204,7 +205,8 @@ export const promotions = pgTable(
     orgId: uuid("org_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
-    code: text("code").notNull(),
+    /** Only a coupon has one; every other type is applied by its rules. Unique per org where set. */
+    code: text("code"),
     name: text("name").notNull(),
     description: text("description"),
     /** Exactly one of these is set. */
@@ -216,8 +218,46 @@ export const promotions = pgTable(
     endsAt: timestamp("ends_at", { withTimezone: true }),
     usageLimit: integer("usage_limit"),
     usageCount: integer("usage_count").notNull().default(0),
+    /** Mirrors `status = 'live'` — kept so the website's existing coupon path keeps reading one flag. */
     isActive: boolean("is_active").notNull().default(true),
+
+    /*
+     * The product-aware promotion model (src/lib/promotions/engine.ts).
+     * Percent, flat, coupon, buy-one-get-one, buy-X-get-Y, combo, free
+     * item, happy hour. Products are referenced by slug — the identity an
+     * order line stores (§51); a renamed product keeps its slug.
+     */
+    type: text("type").notNull().default("coupon"),
+    buyQty: integer("buy_qty").notNull().default(1),
+    buyProducts: text("buy_products").array().notNull().default(sql`'{}'::text[]`),
+    getQty: integer("get_qty").notNull().default(1),
+    getProducts: text("get_products").array().notNull().default(sql`'{}'::text[]`),
+    /** Discount on the "get" items, in basis points. 10000 is free. */
+    getDiscountBps: integer("get_discount_bps").notNull().default(10000),
+    products: text("products").array().notNull().default(sql`'{}'::text[]`),
+    comboPrice: money("combo_price"),
+    /** "HH:MM" in Asia/Kolkata; both null means all day. */
+    startTime: text("start_time"),
+    endTime: text("end_time"),
+    /** Bit i (Monday = 0) set when the promotion runs that day. 127 is every day. */
+    daysMask: integer("days_mask").notNull().default(127),
+    customerSegment: text("customer_segment").notNull().default("everyone"),
+    stacking: text("stacking").notNull().default("none"),
+    /** Channels are the counter and the website — nothing else exists. Ticking one does not activate it; pushing does. */
+    channelPos: boolean("channel_pos").notNull().default(false),
+    channelWeb: boolean("channel_web").notNull().default(false),
+    perCustomerLimit: integer("per_customer_limit"),
+    /** draft → live → paused. Only a push or Activate makes it live. */
+    status: text("status").notNull().default("draft"),
+    liveSince: timestamp("live_since", { withTimezone: true }),
     ...timestamps,
   },
-  (table) => [unique("promotions_org_code_unique").on(table.orgId, table.code)],
+  (table) => [
+    unique("promotions_org_code_unique").on(table.orgId, table.code),
+    check("promotions_type_check", sql`${table.type} IN ('percent','flat','coupon','bogo','bxgy','combo','freeitem','happyhour')`),
+    check("promotions_status_check", sql`${table.status} IN ('draft','live','paused')`),
+    check("promotions_segment_check", sql`${table.customerSegment} IN ('everyone','new','returning','members')`),
+    check("promotions_stacking_check", sql`${table.stacking} IN ('none','allow')`),
+    check("promotions_days_mask_check", sql`${table.daysMask} BETWEEN 0 AND 127`),
+  ],
 );

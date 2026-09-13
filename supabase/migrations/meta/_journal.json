@@ -169,6 +169,13 @@
       "when": 1789263036539,
       "tag": "0023_overview_operations_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1789265995184,
+      "tag": "0024_promotions_types_and_channels",
+      "breakpoints": true
     }
   ]
 }

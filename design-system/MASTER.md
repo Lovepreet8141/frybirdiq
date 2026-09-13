@@ -164,6 +164,17 @@ chart-4  #C2410C  warning orange — over target, late, at risk
 chart-5  #D92B2B  red — an alert series, and nothing else
 ```
 
+### Promotion status tints (staff surface only)
+
+A promotion is a draft, live, or paused. Three tints, each a ground, an
+ink and an edge, checked AA by `scripts/check-contrast.py`.
+
+```
+promo.live    ground #F5EDD8  ink #7A3B00  edge #C9A227
+promo.paused  ground #FDECE4  ink #C2410C  edge #D98282
+promo.draft   ground #EEEEEE  ink #555555  edge #CFD1D4
+```
+
 ### Order tints (staff surface only)
 
 The orders list tells four order *types* and five order *statuses* apart at a

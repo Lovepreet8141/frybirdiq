@@ -78,7 +78,7 @@ async function main() {
   for (const row of rows) {
     const off = row.discountBps ? formatBps(row.discountBps, 0) : row.discountAmount ? formatINR(paise(row.discountAmount)) : "—";
     console.log(
-      `${row.code.padEnd(14)} ${off.padEnd(11)} ${(row.minOrderAmount ? formatINR(paise(row.minOrderAmount)) : "—").padEnd(9)} ${(row.maxDiscountAmount ? formatINR(paise(row.maxDiscountAmount)) : "—").padEnd(9)} ${String(row.usageCount).padStart(4)}   ${row.isActive ? "yes" : "no"}`,
+      `${(row.code ?? `(${row.type})`).padEnd(14)} ${off.padEnd(11)} ${(row.minOrderAmount ? formatINR(paise(row.minOrderAmount)) : "—").padEnd(9)} ${(row.maxDiscountAmount ? formatINR(paise(row.maxDiscountAmount)) : "—").padEnd(9)} ${String(row.usageCount).padStart(4)}   ${row.isActive ? "yes" : "no"}`,
     );
   }
 }

@@ -72,6 +72,11 @@ def main() -> int:
             palette[f"{group}.{name}.ink"] = spec["ink"]
             palette[f"{group}.{name}.ground"] = spec["ground"]
             order_pairs.append((f"{group}.{name}.ink", f"{group}.{name}.ground", True))
+    # Promotion status tints (MASTER.md §5): badge text on its ground.
+    for name, spec in colors["promo"]["status"].items():
+        palette[f"promo.{name}.ink"] = spec["ink"]
+        palette[f"promo.{name}.ground"] = spec["ground"]
+        order_pairs.append((f"promo.{name}.ink", f"promo.{name}.ground", True))
 
     failures = []
     print(f"{'pair':<44} {'ratio':>6}  {'AA body':<8} {'AA large':<9}")

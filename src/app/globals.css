@@ -56,6 +56,17 @@
   --color-status-out-for-delivery-fg: var(--status-out-for-delivery-fg);
   --color-status-out-for-delivery-dot: var(--status-out-for-delivery-dot);
   --color-order-late-line: var(--order-late-line);
+  /* Promotion status tints — MASTER.md §5. Utilities: bg-promo-live,
+     text-promo-live-fg, border-promo-live-line (and paused, draft). */
+  --color-promo-live: var(--promo-live);
+  --color-promo-live-fg: var(--promo-live-fg);
+  --color-promo-live-line: var(--promo-live-line);
+  --color-promo-paused: var(--promo-paused);
+  --color-promo-paused-fg: var(--promo-paused-fg);
+  --color-promo-paused-line: var(--promo-paused-line);
+  --color-promo-draft: var(--promo-draft);
+  --color-promo-draft-fg: var(--promo-draft-fg);
+  --color-promo-draft-line: var(--promo-draft-line);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -347,6 +358,17 @@
   --status-out-for-delivery-fg: #115e59;
   --status-out-for-delivery-dot: #0d9488;
   --order-late-line: #f5b8b0;
+
+  /* Promotion status — MASTER.md §5, tokens.json `color.promo`. */
+  --promo-live: #f5edd8;
+  --promo-live-fg: #7a3b00;
+  --promo-live-line: #c9a227;
+  --promo-paused: #fdece4;
+  --promo-paused-fg: #c2410c;
+  --promo-paused-line: #d98282;
+  --promo-draft: #eeeeee;
+  --promo-draft-fg: #555555;
+  --promo-draft-line: #cfd1d4;
 
   --sidebar: #ffffff;
   --sidebar-foreground: var(--ink);
