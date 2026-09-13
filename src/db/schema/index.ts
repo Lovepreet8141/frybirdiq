@@ -14,3 +14,4 @@ export * from "./orders";
 export * from "./inventory";
 export * from "./platform";
 export * from "./expenses";
+export * from "./receipt";

@@ -7,6 +7,7 @@ import { requireStaff, staffCan } from "@/lib/auth";
 import { getMenu } from "@/lib/repositories/menu";
 import { requireOrg } from "@/lib/repositories/org";
 import { getOrder, type OrderView } from "@/lib/repositories/orders";
+import { getActiveReceiptTemplate } from "@/lib/repositories/receipt";
 import { listTables, listUnassignedDineInOrders } from "@/lib/repositories/tables";
 
 export const metadata: Metadata = { title: "POS", robots: { index: false, follow: false } };
@@ -51,9 +52,11 @@ export default async function PosPage() {
   const staff = await requireStaff();
   const org = await requireOrg();
   const canAddTable = await staffCan("settings.manage");
-  const [tables, unassignedOrders] = await Promise.all([
+  const [tables, unassignedOrders, receiptTemplate] = await Promise.all([
     listTables(staff.orgId),
     listUnassignedDineInOrders(staff.orgId),
+    // The design the owner last applied on Bill & Receipt; the till prints it without knowing there is a designer.
+    getActiveReceiptTemplate(staff.orgId),
   ]);
 
   const openOrders = await Promise.all(
@@ -69,6 +72,7 @@ export default async function PosPage() {
           categories={menu}
           canLookupCustomers={canLookupCustomers}
           shopName={org.name}
+          receiptTemplate={receiptTemplate}
           tables={tables.map((table) => ({ id: table.id, name: table.name, available: table.openOrder === null }))}
         />
       }

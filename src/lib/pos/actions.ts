@@ -25,6 +25,8 @@ import { counterPhoneSchema } from "./rewards-enrolment";
 import { type MenuCategory, getMenu } from "@/lib/repositories/menu";
 import { placeCounterOrder } from "@/lib/repositories/orders";
 import { isOrderPaid, recordCashPayment } from "@/lib/repositories/payments";
+import { receiptDataForOrder } from "@/lib/repositories/receipt";
+import type { ReceiptData } from "@/lib/receipt/data";
 import { priceDraft } from "./pricing";
 import { changeDue, parseTender } from "./tender";
 
@@ -143,6 +145,8 @@ export type CounterCheckoutResult =
       readonly change: string;
       readonly paid: true;
       readonly replayed: boolean;
+      /** The order as the receipt prints it — read back from the rows just written, so the slip and the sale cannot disagree. */
+      readonly receipt: ReceiptData | null;
     }
   | {
       readonly ok: true;
@@ -154,6 +158,7 @@ export type CounterCheckoutResult =
       readonly paid: false;
       readonly paymentError: string;
       readonly replayed: boolean;
+      readonly receipt: ReceiptData | null;
     }
   | { readonly ok: false; readonly error: string };
 
@@ -206,12 +211,17 @@ export async function placeCounterOrderAction(input: unknown): Promise<CounterCh
   // when they tap Next order instead — see `startNextOrder` in PosShell.
   revalidatePath("/app/orders");
 
+  // What the bill prints, from the rows just written. Best-effort: a
+  // receipt that cannot be read must never turn a recorded sale into an error.
+  const receipt = await receiptDataForOrder(staff.orgId, placed.orderId, { tendered }).catch(() => null);
+
   const base = {
     orderId: placed.orderId,
     orderNumber: placed.orderNumber,
     total: formatINR(placed.total),
     received: formatINR(tendered),
     replayed: placed.replayed,
+    receipt,
   };
 
   if (payment.ok || (placed.replayed && (await isOrderPaid(placed.orderId)))) {

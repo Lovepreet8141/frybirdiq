@@ -12,6 +12,7 @@ import {
   type LucideIcon,
   Package,
   PackageSearch,
+  ReceiptText,
   Settings2,
   ShieldCheck,
   ShoppingBag,
@@ -160,6 +161,7 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
       label: "Admin",
       items: [
         ...(canSeeSettings ? [{ href: "/app/admin/restaurant", label: "Restaurant", icon: Settings2 }] : []),
+        ...(canSeeSettings ? [{ href: "/app/admin/receipt", label: "Bill & Receipt", icon: ReceiptText }] : []),
         ...(canSeeAudit ? [{ href: "/app/admin/audit", label: "Audit log", icon: ShieldCheck }] : []),
       ],
     },

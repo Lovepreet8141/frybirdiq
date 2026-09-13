@@ -545,6 +545,10 @@
     visibility: hidden;
     background: transparent !important;
     box-shadow: none !important;
+    /* A control with `transition-all` would otherwise fade its visibility
+       over 150 ms and still be on the page when the print snapshot is taken. */
+    transition: none !important;
+    animation: none !important;
   }
   body:has([data-print-receipt]) [data-print-receipt],
   body:has([data-print-receipt]) [data-print-receipt] * {

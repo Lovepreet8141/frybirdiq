@@ -20,6 +20,7 @@ import { CategoryRail } from "./category-rail";
 import { CustomerControl } from "./customer-control";
 import { ModifierPicker } from "./modifier-picker";
 import { OrderBuilder, type PosTableOption } from "./order-builder";
+import type { ReceiptTemplate } from "@/lib/receipt/template";
 import { PaymentSheet, type PosCustomer } from "./payment-sheet";
 import { ProductGrid } from "./product-grid";
 import { useOnline } from "./use-online";
@@ -47,11 +48,14 @@ export function PosShell({
   canLookupCustomers,
   tables,
   shopName,
+  receiptTemplate,
 }: {
   categories: readonly MenuCategory[];
   canLookupCustomers: boolean;
   tables: readonly PosTableOption[];
   shopName: string;
+  /** The applied Bill & Receipt design — what Print produces after a sale. */
+  receiptTemplate: ReceiptTemplate;
 }) {
   const [categories, setCategories] = useState<readonly MenuCategory[]>(initialCategories);
   const [activeCategory, setActiveCategory] = useState<string | null>(initialCategories[0]?.slug ?? null);
@@ -349,6 +353,7 @@ export function PosShell({
         <PaymentSheet
           priced={payingFor}
           shopName={shopName}
+          receiptTemplate={receiptTemplate}
           channelLabel={channel === "DINE_IN" ? "Dine-in" : "Takeaway"}
           tableName={(channel === "DINE_IN" && tables.find((table) => table.id === tableId)?.name) || null}
           customer={customer}

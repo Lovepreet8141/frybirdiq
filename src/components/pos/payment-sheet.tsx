@@ -22,6 +22,9 @@ import { Banknote, CheckCircle2, Gift, Loader2, Printer, TriangleAlert } from "l
 import { formatINR, paise, subtract } from "@/lib/money";
 import type { CounterCheckoutResult, PriceDraftOk } from "@/lib/pos/actions";
 import { changeDue, parseTender, quickTenders } from "@/lib/pos/tender";
+import type { ReceiptData } from "@/lib/receipt/data";
+import type { ReceiptTemplate } from "@/lib/receipt/template";
+import { ReceiptSheet } from "@/components/receipt/receipt-sheet";
 import { cn } from "@/lib/utils";
 import { type PosCustomer, attachCustomerByPhone } from "./attach-customer";
 import { RewardsKeypad } from "./rewards-keypad";
@@ -36,11 +39,14 @@ export interface SettledOrder {
   readonly paid: boolean;
   readonly paymentError: string | null;
   readonly at: string;
+  /** The slip, as the server read it back from the order it just wrote. */
+  readonly receipt: ReceiptData | null;
 }
 
 export function PaymentSheet({
   priced,
   shopName,
+  receiptTemplate,
   channelLabel,
   tableName,
   customer,
@@ -52,6 +58,8 @@ export function PaymentSheet({
 }: {
   priced: PriceDraftOk;
   shopName: string;
+  /** The applied Bill & Receipt design. */
+  receiptTemplate: ReceiptTemplate;
   channelLabel: string;
   tableName: string | null;
   customer: PosCustomer | null;
@@ -113,6 +121,7 @@ export function PaymentSheet({
         paid: result.paid,
         paymentError: result.paid ? null : result.paymentError,
         at: new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }),
+        receipt: result.receipt,
       });
     });
   }
@@ -297,16 +306,12 @@ export function PaymentSheet({
         )}
       </div>
 
-      {settled !== null && (
-        <Receipt
-          settled={settled}
-          priced={priced}
-          shopName={shopName}
-          channelLabel={channelLabel}
-          tableName={tableName}
-          customerName={customerName}
-        />
-      )}
+      {settled !== null &&
+        (settled.receipt ? (
+          <ReceiptSheet template={receiptTemplate} data={settled.receipt} mode="print" />
+        ) : (
+          <Receipt settled={settled} priced={priced} shopName={shopName} channelLabel={channelLabel} tableName={tableName} customerName={customerName} />
+        ))}
     </div>
   );
 }
@@ -399,7 +404,9 @@ function Settled({
 }
 
 /**
- * The customer's copy, and the only thing on the page when Print is tapped.
+ * The fallback slip, used only if the server could not read the order back
+ * for the designed receipt. Normally `ReceiptSheet` prints the design
+ * applied on Bill & Receipt.
  *
  * Hidden on screen; `data-print-receipt` is what the print rules in
  * globals.css key off to blank the rest of the page, so a counter printer
