@@ -7,6 +7,53 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## POS: optional FRYBIRD REWARDS enrolment at checkout
+
+**Status:** Complete. Gates green (348 tests, 8 new). Deployed (see
+deployment record). Walked signed-in on a local build up to — not
+including — Confirm payment, so no order was placed.
+
+**What it is:** one secondary button on the tender step, "Rewards · add
+mobile". The default flow ignores it and goes through in the same taps as
+before. Tapping it swaps the tender for a keypad (`inputmode="tel"` field
+plus on-screen digits), validated only on submit; Cancel returns with
+nothing changed. On entry the number is looked up: known → name and
+"2/7 stamps · 45 points" inline; unknown → "New — enrolled with this
+order". The chip has Change and Remove. The always-visible phone field at
+the top of the order builder (`customer-lookup.tsx`) is gone.
+
+**How it credits — no separate logic:** `recordCashPayment` already
+credits points (`pointsEarned`) and stamps (`awardStampForOrder`) for any
+order with `customer_id`, web or counter. The only gap was that
+`placeCounterOrder` linked *existing* customers and stored an unknown
+phone as text. It now resolves the phone with `ensureCustomerByPhone`
+(found, or created with just the number, keyed on `(org_id, phone)`
+like the website's checkout upsert — no name, no consent, existing rows
+untouched). Creation happens at placement, not at lookup, so a cancelled
+keypad leaves nothing behind. No phone → no record → "No phone on file",
+nothing credited — unchanged.
+
+**One rule, two places:** `counterPhoneSchema` (`src/lib/pos/
+rewards-enrolment.ts`) is what the keypad's `parseMobile` and the
+server's `counterOrderSchema` both apply, so an invalid number is an
+inline error on the keypad and, if it ever reached the action, a failed
+parse before any repository call — no order placed.
+
+**Tests** (`rewards-enrolment.test.ts`): valid forms (+91, 0, spaces,
+dashes) normalise; invalid forms refuse with a sentence; the server
+schema accepts exactly the keypad's set, `null` when absent; summary
+wording. Crediting with/without a phone is the existing capture path,
+under test in `src/lib/loyalty`; there is no DB test harness in this
+repo, so linked-and-credited is verified by the code path plus the
+signed-in walk, not by an integration test.
+
+**Permissions unchanged:** the button appears under `customers.view`
+(the same gate the old lookup had); placement stays under
+`orders.create`, cash under `orders.update`. `lookupCustomerAction`
+remains read-only.
+
+---
+
 ## Slice 4 (UI Kit): Orders — card-row board from the "Frybird Orders v2" design
 
 **Status:** Complete. Gates green. Deployed (see deployment record).
@@ -1272,6 +1319,12 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-13 — POS rewards enrolment
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `7c3d151`. Gates in-script green (tests 348/348). Post-deploy:
+`active`; smoke `HTTP 200`; no runtime errors since the restart.
 
 ### 2026-09-13 00:27 UTC — Orders board (slice 4)
 
