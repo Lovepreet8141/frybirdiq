@@ -7,6 +7,136 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Hardware — devices, printers, print queue, local printer bridge, FRYBIRD POS Android app
+
+**Status:** Complete for everything that can be tested without the
+POSIFLOW in the room. Gates green (439 tests, 39 new). Committed
+`51fe96f` + `3e07048`. Deployed (see deployment record).
+Migration 0026 applied. Android debug and release builds compile on this
+Mac (APK at `android/app/build/outputs/apk/debug/app-debug.apk`, not
+committed). **Physical POSIFLOW: not tested** — it is in Ambala and this
+Mac is not; the last step happens on the Redmi Pad.
+
+**The rule this is built on:** the cloud never connects to a printer.
+A receipt's bytes go from the tablet at the counter to the printer over
+the shop's own Wi-Fi. FRYBIRD IQ (from anywhere) holds the
+configuration, the device list and the print history — nothing else.
+
+```
+FRYBIRD CLOUD (devices · printers · receipt designs · print_jobs)
+      │ HTTPS
+      ▼
+FRYBIRD web app ── plain browser: dashboard + POS, browser printing only
+      │
+      └─ FRYBIRD POS (Android WebView) ── window.FRYPOS.printer ── local bridge ── TCP 9100 ── POSIFLOW KPC307-UEWB
+```
+
+**Hardware abstraction** (`src/lib/hardware/`, pure, tested):
+`printer/types.ts` — `PrinterProvider` (isAvailable, getCapabilities,
+getStatus, discover, connect, disconnect, testConnection, testPrint,
+printReceipt, getLastError), `PrinterCapabilities`, `PrinterConnection`,
+`PrinterJob`, real statuses only (ONLINE / OFFLINE / CONNECTING / ERROR /
+UNKNOWN, and UNAVAILABLE when there is no bridge), and the wire protocol
+— nine allowlisted operations. `net.ts` — private-IPv4-only address
+rule, applied in the shim, on the server and natively. `device.ts` —
+platform / device-type detection, device key minted once into the
+device's storage, "online = heard from in 3 min". `printer/escpos.ts` —
+`EscPosReceiptBuilder` (initialize, align, bold, size, text with
+wrapping, two-column rows, rules, raster images, native QR, feed, cut;
+48 / 64 / 24 columns on the 576-dot 80 mm head, 58 mm supported) and
+`receiptToEscPos()` over the Bill & Receipt designer's own renderer, so
+paper = preview = POS print; ₹ prints as "Rs." until the printer's code
+page is confirmed on hardware. `printer/bridge.ts` — the shim that
+builds `window.FRYPOS.printer` over the origin-restricted
+`FRYPOS_NATIVE` channel: ids, timeouts, malformed replies dropped,
+addresses checked before anything leaves the page. `src/lib/printer/
+client.ts` — `getPrinterClient()`: native when the bridge exists, else a
+browser client whose every call answers `{ supported: false, reason:
+"LOCAL_PRINTER_BRIDGE_UNAVAILABLE" }`. Nothing fakes a printer.
+
+**Storage** (migration 0026, RLS, rollback): `pos_devices` (org + store,
+device_key unique per org, type, platform, versions, capabilities,
+last_seen_at, last printer status), `printers` (bound to one device,
+LAN / Bluetooth / USB, ip, port 9100, MAC, 80 mm, ESC/POS, one default
+per store, auto print, last status / seen / print / error),
+`print_jobs` (id minted on the device; one RECEIPT job per order,
+retries reuse it; DUPLICATE and TEST are their own jobs; QUEUED →
+PRINTING → PRINTED / FAILED, attempts, error, printed_at, the receipt
+design it printed). Repository `src/lib/repositories/hardware.ts`;
+actions in `src/lib/hardware/actions.ts`: register / who-am-I /
+heartbeat / printer status / jobs take `orders.create` (the device
+about itself), printer and device configuration take
+`integrations.manage` (OWNER, ADMIN — existing permission, no new one),
+a duplicate copy takes `orders.refund`. Configuration changes audited.
+
+**Device agent** (`src/components/hardware/device-agent.tsx`): on the
+POS and Printers pages. With a bridge: registers the device on first
+load (never on a plain browser — a browser registers only when a person
+asks), heartbeats once a minute while visible (device online, app and
+bridge versions, printer status), probes the printer every 30 s backing
+off to 8 min while it is down, and prints: build bytes (images resolved
+on the device) → record job → bridge → record outcome. If the cloud is
+unreachable the bytes still go to the printer; the job record is
+best-effort.
+
+**Settings › Hardware › Printers** (`/app/admin/hardware`, nav +
+breadcrumb): This device (POS Device Setup ✓ registered ✓ bridge ready,
+or "This device can run FRYBIRD POS, but direct thermal printing is not
+configured" + Set Up Printing), Devices (real registrations only, online
+dot, last seen, versions, rename / remove for admins), Printers (cards
+with device, connection, IP, port, paper, auto print, default, last
+print, last reported status; Test connection / Test Print / Reconnect
+enabled only on the owning device, Edit / Remove for admins), Add
+Printer (device, connection with Bluetooth / USB honestly "not yet",
+POSIFLOW defaults, Find printers on this network — runs on the tablet's
+own /24, never from the cloud — or enter IP manually, private addresses
+only), Recent print jobs, and the setup guide. Stacks at 390.
+
+**POS:** "🟢 Printer Ready / 🔴 Printer Offline" pill when this device
+has a printer — no IP, port or MAC for the cashier. After payment the
+receipt auto-prints through the applied design; the order is complete
+either way. "Receipt Printed ✓" (+ Print Duplicate for managers) or
+"Receipt Not Printed" with Retry Print on the same job id — the bridge
+refuses to reprint a job id that already printed, so a retried request
+cannot produce two bills. Browser Print stays as the fallback.
+
+**Android** (`android/`, README inside): FRYBIRD POS loads
+`https://frybirdiq.tech/app/pos` in a WebView. The bridge is
+`WebViewCompat.addWebMessageListener` for that origin only; the listener
+re-checks origin and main frame per message; no
+`addJavascriptInterface`. `PrinterBridge.kt` allows nine operations,
+validates address / port / payload size / job id, caches status probes,
+remembers printed job ids; `EscPosTcpPrinter.kt` connects, writes,
+flushes with timeouts and 3-attempt backoff; `PrinterDiscovery.kt`
+scans only the tablet's own private /24 for port 9100. Package
+`tech.frybirdiq.pos`, minSdk 26, targetSdk 35.
+
+**Tested:** web UI in a plain browser (no fake hardware, Add Printer
+disabled until a device exists, POS pill absent, 390 clean); the bridge
+protocol end to end with a simulated Android bridge speaking the exact
+protocol (registration, discovery, add printer, status online / offline,
+test connection, test print bytes, public IP refused, edit, rename,
+remove device and printer); one real ₹99 POS order (#022) with the
+simulated printer offline → "Receipt Not Printed", Retry → printed,
+Print Duplicate → second job; job rows PRINTED with 2 attempts; ESC/POS
+bytes carried ORDER #022 and ended with the cut. Vitest: ESC/POS bytes,
+layouts, images, QR, 58 mm, bridge ids / timeouts / errors / duplicate,
+client selection, addresses, identity. Android: debug + release
+compile. The simulated device, its printer and its jobs were removed
+afterwards; production holds no device, no printer, no print job.
+
+**Not tested — needs the Redmi Pad in India:** the POSIFLOW itself
+(cut, code page for ₹, raster density, real discovery on that Wi-Fi),
+install of the APK, and the bridge inside a real Android WebView.
+
+**Known limits:** Bluetooth and USB are listed but not implemented;
+iOS has no bridge (browser mode); ₹ is transliterated to "Rs." in
+ESC/POS text; the cashier line prints the display name. Adding a
+printer needs OWNER or ADMIN — MANAGER cannot (existing permission
+model, not changed).
+
+---
+
 ## Bill & Receipt designer — Settings › Bill & Receipt
 
 **Status:** Complete. Gates green (405 tests, 13 new). Committed
@@ -1593,6 +1723,21 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-13 14:15 UTC — Hardware: devices, printers, print jobs, local printer bridge (+ migration 0026)
+
+Migration 0026 applied from the Mac before the deploy (three new tables
+with RLS; verified via information_schema — tables, policies, journal
+27). Deployed twice via `./deploy/deploy.sh root@194.238.16.200` from
+`kit-radix-nova`: `51fe96f` (the feature) and `3e07048` (a hydration fix
+for "seconds ago" on the Printers page). Gates in-script green (439/439,
+RSC check OK). Post-deploy: `active`; smoke `HTTP 200`; signed-in
+production walk in a plain browser and with the simulated bridge
+(register → discover → add printer → test connection → test print →
+offline reconnect → remove); console clean after the fix. Simulated
+device, printer and jobs removed; verification sessions revoked; temp
+scripts deleted. Android APK built locally, not deployed anywhere — it
+is installed by hand on the Redmi Pad.
 
 ### 2026-09-13 11:05 UTC — Bill & Receipt designer (+ migration 0025)
 
