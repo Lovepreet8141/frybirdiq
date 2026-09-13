@@ -1788,6 +1788,17 @@ clean.
 
 ## Deployment record
 
+### 2026-09-13 15:05 UTC — Bluetooth transport (no migration)
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from
+`kit-radix-nova` at `d86d8f4`. Gates in-script green (441/441, RSC
+check OK). Post-deploy: `active`; smoke `HTTP 200`; signed-in production
+walk with the simulated Bluetooth bridge (radio off → error, scan,
+connect, save, test connection, test print, printer off → disconnected
+error, POS pill), then cleanup of the simulated rows. The real "Chrome
+on Android" device and its LAN printer were not touched. Android APK
+(bridge 1.1.0) built locally; installed by hand on the Android device.
+
 ### 2026-09-13 14:15 UTC — Hardware: devices, printers, print jobs, local printer bridge (+ migration 0026)
 
 Migration 0026 applied from the Mac before the deploy (three new tables
