@@ -12,9 +12,9 @@
  * ever sent — the native side validates it again.
  */
 
-import { validatePrinterAddress } from "../net";
+import { normaliseMac, validatePrinterAddress } from "../net";
 import { bytesToBase64 } from "./escpos";
-import { BRIDGE_OPS, BRIDGE_PROTOCOL_VERSION, type BridgeCapabilities, type BridgeErrorCode, type BridgeOp, type BridgeRequest, type BridgeResponse, type DiscoveredPrinter, type PrintOutcome, type PrinterConnection, type PrinterJob, type PrinterProvider, type StatusReport } from "./types";
+import { BRIDGE_OPS, BRIDGE_PROTOCOL_VERSION, type BluetoothState, type BridgeCapabilities, type BridgeErrorCode, type BridgeOp, type BridgeRequest, type BridgeResponse, type DiscoveredPrinter, type PrintOutcome, type PrinterConnection, type PrinterJob, type PrinterProvider, type StatusReport } from "./types";
 
 export interface NativeChannel {
   postMessage(message: string): void;
@@ -34,6 +34,8 @@ export class BridgeError extends Error {
 const DEFAULT_TIMEOUT_MS = 8_000;
 const PRINT_TIMEOUT_MS = 30_000;
 const DISCOVER_TIMEOUT_MS = 20_000;
+/** Pairing can put a PIN dialog on the tablet; give the person time to answer it. */
+const BLUETOOTH_CONNECT_TIMEOUT_MS = 60_000;
 
 function parseResponse(raw: unknown): BridgeResponse | null {
   if (typeof raw !== "string") return null;
@@ -103,9 +105,15 @@ function toStatus(result: unknown): StatusReport {
   const record = asRecord(result);
   const status = str(record.status) ?? "UNKNOWN";
   const connection = asRecord(record.connection);
+  const reported: PrinterConnection | null =
+    typeof connection.address === "string"
+      ? { connectionType: "BLUETOOTH", address: connection.address, name: str(connection.name) }
+      : typeof connection.host === "string" && typeof connection.port === "number"
+        ? { connectionType: "LAN", host: connection.host, port: connection.port }
+        : null;
   return {
     status: (["ONLINE", "OFFLINE", "CONNECTING", "ERROR", "UNKNOWN"].includes(status) ? status : "UNKNOWN") as StatusReport["status"],
-    connection: typeof connection.host === "string" && typeof connection.port === "number" ? { connectionType: "LAN", host: connection.host, port: connection.port } : null,
+    connection: reported,
     checkedAt: str(record.checkedAt),
     error: str(record.error),
   };
@@ -121,11 +129,19 @@ function failed(error: unknown): PrintOutcome {
   return { printed: false, error: error instanceof Error ? error.message : "Printing failed.", code: "BRIDGE_ERROR" };
 }
 
-function checkedAddress(connection: PrinterConnection): { host: string; port: number } {
+/** The payload the native side gets: a checked LAN address, or a checked Bluetooth MAC. Anything else never leaves the page. */
+function checkedAddress(connection: PrinterConnection): Record<string, unknown> {
+  if (connection.connectionType === "BLUETOOTH") {
+    const address = normaliseMac(connection.address);
+    if (!address) throw new BridgeError("INVALID_ADDRESS", "That is not a Bluetooth address. Scan and pick the printer from the list.");
+    return { transport: "BLUETOOTH", address, name: connection.name };
+  }
   const checked = validatePrinterAddress(connection.host, connection.port);
   if (!checked.ok) throw new BridgeError("INVALID_ADDRESS", checked.message);
-  return { host: checked.host, port: checked.port };
+  return { transport: "LAN", host: checked.host, port: checked.port };
 }
+
+const connectTimeout = (connection: PrinterConnection) => (connection.connectionType === "BLUETOOTH" ? BLUETOOTH_CONNECT_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
 
 /** `window.FRYPOS.printer`, built over a transport. */
 export function createNativePrinterProvider(transport: BridgeTransport): PrinterProvider {
@@ -166,18 +182,41 @@ export function createNativePrinterProvider(transport: BridgeTransport): Printer
 
     async discover(options = {}): Promise<readonly DiscoveredPrinter[]> {
       const timeoutMs = options.timeoutMs ?? DISCOVER_TIMEOUT_MS;
-      const record = asRecord(await transport.request("DISCOVER", { timeoutMs, port: 9100 }, timeoutMs + 5_000));
+      const transportKind = options.transport ?? "LAN";
+      const record = asRecord(await transport.request("DISCOVER", { transport: transportKind, timeoutMs, port: 9100 }, timeoutMs + 45_000));
       const found = Array.isArray(record.printers) ? record.printers : [];
-      return found.flatMap((entry) => {
+      return found.flatMap<DiscoveredPrinter>((entry) => {
         const item = asRecord(entry);
+        if (transportKind === "BLUETOOTH") {
+          const address = typeof item.address === "string" ? normaliseMac(item.address) : null;
+          return address ? [{ transport: "BLUETOOTH", address, name: str(item.name), paired: item.paired === true }] : [];
+        }
         if (typeof item.host !== "string" || !validatePrinterAddress(item.host, 9100).ok) return [];
-        return [{ host: item.host, port: typeof item.port === "number" ? item.port : 9100, hostname: str(item.hostname), latencyMs: typeof item.latencyMs === "number" ? item.latencyMs : null }];
+        return [{ transport: "LAN", host: item.host, port: typeof item.port === "number" ? item.port : 9100, hostname: str(item.hostname), latencyMs: typeof item.latencyMs === "number" ? item.latencyMs : null }];
       });
+    },
+
+    async getBluetoothState(): Promise<BluetoothState> {
+      try {
+        const record = asRecord(await transport.request("BT_STATE"));
+        const selected = asRecord(record.selected);
+        const permission = str(record.permission) ?? "not_requested";
+        return {
+          supported: record.supported === true,
+          enabled: record.enabled === true,
+          permission: permission === "granted" || permission === "denied" ? permission : "not_requested",
+          connected: record.connected === true,
+          selected: typeof selected.address === "string" ? { address: selected.address, name: str(selected.name) } : null,
+          error: str(record.error),
+        };
+      } catch (error) {
+        return { supported: false, enabled: false, permission: "not_requested", connected: false, selected: null, error: error instanceof Error ? error.message : "Bluetooth state unknown." };
+      }
     },
 
     async connect(connection: PrinterConnection): Promise<StatusReport> {
       const address = checkedAddress(connection);
-      return toStatus(await transport.request("CONNECT", address));
+      return toStatus(await transport.request("CONNECT", address, connectTimeout(connection)));
     },
 
     async disconnect(): Promise<void> {
@@ -187,7 +226,7 @@ export function createNativePrinterProvider(transport: BridgeTransport): Printer
     async testConnection(connection: PrinterConnection) {
       try {
         const address = checkedAddress(connection);
-        const record = asRecord(await transport.request("TEST_CONNECTION", address));
+        const record = asRecord(await transport.request("TEST_CONNECTION", address, connectTimeout(connection)));
         return { ok: record.ok === true, latencyMs: typeof record.latencyMs === "number" ? record.latencyMs : null, error: str(record.error) };
       } catch (error) {
         return { ok: false, latencyMs: null, error: error instanceof Error ? error.message : "Connection test failed." };
@@ -197,7 +236,7 @@ export function createNativePrinterProvider(transport: BridgeTransport): Printer
     async testPrint(connection: PrinterConnection, data: Uint8Array): Promise<PrintOutcome> {
       try {
         const address = checkedAddress(connection);
-        return toOutcome(await transport.request("TEST_PRINT", { ...address, data: bytesToBase64(data) }, PRINT_TIMEOUT_MS));
+        return toOutcome(await transport.request("TEST_PRINT", { ...address, data: bytesToBase64(data) }, PRINT_TIMEOUT_MS + connectTimeout(connection)));
       } catch (error) {
         return failed(error);
       }
@@ -206,7 +245,7 @@ export function createNativePrinterProvider(transport: BridgeTransport): Printer
     async printReceipt(job: PrinterJob): Promise<PrintOutcome> {
       try {
         const address = checkedAddress(job.connection);
-        return toOutcome(await transport.request("PRINT_RECEIPT", { jobId: job.id, kind: job.kind, ...address, data: bytesToBase64(job.data) }, PRINT_TIMEOUT_MS));
+        return toOutcome(await transport.request("PRINT_RECEIPT", { jobId: job.id, kind: job.kind, ...address, data: bytesToBase64(job.data) }, PRINT_TIMEOUT_MS + connectTimeout(job.connection)));
       } catch (error) {
         return failed(error);
       }

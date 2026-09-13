@@ -29,11 +29,14 @@ export const NO_HARDWARE: HardwareCapabilities = { printer: false, localPrinterB
  */
 export type PrinterStatus = "ONLINE" | "OFFLINE" | "CONNECTING" | "ERROR" | "UNKNOWN" | "UNAVAILABLE";
 
-/** How the bridge reaches one printer. Never a public address. */
-export interface PrinterConnection {
-  readonly connectionType: PrinterConnectionType;
-  readonly host: string;
-  readonly port: number;
+/** How the bridge reaches one printer: a private LAN address, or a paired Bluetooth (SPP) device. */
+export type PrinterConnection =
+  | { readonly connectionType: "LAN"; readonly host: string; readonly port: number }
+  | { readonly connectionType: "BLUETOOTH"; readonly address: string; readonly name: string | null };
+
+/** A human line for a connection — for status text, never for the cashier's screen. */
+export function describeConnection(connection: PrinterConnection): string {
+  return connection.connectionType === "LAN" ? `${connection.host}:${connection.port}` : connection.name ? `${connection.name} (${connection.address})` : connection.address;
 }
 
 export interface PrinterCapabilities {
@@ -67,11 +70,18 @@ export interface StatusReport {
   readonly error: string | null;
 }
 
-export interface DiscoveredPrinter {
-  readonly host: string;
-  readonly port: number;
-  readonly hostname: string | null;
-  readonly latencyMs: number | null;
+export type DiscoveredPrinter =
+  | { readonly transport: "LAN"; readonly host: string; readonly port: number; readonly hostname: string | null; readonly latencyMs: number | null }
+  | { readonly transport: "BLUETOOTH"; readonly address: string; readonly name: string | null; readonly paired: boolean };
+
+/** What the device says about its Bluetooth radio — before any scan or connect is attempted. */
+export interface BluetoothState {
+  readonly supported: boolean;
+  readonly enabled: boolean;
+  readonly permission: "granted" | "denied" | "not_requested";
+  readonly connected: boolean;
+  readonly selected: { readonly address: string; readonly name: string | null } | null;
+  readonly error: string | null;
 }
 
 /** What the native side says about the device it runs on. */
@@ -94,9 +104,14 @@ export type BridgeErrorCode =
   | "LOCAL_PRINTER_BRIDGE_UNAVAILABLE"
   | "PRINTER_UNREACHABLE"
   | "PRINTER_TIMEOUT"
+  | "PRINTER_DISCONNECTED"
   | "INVALID_ADDRESS"
   | "INVALID_REQUEST"
   | "NOT_ON_WIFI"
+  | "BLUETOOTH_UNAVAILABLE"
+  | "BLUETOOTH_DISABLED"
+  | "PERMISSION_DENIED"
+  | "PAIRING_FAILED"
   | "BRIDGE_ERROR";
 
 /**
@@ -107,7 +122,9 @@ export interface PrinterProvider {
   isAvailable(): boolean;
   getCapabilities(): Promise<BridgeCapabilities>;
   getStatus(): Promise<StatusReport>;
-  discover(options?: { timeoutMs?: number }): Promise<readonly DiscoveredPrinter[]>;
+  discover(options?: { timeoutMs?: number; transport?: "LAN" | "BLUETOOTH" }): Promise<readonly DiscoveredPrinter[]>;
+  /** The Bluetooth radio's state — asks the device, never assumes. */
+  getBluetoothState(): Promise<BluetoothState>;
   connect(connection: PrinterConnection): Promise<StatusReport>;
   disconnect(): Promise<void>;
   testConnection(connection: PrinterConnection): Promise<{ ok: boolean; latencyMs: number | null; error: string | null }>;
@@ -121,7 +138,7 @@ export interface PrinterProvider {
 /* ------------------------------------------------------------------ */
 
 /** The only operations the native side accepts. Anything else is refused. */
-export const BRIDGE_OPS = ["CAPABILITIES", "STATUS", "DISCOVER", "CONNECT", "DISCONNECT", "TEST_CONNECTION", "TEST_PRINT", "PRINT_RECEIPT", "LAST_ERROR"] as const;
+export const BRIDGE_OPS = ["CAPABILITIES", "STATUS", "DISCOVER", "CONNECT", "DISCONNECT", "TEST_CONNECTION", "TEST_PRINT", "PRINT_RECEIPT", "LAST_ERROR", "BT_STATE"] as const;
 export type BridgeOp = (typeof BRIDGE_OPS)[number];
 
 export interface BridgeRequest {

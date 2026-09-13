@@ -49,6 +49,7 @@ export interface PrinterRecord {
   readonly ipAddress: string | null;
   readonly port: number;
   readonly macAddress: string | null;
+  readonly bluetoothIdentifier: string | null;
   readonly paperWidthMm: 58 | 80;
   readonly protocol: string;
   readonly isDefault: boolean;
@@ -111,6 +112,7 @@ const toPrinter = (row: PrinterRow, device: { name: string; deviceKey: string })
   ipAddress: row.ipAddress,
   port: row.port,
   macAddress: row.macAddress,
+  bluetoothIdentifier: row.bluetoothIdentifier,
   paperWidthMm: row.paperWidthMm === 58 ? 58 : 80,
   protocol: row.protocol,
   isDefault: row.isDefault,
@@ -297,6 +299,8 @@ export interface PrinterInput {
   readonly ipAddress: string | null;
   readonly port: number;
   readonly macAddress: string | null;
+  /** Bluetooth: the paired device's address, chosen on the tablet. */
+  readonly bluetoothIdentifier: string | null;
   readonly paperWidthMm: 58 | 80;
   readonly protocol: string;
   readonly isDefault: boolean;
@@ -309,9 +313,21 @@ export type SavePrinterResult = { ok: true; printer: PrinterRecord } | { ok: fal
 export async function savePrinter(orgId: string, actorUserId: string, input: PrinterInput): Promise<SavePrinterResult> {
   const [device] = await db().select().from(posDevices).where(and(eq(posDevices.orgId, orgId), eq(posDevices.id, input.deviceId))).limit(1);
   if (!device) return { ok: false, error: "Choose the device that is next to the printer — it must be registered in this store." };
-  if (input.connectionType !== "LAN") return { ok: false, error: "Only Wi-Fi / LAN printers are supported by the FRYBIRD POS bridge today. Bluetooth and USB are coming." };
-  const address = validatePrinterAddress(input.ipAddress ?? "", input.port);
-  if (!address.ok) return { ok: false, error: address.message };
+  if (input.connectionType === "USB") return { ok: false, error: "USB printers are not supported by the FRYBIRD POS bridge yet." };
+  // LAN: a private address. Bluetooth: the paired device the person picked on the tablet (its MAC), no IP at all.
+  let host: string | null = null;
+  let port = input.port;
+  let bluetoothIdentifier: string | null = null;
+  if (input.connectionType === "LAN") {
+    const address = validatePrinterAddress(input.ipAddress ?? "", input.port);
+    if (!address.ok) return { ok: false, error: address.message };
+    host = address.host;
+    port = address.port;
+  } else {
+    bluetoothIdentifier = input.bluetoothIdentifier?.trim() ? normaliseMac(input.bluetoothIdentifier) : null;
+    if (!bluetoothIdentifier) return { ok: false, error: "Scan for the printer on the tablet and pick it from the list — a Bluetooth printer is saved by its device address." };
+    port = 1; // Unused for Bluetooth; the column is NOT NULL and checked 1–65535.
+  }
   const mac = input.macAddress?.trim() ? normaliseMac(input.macAddress) : null;
   if (input.macAddress?.trim() && !mac) return { ok: false, error: "That MAC address is not valid. Use the form 24:19:7B:5B:A6:FE." };
 
@@ -323,9 +339,10 @@ export async function savePrinter(orgId: string, actorUserId: string, input: Pri
     model: input.model?.trim() || null,
     manufacturer: input.manufacturer?.trim() || null,
     connectionType: input.connectionType,
-    ipAddress: address.host,
-    port: address.port,
+    ipAddress: host,
+    port,
     macAddress: mac,
+    bluetoothIdentifier,
     paperWidthMm: input.paperWidthMm,
     protocol: input.protocol.trim() || "ESC/POS",
     isDefault: input.isDefault,

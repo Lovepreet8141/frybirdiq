@@ -123,6 +123,7 @@ const printerSchema = z.object({
   ipAddress: z.string().trim().max(45).nullable(),
   port: z.number().int().min(1).max(65535),
   macAddress: z.string().trim().max(20).nullable(),
+  bluetoothIdentifier: z.string().trim().max(20).nullable(),
   paperWidthMm: z.union([z.literal(58), z.literal(80)]),
   protocol: z.string().trim().min(1).max(20),
   isDefault: z.boolean(),

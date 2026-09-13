@@ -52,7 +52,7 @@ describe("bridge shim", () => {
     const job = { id: "job-1", kind: "RECEIPT" as const, connection: { connectionType: "LAN" as const, host: "192.168.1.50", port: 9100 }, data: Uint8Array.from([1, 2, 3]) };
     const first = await provider.printReceipt(job);
     expect(first).toEqual({ printed: true, duplicate: false, bytes: 3 });
-    expect(seen[0]).toEqual({ op: "PRINT_RECEIPT", payload: { jobId: "job-1", kind: "RECEIPT", host: "192.168.1.50", port: 9100, data: "AQID" } });
+    expect(seen[0]).toEqual({ op: "PRINT_RECEIPT", payload: { jobId: "job-1", kind: "RECEIPT", transport: "LAN", host: "192.168.1.50", port: 9100, data: "AQID" } });
     const again = await provider.printReceipt({ ...job, id: "printed-before" });
     expect(again).toEqual({ printed: true, duplicate: true, bytes: 3 });
   });
@@ -90,7 +90,39 @@ describe("bridge shim", () => {
     const { channel } = fakeNative({ DISCOVER: () => ({ printers: [{ host: "192.168.1.105", port: 9100, latencyMs: 12 }, { host: "1.1.1.1", port: 9100 }, { host: "junk" }] }) });
     const provider = createNativePrinterProvider(new BridgeTransport(channel));
     const found = await provider.discover({ timeoutMs: 100 });
-    expect(found).toEqual([{ host: "192.168.1.105", port: 9100, hostname: null, latencyMs: 12 }]);
+    expect(found).toEqual([{ transport: "LAN", host: "192.168.1.105", port: 9100, hostname: null, latencyMs: 12 }]);
+  });
+
+  it("Bluetooth: scans paired and nearby devices, connects by address, prints through the same PRINT_RECEIPT", async () => {
+    const { channel, seen } = fakeNative({
+      BT_STATE: () => ({ supported: true, enabled: true, permission: "granted", connected: false, selected: null, error: null }),
+      DISCOVER: (payload) => (payload.transport === "BLUETOOTH" ? { printers: [{ address: "66:22:aa:bb:cc:dd", name: "KP307-UEWB", paired: true }, { address: "bad", name: "x" }] } : { printers: [] }),
+      CONNECT: (payload) => ({ status: "ONLINE", connection: { address: payload.address, name: payload.name }, checkedAt: "2026-09-13T09:00:00Z", error: null }),
+      PRINT_RECEIPT: (payload) => ({ duplicate: false, bytes: payload.transport === "BLUETOOTH" ? 3 : 0 }),
+    });
+    const provider = createNativePrinterProvider(new BridgeTransport(channel));
+    expect((await provider.getBluetoothState()).enabled).toBe(true);
+    const found = await provider.discover({ transport: "BLUETOOTH", timeoutMs: 100 });
+    expect(found).toEqual([{ transport: "BLUETOOTH", address: "66:22:AA:BB:CC:DD", name: "KP307-UEWB", paired: true }]);
+    const status = await provider.connect({ connectionType: "BLUETOOTH", address: "66:22:aa:bb:cc:dd", name: "KP307-UEWB" });
+    expect(status.status).toBe("ONLINE");
+    expect(status.connection).toEqual({ connectionType: "BLUETOOTH", address: "66:22:AA:BB:CC:DD", name: "KP307-UEWB" });
+    const outcome = await provider.printReceipt({ id: "bt-job", kind: "RECEIPT", connection: { connectionType: "BLUETOOTH", address: "66:22:AA:BB:CC:DD", name: null }, data: Uint8Array.from([1, 2, 3]) });
+    expect(outcome).toEqual({ printed: true, duplicate: false, bytes: 3 });
+    expect(seen.at(-1)).toEqual({ op: "PRINT_RECEIPT", payload: { jobId: "bt-job", kind: "RECEIPT", transport: "BLUETOOTH", address: "66:22:AA:BB:CC:DD", name: null, data: "AQID" } });
+    const refused = await provider.printReceipt({ id: "bt-job-2", kind: "RECEIPT", connection: { connectionType: "BLUETOOTH", address: "not-a-mac", name: null }, data: new Uint8Array() });
+    expect(refused).toMatchObject({ printed: false, code: "INVALID_ADDRESS" });
+  });
+
+  it("Bluetooth: a disconnected printer is reported, never invented", async () => {
+    const { channel } = fakeNative({
+      BT_STATE: () => ({ supported: true, enabled: false, permission: "denied", connected: false, selected: { address: "66:22:AA:BB:CC:DD", name: "KP307-UEWB" }, error: "Bluetooth is off" }),
+    });
+    const provider = createNativePrinterProvider(new BridgeTransport(channel));
+    const state = await provider.getBluetoothState();
+    expect(state).toEqual({ supported: true, enabled: false, permission: "denied", connected: false, selected: { address: "66:22:AA:BB:CC:DD", name: "KP307-UEWB" }, error: "Bluetooth is off" });
+    const browser = getPrinterClient({} as Window);
+    expect((await browser.getBluetoothState()).supported).toBe(false);
   });
 
   it("status is a real report or ERROR — never ONLINE by default", async () => {
@@ -98,7 +130,7 @@ describe("bridge shim", () => {
     const provider = createNativePrinterProvider(new BridgeTransport(channel));
     const status = await provider.getStatus();
     expect(status.status).toBe("OFFLINE");
-    expect(status.connection?.host).toBe("192.168.1.50");
+    expect(status.connection?.connectionType === "LAN" && status.connection.host).toBe("192.168.1.50");
     const silent = createNativePrinterProvider(new BridgeTransport({ onmessage: null, postMessage: () => undefined }));
     const timedOut = silent.getStatus();
     await vi.waitFor(() => undefined);

@@ -13,8 +13,14 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.LinearLayout
+import android.bluetooth.BluetoothAdapter
+import android.app.Activity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 
@@ -27,11 +33,45 @@ import androidx.webkit.WebViewFeature
  * one this WebView is navigated to — never sees `FRYPOS_NATIVE`. Nothing
  * is exposed with addJavascriptInterface.
  */
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), BluetoothPrinter.BridgeHost {
 
     private lateinit var webView: WebView
     private lateinit var offline: LinearLayout
     private lateinit var bridge: PrinterBridge
+
+    // Bluetooth needs two things only the Activity can do: ask for runtime
+    // permissions and show the "turn on Bluetooth" dialog. The bridge calls
+    // these from its worker thread and waits for the person's answer.
+    private var permissionLatch: CountDownLatch? = null
+    private val permissionResult = AtomicBoolean(false)
+    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        permissionResult.set(granted.values.all { it })
+        permissionLatch?.countDown()
+    }
+    private var enableLatch: CountDownLatch? = null
+    private val enableResult = AtomicBoolean(false)
+    private val enableLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        enableResult.set(result.resultCode == Activity.RESULT_OK)
+        enableLatch?.countDown()
+    }
+
+    override fun requestPermissions(permissions: Array<String>): Boolean {
+        val latch = CountDownLatch(1)
+        permissionLatch = latch
+        permissionResult.set(false)
+        runOnUiThread { permissionLauncher.launch(permissions) }
+        latch.await(2, TimeUnit.MINUTES)
+        return permissionResult.get()
+    }
+
+    override fun requestEnableBluetooth(): Boolean {
+        val latch = CountDownLatch(1)
+        enableLatch = latch
+        enableResult.set(false)
+        runOnUiThread { enableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }
+        latch.await(2, TimeUnit.MINUTES)
+        return enableResult.get()
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,7 +84,7 @@ class MainActivity : AppCompatActivity() {
         offline = findViewById(R.id.offline)
         findViewById<Button>(R.id.retry).setOnClickListener { load() }
 
-        bridge = PrinterBridge(applicationContext)
+        bridge = PrinterBridge(applicationContext, this)
 
         with(webView.settings) {
             javaScriptEnabled = true

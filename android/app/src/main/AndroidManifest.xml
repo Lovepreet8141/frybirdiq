@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- The web POS over HTTPS, and raw TCP to the printer on the shop's LAN. -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -7,6 +8,16 @@
     <!-- To learn the tablet's own LAN address for discovery (which /24 to scan). -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Bluetooth Classic (SPP) to the printer. Android 12+ uses the two
+         runtime "Nearby devices" permissions; older versions need the legacy
+         pair plus fine location for classic discovery. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
 
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />

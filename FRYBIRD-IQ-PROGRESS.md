@@ -7,6 +7,70 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Hardware — Bluetooth (SPP) transport for the POSIFLOW, added to the existing printer system
+
+**Status:** Complete for everything testable without the printer in the
+room. Gates green (441 tests, 2 new). Android debug + release compile
+(bridge 1.1.0). Deployed (see deployment record). **Physical POSIFLOW
+over Bluetooth: not tested** — that happens on the Android device next
+to it. Nothing rebuilt: same tables (no migration — `connection_type`
+and `bluetooth_identifier` already existed), same actions, same print
+jobs, same receipt bytes, same auto print; Wi-Fi / LAN re-verified
+unchanged.
+
+**Where it plugs in.** `PrinterConnection` is now a union — a private
+LAN address, or a Bluetooth device address — and the shim, the device
+agent's `connectionOf()`, the repository's `savePrinter` and the Android
+`PrinterBridge` all switch on it. One new bridge operation, `BT_STATE`
+(radio supported / enabled / permission / connected / selected);
+`DISCOVER` takes `transport`. Everything downstream — job record,
+`PRINT_RECEIPT`, duplicate protection, Retry, Print Duplicate, status
+pill — is untouched and now runs over either transport.
+
+**Android** (`BluetoothPrinter.kt`): Bluetooth Classic SPP
+(`createRfcommSocketToServiceRecord`, insecure fallback). Runtime
+permissions per Android version (BLUETOOTH_SCAN + BLUETOOTH_CONNECT on
+12+, legacy BLUETOOTH/ADMIN + fine location below) requested through
+the Activity; the "turn on Bluetooth" system dialog when the radio is
+off; scan = bonded devices + classic discovery with a hard timeout;
+pairing via `createBond()` (Android shows the PIN prompt) with a bond
+wait; one socket kept open; chunked writes; a reconnect thread with
+2 s → 30 s backoff and a NUL keep-alive every 20 s that notices a
+silent drop, so "printer off → on" recovers by itself. Every failure is
+a code the web shows: BLUETOOTH_UNAVAILABLE / BLUETOOTH_DISABLED /
+PERMISSION_DENIED / PAIRING_FAILED / PRINTER_TIMEOUT /
+PRINTER_UNREACHABLE / PRINTER_DISCONNECTED. Manifest permissions added.
+
+**Add Printer screen:** the Bluetooth option is enabled only when the
+bridge on this device reports a Bluetooth radio (Chrome never qualifies
+— it says why). Choosing it shows *Bluetooth Printer — Scan for
+Printers — Available Devices (name, address, paired) — Connect —
+Status: Connected / Disconnected*, and the printer name fills from the
+device name. The LAN address block hides; name, model, paper (80 mm /
+576 dots), protocol (ESC/POS), default and auto print stay. Saving
+stores `connection_type = BLUETOOTH` and `bluetooth_identifier` (the
+MAC); no IP. The printer card shows "Bluetooth device" instead of
+IP/port; Test connection / Test Print / Reconnect go through the
+Bluetooth socket on the owning device and report the real result.
+
+**Verified:** with a simulated bridge speaking the exact protocol —
+Bluetooth off → real error; permission, scan listing paired + nearby,
+Connect → Connected, save, card, test connection, test print bytes over
+`TEST_PRINT:BLUETOOTH`, printer powered off → "Writing to KP307-UEWB
+failed: connection lost. The bridge will reconnect.", POS pill; then
+the LAN flow re-run end to end unchanged. Console clean. Simulated
+rows removed; the real "Chrome on Android" device and its LAN printer
+that were registered from the counter today were left exactly as they
+are.
+
+**To note:** that "Chrome on Android" device has no bridge, so nothing
+prints from it; the FRYBIRD POS app registers as its own device and the
+printer must be added (or re-bound) to that device. The printer's
+Bluetooth name may be "KP307-UEWB" or similar; the typical PIN is 0000
+or 1234.
+
+---
+
 ## Hardware — devices, printers, print queue, local printer bridge, FRYBIRD POS Android app
 
 **Status:** Complete for everything that can be tested without the

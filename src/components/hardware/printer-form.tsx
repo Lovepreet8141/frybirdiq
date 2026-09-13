@@ -8,16 +8,17 @@
  * and "Enter IP manually" is always there.
  */
 
-import { useState, useTransition } from "react";
-import { Loader2, Search, Wifi } from "lucide-react";
+import { useEffect, useState, useTransition } from "react";
+import { Bluetooth, Loader2, Search, Wifi } from "lucide-react";
 import { Field, inputClass, selectClass } from "@/components/inventory/field";
 import { Button } from "@/components/ui/button";
 import { savePrinterAction } from "@/lib/hardware/actions";
 import { validatePrinterAddress } from "@/lib/hardware/net";
-import type { DiscoveredPrinter, PrinterConnectionType } from "@/lib/hardware/printer/types";
+import type { BluetoothState, DiscoveredPrinter, PrinterConnectionType, PrinterStatus } from "@/lib/hardware/printer/types";
 import type { DeviceRecord, PrinterRecord } from "@/lib/repositories/hardware";
 import { cn } from "@/lib/utils";
 import { useLocalPrinter } from "./device-agent";
+import { StatusDot } from "./printer-status";
 
 export const POSIFLOW = { model: "POSIFLOW KPC307-UEWB", manufacturer: "POSIFLOW", port: 9100, paperWidthMm: 80 as const, protocol: "ESC/POS" };
 
@@ -30,6 +31,9 @@ interface FormState {
   ipAddress: string;
   port: string;
   macAddress: string;
+  /** Bluetooth: the paired device's address and its advertised name. */
+  bluetoothAddress: string;
+  bluetoothName: string;
   paperWidthMm: "80" | "58";
   protocol: string;
   isDefault: boolean;
@@ -46,6 +50,8 @@ function initial(printer: PrinterRecord | null, devices: readonly DeviceRecord[]
     ipAddress: printer?.ipAddress ?? "",
     port: String(printer?.port ?? POSIFLOW.port),
     macAddress: printer?.macAddress ?? "",
+    bluetoothAddress: printer?.bluetoothIdentifier ?? "",
+    bluetoothName: "",
     paperWidthMm: printer?.paperWidthMm === 58 ? "58" : "80",
     protocol: printer?.protocol ?? POSIFLOW.protocol,
     isDefault: printer?.isDefault ?? firstPrinter,
@@ -60,19 +66,78 @@ export function PrinterForm({ printer, devices, firstPrinter, onSaved, onCancel 
   const [found, setFound] = useState<readonly DiscoveredPrinter[] | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [discoverNote, setDiscoverNote] = useState<string | null>(null);
+  const [bluetooth, setBluetooth] = useState<BluetoothState | null>(null);
+  const [btDevices, setBtDevices] = useState<readonly Extract<DiscoveredPrinter, { transport: "BLUETOOTH" }>[] | null>(null);
+  const [btScanning, setBtScanning] = useState(false);
+  const [btConnecting, setBtConnecting] = useState(false);
+  const [btStatus, setBtStatus] = useState<{ status: PrinterStatus; error: string | null } | null>(null);
+  const [btNote, setBtNote] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((current) => ({ ...current, [key]: value }));
 
   const chosenDevice = devices.find((device) => device.id === form.deviceId) ?? null;
   const thisIsTheDevice = Boolean(local?.client.supported && local.device && local.device.id === form.deviceId);
+  // Bluetooth is offered only where a bridge with a Bluetooth radio is running — never in a plain browser.
+  const bluetoothAvailable = Boolean(local?.client.supported && local.bridge?.capabilities.bluetooth);
   const address = validatePrinterAddress(form.ipAddress, Number(form.port));
+
+  // Ask the radio how it is the moment Bluetooth is chosen on the bridge device.
+  useEffect(() => {
+    if (form.connectionType !== "BLUETOOTH" || !local?.client.supported || !thisIsTheDevice) return;
+    let cancelled = false;
+    void local.client.getBluetoothState().then((state) => {
+      if (cancelled) return;
+      setBluetooth(state);
+      if (state.connected && state.selected) setBtStatus({ status: "ONLINE", error: null });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [form.connectionType, local, thisIsTheDevice]);
+
+  async function scanBluetooth() {
+    if (!local?.client.supported) return;
+    setBtScanning(true);
+    setBtNote(null);
+    try {
+      const found = await local.client.discover({ transport: "BLUETOOTH", timeoutMs: 15_000 });
+      const devicesFound = found.filter((entry): entry is Extract<DiscoveredPrinter, { transport: "BLUETOOTH" }> => entry.transport === "BLUETOOTH");
+      setBtDevices(devicesFound);
+      setBluetooth(await local.client.getBluetoothState());
+      if (devicesFound.length === 0) setBtNote("No Bluetooth devices found. Switch the printer on, hold it near the tablet, and scan again.");
+    } catch (caught) {
+      setBtDevices([]);
+      setBtNote(caught instanceof Error ? caught.message : "Bluetooth scan failed.");
+      setBluetooth(await local.client.getBluetoothState());
+    } finally {
+      setBtScanning(false);
+    }
+  }
+
+  async function connectBluetooth(target: { address: string; name: string | null }) {
+    if (!local?.client.supported) return;
+    setBtConnecting(true);
+    setBtNote(null);
+    setBtStatus({ status: "CONNECTING", error: null });
+    try {
+      const report = await local.client.connect({ connectionType: "BLUETOOTH", address: target.address, name: target.name });
+      setBtStatus({ status: report.status, error: report.error });
+      if (report.status === "ONLINE") {
+        setForm((current) => ({ ...current, bluetoothAddress: target.address, bluetoothName: target.name ?? "", name: current.name === "Receipt Printer" && target.name ? target.name : current.name }));
+      }
+    } catch (caught) {
+      setBtStatus({ status: "ERROR", error: caught instanceof Error ? caught.message : "Could not connect." });
+    } finally {
+      setBtConnecting(false);
+    }
+  }
 
   async function discover() {
     if (!local?.client.supported) return;
     setDiscovering(true);
     setDiscoverNote(null);
     try {
-      const printers = await local.client.discover({ timeoutMs: 15_000 });
+      const printers = await local.client.discover({ transport: "LAN", timeoutMs: 15_000 });
       setFound(printers);
       setDiscoverNote(printers.length === 0 ? "Nothing answered on port 9100. Check the printer is on and on the same Wi-Fi, or enter its IP from the printer's self-test page." : null);
     } catch (caught) {
@@ -94,6 +159,10 @@ export function PrinterForm({ printer, devices, firstPrinter, onSaved, onCancel 
       setError(address.message);
       return;
     }
+    if (form.connectionType === "BLUETOOTH" && !form.bluetoothAddress) {
+      setError("Scan for the printer and connect to it first, so FRYBIRD knows which Bluetooth device to print to.");
+      return;
+    }
     startTransition(async () => {
       const result = await savePrinterAction({
         id: printer?.id ?? null,
@@ -105,6 +174,7 @@ export function PrinterForm({ printer, devices, firstPrinter, onSaved, onCancel 
         ipAddress: form.ipAddress || null,
         port: Number(form.port),
         macAddress: form.macAddress || null,
+        bluetoothIdentifier: form.connectionType === "BLUETOOTH" ? form.bluetoothAddress || null : null,
         paperWidthMm: form.paperWidthMm === "58" ? 58 : 80,
         protocol: form.protocol,
         isDefault: form.isDefault,
@@ -144,18 +214,80 @@ export function PrinterForm({ printer, devices, firstPrinter, onSaved, onCancel 
         <div role="radiogroup" aria-label="Connection" className="grid grid-cols-3 gap-2">
           {(
             [
-              { value: "LAN", label: "Wi-Fi / LAN", supported: true },
-              { value: "BLUETOOTH", label: "Bluetooth", supported: false },
-              { value: "USB", label: "USB", supported: false },
+              { value: "LAN", label: "Wi-Fi / LAN", supported: true, note: null },
+              { value: "BLUETOOTH", label: "Bluetooth", supported: bluetoothAvailable || form.connectionType === "BLUETOOTH", note: bluetoothAvailable ? null : "needs the FRYBIRD POS app" },
+              { value: "USB", label: "USB", supported: false, note: "not yet" },
             ] as const
           ).map((option) => (
             <button key={option.value} type="button" role="radio" aria-checked={form.connectionType === option.value} disabled={!option.supported} onClick={() => set("connectionType", option.value)} className={cn("min-h-[44px] rounded-md border px-2 text-sm font-medium", form.connectionType === option.value ? "border-foreground bg-surface" : "border-border text-muted-foreground", !option.supported && "cursor-not-allowed opacity-50")}>
               {option.label}
-              {!option.supported && <span className="block text-[10px] font-normal">not yet</span>}
+              {option.note && <span className="block text-[10px] font-normal">{option.note}</span>}
             </button>
           ))}
         </div>
+        {!bluetoothAvailable && <p className="text-xs text-muted-foreground">Bluetooth printing runs from the FRYBIRD POS app on the Android device next to the printer. Chrome cannot open a Bluetooth printer connection.</p>}
       </div>
+
+      {form.connectionType === "BLUETOOTH" && (
+        <div className="flex flex-col gap-3 rounded-md border border-border bg-surface p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1.5 text-sm font-semibold">
+              <Bluetooth className="size-4" aria-hidden="true" />
+              Bluetooth Printer
+            </span>
+            {thisIsTheDevice ? (
+              <Button type="button" variant="outline" size="sm" onClick={scanBluetooth} disabled={btScanning || btConnecting}>
+                {btScanning ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Search aria-hidden="true" />}
+                {btScanning ? "Scanning…" : "Scan for Printers"}
+              </Button>
+            ) : (
+              <span className="text-xs text-muted-foreground">Scan and connect from {chosenDevice?.name ?? "the POS device"} — the tablet that holds the Bluetooth link.</span>
+            )}
+          </div>
+          {bluetooth && !bluetooth.supported && <p className="text-xs text-destructive">This device has no Bluetooth radio.</p>}
+          {bluetooth && bluetooth.supported && !bluetooth.enabled && <p className="text-xs text-destructive">Bluetooth is switched off on the tablet. Scanning will ask to turn it on.</p>}
+          {bluetooth && bluetooth.permission === "denied" && <p className="text-xs text-destructive">Bluetooth permission was denied. Allow &ldquo;Nearby devices&rdquo; for FRYBIRD POS in Android Settings, then scan again.</p>}
+          {btDevices && btDevices.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">Available Devices</span>
+              <ul className="flex flex-col gap-1">
+                {btDevices.map((candidate) => {
+                  const selected = form.bluetoothAddress === candidate.address;
+                  return (
+                    <li key={candidate.address} className="flex items-center justify-between gap-2 rounded border border-border bg-background px-2 py-1.5 text-sm">
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium">{candidate.name ?? "Unnamed device"}</span>
+                        <span className="tabular text-xs text-muted-foreground">
+                          {candidate.address}
+                          {candidate.paired ? " · paired" : " · not paired yet"}
+                        </span>
+                      </span>
+                      <Button type="button" size="sm" variant={selected ? "default" : "outline"} disabled={btConnecting} onClick={() => connectBluetooth(candidate)}>
+                        {btConnecting && selected ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
+                        {selected && btStatus?.status === "ONLINE" ? "Connected" : "Connect"}
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+          {btNote && <p className="text-xs text-muted-foreground">{btNote}</p>}
+          <dl className="flex flex-col gap-1 text-sm">
+            <div className="flex items-baseline justify-between gap-4">
+              <dt className="text-muted-foreground">Selected printer</dt>
+              <dd className="text-right font-medium">{form.bluetoothAddress ? `${form.bluetoothName || printer?.name || "Bluetooth printer"} · ${form.bluetoothAddress}` : "None yet"}</dd>
+            </div>
+            <div className="flex items-baseline justify-between gap-4">
+              <dt className="text-muted-foreground">Status</dt>
+              <dd className="text-right font-medium">
+                {btStatus ? <StatusDot status={btStatus.status} label={btStatus.status === "ONLINE" ? "Connected" : btStatus.status === "CONNECTING" ? "Connecting…" : "Disconnected"} /> : thisIsTheDevice ? <StatusDot status="UNKNOWN" label="Not connected yet" /> : "—"}
+              </dd>
+            </div>
+            {btStatus?.error && btStatus.status !== "ONLINE" && <dd className="text-xs text-destructive">{btStatus.error}</dd>}
+          </dl>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field id="pf-name" label="Printer name">
@@ -166,6 +298,7 @@ export function PrinterForm({ printer, devices, firstPrinter, onSaved, onCancel 
         </Field>
       </div>
 
+      {form.connectionType === "LAN" && (
       <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-sm font-semibold">Printer address</span>
@@ -180,21 +313,25 @@ export function PrinterForm({ printer, devices, firstPrinter, onSaved, onCancel 
         </div>
         {found && found.length > 0 && (
           <ul className="flex flex-col gap-1">
-            {found.map((candidate) => (
-              <li key={candidate.host} className="flex items-center justify-between gap-2 rounded border border-border bg-background px-2 py-1.5 text-sm">
-                <span className="inline-flex items-center gap-2">
-                  <Wifi className="size-4 text-muted-foreground" aria-hidden="true" />
-                  <span className="tabular font-medium">{candidate.host}</span>
-                  <span className="text-xs text-muted-foreground">
-                    port {candidate.port}
-                    {candidate.latencyMs !== null ? ` · ${candidate.latencyMs} ms` : ""}
-                  </span>
-                </span>
-                <Button type="button" size="sm" variant={form.ipAddress === candidate.host ? "default" : "outline"} onClick={() => setForm((current) => ({ ...current, ipAddress: candidate.host, port: String(candidate.port) }))}>
-                  {form.ipAddress === candidate.host ? "Selected" : "Use"}
-                </Button>
-              </li>
-            ))}
+            {found.flatMap((candidate) =>
+              candidate.transport !== "LAN"
+                ? []
+                : [
+                    <li key={candidate.host} className="flex items-center justify-between gap-2 rounded border border-border bg-background px-2 py-1.5 text-sm">
+                      <span className="inline-flex items-center gap-2">
+                        <Wifi className="size-4 text-muted-foreground" aria-hidden="true" />
+                        <span className="tabular font-medium">{candidate.host}</span>
+                        <span className="text-xs text-muted-foreground">
+                          port {candidate.port}
+                          {candidate.latencyMs !== null ? ` · ${candidate.latencyMs} ms` : ""}
+                        </span>
+                      </span>
+                      <Button type="button" size="sm" variant={form.ipAddress === candidate.host ? "default" : "outline"} onClick={() => setForm((current) => ({ ...current, ipAddress: candidate.host, port: String(candidate.port) }))}>
+                        {form.ipAddress === candidate.host ? "Selected" : "Use"}
+                      </Button>
+                    </li>,
+                  ],
+            )}
           </ul>
         )}
         {discoverNote && <p className="text-xs text-muted-foreground">{discoverNote}</p>}
@@ -208,6 +345,7 @@ export function PrinterForm({ printer, devices, firstPrinter, onSaved, onCancel 
         </div>
         {form.ipAddress && !address.ok && <p className="text-xs text-destructive">{address.message}</p>}
       </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Field id="pf-paper" label="Paper width">

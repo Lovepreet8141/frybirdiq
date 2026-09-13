@@ -21,7 +21,7 @@ import { deletePrinterAction, removeDeviceAction, renameDeviceAction } from "@/l
 import { isOnline } from "@/lib/hardware/device";
 import type { DeviceRecord, PrintJobRecord, PrinterRecord } from "@/lib/repositories/hardware";
 import { cn } from "@/lib/utils";
-import { useLocalPrinter } from "./device-agent";
+import { connectionOf, useLocalPrinter } from "./device-agent";
 import { PrinterForm } from "./printer-form";
 import { STATUS_LABEL, StatusDot } from "./printer-status";
 import { relativeTime } from "./relative-time";
@@ -81,10 +81,12 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
 
   const testConnection = (printer: PrinterRecord) =>
     run(`conn-${printer.id}`, async () => {
-      if (!local || !printer.ipAddress) return { tone: "error", text: "This printer has no address." };
-      const result = await local.testConnection({ connectionType: printer.connectionType, host: printer.ipAddress, port: printer.port });
+      const connection = connectionOf(printer);
+      if (!local || !connection) return { tone: "error", text: "This printer has no address." };
+      const result = await local.testConnection(connection);
       await local.refreshStatus();
-      return result.ok ? { tone: "ok", text: `${printer.name} answered on port ${printer.port}${result.latencyMs !== null ? ` in ${result.latencyMs} ms` : ""}.` } : { tone: "error", text: result.error ?? `${printer.name} did not answer.` };
+      if (!result.ok) return { tone: "error", text: result.error ?? `${printer.name} did not answer.` };
+      return { tone: "ok", text: connection.connectionType === "BLUETOOTH" ? `${printer.name} is connected over Bluetooth.` : `${printer.name} answered on port ${connection.port}${result.latencyMs !== null ? ` in ${result.latencyMs} ms` : ""}.` };
     });
 
   const testPrint = (printer: PrinterRecord) =>
@@ -301,13 +303,21 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
                       {printer.deviceName}
                       <span className="ml-1 text-xs font-normal text-muted-foreground">({deviceOnline ? "online" : "offline"})</span>
                     </Row>
-                    <Row label="Connection">{printer.connectionType === "LAN" ? "Wi-Fi / LAN" : printer.connectionType}</Row>
-                    <Row label="IP">
-                      <span className="tabular">{printer.ipAddress ?? "—"}</span>
-                    </Row>
-                    <Row label="Port">
-                      <span className="tabular">{printer.port}</span>
-                    </Row>
+                    <Row label="Connection">{printer.connectionType === "LAN" ? "Wi-Fi / LAN" : printer.connectionType === "BLUETOOTH" ? "Bluetooth" : "USB"}</Row>
+                    {printer.connectionType === "BLUETOOTH" ? (
+                      <Row label="Bluetooth device">
+                        <span className="tabular">{printer.bluetoothIdentifier ?? "—"}</span>
+                      </Row>
+                    ) : (
+                      <>
+                        <Row label="IP">
+                          <span className="tabular">{printer.ipAddress ?? "—"}</span>
+                        </Row>
+                        <Row label="Port">
+                          <span className="tabular">{printer.port}</span>
+                        </Row>
+                      </>
+                    )}
                     <Row label="Paper">{printer.paperWidthMm} mm</Row>
                     <Row label="Auto Print">{printer.autoPrintEnabled ? "ON" : "OFF"}</Row>
                     <Row label="Default">{printer.isDefault ? "YES" : "NO"}</Row>
@@ -390,7 +400,7 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
         <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{editing === "new" || editing === null ? "Add printer" : `Edit ${editing.name}`}</DialogTitle>
-            <DialogDescription>Wi-Fi / LAN printers print over the shop&rsquo;s own network from the device you choose.</DialogDescription>
+            <DialogDescription>A printer prints from the device you choose — over the shop&rsquo;s own Wi-Fi, or over Bluetooth from the FRYBIRD POS app.</DialogDescription>
           </DialogHeader>
           {editing !== null && (
             <PrinterForm

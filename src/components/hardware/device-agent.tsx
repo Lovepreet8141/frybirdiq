@@ -57,7 +57,12 @@ const HEARTBEAT_MS = 60_000;
 const STATUS_POLL_MS = 30_000;
 const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? null;
 
-const connectionOf = (printer: PrinterRecord): PrinterConnection | null => (printer.ipAddress ? { connectionType: printer.connectionType, host: printer.ipAddress, port: printer.port } : null);
+/** The bridge's view of a saved printer: a LAN address, or the Bluetooth device the tablet was paired with. */
+export const connectionOf = (printer: PrinterRecord): PrinterConnection | null => {
+  if (printer.connectionType === "BLUETOOTH") return printer.bluetoothIdentifier ? { connectionType: "BLUETOOTH", address: printer.bluetoothIdentifier, name: printer.name } : null;
+  if (printer.connectionType === "LAN") return printer.ipAddress ? { connectionType: "LAN", host: printer.ipAddress, port: printer.port } : null;
+  return null;
+};
 
 export function DeviceAgent({ children, autoRegister = true, initialPrinter = null }: { children: ReactNode; /** Register a bridge device on load. Browsers never auto-register. */ autoRegister?: boolean; initialPrinter?: PrinterRecord | null }) {
   const [client] = useState<PrinterClient>(() => getPrinterClient());
@@ -224,7 +229,7 @@ export function DeviceAgent({ children, autoRegister = true, initialPrinter = nu
         if (recorded) await reportPrintJobAction({ id: jobId, status: "PRINTED", error: null }).catch(() => null);
         return { ok: true, jobId, duplicate: outcome.duplicate };
       }
-      setStatus(outcome.code === "PRINTER_UNREACHABLE" || outcome.code === "PRINTER_TIMEOUT" ? "OFFLINE" : "ERROR");
+      setStatus(outcome.code === "PRINTER_UNREACHABLE" || outcome.code === "PRINTER_TIMEOUT" || outcome.code === "PRINTER_DISCONNECTED" || outcome.code === "BLUETOOTH_DISABLED" ? "OFFLINE" : "ERROR");
       setStatusError(outcome.error);
       if (recorded) await reportPrintJobAction({ id: jobId, status: "FAILED", error: outcome.error }).catch(() => null);
       return { ok: false, jobId, error: outcome.error, retryable: outcome.code !== "INVALID_ADDRESS" && outcome.code !== "INVALID_REQUEST" };

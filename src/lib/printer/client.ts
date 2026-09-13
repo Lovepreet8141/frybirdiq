@@ -9,7 +9,7 @@
  */
 
 import { ensureBridge } from "@/lib/hardware/printer/bridge";
-import type { BridgeCapabilities, DiscoveredPrinter, PrintOutcome, PrinterConnection, PrinterJob, PrinterProvider, StatusReport } from "@/lib/hardware/printer/types";
+import type { BluetoothState, BridgeCapabilities, DiscoveredPrinter, PrintOutcome, PrinterConnection, PrinterJob, PrinterProvider, StatusReport } from "@/lib/hardware/printer/types";
 
 export const UNAVAILABLE_REASON = "LOCAL_PRINTER_BRIDGE_UNAVAILABLE" as const;
 
@@ -21,7 +21,8 @@ export interface NativePrinterClient {
   readonly provider: PrinterProvider;
   getCapabilities(): Promise<BridgeCapabilities>;
   getStatus(): Promise<StatusReport>;
-  discover(options?: { timeoutMs?: number }): Promise<readonly DiscoveredPrinter[]>;
+  discover(options?: { timeoutMs?: number; transport?: "LAN" | "BLUETOOTH" }): Promise<readonly DiscoveredPrinter[]>;
+  getBluetoothState(): Promise<BluetoothState>;
   connect(connection: PrinterConnection): Promise<StatusReport>;
   disconnect(): Promise<void>;
   testConnection(connection: PrinterConnection): Promise<{ ok: boolean; latencyMs: number | null; error: string | null }>;
@@ -37,7 +38,8 @@ export interface BrowserPrinterClient {
   readonly reason: typeof UNAVAILABLE_REASON;
   getCapabilities(): Promise<Unsupported>;
   getStatus(): Promise<StatusReport>;
-  discover(options?: { timeoutMs?: number }): Promise<Unsupported>;
+  discover(options?: { timeoutMs?: number; transport?: "LAN" | "BLUETOOTH" }): Promise<Unsupported>;
+  getBluetoothState(): Promise<BluetoothState>;
   connect(connection?: PrinterConnection): Promise<Unsupported>;
   disconnect(): Promise<void>;
   testConnection(connection?: PrinterConnection): Promise<Unsupported>;
@@ -58,6 +60,7 @@ export const browserPrinterClient: BrowserPrinterClient = {
   getCapabilities: async () => unsupported,
   getStatus: async () => ({ status: "UNAVAILABLE", connection: null, checkedAt: null, error: null }),
   discover: async () => unsupported,
+  getBluetoothState: async () => ({ supported: false, enabled: false, permission: "not_requested", connected: false, selected: null, error: "Bluetooth printing needs the FRYBIRD POS app on the device next to the printer." }),
   connect: async () => unsupported,
   disconnect: async () => undefined,
   testConnection: async () => unsupported,
@@ -74,6 +77,7 @@ export function nativePrinterClient(provider: PrinterProvider): NativePrinterCli
     getCapabilities: () => provider.getCapabilities(),
     getStatus: () => provider.getStatus(),
     discover: (options) => provider.discover(options),
+    getBluetoothState: () => provider.getBluetoothState(),
     connect: (connection) => provider.connect(connection),
     disconnect: () => provider.disconnect(),
     testConnection: (connection) => provider.testConnection(connection),
