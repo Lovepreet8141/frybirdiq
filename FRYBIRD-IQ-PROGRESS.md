@@ -7,6 +7,72 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## POS: accept at placement, alert only online orders, Customer control
+
+**Status:** Complete. Gates green (355 tests, 7 new). Deployed
+`b013cc2` (see deployment record). Verified on production with one real
+counter order (#009, ₹59 cash takeaway, customer attached at the top).
+
+**Report that prompted it:** #008 (₹139 dine-in, rewards mobile
+attached) landed in PAID and opened the new-order pop-up. **Correction to
+the premise:** no "accept at placement" step existed on the deployed
+build — `placeCounterOrderAction` placed (PENDING_PAYMENT) and captured
+cash (PAID) and stopped. This was flagged in the Orders-board slice as
+needing approval; that report is taken as the approval. #008 did not
+bypass anything. Its customer link and points *did* work.
+
+**Fix 1 — placement.** `placeCounterOrder` now moves the order
+PENDING_PAYMENT → ACCEPTED inside the idempotent placement, via the
+domain's own `advanceOrder` (legal for both counter channels; cashier as
+actor; `accepted_at` set). Cash capture on an ACCEPTED order records the
+payment and leaves the status alone — existing behaviour for any
+non-pending order. Best effort by design: failing placement on an infra
+error in the accept step would make the till retry and re-run the
+callback, ringing the order up twice; if it ever fails the order stays
+PENDING_PAYMENT and is accepted by hand, as before.
+
+**Fix 2 — pop-up and alarm.** `pollNewOrders` filters on source first:
+`awaitsCounterDecision` (`src/domain/order-alert.ts`) is true only for an
+ONLINE order in PENDING_PAYMENT/PAID. A till order never matches, at any
+status. The dashboard "awaiting decision" count is unchanged.
+
+**Fix 3 — Customer control.** "Customer · add mobile" at the top of the
+till, usable at any point: keypad → name, stamps (n/7), points, and
+whether a reward or points are usable. Same shell state the tender reads,
+so "Rewards · add mobile" shows the already-attached customer and stays
+as a second entry point. One lookup (`attachCustomerByPhone`); nothing
+written until placement (`ensureCustomerByPhone`). **Redeem is not
+built** — applying a stamp reward or points at the till is a discount on
+the sale (pricing, tax base, ledger spend) and needs its own approval;
+the control says "reward ready" / "points usable" and stops there.
+
+Orders board: counter orders carry a **Till** pill in the type rail.
+
+**Tests:** `awaitsCounterDecision` over every channel × status (a PAID
+till order never matches); counter placement lands in ACCEPTED, allowed
+by the state machine for both counter channels, live on the KDS, never
+alerts. The "lookup at the top attaches and the tender shows the same
+customer" check has no unit form (vitest runs in `node`, no React
+harness) and was done on production.
+
+**Production verification (#009):** attached 9355533343 at the top →
+tender header "TAKEAWAY · LOVEPREET SINGH", chip "2/7 stamps · 51
+points" → ₹100 cash → settled → `/app/orders` row "TAKEAWAY · Till ·
+#009 · Accepted · Paid · Start cooking", **no pop-up after a full 12s
+poll cycle** → on `/app/kds` → customer page: points 51 → 53,
+`orders.points_earned = 2`, linked. **Stamps stayed 2/7 — correctly:**
+the org's rule is qualifying spend strictly greater than ₹200
+(`stamp_min_order_value = 20000`), the same rule online orders get; ₹59
+and ₹139 do not qualify. The points credit comes from the same capture
+block that awards stamps, so the counter path is proven without placing
+a second, larger real order. Server logs clean. One intermittent React
+#418 (hydration text mismatch) surfaced during the multi-page walk and
+did not reproduce on isolated loads of any of the five pages — most
+likely a minute counter crossing a boundary between SSR and hydration
+on the KDS/orders boards; pre-existing, not chased here.
+
+---
+
 ## POS: optional FRYBIRD REWARDS enrolment at checkout
 
 **Status:** Complete. Gates green (348 tests, 8 new). Deployed (see
@@ -1319,6 +1385,13 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-13 01:17 UTC — POS accept-at-placement, alert source filter, Customer control
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `b013cc2`. Gates in-script green (tests 355/355). Post-deploy:
+`active`; smoke `HTTP 200`; production walk placed order #009 (see
+slice); no runtime errors since the restart.
 
 ### 2026-09-13 — POS rewards enrolment
 
