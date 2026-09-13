@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FRYBIRD POS</string>
+    <string name="offline_title">No connection</string>
+    <string name="offline_body">FRYBIRD POS needs the internet to load. Check the Wi-Fi and try again.</string>
+    <string name="retry">Try again</string>
+</resources>

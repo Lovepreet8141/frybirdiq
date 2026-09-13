@@ -25,6 +25,7 @@ import { changeDue, parseTender, quickTenders } from "@/lib/pos/tender";
 import type { ReceiptData } from "@/lib/receipt/data";
 import type { ReceiptTemplate } from "@/lib/receipt/template";
 import { ReceiptSheet } from "@/components/receipt/receipt-sheet";
+import { type PrintResult, useLocalPrinter } from "@/components/hardware/device-agent";
 import { cn } from "@/lib/utils";
 import { type PosCustomer, attachCustomerByPhone } from "./attach-customer";
 import { RewardsKeypad } from "./rewards-keypad";
@@ -32,6 +33,7 @@ import { RewardsKeypad } from "./rewards-keypad";
 export type { PosCustomer } from "./attach-customer";
 
 export interface SettledOrder {
+  readonly orderId: string;
   readonly orderNumber: string;
   readonly total: string;
   readonly received: string;
@@ -47,6 +49,7 @@ export function PaymentSheet({
   priced,
   shopName,
   receiptTemplate,
+  canDuplicate,
   channelLabel,
   tableName,
   customer,
@@ -60,6 +63,8 @@ export function PaymentSheet({
   shopName: string;
   /** The applied Bill & Receipt design. */
   receiptTemplate: ReceiptTemplate;
+  /** `orders.refund` — may print a second copy. */
+  canDuplicate: boolean;
   channelLabel: string;
   tableName: string | null;
   customer: PosCustomer | null;
@@ -76,6 +81,21 @@ export function PaymentSheet({
   const [enrolling, setEnrolling] = useState(false);
   const [isPending, startTransition] = useTransition();
   const customerName = customer?.name ?? customer?.phone ?? null;
+  const localPrinter = useLocalPrinter();
+  const [print, setPrint] = useState<ThermalPrintState>({ state: "idle" });
+
+  /**
+   * The receipt to the thermal printer, through this device's bridge. The
+   * order is already saved and paid before this runs; a printer that is off
+   * changes nothing about the sale — only what this screen says next.
+   */
+  async function printThermal(order: SettledOrder, kind: "RECEIPT" | "DUPLICATE", jobId?: string) {
+    if (!localPrinter?.client.supported || !localPrinter.printer || !order.receipt) return;
+    setPrint({ state: "printing", kind });
+    const result: PrintResult = await localPrinter.printReceipt({ orderId: order.orderId, template: receiptTemplate, data: order.receipt, kind, jobId });
+    if (result.ok) setPrint({ state: "printed", kind, jobId: result.jobId, duplicate: result.duplicate });
+    else setPrint({ state: "failed", kind, jobId: result.jobId, error: result.error, retryable: result.retryable });
+  }
 
   /** The keypad's submit: the same lookup as the Customer control at the top of the till, into the same shell state. */
   async function enrol(phone: string): Promise<string | null> {
@@ -113,7 +133,8 @@ export function PaymentSheet({
         setError(result.error);
         return;
       }
-      setSettled({
+      const order: SettledOrder = {
+        orderId: result.orderId,
         orderNumber: result.orderNumber,
         total: result.total,
         received: result.received,
@@ -122,7 +143,11 @@ export function PaymentSheet({
         paymentError: result.paid ? null : result.paymentError,
         at: new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }),
         receipt: result.receipt,
-      });
+      };
+      setSettled(order);
+      // Auto print: only on a device with a bridge and a printer set to auto print.
+      if (localPrinter?.client.supported && localPrinter.printer?.autoPrintEnabled && result.paid) void printThermal(order, "RECEIPT");
+      else if (localPrinter?.client.supported && localPrinter.printer) setPrint({ state: "skipped" });
     });
   }
 
@@ -141,7 +166,12 @@ export function PaymentSheet({
     >
       <div className="flex max-h-[92dvh] w-full max-w-md flex-col overflow-y-auto rounded-t-xl bg-background p-5 shadow-xl sm:rounded-xl">
         {settled ? (
-          <Settled settled={settled} onDone={onDone} onRetry={() => setSettled(null)} />
+          <Settled
+            settled={settled}
+            onDone={onDone}
+            onRetry={() => setSettled(null)}
+            thermal={localPrinter?.client.supported && localPrinter.printer ? { print, printerName: localPrinter.printer.name, canDuplicate, retry: () => printThermal(settled, "RECEIPT", print.state === "failed" ? (print.jobId ?? undefined) : undefined), duplicate: () => printThermal(settled, "DUPLICATE"), printNow: () => printThermal(settled, "RECEIPT") } : null}
+          />
         ) : enrolling ? (
           <RewardsKeypad onCancel={() => setEnrolling(false)} onSubmit={enrol} />
         ) : (
@@ -327,14 +357,72 @@ export function PaymentSheet({
  * second time replays the placement onto the order that already exists and
  * only the cash capture is retried.
  */
+export type ThermalPrintState =
+  | { readonly state: "idle" }
+  | { readonly state: "skipped" }
+  | { readonly state: "printing"; readonly kind: "RECEIPT" | "DUPLICATE" }
+  | { readonly state: "printed"; readonly kind: "RECEIPT" | "DUPLICATE"; readonly jobId: string; readonly duplicate: boolean }
+  | { readonly state: "failed"; readonly kind: "RECEIPT" | "DUPLICATE"; readonly jobId: string | null; readonly error: string; readonly retryable: boolean };
+
+interface ThermalControls {
+  readonly print: ThermalPrintState;
+  readonly printerName: string;
+  readonly canDuplicate: boolean;
+  readonly retry: () => void;
+  readonly duplicate: () => void;
+  readonly printNow: () => void;
+}
+
+/** What the cashier sees about the thermal receipt: printed, not printed with a retry, or nothing when this device has no printer. */
+function ThermalStatus({ thermal }: { thermal: ThermalControls }) {
+  const { print } = thermal;
+  if (print.state === "idle") return null;
+  const busy = print.state === "printing";
+  return (
+    <div role="status" aria-live="polite" className={cn("flex w-full flex-col gap-2 rounded-md border px-3 py-2 text-left text-sm", print.state === "printed" ? "border-success/40 bg-success/10" : print.state === "failed" ? "border-destructive/40 bg-destructive/10" : "border-border bg-surface")}>
+      <p className="flex items-center gap-2 font-semibold">
+        {busy && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+        {print.state === "printed" && <CheckCircle2 className="size-4 text-success" aria-hidden="true" />}
+        {print.state === "failed" && <TriangleAlert className="size-4 text-destructive" aria-hidden="true" />}
+        {print.state === "printing" ? (print.kind === "DUPLICATE" ? "Printing duplicate…" : "Printing receipt…") : print.state === "printed" ? (print.kind === "DUPLICATE" ? "Duplicate printed ✓" : print.duplicate ? "Receipt already printed ✓" : "Receipt Printed ✓") : print.state === "failed" ? "Receipt Not Printed" : "Receipt not printed — auto print is off"}
+      </p>
+      {/* The cashier gets the plain fact, not an address and a port; the detail is on the Printers page. */}
+      {print.state === "failed" && <p className="text-xs text-muted-foreground">{print.retryable ? "The printer did not answer. Check it is switched on and on the shop Wi-Fi, then retry. The order is complete either way." : print.error}</p>}
+      <div className="flex flex-wrap gap-2">
+        {print.state === "failed" && print.retryable && (
+          <button type="button" onClick={thermal.retry} className="inline-flex min-h-[40px] items-center gap-1.5 rounded-md border border-border-strong bg-background px-3 text-sm font-semibold hover:bg-surface-muted">
+            <Printer className="size-4" aria-hidden="true" />
+            Retry Print
+          </button>
+        )}
+        {print.state === "skipped" && (
+          <button type="button" onClick={thermal.printNow} className="inline-flex min-h-[40px] items-center gap-1.5 rounded-md border border-border-strong bg-background px-3 text-sm font-semibold hover:bg-surface-muted">
+            <Printer className="size-4" aria-hidden="true" />
+            Print receipt
+          </button>
+        )}
+        {print.state === "printed" && thermal.canDuplicate && (
+          <button type="button" onClick={thermal.duplicate} className="inline-flex min-h-[40px] items-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-semibold hover:bg-surface-muted">
+            <Printer className="size-4" aria-hidden="true" />
+            Print Duplicate
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Settled({
   settled,
   onDone,
   onRetry,
+  thermal,
 }: {
   settled: SettledOrder;
   onDone: () => void;
   onRetry: () => void;
+  /** Null when this device has no thermal printer — the browser Print button is what remains. */
+  thermal: ThermalControls | null;
 }) {
   return (
     <div className="flex flex-col items-center gap-4 text-center">
@@ -361,6 +449,8 @@ function Settled({
           {settled.paymentError ?? "Take the cash on the order screen before the customer leaves."}
         </p>
       )}
+
+      {thermal && <ThermalStatus thermal={thermal} />}
 
       <dl className="flex w-full flex-col gap-1 text-sm">
         <div className="flex items-baseline justify-between gap-4">

@@ -32,6 +32,7 @@ interface Permissions {
   readonly canSeePromotions: boolean;
   readonly canSeeInventory: boolean;
   readonly canReject: boolean;
+  readonly canSeeHardware: boolean;
 }
 
 /**
@@ -70,6 +71,7 @@ export function AppChrome({
     canSeePromotions,
     canSeeInventory,
     canReject,
+    canSeeHardware,
   } = permissions;
 
   // POS and the kitchen display: touch/speed screens that should not spend
@@ -146,6 +148,7 @@ export function AppChrome({
     canSeeSettings,
     canSeePromotions,
     canSeeInventory,
+    canSeeHardware,
   });
 
   return (
@@ -176,6 +179,7 @@ export function AppChrome({
         canSeeSettings={canSeeSettings}
         canSeePromotions={canSeePromotions}
         canSeeInventory={canSeeInventory}
+        canSeeHardware={canSeeHardware}
       />
       <SidebarInset>
         <SiteHeader groups={navGroups} canSeeOrders={canSeeOrders} staff={staff} />

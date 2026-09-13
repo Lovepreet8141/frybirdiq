@@ -12,6 +12,7 @@ import {
   type LucideIcon,
   Package,
   PackageSearch,
+  Printer,
   ReceiptText,
   Settings2,
   ShieldCheck,
@@ -50,6 +51,8 @@ export interface NavPermissions {
   readonly canSeeFinance: boolean;
   readonly canSeeKitchen: boolean;
   readonly canSeeSettings: boolean;
+  /** `integrations.manage` or `orders.create` — the printers page is for the owner and for the device at the till. */
+  readonly canSeeHardware: boolean;
   readonly canSeePromotions: boolean;
   readonly canSeeInventory: boolean;
 }
@@ -77,6 +80,7 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
     canSeeFinance,
     canSeeKitchen,
     canSeeSettings,
+    canSeeHardware,
     canSeePromotions,
     canSeeInventory,
   } = permissions;
@@ -162,6 +166,7 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
       items: [
         ...(canSeeSettings ? [{ href: "/app/admin/restaurant", label: "Restaurant", icon: Settings2 }] : []),
         ...(canSeeSettings ? [{ href: "/app/admin/receipt", label: "Bill & Receipt", icon: ReceiptText }] : []),
+        ...(canSeeHardware ? [{ href: "/app/admin/hardware", label: "Printers", icon: Printer }] : []),
         ...(canSeeAudit ? [{ href: "/app/admin/audit", label: "Audit log", icon: ShieldCheck }] : []),
       ],
     },

@@ -27,6 +27,7 @@ const SECTIONS: readonly { readonly prefix: string; readonly label: string }[] =
   { prefix: "/app/iq", label: "Overview" },
   { prefix: "/app/admin/restaurant", label: "Restaurant" },
   { prefix: "/app/admin/receipt", label: "Bill & Receipt" },
+  { prefix: "/app/admin/hardware", label: "Printers" },
   { prefix: "/app/admin/audit", label: "Audit log" },
   { prefix: "/app/inventory/suppliers", label: "Suppliers" },
   { prefix: "/app/inventory", label: "Ingredients" },

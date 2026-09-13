@@ -21,6 +21,8 @@ import { CustomerControl } from "./customer-control";
 import { ModifierPicker } from "./modifier-picker";
 import { OrderBuilder, type PosTableOption } from "./order-builder";
 import type { ReceiptTemplate } from "@/lib/receipt/template";
+import { useLocalPrinter } from "@/components/hardware/device-agent";
+import { PrinterReadyPill } from "@/components/hardware/printer-status";
 import { PaymentSheet, type PosCustomer } from "./payment-sheet";
 import { ProductGrid } from "./product-grid";
 import { useOnline } from "./use-online";
@@ -49,9 +51,12 @@ export function PosShell({
   tables,
   shopName,
   receiptTemplate,
+  canDuplicate,
 }: {
   categories: readonly MenuCategory[];
   canLookupCustomers: boolean;
+  /** `orders.refund` — may print a second copy of a bill. */
+  canDuplicate: boolean;
   tables: readonly PosTableOption[];
   shopName: string;
   /** The applied Bill & Receipt design — what Print produces after a sale. */
@@ -75,6 +80,8 @@ export function PosShell({
 
   const online = useOnline();
   const router = useRouter();
+  // The local printer, if this device has one. Null outside the agent (tests, other screens).
+  const localPrinter = useLocalPrinter();
 
   // Refresh the grid against the same shared menu path everything else
   // reads (§ pollPosMenu) — a price change, a photo, or someone marking an
@@ -326,6 +333,11 @@ export function PosShell({
       <div className="flex h-full min-h-0 flex-col">
         {/* Attach a customer at any point; the tender step reads the same
             state and offers the same keypad as a second entry point. */}
+        {localPrinter && localPrinter.printer && (
+          <div className="flex items-center justify-end border-b border-border bg-surface px-3 py-1.5">
+            <PrinterReadyPill status={localPrinter.status} configured />
+          </div>
+        )}
         <CustomerControl customer={customer} onChange={setCustomer} enabled={canLookupCustomers} />
         <div className="min-h-0 flex-1">
           <OrderBuilder
@@ -354,6 +366,7 @@ export function PosShell({
           priced={payingFor}
           shopName={shopName}
           receiptTemplate={receiptTemplate}
+          canDuplicate={canDuplicate}
           channelLabel={channel === "DINE_IN" ? "Dine-in" : "Takeaway"}
           tableName={(channel === "DINE_IN" && tables.find((table) => table.id === tableId)?.name) || null}
           customer={customer}

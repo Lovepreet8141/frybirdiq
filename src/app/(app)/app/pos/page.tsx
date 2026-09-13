@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { DeviceAgent } from "@/components/hardware/device-agent";
 import { PosShell } from "@/components/pos/pos-shell";
 import { PosViewTabs } from "@/components/pos/pos-view-tabs";
 import { TablesView } from "@/components/pos/tables-view";
@@ -52,6 +53,8 @@ export default async function PosPage() {
   const staff = await requireStaff();
   const org = await requireOrg();
   const canAddTable = await staffCan("settings.manage");
+  // A second copy of a bill is a manager's call, like a refund.
+  const canDuplicate = await staffCan("orders.refund");
   const [tables, unassignedOrders, receiptTemplate] = await Promise.all([
     listTables(staff.orgId),
     listUnassignedDineInOrders(staff.orgId),
@@ -68,13 +71,17 @@ export default async function PosPage() {
   return (
     <PosViewTabs
       order={
-        <PosShell
-          categories={menu}
-          canLookupCustomers={canLookupCustomers}
-          shopName={org.name}
-          receiptTemplate={receiptTemplate}
-          tables={tables.map((table) => ({ id: table.id, name: table.name, available: table.openOrder === null }))}
-        />
+        // The device agent registers a FRYBIRD POS device, watches its printer and prints; a plain browser gets nothing but the truth.
+        <DeviceAgent autoRegister>
+          <PosShell
+            categories={menu}
+            canLookupCustomers={canLookupCustomers}
+            canDuplicate={canDuplicate}
+            shopName={org.name}
+            receiptTemplate={receiptTemplate}
+            tables={tables.map((table) => ({ id: table.id, name: table.name, available: table.openOrder === null }))}
+          />
+        </DeviceAgent>
       }
       tables={
         <TablesView tables={tables} orderDetails={orderDetails} unassignedOrders={unassignedOrders} canAddTable={canAddTable} />
