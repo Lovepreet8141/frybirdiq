@@ -7,6 +7,33 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Polish: /app/iq after slice 3
+
+**Status:** Complete. Gates green. Deployed (see deployment record).
+Verified signed in at 390px and 1440px.
+
+1. **"Where the money goes" states.** The empty state and the donut
+   rendered together when only operating expenses existed — the empty
+   check tested COGS alone. Now two separate facts drive it:
+   `pnl.hasExpenses` (any expense this month → donut) and `hasDirect`
+   (any food/packaging cost in the weekly series → food cost % chart).
+   Nothing recorded → the full empty state; operating-only → donut plus
+   one line ("No food or packaging costs yet — food cost % appears once
+   you record one").
+2. **Series colour.** Sparkline and mini bars moved to `--chart-5` (ink
+   grey). Note for the token decision: on the IQ surface **`--chart-1` is
+   the brand red** (`#d92b2b`, `globals.css:269`), so "use `--chart-1`"
+   would have kept them red. Redefining `--chart-1` itself would recolour
+   Channels and Food cost too — left for an explicit call.
+3. **Equal-height KPI cards** — `h-full` on the stagger item and card,
+   content as a column, footer pinned with `mt-auto`.
+4. **Footer links on all three** — Revenue → `/app/iq?range=7d` ("Sales,
+   last 7 days" — Sales *is* this page, so the link goes to the period the
+   sparkline shows), Orders → `/app/iq/live`, Average order →
+   `/app/iq/pnl`.
+
+---
+
 ## Slice 3 (UI Kit): Overview — today's KPIs on the kit's Default dashboard cards
 
 **Status:** Complete. Gates green. Committed `0acc6cf`. Deployed (see
