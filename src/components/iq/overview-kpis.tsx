@@ -25,9 +25,8 @@ import { formatBps } from "@/lib/money";
  * Deltas keep the accessible form (`Delta`: arrow + sign + words), not the
  * kit's colour-only "+20.1%" — a figure that moved never relies on green.
  *
- * Series colour is `--chart-5` (ink grey), not `--chart-1`: on the IQ surface
- * chart-1 is the brand red, and red is what an alert looks like here. A
- * sparkline of ordinary Tuesdays should not read as a warning.
+ * Series colour is `--chart-1`, the neutral (MASTER.md §5 "Charts"); red is
+ * reserved for a series that is an alert.
  */
 
 export interface SparkPoint {
@@ -48,8 +47,8 @@ export interface KpiFigure {
   readonly detail?: string;
 }
 
-const revenueConfig = { rupees: { label: "Revenue", color: "var(--chart-5)" } } satisfies ChartConfig;
-const ordersConfig = { orders: { label: "Orders", color: "var(--chart-5)" } } satisfies ChartConfig;
+const revenueConfig = { rupees: { label: "Revenue", color: "var(--chart-1)" } } satisfies ChartConfig;
+const ordersConfig = { orders: { label: "Orders", color: "var(--chart-1)" } } satisfies ChartConfig;
 
 function Comparisons({ figure }: { figure: KpiFigure }) {
   return (

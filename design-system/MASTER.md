@@ -150,6 +150,20 @@ Success is the one colour outside the brand set, because a kitchen ticket that
 has gone green cannot also be the brand red — status has to survive being
 glanced at from two metres away. It is used only for status, never decoration.
 
+### Charts (staff surface only)
+
+A data series is drawn in the neutral, never the brand red: on the IQ
+surface red is what an alert looks like, and a sparkline of ordinary
+Tuesdays must not read as a warning.
+
+```
+chart-1  #55504A  ink grey — the default series
+chart-2  #0F7B4F  success — status only, never a channel or a series
+chart-3  #726C63  muted grey — a second, quieter series
+chart-4  #C2410C  warning orange — over target, late, at risk
+chart-5  #D92B2B  red — an alert series, and nothing else
+```
+
 ### Order tints (staff surface only)
 
 The orders list tells four order *types* and five order *statuses* apart at a

@@ -462,7 +462,7 @@ export interface DayTotal {
 }
 
 /** Revenue and order count for one arbitrary window — lighter than {@link getDashboard} when neither AOV nor a product breakdown is needed. */
-async function periodTotals(orgId: string, range: DateRange): Promise<DayTotal> {
+export async function periodTotals(orgId: string, range: DateRange): Promise<DayTotal> {
   const rows = await paidOrders(orgId, range);
   return { revenue: add(...rows.map((row) => paise(row.grandTotal))), orders: rows.length };
 }

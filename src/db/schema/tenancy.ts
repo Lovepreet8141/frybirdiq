@@ -1,7 +1,7 @@
 /** Organizations, locations, staff and roles. BUILD-PLAN.md §41, §42. */
 
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, pgEnum, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
+import { boolean, date, index, integer, pgEnum, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
 import { ROLES } from "@/domain/permissions";
 import { ZERO_MONEY, money, primaryId, priceBasisEnum, timestamps } from "./_shared";
 
@@ -70,6 +70,24 @@ export const organizations = pgTable("organizations", {
   stampMaxRewardValue: money("stamp_max_reward_value").notNull().default(sql`25000`),
 
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
+
+  /*
+   * Operations. Read by FRYBIRD IQ's Overview; written from the Restaurant
+   * settings screen. Settings, not constants — like the rewards rules above.
+   */
+  /**
+   * How many tickets the kitchen can have open at once before it is full.
+   * "Kitchen load" on the Overview is open tickets against this. 10 is the
+   * starting figure for a single fryer line; the owner sets the real one.
+   */
+  kitchenCapacity: integer("kitchen_capacity").notNull().default(10),
+  /**
+   * The day the shop opened. Decides which comparisons the Overview can
+   * honestly offer — a 4-week average needs four weeks of trading, "same
+   * day last year" needs a year. Null until set; the Overview then falls
+   * back to the first order it can see and says so.
+   */
+  openedOn: date("opened_on"),
   ...timestamps,
 });
 

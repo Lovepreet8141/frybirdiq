@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { OperationsSettingsForm } from "@/components/staff/operations-settings-form";
 import { PageHeader } from "@/components/staff/page-header";
 import { SettingRow } from "@/components/staff/setting-row";
 import { EmptyState, PermissionDenied } from "@/components/states";
@@ -57,7 +58,7 @@ export default async function RestaurantSettingsPage() {
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-[var(--gutter)] py-8">
       <PageHeader
         title="Restaurant"
-        description="What FRYBIRD is configured as. These values already drive every invoice, price, reward and delivery quote; changing any of them is a business decision, so this page shows them and does not edit them."
+        description="What FRYBIRD is configured as. These values already drive every invoice, price, reward and delivery quote; changing any of them is a business decision, so this page shows them and edits only the operations settings the Overview reads."
       />
 
       <Section title="Business">
@@ -75,6 +76,10 @@ export default async function RestaurantSettingsPage() {
         />
         <SettingRow label="Currency" value={organization.currency} />
         <SettingRow label="Business day" description="Order numbers restart, and 'today' begins, on this clock." value={organization.timezone} />
+      </Section>
+
+      <Section title="Operations" description="Read by the Overview: kitchen load is open tickets against the capacity; the opening date decides which comparisons can honestly be offered.">
+        <OperationsSettingsForm kitchenCapacity={organization.kitchenCapacity} openedOn={organization.openedOn} />
       </Section>
 
       <Section title="GST rates" description="Every product line is taxed at its own rate and carries its HSN/SAC code.">

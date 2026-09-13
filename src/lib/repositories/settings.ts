@@ -27,6 +27,10 @@ export interface RestaurantSettings {
     readonly currency: string;
     readonly timezone: string;
     readonly priceBasis: PriceBasis;
+    /** Open tickets the kitchen can carry at once — "Kitchen load" on the Overview is measured against this. */
+    readonly kitchenCapacity: number;
+    /** YYYY-MM-DD, or null until the owner sets it. */
+    readonly openedOn: string | null;
   };
   readonly loyalty: {
     readonly earnBps: number;
@@ -75,6 +79,8 @@ export async function getRestaurantSettings(orgId: string): Promise<RestaurantSe
       currency: org.currency,
       timezone: org.timezone,
       priceBasis: org.priceBasis,
+      kitchenCapacity: org.kitchenCapacity,
+      openedOn: org.openedOn,
     },
     loyalty: {
       earnBps: org.loyaltyEarnBps,
@@ -101,4 +107,20 @@ export async function getRestaurantSettings(orgId: string): Promise<RestaurantSe
     delivery,
     taxRates: rates,
   };
+}
+
+/**
+ * The operations settings the Overview reads. The one write in this file —
+ * a settings change, like the rewards rules: read on the next request,
+ * no deploy. Permission is the caller's (`settings.manage`, checked in the
+ * action), the division every repository write here follows.
+ */
+export async function updateOperationsSettings(
+  orgId: string,
+  input: { readonly kitchenCapacity: number; readonly openedOn: string | null },
+): Promise<void> {
+  await db()
+    .update(organizations)
+    .set({ kitchenCapacity: input.kitchenCapacity, openedOn: input.openedOn, updatedAt: new Date() })
+    .where(eq(organizations.id, orgId));
 }

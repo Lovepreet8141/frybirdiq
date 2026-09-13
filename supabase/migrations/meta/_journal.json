@@ -162,6 +162,13 @@
       "when": 1789252194628,
       "tag": "0022_inventory_recipe_versions_and_traceability",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789263036539,
+      "tag": "0023_overview_operations_settings",
+      "breakpoints": true
     }
   ]
 }

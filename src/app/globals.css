@@ -302,11 +302,15 @@
   --input: var(--iq-hairline);
   --ring: var(--iq-red);
 
-  --chart-1: #d92b2b;
+  /* Chart palette (MASTER.md §5 "Charts"): chart-1 is the neutral a data
+     series is drawn in; red sits last and is reached for only when a series
+     *is* an alert (late, over target). A sparkline of ordinary Tuesdays must
+     never read as a warning. */
+  --chart-1: #55504a;
   --chart-2: #0f7b4f;
   --chart-3: #726c63;
   --chart-4: #c2410c;
-  --chart-5: #55504a;
+  --chart-5: #d92b2b;
 
   /* Order tints — MASTER.md §5, design-system/tokens.json `color.order`.
      Staff surface only: a type or status has to be told apart at row height
