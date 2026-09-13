@@ -31,7 +31,7 @@ import { priceDraft } from "@/lib/pos/pricing";
 import { quoteForPin } from "./delivery";
 import { countPromotionUse } from "./promotions";
 import { requireOrg, resolvePricingContext } from "./org";
-import { findCustomerByPhone } from "./customers";
+import { ensureCustomerByPhone } from "./customers";
 import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
 import { createPendingPayment, recordCashPayment } from "./payments";
@@ -628,7 +628,11 @@ export async function placeCounterOrder(input: CounterOrderInput): Promise<Count
     tableName = table.name;
   }
 
-  const customer = input.customerPhone ? await findCustomerByPhone(input.orgId, input.customerPhone) : null;
+  // A phone offered at the counter enrols the customer: found, or created
+  // with just the number. The order is then theirs, and the cash capture
+  // credits stamps and points the way it does for every other channel.
+  // No phone, no record — "No phone on file", nothing credited.
+  const customer = input.customerPhone ? await ensureCustomerByPhone(input.orgId, input.customerPhone) : null;
 
   try {
     const { result, replayed } = await withIdempotency(

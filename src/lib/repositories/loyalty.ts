@@ -211,6 +211,16 @@ export async function getAvailableStampReward(customerId: string, orgId: string)
 }
 
 /** Current stamp progress and how many rewards are waiting, for the account screen. */
+/** The points balance the customer has right now, or null with no account yet. Read-only; scoped to the org. */
+export async function getPointsBalance(customerId: string, orgId: string): Promise<number | null> {
+  const [account] = await db()
+    .select({ pointsBalance: loyaltyAccounts.pointsBalance })
+    .from(loyaltyAccounts)
+    .where(and(eq(loyaltyAccounts.customerId, customerId), eq(loyaltyAccounts.orgId, orgId)))
+    .limit(1);
+  return account?.pointsBalance ?? null;
+}
+
 export async function getStampAccountState(customerId: string, orgId: string): Promise<StampAccountState | null> {
   const database = db();
   const [account] = await database.select().from(loyaltyAccounts).where(eq(loyaltyAccounts.customerId, customerId)).limit(1);

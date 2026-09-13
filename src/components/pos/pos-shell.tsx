@@ -17,10 +17,9 @@ import { type PriceDraftOk, placeCounterOrderAction, pollPosMenu, priceDraftOrde
 import type { MenuCategory, MenuProduct } from "@/lib/repositories/menu";
 import { recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 import { CategoryRail } from "./category-rail";
-import { CustomerLookup } from "./customer-lookup";
 import { ModifierPicker } from "./modifier-picker";
 import { OrderBuilder, type PosTableOption } from "./order-builder";
-import { PaymentSheet } from "./payment-sheet";
+import { PaymentSheet, type PosCustomer } from "./payment-sheet";
 import { ProductGrid } from "./product-grid";
 import { useOnline } from "./use-online";
 
@@ -60,7 +59,9 @@ export function PosShell({
   const [pickerProduct, setPickerProduct] = useState<MenuProduct | null>(null);
   const [search, setSearch] = useState("");
   const [tableId, setTableId] = useState<string | null>(null);
-  const [customer, setCustomer] = useState<{ phone: string; name: string | null } | null>(null);
+  // Offered by the customer on the tender step ("Rewards · add mobile"), or
+  // nothing. Never a required field.
+  const [customer, setCustomer] = useState<PosCustomer | null>(null);
   const [payingFor, setPayingFor] = useState<PriceDraftOk | null>(null);
 
   const [priced, setPriced] = useState<PriceDraftOk | null>(null);
@@ -318,7 +319,6 @@ export function PosShell({
       />
 
       <div className="flex h-full min-h-0 flex-col">
-        {canLookupCustomers && <CustomerLookup onCustomer={setCustomer} />}
         <div className="min-h-0 flex-1">
           <OrderBuilder
             channel={channel}
@@ -347,7 +347,9 @@ export function PosShell({
           shopName={shopName}
           channelLabel={channel === "DINE_IN" ? "Dine-in" : "Takeaway"}
           tableName={(channel === "DINE_IN" && tables.find((table) => table.id === tableId)?.name) || null}
-          customerName={customer?.name ?? customer?.phone ?? null}
+          customer={customer}
+          onCustomerChange={setCustomer}
+          canEnrol={canLookupCustomers}
           onCancel={() => setPayingFor(null)}
           onConfirm={confirmPayment}
           onDone={startNextOrder}

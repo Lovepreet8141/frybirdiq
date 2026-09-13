@@ -18,11 +18,21 @@
  */
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { Banknote, CheckCircle2, Loader2, Printer, TriangleAlert } from "lucide-react";
+import { Banknote, CheckCircle2, Gift, Loader2, Printer, TriangleAlert } from "lucide-react";
 import { formatINR, paise, subtract } from "@/lib/money";
-import type { CounterCheckoutResult, PriceDraftOk } from "@/lib/pos/actions";
+import { type CounterCheckoutResult, type PriceDraftOk, lookupCustomerAction } from "@/lib/pos/actions";
+import { rewardsSummary } from "@/lib/pos/rewards-enrolment";
 import { changeDue, parseTender, quickTenders } from "@/lib/pos/tender";
 import { cn } from "@/lib/utils";
+import { RewardsKeypad } from "./rewards-keypad";
+
+/** The customer this order is for, once they have offered a number. The phone travels; the server resolves it against the org. */
+export interface PosCustomer {
+  readonly phone: string;
+  readonly name: string | null;
+  /** "3/5 stamps · 120 points", or "New — enrolled with this order". */
+  readonly summary: string;
+}
 
 export interface SettledOrder {
   readonly orderNumber: string;
@@ -39,7 +49,9 @@ export function PaymentSheet({
   shopName,
   channelLabel,
   tableName,
-  customerName,
+  customer,
+  onCustomerChange,
+  canEnrol,
   onCancel,
   onConfirm,
   onDone,
@@ -48,7 +60,10 @@ export function PaymentSheet({
   shopName: string;
   channelLabel: string;
   tableName: string | null;
-  customerName: string | null;
+  customer: PosCustomer | null;
+  onCustomerChange: (customer: PosCustomer | null) => void;
+  /** `customers.view` — whether the rewards button is offered at all. */
+  canEnrol: boolean;
   onCancel: () => void;
   onConfirm: (cashReceived: string, idempotencyKey: string) => Promise<CounterCheckoutResult>;
   onDone: () => void;
@@ -56,7 +71,22 @@ export function PaymentSheet({
   const [cash, setCash] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [settled, setSettled] = useState<SettledOrder | null>(null);
+  const [enrolling, setEnrolling] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const customerName = customer?.name ?? customer?.phone ?? null;
+
+  /** The keypad's submit: look the number up, attach what came back, close. An error sentence goes back to the keypad. */
+  async function enrol(phone: string): Promise<string | null> {
+    const result = await lookupCustomerAction(phone);
+    if (!result.ok) return result.error;
+    onCustomerChange({
+      phone: result.phone,
+      name: result.found ? result.name : null,
+      summary: result.found ? rewardsSummary({ found: true, rewards: result.rewards, points: result.points }) : rewardsSummary({ found: false, rewards: null, points: null }),
+    });
+    setEnrolling(false);
+    return null;
+  }
   // One key for the life of this sheet: minted on mount, so it is the same
   // on the first Confirm and on every retry after it.
   const [idempotencyKey] = useState(() => crypto.randomUUID());
@@ -101,15 +131,20 @@ export function PaymentSheet({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={settled ? "Order complete" : "Take payment"}
+      aria-label={settled ? "Order complete" : enrolling ? "Rewards — add mobile" : "Take payment"}
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4"
       onKeyDown={(event) => {
-        if (event.key === "Escape" && !isPending) (settled ? onDone : onCancel)();
+        if (event.key !== "Escape" || isPending) return;
+        // Escape on the keypad is Cancel: back to the tender, nothing changed.
+        if (enrolling) setEnrolling(false);
+        else (settled ? onDone : onCancel)();
       }}
     >
       <div className="flex max-h-[92dvh] w-full max-w-md flex-col overflow-y-auto rounded-t-xl bg-background p-5 shadow-xl sm:rounded-xl">
         {settled ? (
           <Settled settled={settled} onDone={onDone} onRetry={() => setSettled(null)} />
+        ) : enrolling ? (
+          <RewardsKeypad onCancel={() => setEnrolling(false)} onSubmit={enrol} />
         ) : (
           <>
             <div className="flex flex-col gap-1">
@@ -187,6 +222,48 @@ export function PaymentSheet({
                     : "—"}
               </span>
             </p>
+
+            {/* FRYBIRD REWARDS — optional, customer-initiated, never in the
+                way. One secondary button; the default flow ignores it and the
+                order goes through in the same taps as before. Once a number
+                is on the order it reads back as a chip with a way off. */}
+            {canEnrol &&
+              (customer ? (
+                <div className="mt-3 flex items-center gap-2 rounded-md bg-surface-muted px-3 py-2 text-sm">
+                  <Gift className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-semibold">{customer.name ?? customer.phone}</p>
+                    <p className="truncate text-xs text-muted-foreground">{customer.summary}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEnrolling(true)}
+                    disabled={isPending}
+                    className="min-h-[36px] rounded-md px-2 text-xs font-semibold underline underline-offset-2 disabled:opacity-50"
+                  >
+                    Change
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onCustomerChange(null)}
+                    disabled={isPending}
+                    aria-label="Remove rewards number from this order"
+                    className="min-h-[36px] rounded-md px-2 text-xs font-semibold text-muted-foreground underline underline-offset-2 disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setEnrolling(true)}
+                  disabled={isPending}
+                  className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition-colors hover:bg-surface-muted disabled:opacity-50"
+                >
+                  <Gift className="size-4" aria-hidden="true" />
+                  Rewards · add mobile
+                </button>
+              ))}
 
             {error !== null && (
               <p

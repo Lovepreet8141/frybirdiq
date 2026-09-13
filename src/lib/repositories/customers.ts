@@ -3,7 +3,8 @@ import "server-only";
 /**
  * Customer lookup and the Customer 360 profile.
  *
- * Read-only, same as the rest of this file. "Paid" here means the same
+ * Read-only apart from `ensureCustomerByPhone`, the one write: a counter
+ * enrolment that needs a record to attach an order to. "Paid" here means the same
  * thing it means everywhere else revenue is computed in this app (see
  * `analytics.ts`'s `paidOrders`): a captured payment, on an order that
  * hasn't since been cancelled, failed or refunded. A customer's order count
@@ -33,6 +34,29 @@ export async function findCustomerByPhone(orgId: string, phone: string): Promise
     .where(and(eq(customers.orgId, orgId), eq(customers.phone, phone)))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * The customer behind a phone number, created with just that number if
+ * there is none yet — how a counter enrolment gets a record to attach the
+ * order to, so the capture path credits it exactly as it credits a website
+ * order (`recordCashPayment` keys on `orders.customer_id`).
+ *
+ * Same identity rule as the website's checkout upsert: keyed on
+ * `(org_id, phone)`. Nothing else is written — no name, no consent — and an
+ * existing record is never touched; two tills enrolling the same number at
+ * once both land on the one row.
+ */
+export async function ensureCustomerByPhone(orgId: string, phone: string): Promise<CustomerLookup> {
+  const [created] = await db()
+    .insert(customers)
+    .values({ orgId, phone })
+    .onConflictDoNothing({ target: [customers.orgId, customers.phone] })
+    .returning({ id: customers.id, name: customers.name, phone: customers.phone });
+  if (created) return created;
+  const existing = await findCustomerByPhone(orgId, phone);
+  if (!existing) throw new Error("customers: phone neither inserted nor found");
+  return existing;
 }
 
 /** A customer's paid orders — the same join `analytics.ts` uses for revenue, without a date range. */

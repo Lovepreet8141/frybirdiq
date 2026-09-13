@@ -18,8 +18,10 @@ import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
 import { cartLineSchema } from "@/lib/cart/schema";
 import { ZERO, formatINR } from "@/lib/money";
 import { findCustomerByPhone } from "@/lib/repositories/customers";
-import { getStampConfig } from "@/lib/loyalty/config";
-import { getStampAccountState } from "@/lib/repositories/loyalty";
+import { isLoyaltyEnabled } from "@/lib/loyalty";
+import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
+import { getPointsBalance, getStampAccountState } from "@/lib/repositories/loyalty";
+import { counterPhoneSchema } from "./rewards-enrolment";
 import { type MenuCategory, getMenu } from "@/lib/repositories/menu";
 import { placeCounterOrder } from "@/lib/repositories/orders";
 import { isOrderPaid, recordCashPayment } from "@/lib/repositories/payments";
@@ -122,7 +124,9 @@ const counterOrderSchema = z.object({
   lines: z.array(cartLineSchema).min(1).max(50),
   channel: z.enum(["DINE_IN", "TAKEAWAY"]),
   tableId: z.string().uuid().nullable().default(null),
-  customerPhone: z.string().regex(/^[6-9]\d{9}$/).nullable().default(null),
+  // The same rule the keypad applied: a bad number fails here, before any
+  // repository call, so no order is placed against it. Absent means no phone.
+  customerPhone: counterPhoneSchema.nullable().default(null),
   notes: z.string().trim().max(500).optional(),
   /** Minted by the till when the payment sheet opens; the same key on every retry. §17. */
   idempotencyKey: z.string().uuid(),
@@ -242,28 +246,40 @@ export async function pollPosMenu(channel: unknown): Promise<{ ok: true; categor
   return { ok: true, categories: await getMenu(parsed.data) };
 }
 
-export interface CustomerLookupResult {
-  readonly ok: true;
-  readonly name: string | null;
-  readonly phone: string;
-  /** null when the stamp program is off, or this customer has never earned toward it. */
-  readonly rewards: { readonly stampCount: number; readonly stampsRequired: number; readonly availableRewardCount: number } | null;
-}
+export type CustomerLookupResult =
+  | {
+      readonly ok: true;
+      readonly found: true;
+      readonly name: string | null;
+      readonly phone: string;
+      /** null when the stamp program is off, or this customer has never earned toward it. */
+      readonly rewards: { readonly stampCount: number; readonly stampsRequired: number; readonly availableRewardCount: number } | null;
+      /** null when points are off. */
+      readonly points: number | null;
+    }
+  | {
+      /** A valid number nobody has ordered with yet. The record is created when the order is placed, not here. */
+      readonly ok: true;
+      readonly found: false;
+      readonly phone: string;
+    };
 
 export interface CustomerLookupFail {
   readonly ok: false;
   readonly error: string;
 }
 
-const phoneSchema = z.string().trim().regex(/^[6-9]\d{9}$/, "Enter a 10-digit mobile number.");
-
 /**
  * Looks a customer up by phone for the counter — read-only, no discount is
  * applied here. Reuses the same FRYBIRD REWARDS ledger the website reads
- * (`getStampAccountState`), not a parallel POS loyalty system.
+ * (`getStampAccountState`, `getPointsBalance`), not a parallel POS loyalty
+ * system. An unknown number is a *new* customer, not an error: the record
+ * is created with just the phone when the order is placed
+ * (`placeCounterOrder` → `ensureCustomerByPhone`), so a keypad that was
+ * cancelled leaves nothing behind.
  */
 export async function lookupCustomerAction(phone: string): Promise<CustomerLookupResult | CustomerLookupFail> {
-  const parsed = phoneSchema.safeParse(phone);
+  const parsed = counterPhoneSchema.safeParse(phone.trim());
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Enter a 10-digit mobile number." };
 
   let staff;
@@ -276,15 +292,21 @@ export async function lookupCustomerAction(phone: string): Promise<CustomerLooku
   }
 
   const customer = await findCustomerByPhone(staff.orgId, parsed.data);
-  if (!customer) return { ok: false, error: "No customer found with that number." };
+  if (!customer) return { ok: true, found: false, phone: parsed.data };
 
-  const config = await getStampConfig();
-  const state = config.enabled ? await getStampAccountState(customer.id, staff.orgId) : null;
+  const [stampConfig, loyaltyConfig] = await Promise.all([getStampConfig(), getLoyaltyConfig()]);
+  const pointsOn = isLoyaltyEnabled(loyaltyConfig);
+  const [state, points] = await Promise.all([
+    stampConfig.enabled ? getStampAccountState(customer.id, staff.orgId) : null,
+    pointsOn ? getPointsBalance(customer.id, staff.orgId) : null,
+  ]);
 
   return {
     ok: true,
+    found: true,
     name: customer.name,
     phone: parsed.data,
-    rewards: state ? { stampCount: state.stampCount, stampsRequired: config.stampsRequired, availableRewardCount: state.availableRewards.length } : null,
+    rewards: state ? { stampCount: state.stampCount, stampsRequired: stampConfig.stampsRequired, availableRewardCount: state.availableRewards.length } : null,
+    points: pointsOn ? (points ?? 0) : null,
   };
 }
