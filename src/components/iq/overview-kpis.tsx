@@ -24,6 +24,10 @@ import { formatBps } from "@/lib/money";
  *
  * Deltas keep the accessible form (`Delta`: arrow + sign + words), not the
  * kit's colour-only "+20.1%" — a figure that moved never relies on green.
+ *
+ * Series colour is `--chart-5` (ink grey), not `--chart-1`: on the IQ surface
+ * chart-1 is the brand red, and red is what an alert looks like here. A
+ * sparkline of ordinary Tuesdays should not read as a warning.
  */
 
 export interface SparkPoint {
@@ -44,8 +48,8 @@ export interface KpiFigure {
   readonly detail?: string;
 }
 
-const revenueConfig = { rupees: { label: "Revenue", color: "var(--chart-1)" } } satisfies ChartConfig;
-const ordersConfig = { orders: { label: "Orders", color: "var(--chart-1)" } } satisfies ChartConfig;
+const revenueConfig = { rupees: { label: "Revenue", color: "var(--chart-5)" } } satisfies ChartConfig;
+const ordersConfig = { orders: { label: "Orders", color: "var(--chart-5)" } } satisfies ChartConfig;
 
 function Comparisons({ figure }: { figure: KpiFigure }) {
   return (
@@ -74,13 +78,32 @@ function SparkTooltip({ active, payload }: { active?: boolean; payload?: readonl
   );
 }
 
+/** The kit stat card's footer: a rule, then a quiet "view more" link pinned to the bottom of the card. */
+function FooterLink({ href, label }: { href: string; label: string }) {
+  return (
+    <div className="mt-auto pt-3">
+      <Separator className="mb-3" />
+      <Link href={href} className="flex w-full items-center justify-between text-xs text-muted-foreground hover:text-foreground">
+        {label}
+        <ArrowRight className="size-3" aria-hidden="true" />
+      </Link>
+    </div>
+  );
+}
+
+/* Each card fills its grid cell (`h-full`) and lays its content out as a
+   column so the footer link sits on the same baseline across the row,
+   whatever each card has above it. */
+const cardClass = "h-full";
+const contentClass = "flex flex-1 flex-col";
+
 export function RevenueCard({ figure, series }: { figure: KpiFigure; series: readonly SparkPoint[] }) {
   return (
-    <Card>
+    <Card className={cardClass}>
       <CardHeader>
         <CardTitle>Revenue</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className={contentClass}>
         <div className="tabular font-heading text-3xl font-bold leading-6">{figure.value}</div>
         <Comparisons figure={figure} />
         <ChartContainer className="mt-4 h-[100px] w-full" config={revenueConfig}>
@@ -98,6 +121,7 @@ export function RevenueCard({ figure, series }: { figure: KpiFigure; series: rea
           </LineChart>
         </ChartContainer>
         <p className="mt-1 text-xs text-muted-foreground">Last 7 days, by day</p>
+        <FooterLink href="/app/iq?range=7d" label="Sales, last 7 days" />
       </CardContent>
     </Card>
   );
@@ -105,11 +129,11 @@ export function RevenueCard({ figure, series }: { figure: KpiFigure; series: rea
 
 export function OrdersCard({ figure, series }: { figure: KpiFigure; series: readonly SparkPoint[] }) {
   return (
-    <Card>
+    <Card className={cardClass}>
       <CardHeader>
         <CardTitle>Orders</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className={contentClass}>
         <div className="tabular font-heading text-3xl font-bold leading-6">{figure.value}</div>
         <Comparisons figure={figure} />
         <ChartContainer className="mt-6 h-[85px] w-full" config={ordersConfig}>
@@ -121,6 +145,7 @@ export function OrdersCard({ figure, series }: { figure: KpiFigure; series: read
           </BarChart>
         </ChartContainer>
         <p className="mt-1 text-xs text-muted-foreground">Last 7 days, by day</p>
+        <FooterLink href="/app/iq/live" label="Live operations" />
       </CardContent>
     </Card>
   );
@@ -134,11 +159,11 @@ export function AverageOrderCard({ figure }: { figure: KpiFigure }) {
   const Icon = flat ? Minus : up ? ArrowUpRight : ArrowDownRight;
 
   return (
-    <Card>
+    <Card className={cardClass}>
       <CardHeader>
         <CardTitle>Average order</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className={contentClass}>
         <div className="flex flex-wrap items-center gap-2">
           <span className="tabular font-heading text-3xl font-bold leading-6">{figure.value}</span>
           {typeof change === "number" && (
@@ -158,11 +183,7 @@ export function AverageOrderCard({ figure }: { figure: KpiFigure }) {
             <Delta changeBps={figure.secondaryChangeBps} comparedTo="the same day last week" />
           </div>
         )}
-        <Separator className="my-3" />
-        <Link href="/app/iq/pnl" className="flex w-full items-center justify-between text-xs text-muted-foreground hover:text-foreground">
-          Profit and loss
-          <ArrowRight className="size-3" aria-hidden="true" />
-        </Link>
+        <FooterLink href="/app/iq/pnl" label="Profit and loss" />
       </CardContent>
     </Card>
   );

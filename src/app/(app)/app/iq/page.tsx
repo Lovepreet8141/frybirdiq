@@ -82,6 +82,8 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
   const directTotal = pnl.direct.reduce((s, r) => s + r.amount, 0n);
   const fixedTotal = pnl.fixed.reduce((s, r) => s + r.amount, 0n);
 
+  const hasDirect = foodCost.some((point) => point.directCost > 0n);
+
   const overTarget =
     pnl.foodCostTargetBps !== null && pnl.result.foodCostBps !== null && pnl.result.foodCostBps > pnl.foodCostTargetBps;
 
@@ -159,7 +161,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
             orphans an empty grey cell with exactly three tiles. */}
         <MotionStagger each={0.04} count={3}>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6">
-            <MotionStaggerItem>
+            <MotionStaggerItem className="h-full">
               <RevenueCard
                 figure={{
                   value: formatINR(today.today.revenue, "whole"),
@@ -169,7 +171,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
                 series={spark}
               />
             </MotionStaggerItem>
-            <MotionStaggerItem>
+            <MotionStaggerItem className="h-full">
               <OrdersCard
                 figure={{
                   value: String(today.today.orders),
@@ -179,7 +181,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
                 series={spark}
               />
             </MotionStaggerItem>
-            <MotionStaggerItem>
+            <MotionStaggerItem className="h-full">
               <AverageOrderCard
                 figure={{
                   value: today.today.orders === 0 ? "—" : formatINR(todayAverage, "whole"),
@@ -229,24 +231,15 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
             <span className="text-sm text-muted-foreground">{monthRange.label}</span>
           </div>
 
-          {/* A week with revenue but zero direct cost reads as "0% food cost"
-              even when nothing has ever been recorded — checking directCost
-              rather than foodCostBps null-ness is what tells those apart. */}
-          {!foodCost.some((point) => point.directCost > 0n) ? (
-            <EmptyState
-              className="mt-4"
-              title="No costs recorded yet."
-              detail="Revenue is already tracked from your orders. Record what you spend on food and packaging to see food cost % here."
-              action={
-                <Link
-                  href="/app/iq/expenses/new"
-                  className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
-                >
-                  Record an expense
-                </Link>
-              }
-            />
-          ) : (
+          {/* Two separate facts: whether any expense exists this month
+              (`pnl.hasExpenses` — the donut needs only that), and whether any
+              food or packaging cost exists in the weekly series (`hasDirect`
+              — the food cost % chart needs that). A week with revenue but
+              zero direct cost reads as "0% food cost" even when nothing was
+              ever recorded, so directCost is checked, not foodCostBps. The
+              full empty state is for having recorded nothing at all;
+              operating expenses without COGS get the donut plus one line. */}
+          {hasDirect ? (
             <>
               <p className="mt-1 text-sm text-muted-foreground">Food cost %, by week.</p>
               <FoodCostChart points={foodCost} targetBps={pnl.foodCostTargetBps} className="mt-4" />
@@ -256,14 +249,40 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
                 </p>
               )}
             </>
+          ) : (
+            !pnl.hasExpenses && (
+              <EmptyState
+                className="mt-4"
+                title="No costs recorded yet."
+                detail="Revenue is already tracked from your orders. Record what you spend on food and packaging to see food cost % here."
+                action={
+                  <Link
+                    href="/app/iq/expenses/new"
+                    className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
+                  >
+                    Record an expense
+                  </Link>
+                }
+              />
+            )
           )}
 
           {pnl.hasExpenses && (
             <CostBreakdownDonut
               directTotal={directTotal as never}
               fixedTotal={fixedTotal as never}
-              className="mt-6 border-t border-border pt-5"
+              className={hasDirect ? "mt-6 border-t border-border pt-5" : "mt-4"}
             />
+          )}
+
+          {pnl.hasExpenses && !hasDirect && (
+            <p className="mt-3 text-sm text-muted-foreground">
+              No food or packaging costs yet — food cost % appears once you{" "}
+              <Link href="/app/iq/expenses/new" className="font-semibold text-foreground underline underline-offset-2">
+                record one
+              </Link>
+              .
+            </p>
           )}
 
           <p className="mt-4 text-sm">
