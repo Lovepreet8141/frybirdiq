@@ -7,6 +7,82 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice 3 (UI Kit): Overview — today's KPIs on the kit's Default dashboard cards
+
+**Status:** Complete. Gates green. Committed `0acc6cf`. Deployed (see
+deployment record).
+
+**What it is:** `/app/iq` "Today" recomposed on
+`shadcn-ui-kit-dashboard/app/dashboard/(auth)/default/components`:
+**Revenue** with a 7-day sparkline (Total Revenue card), **Orders** with
+7 mini bars and counts on top (Subscriptions card), **Average order** as
+the ecommerce stat card (figure + badge, rule, "Profit and loss →"). Kit
+title row: "Overview" + range label left, the period selector (Today /
+Yesterday / 7 days / 30 days) as a segmented control right — kit height on
+a pointer, 44px on a phone. The section links (Sales / Live / … / Menu)
+stay under the title because P&L, Expenses and Rewards have no sidebar
+item.
+
+**Same data, not rewired:** figures and deltas are `getTodayComparison`
+exactly as before; the shapes are `getDashboard(orgId, resolveRange("7d"))
+.series` — one extra call to the same repository function. Everything a
+person reads is formatted from paise on the server; the float
+(`toRupeesFloat`) exists only for recharts geometry, the pattern
+`ChannelChart` already documents. Deltas keep the accessible
+`Delta` (arrow + sign + words), now exported from `stat-tile.tsx`, instead
+of the kit's colour-only "+20.1%". Chart colour is `--chart-1`, type is
+`font-heading` — no kit colours or fonts.
+
+**Files:** `src/components/iq/overview-kpis.tsx` (new, client),
+`src/components/iq/stat-tile.tsx` (export Delta), `src/app/(app)/app/iq/
+page.tsx`. `StatTile` itself is untouched and still used elsewhere.
+
+---
+
+## Slice 2 (UI Kit): Shell — kit sidebar and header structure, our tokens
+
+**Status:** Complete. Gates green. Committed `a54bfa2`. Deployed (see
+deployment record). Verified signed in at 390px and 1440px on `/app/iq`,
+`/app/orders`, `/app/pos` (screenshots reviewed; no console or page
+errors).
+
+**What it is:** structure from
+`shadcn-ui-kit-dashboard/components/layout/{sidebar,header}`:
+- `AppSidebar`: `variant="inset" collapsible="icon"`, brand block as the
+  first menu button (an "F" mark in `--primary` + the wordmark), groups
+  inside a `ScrollArea`, the sheet closes itself on navigation at phone
+  width. Groups, items and lucide icons are unchanged —
+  `buildNavGroups()`, shared with the command palette.
+- `SiteHeader` (new): the kit's `--header-height` (56px), sticky with a
+  blurred ground, one hairline, rounded top corners inside the inset
+  panel. Left: collapse toggle (PanelLeftClose/Open) + breadcrumb. Right:
+  the existing search, Test alarm and account avatar. The kit's store
+  switcher, notifications, theme switch and customizer are not adopted.
+- `AppChrome` sets the kit's provider vars (`--sidebar-width`,
+  `--header-height`, `--content-padding`); the layout reads the
+  `sidebar_state` cookie so a collapsed sidebar stays collapsed on the
+  first paint. Pages keep their own gutter/max-width, so
+  `--content-padding` is declared but not applied at the wrapper (it would
+  double every page's padding) — a later per-page pass can move to it.
+- POS/KDS keep the full-bleed header, now at the same 56px.
+- `scroll-area.tsx`, `kbd.tsx` copied from the kit (Radix, drop-in).
+- Small fixes found in the screenshots: root crumb hidden at phone width
+  (it wrapped inside 56px); `whitespace-nowrap` on the header buttons.
+
+**Tokens:** everything resolves through `[data-surface="iq"]` — sidebar
+white, inset panel `#f4f5f6`, active item `--sidebar-accent` (cream),
+primary red. No kit colours, no kit fonts.
+
+**How it was verified:** local production build + `next start`, a
+short-lived session for the OWNER account minted with the service-role
+key already in `.env.local` (admin `generateLink` → `verifyOtp`; no email
+sent, no data written), Playwright at 390×844 and 1440×900, session
+revoked (`admin.signOut`) and the temporary scripts deleted afterwards.
+The only staff accounts are OWNER and RIDER, and a rider cannot open
+these pages.
+
+---
+
 ## Incident: staff app crashed after sign-in following the radix-nova switch
 
 **Status:** Fixed and deployed (`9e4ca19`, 2026-09-12 23:39 UTC). Cause
@@ -1104,6 +1180,14 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-13 — Shell (slice 2) + Overview (slice 3)
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard`
+at `0acc6cf`. Gates in-script green (tests 340/340). Post-deploy:
+`active`; smoke `HTTP 200`; `/sign-in`, `/menu` → `200`; `/app/iq`,
+`/app/orders`, `/app/pos`, `/app/inventory` → `307` to `/sign-in`; no
+runtime errors after the restart beyond stale-tab action noise.
 
 ### 2026-09-12 23:39 UTC — TooltipProvider hotfix
 
