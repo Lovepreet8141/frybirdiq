@@ -7,6 +7,71 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice 4 (UI Kit): Orders — card-row board from the "Frybird Orders v2" design
+
+**Status:** Complete. Gates green. Deployed (see deployment record).
+Verified signed in at 390×844 and 1440×900; status transitions exercised
+through the row buttons; console clean.
+
+**What it is:** `/app/orders` as the attached design — white rounded
+rows (14px, hairline, soft shadow, stronger on hover) with a 92px type
+rail (icon, DINE-IN / TAKEAWAY / DELIVERY / ONLINE, table or "Website"
+pill), order + customer + phone, first item "+N more", status pill with
+dot, due ("N min late" red, ≤15 min amber, late rows red-bordered),
+amount + Paid/Unpaid chip, one next-step button (Accept filled dark, the
+rest outlined) and the ⋯ menu. Sorted by due ascending. Title row: static
+dot, "{n} open · {n} due soon" (amber when > 0), search across number,
+name, phone, table. Status pills hide at zero unless selected; type
+segmented control with swatches and counts. Dashed "No orders match."
+Phone: rows stack into cards (rail → top strip, Order + Status on a line,
+Items, Due + Amount on a line, full-width action); `scrollWidth` = 390.
+`density` prop (comfortable 84px / compact 64px), default comfortable, no
+toggle.
+
+**Rules applied:**
+1. Our shell — the design's dark header is the canvas chrome, not built.
+2. **No hex in components.** New semantic tokens: `MASTER.md §5 "Order
+   tints"` → `tokens.json color.order` → `globals.css` (`--type-*`,
+   `--status-*`, `--order-late-line`, exposed in `@theme inline`), used
+   as `bg-type-dine-in`, `text-status-new-fg`, `bg-status-ready-dot`,
+   `border-order-late-line` … `check-contrast.py` now reads `color.order`
+   and checks every ink on its ground: 6.8–9.1:1, all AA.
+3. Our fonts (`font-heading`, body); Instrument Serif / Geist ignored.
+4. Static dot, no pulse.
+5. Real data and existing actions: rows are `listActiveOrders`; the
+   button calls `advanceOrderAction` with the one move `nextStep` names —
+   `nextStep` is now exported from `order-card.tsx` with the spec's labels
+   (Accept / Start cooking / Mark ready / Complete / Delivered; delivery
+   READY keeps "Send out" because that is the real transition). Accept
+   still opens the KOT window in the same tick; Complete is disabled with
+   a reason while unpaid; ⋯ and the row click open the existing sheet with
+   the unchanged `OrderCard`. Collection → TAKEAWAY; online collection →
+   ONLINE; delivery → DELIVERY; dine-in → DINE-IN.
+6. Kit `Badge`, `Button`, `Input`, `DropdownMenu`; the row is a plain grid
+   with the spec's `grid-template-columns`.
+
+**On the "POS orders never show Accept" rule — a finding, not a change:**
+`placeCounterOrderAction` runs `placeCounterOrder` (persists as
+`PENDING_PAYMENT`) then `recordCashPayment` (→ `PAID`); nothing accepts
+it. Under `src/domain/order-status.ts` the only forward move from `PAID`
+is `ACCEPTED`. So a counter order *does* reach this list as **Paid** with
+an **Accept** button, and hiding it would strand the order. The board
+follows the real state machine. If the intended behaviour is that a
+counter order is accepted at the till, that is a change to the POS
+placement path (an order transaction) and needs its own approval.
+"Ready completes them" already holds: READY → COMPLETED for anything not
+a delivery.
+
+**Verification data note:** the live list had no New or Cooking orders,
+so the two transitions exercised were **Start cooking** then **Mark
+ready** on order **#014** (an owner test order): row moved Accepted →
+Cooking → Ready to send, tab counts 13/0/4 → 12/1/4 → 12/0/5. That order
+is now genuinely at READY in production. Same session method as before
+(owner session minted with the service-role key, revoked after; temp
+scripts deleted). `orders-table.tsx` removed — only the page used it.
+
+---
+
 ## Polish: /app/iq after slice 3
 
 **Status:** Complete. Gates green. Deployed (see deployment record).
@@ -1207,6 +1272,20 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-13 00:27 UTC — Orders board (slice 4)
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from the working
+tree that became `c2daafa` on `iq-dashboard` (the commit landed one
+step after the deploy because a `git add` on the already-staged deletion
+aborted the chain; the deployed files are identical to the commit). Gates
+in-script green (tests 340/340). Post-deploy: `active`; smoke `HTTP 200`;
+`/sign-in` → `200`; `/app/orders`, `/app/iq` → `307` to `/sign-in`; no
+runtime errors since the restart.
+
+### 2026-09-13 — /app/iq polish
+
+Deployed from `e3b4f2e`. Gates green; `active`; `HTTP 200`; no errors.
 
 ### 2026-09-13 — Shell (slice 2) + Overview (slice 3)
 
