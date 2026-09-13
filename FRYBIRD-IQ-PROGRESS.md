@@ -7,6 +7,69 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Promotions — Slice A: model, engine, editor
+
+**Status:** Complete. Gates green (392 tests, 20 new). Committed
+`34b1ff6`. Deployed (see deployment record). Verified on a local build
+and on production: one promotion of each of the eight types created
+through the editor; 390 and 1440; console clean. Spec: `Promotions.dc.
+html` (IQ view), `promo-engine.js` (source of truth), `ProductPicker.dc.
+html`. `menu.js` ignored — the picker reads the real menu.
+
+**Extends, does not fork.** The existing `promotions` table, `src/lib/
+promotions/index.ts` (the website's `applyPromotion`), `repositories/
+promotions.ts` and `scripts/promo.ts` are all still the one system.
+**Migration 0024** (additive; `code` becomes nullable because only a
+coupon has one): type, buy/get products + quantities + get-discount
+(bps), products, combo price, start/end time, days mask (Mon = bit 0),
+customer segment, stacking, `channel_pos` / `channel_web`, per-customer
+limit, `status` draft/live/paused, `live_since`; check constraints on
+the enums. Backfill: the one existing row, FRYBIRD10, became
+coupon / live / website (verified). Rollback in `supabase/rollback`.
+`findPromotion` + `applyPromotion` untouched, so the website's coupon
+keeps working exactly as before.
+
+**Engine** (`src/lib/promotions/engine.ts`): `summarize()`, `validate()`
+and `eligible()` ported branch for branch from `promo-engine.js`, in
+integer paise, plus the shop's own rules — start/end dates, usage limit,
+per-customer limit (an offer with a per-customer limit waits until a
+customer is attached), customer segment, never negative — and days /
+times read in Asia/Kolkata (empty times = all day). `rankEligible`
+orders by saving. 20 tests mirror every branch. `form.ts` is the editor's
+JSON-safe shape and `toPromo()` is the one converter both the preview and
+the server use.
+
+**Editor** (`/app/customers/promotions`): library left (status badge,
+one-line summary, "On POS · Website" / "Not active anywhere"), editor
+right — OFFER / PRODUCTS / DISCOUNT / SCHEDULE / CONDITIONS / LIMITS
+shown by the type's `t` flags; product picker over the real menu;
+"Customer sees" from `summarize()`; "Before you can push" from
+`validate()`; Save / Update, Save as draft, Duplicate, Delete; dirty
+label; coupon code uppercase alphanumeric with Generate. Channels are
+POS and Website only; no Store field. Phone: single column, library in a
+drawer. Push / Publish / Pause / Activate are slice B and are not shown
+— nothing fake.
+
+**Permissions:** writes take `settings.manage` (OWNER) — there is no
+`promotions.manage` and adding one is a permission-architecture change;
+reads keep `orders.discount`. Every write is audited (`promotion_created
+/ updated / deleted`).
+
+**Tokens:** promo live / paused / draft tints — MASTER.md §5 →
+tokens.json `color.promo` → globals.css; `check-contrast.py` covers them
+(7.3 / 4.5 / 6.4 : 1).
+
+**Production now holds** eight drafts named "Sample …" (one per type,
+the coupon renamed to "Sample coupon renamed" by the dirty-label check),
+none active anywhere. The verification duplicate was removed. Delete
+them from the editor whenever you like.
+
+**Next:** Slice B — publish flow (push / publish / pause / unpublish /
+activate, audited), the POS "Offers available" + coupon entry, discount
+persisted on the order, usage counters.
+
+---
+
 ## Overview v3 — Slice A: Right now + Needs attention + KPI row
 
 **Status:** Complete. Gates green (372 tests, 17 new). Committed
@@ -1448,6 +1511,16 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-13 02:36 UTC — Promotions slice A (+ migration 0024)
+
+Migration 0024 applied from the Mac before the deploy (additive columns,
+`code` nullable, check constraints, one-row backfill; verified via
+information_schema — 34 columns, journal 25). Deployed via
+`./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard` at
+`34b1ff6`. Gates in-script green (392/392). Post-deploy: `active`; smoke
+`HTTP 200`; signed-in production walk created one draft per type; no
+runtime errors since the restart.
 
 ### 2026-09-13 01:44 UTC — Overview v3 slice A (+ migration 0023)
 
