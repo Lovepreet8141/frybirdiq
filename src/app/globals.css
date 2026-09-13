@@ -20,6 +20,42 @@
   --color-surface-elevated: var(--surface-elevated);
   --color-surface-muted: var(--surface-muted);
   --color-border-strong: var(--border-strong);
+  /* Order type and status tints — MASTER.md §5 "Order tints". Utilities:
+     bg-type-dine-in, text-type-dine-in-fg, border-type-dine-in-line,
+     bg-type-dine-in-swatch; bg-status-new, text-status-new-fg,
+     bg-status-new-dot; border-order-late-line. */
+  --color-type-dine-in: var(--type-dine-in);
+  --color-type-dine-in-fg: var(--type-dine-in-fg);
+  --color-type-dine-in-line: var(--type-dine-in-line);
+  --color-type-dine-in-swatch: var(--type-dine-in-swatch);
+  --color-type-takeaway: var(--type-takeaway);
+  --color-type-takeaway-fg: var(--type-takeaway-fg);
+  --color-type-takeaway-line: var(--type-takeaway-line);
+  --color-type-takeaway-swatch: var(--type-takeaway-swatch);
+  --color-type-delivery: var(--type-delivery);
+  --color-type-delivery-fg: var(--type-delivery-fg);
+  --color-type-delivery-line: var(--type-delivery-line);
+  --color-type-delivery-swatch: var(--type-delivery-swatch);
+  --color-type-online: var(--type-online);
+  --color-type-online-fg: var(--type-online-fg);
+  --color-type-online-line: var(--type-online-line);
+  --color-type-online-swatch: var(--type-online-swatch);
+  --color-status-new: var(--status-new);
+  --color-status-new-fg: var(--status-new-fg);
+  --color-status-new-dot: var(--status-new-dot);
+  --color-status-accepted: var(--status-accepted);
+  --color-status-accepted-fg: var(--status-accepted-fg);
+  --color-status-accepted-dot: var(--status-accepted-dot);
+  --color-status-cooking: var(--status-cooking);
+  --color-status-cooking-fg: var(--status-cooking-fg);
+  --color-status-cooking-dot: var(--status-cooking-dot);
+  --color-status-ready: var(--status-ready);
+  --color-status-ready-fg: var(--status-ready-fg);
+  --color-status-ready-dot: var(--status-ready-dot);
+  --color-status-out-for-delivery: var(--status-out-for-delivery);
+  --color-status-out-for-delivery-fg: var(--status-out-for-delivery-fg);
+  --color-status-out-for-delivery-dot: var(--status-out-for-delivery-dot);
+  --color-order-late-line: var(--order-late-line);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -271,6 +307,42 @@
   --chart-3: #726c63;
   --chart-4: #c2410c;
   --chart-5: #55504a;
+
+  /* Order tints — MASTER.md §5, design-system/tokens.json `color.order`.
+     Staff surface only: a type or status has to be told apart at row height
+     from across a counter, and the brand has fewer hues than that needs. */
+  --type-dine-in: #f1e6ff;
+  --type-dine-in-fg: #4c1d95;
+  --type-dine-in-line: #e3d2fa;
+  --type-dine-in-swatch: #7c3aed;
+  --type-takeaway: #ffedd5;
+  --type-takeaway-fg: #7c2d12;
+  --type-takeaway-line: #fbd9b5;
+  --type-takeaway-swatch: #ea580c;
+  --type-delivery: #e0ecff;
+  --type-delivery-fg: #1e3a8a;
+  --type-delivery-line: #c7d8fa;
+  --type-delivery-swatch: #2563eb;
+  --type-online: #dcfce7;
+  --type-online-fg: #14532d;
+  --type-online-line: #bbf0cd;
+  --type-online-swatch: #16a34a;
+  --status-new: #fef2f2;
+  --status-new-fg: #991b1b;
+  --status-new-dot: #dc2626;
+  --status-accepted: #eff6ff;
+  --status-accepted-fg: #1e40af;
+  --status-accepted-dot: #2563eb;
+  --status-cooking: #fffbeb;
+  --status-cooking-fg: #92400e;
+  --status-cooking-dot: #d97706;
+  --status-ready: #f0fdf4;
+  --status-ready-fg: #166534;
+  --status-ready-dot: #16a34a;
+  --status-out-for-delivery: #f0fdfa;
+  --status-out-for-delivery-fg: #115e59;
+  --status-out-for-delivery-dot: #0d9488;
+  --order-late-line: #f5b8b0;
 
   --sidebar: #ffffff;
   --sidebar-foreground: var(--ink);

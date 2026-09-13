@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import type { StaffOrder } from "@/components/staff/order-card";
-import { OrdersTable } from "@/components/staff/orders-table";
-import { PageHeader } from "@/components/staff/page-header";
-import { EmptyState } from "@/components/states";
+import { OrdersBoard } from "@/components/staff/orders-board";
 import { requireStaff, staffCan } from "@/lib/auth";
 import { listActiveOrders } from "@/lib/repositories/orders";
 
@@ -11,11 +9,17 @@ export const metadata: Metadata = { title: "Orders", robots: { index: false, fol
 // Counter screen: always the live list, never a cached one.
 export const dynamic = "force-dynamic";
 
+/** The clock the list was fetched at — captured with the data, not read during render. */
+async function snapshot(orgId: string) {
+  const orders = await listActiveOrders(orgId);
+  return { orders, nowMs: Date.now() };
+}
+
 export default async function StaffOrdersPage({ searchParams }: { searchParams: Promise<{ open?: string }> }) {
   const staff = await requireStaff();
-  const [{ open }, orders, canSettle, canAdvance, canPrintKot, canSeeCustomers] = await Promise.all([
+  const [{ open }, { orders, nowMs }, canSettle, canAdvance, canPrintKot, canSeeCustomers] = await Promise.all([
     searchParams,
-    listActiveOrders(staff.orgId),
+    snapshot(staff.orgId),
     staffCan("orders.update"),
     staffCan("kitchen.update"),
     staffCan("kitchen.view"),
@@ -23,39 +27,27 @@ export default async function StaffOrdersPage({ searchParams }: { searchParams: 
   ]);
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
-      <PageHeader
-        title="Orders"
-        actions={
-          <p className="tabular text-sm text-muted-foreground" aria-live="polite">
-            {orders.length} open
-          </p>
-        }
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-6 px-[var(--gutter)] py-8">
+      <OrdersBoard
+        orders={orders.map(
+          (order) =>
+            ({
+              ...order,
+              placedAt: order.placedAt?.toISOString() ?? null,
+              fulfilment: order.fulfilment,
+              invoiceNumber: order.invoiceNumber,
+              estimatedReadyAt: order.estimatedReadyAt?.toISOString() ?? null,
+              delivery: order.delivery ? { ...order.delivery } : null,
+              items: [...order.items].map((item) => ({ ...item, modifiers: [...item.modifiers] })),
+            }) as StaffOrder,
+        )}
+        nowMs={nowMs}
+        canSettle={canSettle}
+        canAdvance={canAdvance}
+        canPrintKot={canPrintKot}
+        canSeeCustomers={canSeeCustomers}
+        initialSelectedId={open ?? null}
       />
-
-      {orders.length === 0 ? (
-        <EmptyState title="No open orders." detail="New website orders appear here." />
-      ) : (
-        <OrdersTable
-          orders={orders.map(
-            (order) =>
-              ({
-                ...order,
-                placedAt: order.placedAt?.toISOString() ?? null,
-                fulfilment: order.fulfilment,
-                invoiceNumber: order.invoiceNumber,
-                estimatedReadyAt: order.estimatedReadyAt?.toISOString() ?? null,
-                delivery: order.delivery ? { ...order.delivery } : null,
-                items: [...order.items].map((item) => ({ ...item, modifiers: [...item.modifiers] })),
-              }) as StaffOrder,
-          )}
-          canSettle={canSettle}
-          canAdvance={canAdvance}
-          canPrintKot={canPrintKot}
-          canSeeCustomers={canSeeCustomers}
-          initialSelectedId={open ?? null}
-        />
-      )}
 
       {/*
         Orders do not appear on their own yet — realtime is Phase 3. Saying so

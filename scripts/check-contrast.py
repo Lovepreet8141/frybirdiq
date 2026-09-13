@@ -64,17 +64,26 @@ def main() -> int:
     palette = {name: spec["value"] for name, spec in colors["brand"].items()}
     palette.update({name: spec["value"] for name, spec in colors["staff"].items()})
 
-    failures = []
-    print(f"{'pair':<26} {'ratio':>6}  {'AA body':<8} {'AA large':<9}")
-    print("-" * 54)
+    # Order tints (MASTER.md §5 "Order tints"): every ink on its own ground is
+    # a status pill or a type rail label, read at 11–13px, so body AA applies.
+    order_pairs = []
+    for group in ("type", "status"):
+        for name, spec in colors["order"][group].items():
+            palette[f"{group}.{name}.ink"] = spec["ink"]
+            palette[f"{group}.{name}.ground"] = spec["ground"]
+            order_pairs.append((f"{group}.{name}.ink", f"{group}.{name}.ground", True))
 
-    for fg, bg, body_required in PAIRS + STAFF_PAIRS:
+    failures = []
+    print(f"{'pair':<44} {'ratio':>6}  {'AA body':<8} {'AA large':<9}")
+    print("-" * 72)
+
+    for fg, bg, body_required in PAIRS + STAFF_PAIRS + order_pairs:
         value = ratio(palette[fg], palette[bg])
         body_ok = value >= 4.5
         large_ok = value >= 3.0
         note = "" if body_required else "   (large text and fills only)"
         print(
-            f"{fg + ' on ' + bg:<26} {value:>6.2f}  "
+            f"{fg + ' on ' + bg:<44} {value:>6.2f}  "
             f"{'PASS' if body_ok else 'FAIL':<8} {'PASS' if large_ok else 'FAIL':<9}{note}"
         )
         if body_required and not body_ok:

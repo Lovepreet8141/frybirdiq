@@ -150,6 +150,39 @@ Success is the one colour outside the brand set, because a kitchen ticket that
 has gone green cannot also be the brand red — status has to survive being
 glanced at from two metres away. It is used only for status, never decoration.
 
+### Order tints (staff surface only)
+
+The orders list tells four order *types* and five order *statuses* apart at a
+glance, at row height, from across a counter. That needs more hues than the
+brand has, so these are semantic tokens of their own — defined on the IQ
+surface, never used on the customer site, and never for anything but an order
+type or status. Each type carries a tinted ground, a readable ink for it, a
+hairline, and a solid swatch for controls; each status a dot, a tinted ground
+and its ink. Every ink-on-ground pair is AA for body text (checked by
+`scripts/check-contrast.py`).
+
+```
+type.dineIn     ground #F1E6FF  ink #4C1D95  line #E3D2FA  swatch #7C3AED
+type.takeaway   ground #FFEDD5  ink #7C2D12  line #FBD9B5  swatch #EA580C
+type.delivery   ground #E0ECFF  ink #1E3A8A  line #C7D8FA  swatch #2563EB
+type.online     ground #DCFCE7  ink #14532D  line #BBF0CD  swatch #16A34A
+
+status.new             dot #DC2626  ground #FEF2F2  ink #991B1B
+status.accepted        dot #2563EB  ground #EFF6FF  ink #1E40AF
+status.cooking         dot #D97706  ground #FFFBEB  ink #92400E
+status.ready           dot #16A34A  ground #F0FDF4  ink #166534
+status.outForDelivery  dot #0D9488  ground #F0FDFA  ink #115E59
+
+order.lateLine  #F5B8B0   the border of a row that is past its promised time
+```
+
+Collection is a takeaway: `fulfilment: TAKEAWAY` renders as TAKEAWAY. An
+online collection order is ONLINE (its channel), a delivery is DELIVERY. A
+`PAID` order that nobody has accepted yet is a *new* order for the counter and
+takes the `new` tint. Consumed as utilities (`bg-type-dine-in`,
+`text-type-dine-in-fg`, `border-type-dine-in-line`, `bg-status-new-dot` …),
+never as hex.
+
 ---
 
 ## 6. Motion

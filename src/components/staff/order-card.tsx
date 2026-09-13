@@ -52,7 +52,7 @@ export interface StaffOrder {
  * mean a collection order is not started until the customer is at the counter,
  * and a delivery order is never started at all.
  */
-function nextStep(
+export function nextStep(
   status: OrderStatus,
   fulfilment: StaffOrder["fulfilment"],
 ): { to: OrderStatus; label: string } | null {
@@ -63,11 +63,12 @@ function nextStep(
     case "ACCEPTED":
       return { to: "PREPARING", label: "Start cooking" };
     case "PREPARING":
-      return { to: "READY", label: fulfilment === "DELIVERY" ? "Ready to send" : "Ready" };
+      return { to: "READY", label: "Mark ready" };
     case "READY":
+      // Only a delivery goes out; everything else is handed over and done.
       return fulfilment === "DELIVERY"
         ? { to: "OUT_FOR_DELIVERY", label: "Send out" }
-        : { to: "COMPLETED", label: "Handed over" };
+        : { to: "COMPLETED", label: "Complete" };
     case "OUT_FOR_DELIVERY":
       return { to: "COMPLETED", label: "Delivered" };
     default:
