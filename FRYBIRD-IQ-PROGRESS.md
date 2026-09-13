@@ -7,6 +7,69 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Overview v3 — Slice A: Right now + Needs attention + KPI row
+
+**Status:** Complete. Gates green (372 tests, 17 new). Committed
+`87eca04`. Deployed (see deployment record). Verified signed in at 390
+and 1440 on a local build **and on production**: two tiles opened and
+closed, range switched to 7 days, comparison switched, console clean.
+Spec: `FRYBIRD IQ Overview v3.dc.html` (`renderVals()`); v2 ignored.
+
+**Right now** — eight tiles, each opening the inline drawer with the
+spec's columns (order, channel, items, state, timing, amount + pay,
+Open). Readings, all measured server-side (`src/lib/repositories/
+overview.ts`): Awaiting decision (online undecided), In the kitchen
+(ACCEPTED + PREPARING, oldest), Ready, Late (oldest), **Avg prep time**
+= accept → ready over the last hour from `orders.accepted_at`/`ready_at`,
+**On-time today** = ready ≤ promised among today's promised orders,
+**Kitchen load** = open tickets ÷ `kitchen_capacity`, **Payment
+pending** = unpaid orders READY / OUT_FOR_DELIVERY. No "staff on shift".
+
+**Needs attention** — rule-generated only (`src/lib/iq/overview.ts`,
+tested): late orders (prep reading as cause), unsettled cash, items
+unsold 7+ days (never-sold counts only once the shop has 7 days of
+history — a 3-day-old shop's whole menu is not "not selling"), costs not
+recorded. Levels NOW / TODAY / THIS WEEK / SETUP; every button is a real
+page; "Nothing needs attention." when nothing fires.
+
+**KPI row** — Revenue / Orders / AOV real, with delta vs the chosen
+comparison and the 7-day shape; Gross profit / Food cost % / Labour
+cost % / Prime cost % / Net profit as the spec's missing cards ("—", the
+input needed, a link). "n of 5 inputs connected" and "n of 4 cost lines
+recorded" are counted from the database. Excludes note uses real
+cancelled/refunded counts. Partial profit is never shown.
+
+**Header** — "Open · {time} IST · Ambala Sector 9 · Dine-in + takeaway
++ delivery · GST: not registered" (from the org's GSTIN). Range Today /
+Yesterday / 7 days / 30 days; comparison picker with each unavailable
+option disabled and its reason ("Needs a week of history · Store opened
+10 Sept 2026 (first order)"). Both in the URL.
+
+**Schema — migration 0023 (additive, applied, verified):**
+`organizations.kitchen_capacity integer not null default 10` (your
+instruction) and `organizations.opened_on date null` (the comparison
+picker needs a real opening date and none existed anywhere — added as a
+setting; until set, the first order's date is used and labelled). Both
+editable under **Restaurant › Operations** (`settings.manage`). Rollback:
+`supabase/rollback/0023_….down.sql`. Core counts unchanged (44 orders,
+44 payments, 49 products).
+
+**Tokens** — `--chart-1` is now the neutral ink grey; red moved to
+`--chart-5` (MASTER.md §5 "Charts", tokens.json `color.chart`). Channels
+chart keeps three distinct hues. Charts here draw in chart-1; red only
+for late/alert.
+
+**Reading of the live data** (why the numbers look the way they do):
+17 late / 16 in the kitchen are the accumulated test orders from earlier
+days; kitchen load 160 % is 16 tickets against the default capacity 10;
+opening date resolves to 10 Sept (first order), so only "vs yesterday"
+is available today — set the real opening date under Restaurant ›
+Operations and the picker widens.
+
+**Next:** Slice B (Sales by hour, Channels, Menu intelligence).
+
+---
+
 ## POS: accept at placement, alert only online orders, Customer control
 
 **Status:** Complete. Gates green (355 tests, 7 new). Deployed
@@ -1385,6 +1448,16 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-13 01:44 UTC — Overview v3 slice A (+ migration 0023)
+
+Migration 0023 applied from the Mac before the deploy (two additive
+columns; verified via information_schema; journal entry 24). Deployed
+via `./deploy/deploy.sh root@194.238.16.200` from `iq-dashboard` at
+`87eca04`. Gates in-script green (372/372). Post-deploy: `active`; smoke
+`HTTP 200`; signed-in production walk at 390 and 1440 (tiles, drawers,
+range, comparison, Restaurant › Operations) clean; no runtime errors
+since the restart.
 
 ### 2026-09-13 01:17 UTC — POS accept-at-placement, alert source filter, Customer control
 
