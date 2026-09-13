@@ -7,6 +7,88 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Bill & Receipt designer — Settings › Bill & Receipt
+
+**Status:** Complete. Gates green (405 tests, 13 new). Committed
+`2ee7a42`. Deployed (see deployment record). Verified on a local build
+and on production with the owner session (there is still no test staff
+account): every editor control, Save Draft, Apply to POS (confirmed),
+Restore previous, Print Test under print media, 390 and 1440, then one
+real ₹99 takeaway sale on the production POS printed through the applied
+design; console clean.
+
+**A design is configuration, never data.** `src/lib/receipt/template.ts`
+is the Zod-validated template: paper width (79 mm, 58 mm ready), divider
+style, and an ordered list of sections — logo, header, restaurant
+details (every field editable, tick to print, reorder), order details,
+customer details, items (compact / detailed / QSR, quantity / unit price
+/ amount / modifiers / modifier prices / notes / item discount / item tax
+/ SKU flags, column header), discounts, taxes (display only — the pricing
+engine's figures are shown or hidden, never recomputed), charges, total
+rows, payment rows, payment QR (a static uploaded image, not a gateway),
+other QR codes (website, menu, feedback, review, loyalty, social),
+footer, and any number of custom text blocks. Every row has its own
+label. `defaultTemplate()` seeds the restaurant fields from the org and
+location rows so a fresh draft already says FRYBIRD, Sector 9, Ambala
+City, Haryana. `src/lib/receipt/data.ts` is the JSON-safe order shape
+(paise as strings) plus the three sample orders. `src/lib/receipt/
+render.ts` is the one renderer — template × order → blocks — that the
+live preview, the test print and the POS slip all draw, so they cannot
+disagree. Zero lines never print; a coupon or offer prints under its
+own name; dates and times are Asia/Kolkata. 13 tests.
+
+**Storage:** `receipt_designs` (migration 0025, one row per org, RLS,
+rollback in `supabase/rollback`): `draft`, `active`, `previous`.
+`saveReceiptDraft` never touches the POS; `applyReceiptDraft` moves
+active → previous and draft → active in one transaction;
+`restorePreviousReceiptDesign` swaps them back (so a restore can itself
+be undone). All three audited (`receipt_draft_saved / design_applied /
+design_restored`). `getActiveReceiptTemplate` falls back to the default
+when nothing has been applied. Actions in `src/lib/receipt/actions.ts`
+re-check `settings.manage` (OWNER); image uploads go through the existing
+`uploadMedia` (Supabase Storage, JPEG/PNG/WebP ≤ 8 MB) under the same
+gate. `receiptDataForOrder` reads the slip back from the order, item,
+modifier, payment, event, table, membership and stamp-event rows the POS
+already wrote — the only arithmetic is change from the cash tendered.
+
+**Designer** (`/app/admin/receipt`, "Bill & Receipt" in the Admin nav
++ breadcrumb): left, the sections on the roll with show/hide, drag or
+arrow reorder, "Add custom text", paper width and dividers; centre, the
+live 79 mm preview against Small / Normal / Large sample orders with
+click-to-edit; right, the editor for the selected section. Header
+buttons Save Draft / Print Test / Apply to POS; status line shows active
+/ draft times, unsaved changes, and "Restore previous design" once there
+is one. Apply asks "Apply this receipt design to POS? This will replace
+the current POS receipt layout." and reports "✓ Receipt design is now
+active on POS". Print Test prints the sample and creates no order.
+Stacks to one column at 390.
+
+**POS:** `placeCounterOrderAction` returns the order read back as
+`receipt` data (best-effort — never fails a recorded sale); the POS page
+passes the applied template; the payment sheet prints it through
+`ReceiptSheet` (`data-print-receipt`, `@page { size: 79mm auto }`,
+images flattened to high-contrast greyscale). The old hand-rolled slip
+remains only as the fallback if the read-back fails. The cashier never
+sees the designer.
+
+**Print rule fix** (globals.css): transitions and animations are
+disabled while printing — the kit's `transition-all` buttons were fading
+their visibility over 150 ms and still showing in the print snapshot.
+
+**Production now holds** an applied design equal to the default except
+the cashier line reads "Served by" (the verification edit), and one real
+order #013 (₹99, cash, paid) placed to verify the POS print path. The
+cashier prints as the membership's display name, which for the owner is
+the email's local part — set a display name on Staff if you want the
+bill to say "Lovepreet".
+
+**Not built (stop rules):** nothing here changes pricing, tax or
+payments; the designer only chooses what to show. Loyalty on the bill is
+"Stamp earned" when the order earned one — a points balance line needs a
+decision on what to print and is not fabricated.
+
+---
+
 ## Promotions — Slice A: model, engine, editor
 
 **Status:** Complete. Gates green (392 tests, 20 new). Committed
@@ -1511,6 +1593,17 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-13 11:05 UTC — Bill & Receipt designer (+ migration 0025)
+
+Migration 0025 applied from the Mac before the deploy (new table
+`receipt_designs` with RLS; verified via information_schema — table,
+policy, journal 26). Deployed via `./deploy/deploy.sh
+root@194.238.16.200` from `kit-radix-nova` at `2ee7a42`. Gates in-script
+green (405/405, RSC check OK). Post-deploy: `active`; smoke `HTTP 200`;
+signed-in production walk: draft cleaned, "Served by" applied, print
+media check, 390, one real POS sale (#013) printed through the design;
+console clean. Verification sessions revoked, temp scripts deleted.
 
 ### 2026-09-13 02:36 UTC — Promotions slice A (+ migration 0024)
 
