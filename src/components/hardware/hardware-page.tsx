@@ -11,7 +11,7 @@
  * the device that owns the printer; from anywhere else they say so.
  */
 
-import { useEffect, useState, useTransition } from "react";
+import { useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Loader2, Pencil, Plus, Printer, RefreshCw, Smartphone, Trash2, X } from "lucide-react";
 import { PageHeader } from "@/components/staff/page-header";
@@ -28,13 +28,19 @@ import { relativeTime } from "./relative-time";
 
 type Notice = { tone: "ok" | "error"; text: string } | null;
 
+/**
+ * The clock, in 15 s ticks. The server snapshot is 0 so the HTML never
+ * carries a "seconds ago" the client would disagree with (a hydration
+ * mismatch in production, where the two clocks are not one machine);
+ * relative times render as "…" until the first client tick.
+ */
+const TICK_MS = 15_000;
+const subscribeClock = (onChange: () => void) => {
+  const timer = setInterval(onChange, TICK_MS);
+  return () => clearInterval(timer);
+};
 function useNow(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 15_000);
-    return () => clearInterval(timer);
-  }, []);
-  return now;
+  return useSyncExternalStore(subscribeClock, () => Math.floor(Date.now() / TICK_MS) * TICK_MS, () => 0);
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {

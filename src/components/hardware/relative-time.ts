@@ -1,6 +1,7 @@
 /** "30 seconds ago", "4 minutes ago", "Today, 2:48 PM", "12 Sept, 09:15". */
 export function relativeTime(iso: string | null, now: number): string {
   if (!iso) return "Never";
+  if (now === 0) return "…";
   const at = Date.parse(iso);
   const seconds = Math.max(0, Math.round((now - at) / 1000));
   if (seconds < 45) return `${seconds} seconds ago`;

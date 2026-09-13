@@ -81,7 +81,7 @@ export function loadOrMintDeviceKey(storage: Pick<Storage, "getItem" | "setItem"
 export const ONLINE_WINDOW_MS = 3 * 60 * 1000;
 
 export function isOnline(lastSeenAt: Date | string | null, now: number): boolean {
-  if (!lastSeenAt) return false;
+  if (!lastSeenAt || now === 0) return false;
   const seen = typeof lastSeenAt === "string" ? Date.parse(lastSeenAt) : lastSeenAt.getTime();
   return now - seen <= ONLINE_WINDOW_MS;
 }
