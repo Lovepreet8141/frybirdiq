@@ -7,6 +7,66 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Roadmap Phase 0–2 deployed — Razorpay behind the interface, realtime on `order_events`, nightly backups proven
+
+**Status:** Deployed (`6bbde8a`) at 16:12 UTC; migration `0027` applied
+and verified; `kit-radix-nova` pushed (new remote branch) and `main`
+fast-forwarded `537f396 → 3bc9b46` on origin — roadmap 0.1 closed. Gates
+green (457/457 across 33 files; 60 routes; RSC check OK).
+
+**What this deploy carried.** The service's last restart before this one
+was 13:41 UTC (`journalctl -u frybird`), so everything from `425b2a7` to
+`6bbde8a` went live together: Design phase 2 wave 3 (`492fd8c`), the
+Driver App prototype (`9078863`), roadmap 0.5 permission tightening
+(`18cd4e0`), 0.6 dead dependencies (`903a6fd`), 1.1–1.4 Razorpay
+provider / online checkout / webhook / refund write path (`b5c1933` …
+`65bfead`), 2.1–2.4 realtime (`688cb85` … `52ec5f5`) and 0.7 backups
+(`6bbde8a`).
+
+**Migration 0027 (realtime).** Read on production before and after: 27 →
+28 applied; `order_events_broadcast_trigger` enabled on `order_events`;
+the `supabase_realtime` publication now carries `order_events`,
+`products` and `product_availability` (it carried nothing before);
+`realtime.send(jsonb, text, text, boolean)` exists, so the customer
+tracking broadcast is live. The browser-level "under 2 s" checks for
+2.1–2.4 were **not** run in this session — the database side is proven,
+the socket side is not.
+
+**Razorpay in production.** `/etc/frybird/env` has no `RAZORPAY_*` keys.
+They are optional in the env schema, so `availableMethods()` offers cash
+and COD only and `/api/payments/razorpay/webhook` answers 503 (not
+configured) — both verified on the live site. Roadmap 1.2's "₹1 paid by
+UPI on the live site" is therefore **not yet met**; it needs the live keys
+(decision 1 in `docs/ROADMAP.md`) in the env file and a service restart.
+
+**Backups (0.7) — done-when met.** On the VPS: `postgresql-client` and a
+local scratch `postgresql` (18.6; Supabase is 17.6, and a newer `pg_dump`
+against an older server is supported) installed; `frybird-backup.timer`
+enabled, next run 22:06 UTC; first dump `frybird-20260914-1615.dump` —
+61 tables of data (all 61 public tables), 304 KB, `/var/backups/frybird`
+0700, file 0600. **The restore check failed on its first run:**
+`pg_restore` ran as the `postgres` OS user and could not open the
+root-only dump (`Permission denied`), and the script's `grep "ERROR"`
+missed pg_restore's lowercase `error:` line, so it reported zero problems
+while restoring nothing. Fixed in `3bc9b46`: root opens the file and
+`pg_restore` reads stdin; the error grep is case-insensitive; a
+table-count guard fails loudly; the scratch database is dropped on every
+exit. Re-run on the VPS: 61 tables, 62 orders, 66 order items, 62
+payments, 49 products, 14 customers — identical to production's counts;
+the 54 restore warnings are `schema public already exists` and RLS
+policies naming Supabase's `authenticated`/`anon` roles, which a scratch
+server lacks. Offsite copy (`BACKUP_RCLONE_REMOTE`) is not configured; the
+dump lives only on the VPS until it is.
+
+**Read-only Products check** (run before anything else): 66 order lines;
+the one placed since the join fix carries a `product_id` that matches its
+snapshot name; 66/66 tie to a live product; 37 of 49 live products have
+not sold in 7 days, as before. No production order, product, customer or
+device was created, changed or removed by this session — the only
+production writes were migration 0027 and the backup files on the VPS.
+
+---
+
 ## Fix — Products analytics tied every sale to "Removed from menu"
 
 **Status:** Fixed and deployed (`573dcab`). Gates green (444 tests, 1
@@ -1973,11 +2033,26 @@ shipped to production so far.
 ## Cumulative state of validation
 
 As of the most recent slice above: `pnpm typecheck` clean, `pnpm lint`
-clean, `pnpm test` 340/340 passing (23 files), `pnpm build` succeeds (49
-routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh`
-clean.
+clean, `pnpm test` 457/457 passing (33 files), `pnpm build` succeeds (60
+routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record
+
+### 2026-09-14 16:12 UTC — Roadmap Phase 0–2 (+ migration 0027), backups, main fast-forwarded
+
+`pnpm db:migrate` applied `0027_realtime_order_events` to production
+first (27 → 28; trigger and publication verified). Then deployed via
+`./deploy/deploy.sh root@194.238.16.200` from `kit-radix-nova` at
+`6bbde8a`. Gates in-script green (457/457, RSC check OK). Post-deploy:
+`active`, 0 restarts; remote `BUILD_ID` `KdHZc-5jqauLg4GNeExJ6` equals
+the local build; smoke `HTTP 200` on `/`, `/menu`, `/sign-in`, `/cart`;
+`/app/*` redirects to sign-in; unknown order id 404; webhook 503 without
+Razorpay keys; journal clean. `postgresql-client` + scratch `postgresql`
+installed on the VPS; `frybird-backup.timer` enabled; first dump and
+restore check done (restore script fixed in `3bc9b46` and re-shipped to
+`/usr/local/bin/frybird-restore-check`, not part of the app build).
+`kit-radix-nova` pushed to origin (new branch); `main` fast-forwarded
+`537f396 → 3bc9b46` locally and on origin. No history rewritten.
 
 ### 2026-09-14 14:45 UTC — Products analytics join fix
 
