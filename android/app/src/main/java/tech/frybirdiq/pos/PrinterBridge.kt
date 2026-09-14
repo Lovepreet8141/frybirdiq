@@ -14,7 +14,7 @@ import java.util.concurrent.Executors
 /**
  * The printer bridge: the only native capability the web POS can reach.
  *
- * Every message is JSON `{ v: 1, id, op, payload }`. Ten operations are
+ * Every message is JSON `{ v: 1, id, op, payload }`. Eleven operations are
  * known; anything else is refused with INVALID_REQUEST. A printer address
  * is either a private IPv4 address with a sane port (Wi-Fi / LAN, TCP
  * 9100) or the Bluetooth address of a device the person picked on this
@@ -86,6 +86,7 @@ class PrinterBridge(private val context: Context, host: BluetoothPrinter.BridgeH
         "CONNECT" -> connect(payload)
         "DISCONNECT" -> { connection = null; lastStatus = null; bluetooth.disconnect(); JSONObject() }
         "BT_STATE" -> bluetoothState()
+        "BT_ENABLE" -> { permissionAsked = true; bluetooth.enable(); bluetoothState() }
         "TEST_CONNECTION" -> testConnection(payload)
         "TEST_PRINT" -> print(payload, jobId = null)
         "PRINT_RECEIPT" -> print(payload, jobId = requireJobId(payload))
@@ -103,9 +104,12 @@ class PrinterBridge(private val context: Context, host: BluetoothPrinter.BridgeH
         val lan = discovery.localAddress()
         return JSONObject()
             .put("deviceId", if (androidId.isNullOrBlank()) JSONObject.NULL else "android-$androidId")
-            .put("deviceName", Build.MODEL ?: "Android device")
+            // The name the person gave the tablet ("Redmi Pad"), not the model code ("22081283G").
+            .put("deviceName", deviceName())
             .put("platform", "ANDROID")
-            .put("deviceType", if (tablet) "TABLET" else "PHONE")
+            // Running the FRYBIRD POS app makes this device the POS terminal, whatever its screen size.
+            .put("deviceType", "POS_TERMINAL")
+            .put("formFactor", if (tablet) "TABLET" else "PHONE")
             .put("model", Build.MODEL)
             .put("manufacturer", Build.MANUFACTURER?.replaceFirstChar { it.uppercase() })
             .put("appVersion", BuildConfig.VERSION_NAME)
@@ -120,6 +124,15 @@ class PrinterBridge(private val context: Context, host: BluetoothPrinter.BridgeH
                     .put("usb", false),
             )
             .put("network", JSONObject().put("wifiConnected", lan != null).put("subnet", lan?.let { PrinterDiscovery.subnetOf(it) } ?: JSONObject.NULL))
+    }
+
+    /** Settings › About › Device name, else the Bluetooth name, else the model. */
+    private fun deviceName(): String {
+        val fromSettings = runCatching { Settings.Global.getString(context.contentResolver, "device_name") }.getOrNull()
+        if (!fromSettings.isNullOrBlank()) return fromSettings.trim()
+        val fromBluetooth = runCatching { bluetooth.adapterName() }.getOrNull()
+        if (!fromBluetooth.isNullOrBlank()) return fromBluetooth.trim()
+        return Build.MODEL ?: "Android device"
     }
 
     private fun status(): JSONObject {

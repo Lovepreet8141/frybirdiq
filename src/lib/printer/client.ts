@@ -23,6 +23,7 @@ export interface NativePrinterClient {
   getStatus(): Promise<StatusReport>;
   discover(options?: { timeoutMs?: number; transport?: "LAN" | "BLUETOOTH" }): Promise<readonly DiscoveredPrinter[]>;
   getBluetoothState(): Promise<BluetoothState>;
+  enableBluetooth(): Promise<BluetoothState>;
   connect(connection: PrinterConnection): Promise<StatusReport>;
   disconnect(): Promise<void>;
   testConnection(connection: PrinterConnection): Promise<{ ok: boolean; latencyMs: number | null; error: string | null }>;
@@ -40,6 +41,7 @@ export interface BrowserPrinterClient {
   getStatus(): Promise<StatusReport>;
   discover(options?: { timeoutMs?: number; transport?: "LAN" | "BLUETOOTH" }): Promise<Unsupported>;
   getBluetoothState(): Promise<BluetoothState>;
+  enableBluetooth(): Promise<BluetoothState>;
   connect(connection?: PrinterConnection): Promise<Unsupported>;
   disconnect(): Promise<void>;
   testConnection(connection?: PrinterConnection): Promise<Unsupported>;
@@ -51,6 +53,7 @@ export interface BrowserPrinterClient {
 export type PrinterClient = NativePrinterClient | BrowserPrinterClient;
 
 const unsupported: Unsupported = { supported: false, reason: UNAVAILABLE_REASON };
+const NO_BLUETOOTH: BluetoothState = { supported: false, enabled: false, permission: "not_requested", connected: false, selected: null, error: "Bluetooth printing needs the FRYBIRD POS app on the device next to the printer." };
 const notPrinted: PrintOutcome = { printed: false, error: "Direct thermal printing is available on a configured POS device.", code: UNAVAILABLE_REASON };
 
 export const browserPrinterClient: BrowserPrinterClient = {
@@ -60,7 +63,8 @@ export const browserPrinterClient: BrowserPrinterClient = {
   getCapabilities: async () => unsupported,
   getStatus: async () => ({ status: "UNAVAILABLE", connection: null, checkedAt: null, error: null }),
   discover: async () => unsupported,
-  getBluetoothState: async () => ({ supported: false, enabled: false, permission: "not_requested", connected: false, selected: null, error: "Bluetooth printing needs the FRYBIRD POS app on the device next to the printer." }),
+  getBluetoothState: async () => NO_BLUETOOTH,
+  enableBluetooth: async () => NO_BLUETOOTH,
   connect: async () => unsupported,
   disconnect: async () => undefined,
   testConnection: async () => unsupported,
@@ -78,6 +82,7 @@ export function nativePrinterClient(provider: PrinterProvider): NativePrinterCli
     getStatus: () => provider.getStatus(),
     discover: (options) => provider.discover(options),
     getBluetoothState: () => provider.getBluetoothState(),
+    enableBluetooth: () => provider.enableBluetooth(),
     connect: (connection) => provider.connect(connection),
     disconnect: () => provider.disconnect(),
     testConnection: (connection) => provider.testConnection(connection),

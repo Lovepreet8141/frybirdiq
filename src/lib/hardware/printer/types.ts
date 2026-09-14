@@ -125,6 +125,8 @@ export interface PrinterProvider {
   discover(options?: { timeoutMs?: number; transport?: "LAN" | "BLUETOOTH" }): Promise<readonly DiscoveredPrinter[]>;
   /** The Bluetooth radio's state — asks the device, never assumes. */
   getBluetoothState(): Promise<BluetoothState>;
+  /** Runs Android's own permission request and "turn on Bluetooth" dialog; returns the real state afterwards. */
+  enableBluetooth(): Promise<BluetoothState>;
   connect(connection: PrinterConnection): Promise<StatusReport>;
   disconnect(): Promise<void>;
   testConnection(connection: PrinterConnection): Promise<{ ok: boolean; latencyMs: number | null; error: string | null }>;
@@ -138,7 +140,7 @@ export interface PrinterProvider {
 /* ------------------------------------------------------------------ */
 
 /** The only operations the native side accepts. Anything else is refused. */
-export const BRIDGE_OPS = ["CAPABILITIES", "STATUS", "DISCOVER", "CONNECT", "DISCONNECT", "TEST_CONNECTION", "TEST_PRINT", "PRINT_RECEIPT", "LAST_ERROR", "BT_STATE"] as const;
+export const BRIDGE_OPS = ["CAPABILITIES", "STATUS", "DISCOVER", "CONNECT", "DISCONNECT", "TEST_CONNECTION", "TEST_PRINT", "PRINT_RECEIPT", "LAST_ERROR", "BT_STATE", "BT_ENABLE"] as const;
 export type BridgeOp = (typeof BRIDGE_OPS)[number];
 
 export interface BridgeRequest {

@@ -40,6 +40,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- "Open FRYBIRD POS" from the web app in Chrome: an intent:// link naming this package. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="frybirdiq.tech" android:pathPrefix="/app/pos" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

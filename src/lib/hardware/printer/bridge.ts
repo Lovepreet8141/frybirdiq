@@ -119,6 +119,20 @@ function toStatus(result: unknown): StatusReport {
   };
 }
 
+function toBluetoothState(result: unknown): BluetoothState {
+  const record = asRecord(result);
+  const selected = asRecord(record.selected);
+  const permission = str(record.permission) ?? "not_requested";
+  return {
+    supported: record.supported === true,
+    enabled: record.enabled === true,
+    permission: permission === "granted" || permission === "denied" ? permission : "not_requested",
+    connected: record.connected === true,
+    selected: typeof selected.address === "string" ? { address: selected.address, name: str(selected.name) } : null,
+    error: str(record.error),
+  };
+}
+
 function toOutcome(result: unknown): PrintOutcome {
   const record = asRecord(result);
   return { printed: true, duplicate: record.duplicate === true, bytes: typeof record.bytes === "number" ? record.bytes : 0 };
@@ -198,19 +212,19 @@ export function createNativePrinterProvider(transport: BridgeTransport): Printer
 
     async getBluetoothState(): Promise<BluetoothState> {
       try {
-        const record = asRecord(await transport.request("BT_STATE"));
-        const selected = asRecord(record.selected);
-        const permission = str(record.permission) ?? "not_requested";
-        return {
-          supported: record.supported === true,
-          enabled: record.enabled === true,
-          permission: permission === "granted" || permission === "denied" ? permission : "not_requested",
-          connected: record.connected === true,
-          selected: typeof selected.address === "string" ? { address: selected.address, name: str(selected.name) } : null,
-          error: str(record.error),
-        };
+        return toBluetoothState(await transport.request("BT_STATE"));
       } catch (error) {
         return { supported: false, enabled: false, permission: "not_requested", connected: false, selected: null, error: error instanceof Error ? error.message : "Bluetooth state unknown." };
+      }
+    },
+
+    async enableBluetooth(): Promise<BluetoothState> {
+      try {
+        // Android puts a system dialog on screen; the person may take a while.
+        return toBluetoothState(await transport.request("BT_ENABLE", {}, 150_000));
+      } catch (error) {
+        const code = error instanceof BridgeError ? error.code : "BRIDGE_ERROR";
+        return { supported: code !== "BLUETOOTH_UNAVAILABLE", enabled: false, permission: code === "PERMISSION_DENIED" ? "denied" : "not_requested", connected: false, selected: null, error: error instanceof Error ? error.message : "Could not turn on Bluetooth." };
       }
     },
 

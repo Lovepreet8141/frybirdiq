@@ -123,6 +123,25 @@ describe("bridge shim", () => {
     expect(state).toEqual({ supported: true, enabled: false, permission: "denied", connected: false, selected: { address: "66:22:AA:BB:CC:DD", name: "KP307-UEWB" }, error: "Bluetooth is off" });
     const browser = getPrinterClient({} as Window);
     expect((await browser.getBluetoothState()).supported).toBe(false);
+    expect((await browser.enableBluetooth()).enabled).toBe(false);
+  });
+
+  it("Bluetooth: turning the radio on goes through the native dialog and returns the real state", async () => {
+    let radio = false;
+    const { channel, seen } = fakeNative({
+      BT_ENABLE: () => {
+        radio = true;
+        return { supported: true, enabled: radio, permission: "granted", connected: false, selected: null, error: null };
+      },
+    });
+    const provider = createNativePrinterProvider(new BridgeTransport(channel));
+    const state = await provider.enableBluetooth();
+    expect(seen[0]?.op).toBe("BT_ENABLE");
+    expect(state.enabled).toBe(true);
+    const refused = createNativePrinterProvider(new BridgeTransport(fakeNative({ BT_ENABLE: () => Promise.reject(Object.assign(new Error("Bluetooth permission was denied."), {})) }).channel));
+    const denied = await refused.enableBluetooth();
+    expect(denied.enabled).toBe(false);
+    expect(denied.error).toContain("denied");
   });
 
   it("status is a real report or ERROR — never ONLINE by default", async () => {

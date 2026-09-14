@@ -18,10 +18,11 @@ import { PageHeader } from "@/components/staff/page-header";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { deletePrinterAction, removeDeviceAction, renameDeviceAction } from "@/lib/hardware/actions";
-import { isOnline } from "@/lib/hardware/device";
+import { deviceKindLabel, isOnline } from "@/lib/hardware/device";
 import type { DeviceRecord, PrintJobRecord, PrinterRecord } from "@/lib/repositories/hardware";
 import { cn } from "@/lib/utils";
 import { connectionOf, useLocalPrinter } from "./device-agent";
+import { OpenPosAppLink } from "./open-pos-app-link";
 import { PrinterForm } from "./printer-form";
 import { STATUS_LABEL, StatusDot } from "./printer-status";
 import { relativeTime } from "./relative-time";
@@ -164,15 +165,27 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
         ) : bridge ? (
           <div className="rounded-lg border border-border bg-surface p-4">
             <p className="font-heading text-base font-semibold">POS Device Setup</p>
+            <p className="mt-1 text-lg font-semibold">{local.device?.name ?? local.identity?.name ?? "This device"}</p>
             <ul className="mt-2 flex flex-col gap-1 text-sm">
               <li className="inline-flex items-center gap-2">
-                {local.device ? <Check className="size-4 text-success" aria-hidden="true" /> : <X className="size-4 text-destructive" aria-hidden="true" />}
-                {local.device ? `Device registered as ${local.device.name}` : "Device not registered"}
+                <Check className="size-4 text-success" aria-hidden="true" />
+                FRYBIRD POS{local.bridge ? ` · app ${local.bridge.appVersion}` : ""}
               </li>
               <li className="inline-flex items-center gap-2">
                 <Check className="size-4 text-success" aria-hidden="true" />
-                Printer bridge ready{local.bridge ? ` · bridge ${local.bridge.bridgeVersion} · app ${local.bridge.appVersion}` : ""}
+                Printer Bridge Available{local.bridge ? ` · bridge ${local.bridge.bridgeVersion}` : ""}
               </li>
+              <li className="inline-flex items-center gap-2">
+                {local.device ? <Check className="size-4 text-success" aria-hidden="true" /> : <X className="size-4 text-destructive" aria-hidden="true" />}
+                {local.device ? "Device registered" : "Device not registered"}
+              </li>
+              {local.bridge && (
+                <li className="inline-flex items-center gap-2 text-muted-foreground">
+                  <span className="size-4" aria-hidden="true" />
+                  Wi-Fi / LAN{local.bridge.capabilities.bluetooth ? " · Bluetooth" : ""}
+                  {local.bridge.capabilities.usb ? " · USB" : ""} printing
+                </li>
+              )}
             </ul>
             <dl className="mt-3 border-t border-border pt-3">
               <Row label="Printer">{thisPrinter ? `${thisPrinter.name}${thisPrinter.model ? ` · ${thisPrinter.model}` : ""}` : "None configured for this device"}</Row>
@@ -198,9 +211,11 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
           </div>
         ) : (
           <div className="rounded-lg border border-border bg-surface p-4">
-            <p className="text-sm">This device can run FRYBIRD POS, but direct thermal printing is not configured. Direct thermal printing is available on a configured POS device — the FRYBIRD POS app on the Android tablet at the counter.</p>
+            <p className="text-lg font-semibold">{local.device?.name ?? local.identity?.name ?? "This browser"}</p>
+            <p className="text-sm font-medium text-muted-foreground">No printer bridge</p>
+            <p className="mt-2 text-sm">You&rsquo;re running FRYBIRD in a browser. Direct Bluetooth/USB thermal printing requires the FRYBIRD POS app. A browser cannot open a connection to a thermal printer, so this device can run the till but the receipt prints from the FRYBIRD POS app on the device next to the printer.</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {local.identity ? `Detected: ${local.identity.name} · ${local.identity.platform.toLowerCase()} · no printer bridge.` : "This browser has no storage for a device key."}
+              {local.identity ? `Detected: ${local.identity.platform === "ANDROID" ? "Android" : local.identity.platform.charAt(0) + local.identity.platform.slice(1).toLowerCase()} · ${local.identity.deviceType.toLowerCase()} · no printer bridge.` : "This browser has no storage for a device key."}
               {local.device ? ` Registered as ${local.device.name}.` : ""}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -209,6 +224,7 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
                   Register this browser as a device
                 </Button>
               )}
+              <OpenPosAppLink platform={local.identity?.platform ?? null} />
               <a href="#setup" className="inline-flex min-h-[32px] items-center rounded-lg border border-border bg-background px-3 text-sm font-medium hover:bg-muted">
                 Set Up Printing
               </a>
@@ -251,9 +267,11 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
                         </p>
                       )}
                       <p className="text-xs text-muted-foreground">
-                        {online ? "Online" : "Offline"} · {device.platform.charAt(0) + device.platform.slice(1).toLowerCase()} {device.deviceType.toLowerCase().replace("_", " ")} · Last seen: {relativeTime(device.lastSeenAt, now)}
-                        {device.capabilities.localPrinterBridge ? ` · bridge ${device.bridgeVersion ?? "?"}` : " · no printer bridge"}
-                        {device.lastPrinterStatus ? ` · printer ${STATUS_LABEL[device.lastPrinterStatus].toLowerCase()}` : ""}
+                        {deviceKindLabel(device)} · {online ? "Online" : "Offline"} · Last seen: {relativeTime(device.lastSeenAt, now)}
+                        {device.lastPrinterStatus && device.capabilities.localPrinterBridge ? ` · printer ${STATUS_LABEL[device.lastPrinterStatus].toLowerCase()}` : ""}
+                      </p>
+                      <p className={cn("text-xs", device.capabilities.localPrinterBridge ? "text-foreground" : "text-muted-foreground")}>
+                        {device.capabilities.localPrinterBridge ? `Printer Bridge: ✓${device.bridgeVersion ? ` v${device.bridgeVersion}` : ""}` : "Browser / No printer bridge"}
                       </p>
                     </div>
                   </div>
@@ -296,7 +314,7 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
                       <p className="font-heading text-base font-semibold">{printer.name}</p>
                       <p className="text-sm text-muted-foreground">{printer.model ?? printer.protocol}</p>
                     </div>
-                    <StatusDot status={liveStatus} label={liveStatus === "ONLINE" ? "Online" : liveStatus === "OFFLINE" ? "Offline" : STATUS_LABEL[liveStatus]} className="font-medium" />
+                    <StatusDot status={liveStatus} label={liveStatus === "ONLINE" ? (printer.connectionType === "BLUETOOTH" ? "Connected" : "Online") : liveStatus === "OFFLINE" ? (printer.connectionType === "BLUETOOTH" ? "Disconnected" : "Offline") : STATUS_LABEL[liveStatus]} className="font-medium" />
                   </div>
                   <dl className="divide-y divide-border/60">
                     <Row label="Device">
@@ -406,6 +424,7 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
             <PrinterForm
               printer={editing === "new" ? null : editing}
               devices={devices}
+              shopName={shopName}
               firstPrinter={printers.length === 0}
               onCancel={() => setEditing(null)}
               onSaved={(saved) => {

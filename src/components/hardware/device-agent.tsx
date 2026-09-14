@@ -44,6 +44,8 @@ export interface LocalPrinter {
   setPrinter(printer: PrinterRecord | null): void;
   printReceipt(input: { orderId: string; template: ReceiptTemplate; data: ReceiptData; kind: "RECEIPT" | "DUPLICATE"; jobId?: string }): Promise<PrintResult>;
   testPrint(printer: PrinterRecord, shopName: string): Promise<PrintResult>;
+  /** A test ticket to a connection that is not saved yet (the Add Printer screen). No job record — there is no printer row to attach one to. */
+  testPrintConnection(input: { connection: PrinterConnection; printerName: string; paperWidthMm: 58 | 80; shopName: string }): Promise<PrintResult>;
   testConnection(connection: PrinterConnection): Promise<{ ok: boolean; latencyMs: number | null; error: string | null }>;
 }
 
@@ -268,6 +270,17 @@ export function DeviceAgent({ children, autoRegister = true, initialPrinter = nu
       async testPrint(target, shopName) {
         const data = testTicket({ shopName, deviceName: device?.name ?? identity?.name ?? "this device", printerName: target.name, at: new Date(), paperWidthMm: target.paperWidthMm });
         return send({ jobId: crypto.randomUUID(), kind: "TEST", printer: target, data, orderId: null });
+      },
+      async testPrintConnection(input) {
+        if (!client.supported) return { ok: false, jobId: null, error: "Direct thermal printing is available on a configured POS device.", retryable: false };
+        const data = testTicket({ shopName: input.shopName, deviceName: device?.name ?? identity?.name ?? "this device", printerName: input.printerName, at: new Date(), paperWidthMm: input.paperWidthMm });
+        const outcome = await client.testPrint(input.connection, data);
+        if (outcome.printed) {
+          setStatus("ONLINE");
+          setStatusError(null);
+          return { ok: true, jobId: "test", duplicate: false };
+        }
+        return { ok: false, jobId: null, error: outcome.error, retryable: outcome.code !== "INVALID_ADDRESS" };
       },
       async testConnection(connection) {
         if (!client.supported) return { ok: false, latencyMs: null, error: "Direct thermal printing is available on a configured POS device." };

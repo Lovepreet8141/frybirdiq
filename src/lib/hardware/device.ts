@@ -33,9 +33,9 @@ export function detectDeviceType(userAgent: string, viewportWidth: number): Devi
   return viewportWidth >= 700 || ua.includes("ipad") || (ua.includes("android") && !ua.includes("mobile")) ? "TABLET" : "PHONE";
 }
 
-/** A readable default name: "Xiaomi Redmi Pad", "Chrome on macOS". */
+/** A readable default name: "Redmi Pad" (the tablet's own device name), else "Xiaomi 22081283G", else "Chrome on Android". */
 export function defaultDeviceName(platform: DevicePlatform, userAgent: string, bridge: BridgeCapabilities | null): string {
-  if (bridge) return [bridge.manufacturer, bridge.model].filter(Boolean).join(" ") || bridge.deviceName || "POS device";
+  if (bridge) return bridge.deviceName.trim() || [bridge.manufacturer, bridge.model].filter(Boolean).join(" ") || "POS device";
   const ua = userAgent;
   const browser = /edg\//i.test(ua) ? "Edge" : /chrome\//i.test(ua) ? "Chrome" : /firefox\//i.test(ua) ? "Firefox" : /safari\//i.test(ua) ? "Safari" : "Browser";
   const os = platform === "MACOS" ? "macOS" : platform === "WINDOWS" ? "Windows" : platform === "LINUX" ? "Linux" : platform === "IOS" ? "iOS" : platform === "ANDROID" ? "Android" : "the web";
@@ -59,6 +59,13 @@ export function describeDevice(input: { deviceKey: string; userAgent: string; vi
     bridgeVersion: bridge?.bridgeVersion ?? null,
     capabilities: bridge ? bridge.capabilities : NO_HARDWARE,
   };
+}
+
+/** "Android POS", "Browser", "POS terminal" — what kind of thing a registered device is, from what it reported. */
+export function deviceKindLabel(device: { platform: DevicePlatform; deviceType: DeviceType; capabilities: HardwareCapabilities }): string {
+  if (device.capabilities.localPrinterBridge) return device.platform === "ANDROID" ? "Android POS" : "POS terminal";
+  const platform = device.platform === "MACOS" ? "macOS" : device.platform === "IOS" ? "iOS" : device.platform === "WEB" ? "web" : device.platform.charAt(0) + device.platform.slice(1).toLowerCase();
+  return `Browser on ${platform}`;
 }
 
 export const DEVICE_KEY_STORAGE = "frybird.device.key";

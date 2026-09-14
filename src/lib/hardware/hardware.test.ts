@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeDevice, detectDeviceType, detectPlatform, isOnline, loadOrMintDeviceKey } from "./device";
+import { describeDevice, detectDeviceType, detectPlatform, deviceKindLabel, isOnline, loadOrMintDeviceKey } from "./device";
 import { isPrivateIPv4, normaliseMac, validatePrinterAddress } from "./net";
 
 describe("printer addresses", () => {
@@ -55,9 +55,18 @@ describe("device identity", () => {
       bridge: { deviceId: "android-id-1", deviceName: "Redmi Pad", platform: "ANDROID", deviceType: "TABLET", model: "Redmi Pad", manufacturer: "Xiaomi", appVersion: "1.0.0", bridgeVersion: "1", capabilities: { printer: true, localPrinterBridge: true, wifi: true, bluetooth: true, usb: false }, network: { wifiConnected: true, subnet: "192.168.1" } },
     });
     expect(device.deviceKey).toBe("android-id-1");
-    expect(device.name).toBe("Xiaomi Redmi Pad");
+    // The tablet's own device name wins over "manufacturer + model code".
+    expect(device.name).toBe("Redmi Pad");
     expect(device.appVersion).toBe("1.0.0");
     expect(device.capabilities.localPrinterBridge).toBe(true);
+  });
+
+  it("labels a device by what it reported: Android POS with a bridge, a browser without", () => {
+    const withBridge = { platform: "ANDROID" as const, deviceType: "POS_TERMINAL" as const, capabilities: { printer: true, localPrinterBridge: true, wifi: true, bluetooth: true, usb: false } };
+    const browser = { platform: "ANDROID" as const, deviceType: "TABLET" as const, capabilities: { printer: false, localPrinterBridge: false, wifi: false, bluetooth: false, usb: false } };
+    expect(deviceKindLabel(withBridge)).toBe("Android POS");
+    expect(deviceKindLabel(browser)).toBe("Browser on Android");
+    expect(deviceKindLabel({ ...browser, platform: "MACOS" })).toBe("Browser on macOS");
   });
 
   it("mints a device key once and keeps it", () => {

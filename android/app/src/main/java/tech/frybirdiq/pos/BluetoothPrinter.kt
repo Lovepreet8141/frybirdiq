@@ -78,6 +78,15 @@ class BluetoothPrinter(private val context: Context, private val host: BridgeHos
         if (!enabled) throw BluetoothException("BLUETOOTH_DISABLED", "Bluetooth is switched off on this device.")
     }
 
+    /** The proper Android flow: runtime permission request, then the system "turn on Bluetooth" dialog. Throws with the real reason. */
+    fun enable() {
+        ensureReady()
+    }
+
+    /** The adapter's own name — needs BLUETOOTH_CONNECT on Android 12+; null when not allowed yet. */
+    @SuppressLint("MissingPermission")
+    fun adapterName(): String? = if (hasPermissions()) adapter?.name else null
+
     /* ---- discovery ---------------------------------------------------- */
 
     /** Paired devices first, then whatever answers a classic discovery within the timeout. */
