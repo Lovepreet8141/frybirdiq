@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { Card, CardContent } from "@/components/ui/card";
+import { Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { IngredientForm } from "@/components/inventory/ingredient-form";
 import { PriceForm } from "@/components/inventory/price-form";
@@ -42,7 +42,7 @@ export default async function IngredientPage({ params, searchParams }: { params:
         description={[ingredient.sku, ingredient.isPackaging ? "Packaging" : "Ingredient", `measured in ${unitLabel(ingredient.baseUnit)}`].filter(Boolean).join(" · ")}
       />
       {created && (
-        <p role="status" className="border-l-2 border-[var(--success)] bg-surface px-4 py-3 text-sm">
+        <p role="status" className="rounded-md border-l-2 border-gain bg-gain-soft/60 px-4 py-3 text-sm">
           Ingredient added. Record what you last paid for it so recipes can be costed.
         </p>
       )}
@@ -59,20 +59,20 @@ export default async function IngredientPage({ params, searchParams }: { params:
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardContent className="flex flex-col gap-4">
-            <h2 className="font-heading text-lg font-semibold">Record a price</h2>
+        <Panel>
+          <PanelHeader title="Record a price" description="What you last paid, in the unit you bought it in. Usable cost follows from yield and waste." />
+          <PanelBody>
             {canManage ? (
               <PriceForm ingredientId={ingredient.id} baseUnit={ingredient.baseUnit} suppliers={supplierOptions} defaultSupplierId={ingredient.supplierId} />
             ) : (
               <p className="text-sm text-muted-foreground">Recording a price needs the purchasing permission.</p>
             )}
-          </CardContent>
-        </Card>
+          </PanelBody>
+        </Panel>
 
-        <Card>
-          <CardContent className="flex flex-col gap-4">
-            <h2 className="font-heading text-lg font-semibold">Details</h2>
+        <Panel>
+          <PanelHeader title="Details" />
+          <PanelBody>
             {canManage ? (
               <IngredientForm
                 initial={{
@@ -95,16 +95,18 @@ export default async function IngredientPage({ params, searchParams }: { params:
                 <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Status</dt><dd>{ingredient.isActive ? "Active" : "Inactive"}</dd></div>
               </dl>
             )}
-          </CardContent>
-        </Card>
+          </PanelBody>
+        </Panel>
       </div>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="font-heading text-lg font-semibold">Price history</h2>
+      <Panel>
+        <PanelHeader title="Price history" meta={ingredient.prices.length === 0 ? undefined : `${ingredient.prices.length} ${ingredient.prices.length === 1 ? "price" : "prices"}`} />
         {ingredient.prices.length === 0 ? (
-          <p className="rounded-lg border border-border bg-surface px-4 py-6 text-center text-sm text-muted-foreground">No prices recorded yet.</p>
+          <PanelBody>
+            <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">No prices recorded yet.</p>
+          </PanelBody>
         ) : (
-          <div className="overflow-hidden rounded-xl border border-border bg-panel">
+          <PanelBody flush className="border-t border-border pb-0">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -131,9 +133,9 @@ export default async function IngredientPage({ params, searchParams }: { params:
                 ))}
               </TableBody>
             </Table>
-          </div>
+          </PanelBody>
         )}
-      </section>
+      </Panel>
     </div>
   );
 }

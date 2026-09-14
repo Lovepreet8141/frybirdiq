@@ -9,7 +9,9 @@ export interface PosCategory {
 }
 
 /**
- * Categories, as a vertical rail.
+ * Categories, as a vertical rail. The active row is the shell's cream row
+ * with the brand-red bar — identity, not a red block — and every row is a
+ * 56px target with a press state inside the 120ms micro ceiling.
  *
  * Vertical rather than the customer site's horizontal scroller: on a
  * landscape tablet the rail sits beside the grid for the whole shift, and a
@@ -36,14 +38,14 @@ export function CategoryRail({
             aria-current={isActive ? "true" : undefined}
             onClick={() => onSelect(category.slug)}
             className={cn(
-              "flex min-h-[56px] w-full flex-col items-start justify-center gap-0.5 rounded-md px-3 text-left transition-colors duration-[var(--duration-micro)]",
+              "relative flex min-h-[56px] w-full touch-manipulation select-none flex-col items-start justify-center gap-0.5 rounded-lg px-3 text-left transition-colors duration-[var(--duration-micro)] active:bg-surface-muted",
               isActive
-                ? "bg-primary text-primary-foreground"
-                : "text-foreground hover:bg-surface-muted",
+                ? "bg-sidebar-accent text-foreground before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary"
+                : "text-foreground/85 hover:bg-surface-muted hover:text-foreground",
             )}
           >
-            <span className="text-sm font-semibold leading-tight">{category.name}</span>
-            <span className={cn("tabular text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
+            <span className={cn("text-sm leading-tight", isActive ? "font-semibold" : "font-medium")}>{category.name}</span>
+            <span className="tabular text-xs text-muted-foreground">
               {category.count} {category.count === 1 ? "item" : "items"}
             </span>
           </button>

@@ -4,13 +4,13 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { type InventoryFormState, recordPriceAction } from "@/lib/inventory/actions";
 import { purchaseUnitsFor } from "@/lib/iq/units";
-import { Field, inputClass, selectClass } from "./field";
+import { Field, errorNoteClass, inputClass, selectClass, submitClass, successNoteClass } from "./field";
 import type { SupplierOption } from "./ingredient-form";
 
 function Submit() {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending} className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-5 text-sm font-semibold text-primary-foreground disabled:opacity-60">
+    <button type="submit" disabled={pending} className={submitClass}>
       {pending ? "Recording…" : "Record price"}
     </button>
   );
@@ -40,12 +40,12 @@ export function PriceForm({
     <form action={action} className="flex flex-col gap-4">
       <input type="hidden" name="ingredientId" value={ingredientId} />
       {state.status === "error" && (
-        <p role="alert" className="border-l-2 border-[var(--destructive)] bg-surface px-4 py-3 text-sm">
+        <p role="alert" className={errorNoteClass}>
           {state.message}
         </p>
       )}
       {state.status === "success" && (
-        <p role="status" className="border-l-2 border-[var(--success)] bg-surface px-4 py-3 text-sm">
+        <p role="status" className={successNoteClass}>
           {state.message}
         </p>
       )}

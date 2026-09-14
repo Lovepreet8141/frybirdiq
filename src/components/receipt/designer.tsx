@@ -195,7 +195,7 @@ export function ReceiptDesigner(props: DesignerProps) {
       </div>
 
       {status && (
-        <p role={status.tone === "error" ? "alert" : "status"} className={cn("border-l-2 bg-surface px-4 py-3 text-sm", status.tone === "error" ? "border-[var(--destructive)]" : status.tone === "ok" ? "border-[var(--success)]" : "border-border-strong")}>
+        <p role={status.tone === "error" ? "alert" : "status"} className={cn("rounded-md border-l-2 px-4 py-3 text-sm", status.tone === "error" ? "border-loss bg-loss-soft/60" : status.tone === "ok" ? "border-gain bg-gain-soft/60" : "border-border-strong bg-panel")}>
           {status.text}
         </p>
       )}
@@ -204,8 +204,8 @@ export function ReceiptDesigner(props: DesignerProps) {
         {/* LEFT — sections on the roll */}
         <aside className="flex flex-col gap-3 lg:sticky lg:top-[calc(var(--header-height)+1rem)] lg:self-start">
           <div className="flex items-baseline justify-between">
-            <h2 className="font-heading text-base font-semibold">Receipt sections</h2>
-            <span className="text-xs text-muted-foreground">Top to bottom</span>
+            <h2 className="font-heading text-sm font-semibold leading-snug tracking-[-0.005em]">Receipt sections</h2>
+            <span className="text-[12.5px] text-muted-foreground">Top to bottom</span>
           </div>
           <ol className="flex flex-col gap-1">
             {template.sections.map((section, index) => {
@@ -229,8 +229,8 @@ export function ReceiptDesigner(props: DesignerProps) {
                   }}
                   onDragEnd={() => setDragId(null)}
                   className={cn(
-                    "flex items-center gap-1 rounded-md border bg-surface pr-1 transition-colors",
-                    isSelected ? "border-foreground" : "border-border hover:border-border-strong",
+                    "flex items-center gap-1 rounded-lg border bg-panel pr-1 transition-colors duration-[120ms]",
+                    isSelected ? "border-foreground bg-sidebar-accent" : "border-border hover:border-border-strong",
                     dragId === section.id && "opacity-50",
                     !section.visible && "text-muted-foreground",
                   )}
@@ -263,19 +263,19 @@ export function ReceiptDesigner(props: DesignerProps) {
             Add custom text
           </Button>
 
-          <div className="mt-2 flex flex-col gap-3 rounded-md border border-border bg-surface p-3">
-            <h3 className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">Paper</h3>
+          <div className="mt-2 flex flex-col gap-3 rounded-xl border border-border bg-panel p-3">
+            <h3 className="text-[11px] font-semibold tracking-[0.04em] text-muted-foreground">Paper</h3>
             <div className="grid grid-cols-2 gap-2 text-sm">
               <label className="flex flex-col gap-1">
                 <span className="font-medium">Width</span>
-                <select value={template.paperWidthMm} onChange={(event) => setTemplate({ ...template, paperWidthMm: Number(event.target.value) as 79 | 58 })} className="h-[38px] rounded-md border border-border bg-background px-2">
+                <select value={template.paperWidthMm} onChange={(event) => setTemplate({ ...template, paperWidthMm: Number(event.target.value) as 79 | 58 })} className="h-9 rounded-md border border-border bg-panel px-2 text-[13px] focus-visible:border-primary focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/20">
                   <option value={79}>79 mm</option>
                   <option value={58}>58 mm</option>
                 </select>
               </label>
               <label className="flex flex-col gap-1">
                 <span className="font-medium">Dividers</span>
-                <select value={template.divider} onChange={(event) => setTemplate({ ...template, divider: event.target.value as ReceiptTemplate["divider"] })} className="h-[38px] rounded-md border border-border bg-background px-2">
+                <select value={template.divider} onChange={(event) => setTemplate({ ...template, divider: event.target.value as ReceiptTemplate["divider"] })} className="h-9 rounded-md border border-border bg-panel px-2 text-[13px] focus-visible:border-primary focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/20">
                   <option value="dashed">Dashed</option>
                   <option value="solid">Solid</option>
                   <option value="none">None</option>
@@ -288,10 +288,10 @@ export function ReceiptDesigner(props: DesignerProps) {
         {/* CENTRE — the roll */}
         <section className="flex min-w-0 flex-col gap-3" aria-label="Live preview">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-heading text-base font-semibold">Live preview</h2>
-            <div role="radiogroup" aria-label="Sample order" className="flex rounded-md border border-border bg-background p-0.5">
+            <h2 className="font-heading text-sm font-semibold leading-snug tracking-[-0.005em]">Live preview</h2>
+            <div role="radiogroup" aria-label="Sample order" className="flex h-9 items-center rounded-[10px] border border-border bg-panel p-1">
               {SAMPLES.map((option) => (
-                <button key={option.value} type="button" role="radio" aria-checked={sample === option.value} onClick={() => setSample(option.value)} className={cn("min-h-[36px] rounded-[5px] px-3 text-sm font-medium transition-colors", sample === option.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")} title={option.hint}>
+                <button key={option.value} type="button" role="radio" aria-checked={sample === option.value} onClick={() => setSample(option.value)} className={cn("h-7 rounded-[7px] px-3 text-[13px] font-medium transition-colors duration-[120ms]", sample === option.value ? "bg-secondary font-semibold text-foreground" : "text-muted-foreground hover:text-foreground")} title={option.hint}>
                   {option.label}
                 </button>
               ))}
@@ -302,7 +302,7 @@ export function ReceiptDesigner(props: DesignerProps) {
               <ReceiptSheet template={template} data={data} mode="preview" selectedId={selectedId} onSelect={setSelectedId} />
             </div>
           </div>
-          <p className="text-xs text-muted-foreground">Sample data · {SAMPLES.find((option) => option.value === sample)?.hint}. Click any part of the bill to edit it. Print Test prints this sample and never creates an order.</p>
+          <p className="text-[12.5px] leading-[1.45] text-muted-foreground">Sample data · {SAMPLES.find((option) => option.value === sample)?.hint}. Click any part of the bill to edit it. Print Test prints this sample and never creates an order.</p>
         </section>
 
         {/* RIGHT — the selected section */}
@@ -310,10 +310,10 @@ export function ReceiptDesigner(props: DesignerProps) {
           {selected ? (
             <>
               <div className="flex items-center justify-between gap-2">
-                <h2 className="font-heading text-base font-semibold">{selected.kind === "text" ? "Custom text" : SECTION_LABELS[selected.kind]}</h2>
+                <h2 className="font-heading text-sm font-semibold leading-snug tracking-[-0.005em]">{selected.kind === "text" ? "Custom text" : SECTION_LABELS[selected.kind]}</h2>
                 <Check id={`${selected.id}-visible`} label="Show on bill" checked={selected.visible} onChange={() => toggleVisible(selected.id)} />
               </div>
-              <div className="flex flex-col gap-4 rounded-md border border-border bg-surface p-4">
+              <div className="flex flex-col gap-4 rounded-xl border border-border bg-panel p-4">
                 <SectionEditor section={selected} onChange={updateSection} onDelete={selected.kind === "text" ? () => deleteSection(selected.id) : undefined} />
               </div>
             </>

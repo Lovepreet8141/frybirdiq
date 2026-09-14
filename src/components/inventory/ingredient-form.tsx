@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { type InventoryFormState, saveIngredientAction } from "@/lib/inventory/actions";
-import { Field, inputClass, selectClass } from "./field";
+import { Field, errorNoteClass, inputClass, selectClass, submitClass, successNoteClass } from "./field";
 
 export interface IngredientFormValues {
   readonly id?: string;
@@ -27,7 +27,7 @@ const BASE_UNIT_LABELS = { G: "Grams (g)", ML: "Millilitres (ml)", PIECE: "Piece
 function Submit({ label }: { label: string }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending} className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-5 text-sm font-semibold text-primary-foreground disabled:opacity-60">
+    <button type="submit" disabled={pending} className={submitClass}>
       {pending ? "Saving…" : label}
     </button>
   );
@@ -46,12 +46,12 @@ export function IngredientForm({ initial, suppliers, lockBaseUnit = false }: { i
       {initial?.id && <input type="hidden" name="id" value={initial.id} />}
       {lockBaseUnit && initial && <input type="hidden" name="baseUnit" value={initial.baseUnit} />}
       {state.status === "error" && (
-        <p role="alert" className="border-l-2 border-[var(--destructive)] bg-surface px-4 py-3 text-sm">
+        <p role="alert" className={errorNoteClass}>
           {state.message}
         </p>
       )}
       {state.status === "success" && (
-        <p role="status" className="border-l-2 border-[var(--success)] bg-surface px-4 py-3 text-sm">
+        <p role="status" className={successNoteClass}>
           {state.message}
         </p>
       )}
@@ -100,12 +100,12 @@ export function IngredientForm({ initial, suppliers, lockBaseUnit = false }: { i
       </Field>
 
       <div className="flex flex-col gap-2">
-        <label className="flex min-h-[44px] items-center gap-2 text-sm">
-          <input type="checkbox" name="isPackaging" defaultChecked={initial?.isPackaging ?? false} className="size-4 accent-[var(--primary)]" />
+        <label className="flex min-h-[40px] items-center gap-2 text-sm">
+          <input type="checkbox" name="isPackaging" defaultChecked={initial?.isPackaging ?? false} className="size-4 accent-primary" />
           Packaging — a box, cup or bag: costed into a product, never eaten
         </label>
-        <label className="flex min-h-[44px] items-center gap-2 text-sm">
-          <input type="checkbox" name="isActive" defaultChecked={initial?.isActive ?? true} className="size-4 accent-[var(--primary)]" />
+        <label className="flex min-h-[40px] items-center gap-2 text-sm">
+          <input type="checkbox" name="isActive" defaultChecked={initial?.isActive ?? true} className="size-4 accent-primary" />
           Active
         </label>
       </div>

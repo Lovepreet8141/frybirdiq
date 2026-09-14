@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Pencil, Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { SupplierForm, type SupplierFormValues } from "./supplier-form";
@@ -24,14 +25,10 @@ export function SuppliersTable({ suppliers, canManage }: { suppliers: readonly S
     <div className="flex flex-col gap-4">
       {canManage && (
         <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={() => setEditing("new")}
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
-          >
-            <Plus className="size-4" aria-hidden="true" />
+          <Button variant="inverse" onClick={() => setEditing("new")}>
+            <Plus data-icon="inline-start" aria-hidden="true" />
             Add supplier
-          </button>
+          </Button>
         </div>
       )}
 
@@ -64,16 +61,16 @@ export function SuppliersTable({ suppliers, canManage }: { suppliers: readonly S
                     </div>
                   </TableCell>
                   <TableCell className="hidden text-muted-foreground sm:table-cell">{[supplier.phone, supplier.email].filter(Boolean).join(" · ") || "—"}</TableCell>
-                  <TableCell className="hidden font-mono text-xs md:table-cell">{supplier.gstin ?? "—"}</TableCell>
+                  <TableCell className="hidden font-mono text-[12px] tracking-[0.02em] md:table-cell">{supplier.gstin ?? "—"}</TableCell>
                   <TableCell className="tabular text-right">{supplier.ingredientCount}</TableCell>
                   <TableCell>
-                    <Badge variant={supplier.isActive ? "secondary" : "destructive"}>{supplier.isActive ? "Active" : "Inactive"}</Badge>
+                    <Badge variant={supplier.isActive ? "success" : "outline"}>{supplier.isActive ? "Active" : "Inactive"}</Badge>
                   </TableCell>
                   {canManage && (
                     <TableCell>
-                      <button type="button" onClick={() => setEditing(supplier)} aria-label={`Edit ${supplier.name}`} className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted hover:text-foreground">
-                        <Pencil className="size-4" aria-hidden="true" />
-                      </button>
+                      <Button variant="ghost" size="icon-sm" onClick={() => setEditing(supplier)} aria-label={`Edit ${supplier.name}`} className="text-muted-foreground">
+                        <Pencil aria-hidden="true" />
+                      </Button>
                     </TableCell>
                   )}
                 </TableRow>

@@ -58,7 +58,7 @@ export function OrderBuilder({
   onCharge: () => void;
 }) {
   return (
-    <div className="flex h-full flex-col border-l border-border bg-surface">
+    <div className="flex h-full flex-col border-l border-border bg-panel">
       <div className="flex flex-col gap-2 border-b border-border p-4">
         <span className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">Order type</span>
         <div className="grid grid-cols-2 gap-2" role="group" aria-label="Order type">
@@ -71,10 +71,10 @@ export function OrderBuilder({
                 aria-pressed={isActive}
                 onClick={() => onChannelChange(value)}
                 className={cn(
-                  "flex min-h-[56px] items-center justify-center rounded-md border px-3 text-sm font-semibold transition-colors duration-[var(--duration-micro)]",
+                  "flex min-h-[56px] touch-manipulation select-none items-center justify-center rounded-lg border px-3 text-sm font-semibold transition-colors duration-[var(--duration-micro)]",
                   isActive
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border bg-background text-foreground hover:border-border-strong",
+                    ? "border-inverse bg-inverse text-inverse-foreground"
+                    : "border-border bg-panel text-foreground hover:border-border-strong active:bg-surface-muted",
                 )}
               >
                 {ORDER_CHANNEL_LABELS[value]}
@@ -97,7 +97,7 @@ export function OrderBuilder({
               id="pos-table"
               value={tableId ?? ""}
               onChange={(event) => onTableChange(event.target.value === "" ? null : event.target.value)}
-              className="h-[44px] w-full rounded-md border border-border bg-background px-3 text-sm font-semibold"
+              className="h-11 w-full rounded-md border border-border bg-panel px-3 text-sm font-semibold transition-[border-color,box-shadow] duration-[var(--duration-micro)] focus-visible:border-primary focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/20"
             >
               <option value="">No table</option>
               {tables.map((table) => (
@@ -129,10 +129,10 @@ export function OrderBuilder({
                 {lines.map((line) => {
                   const priceView = priced?.lines.find((entry) => entry.key === line.key);
                   return (
-                    <li key={line.key} className="flex flex-col gap-2 rounded-md border border-border p-3">
+                    <li key={line.key} className="flex flex-col gap-2 rounded-lg border border-border bg-panel p-3">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold">{line.name}</p>
+                          <p className="truncate text-[14px] font-semibold leading-snug">{line.name}</p>
                           {line.modifierNames.length > 0 && (
                             <p className="truncate text-xs text-muted-foreground">{line.modifierNames.join(", ")}</p>
                           )}
@@ -148,19 +148,19 @@ export function OrderBuilder({
                             type="button"
                             onClick={() => onQuantityChange(line.key, line.quantity - 1)}
                             disabled={line.quantity <= 1}
-                            className="flex size-[44px] items-center justify-center rounded-md border border-border transition-colors hover:border-border-strong disabled:opacity-40"
+                            className="flex size-[44px] touch-manipulation items-center justify-center rounded-md border border-border bg-panel transition-colors duration-[var(--duration-micro)] hover:border-border-strong active:bg-surface-muted disabled:opacity-40"
                             aria-label={`One fewer ${line.name}`}
                           >
                             <Minus className="size-4" aria-hidden="true" />
                           </button>
-                          <span className="tabular w-8 text-center font-semibold" aria-live="polite">
+                          <span className="tabular w-9 text-center text-[15px] font-semibold" aria-live="polite">
                             {line.quantity}
                           </span>
                           <button
                             type="button"
                             onClick={() => onQuantityChange(line.key, line.quantity + 1)}
                             disabled={line.quantity >= 50}
-                            className="flex size-[44px] items-center justify-center rounded-md border border-border transition-colors hover:border-border-strong disabled:opacity-40"
+                            className="flex size-[44px] touch-manipulation items-center justify-center rounded-md border border-border bg-panel transition-colors duration-[var(--duration-micro)] hover:border-border-strong active:bg-surface-muted disabled:opacity-40"
                             aria-label={`One more ${line.name}`}
                           >
                             <Plus className="size-4" aria-hidden="true" />
@@ -169,7 +169,7 @@ export function OrderBuilder({
                         <button
                           type="button"
                           onClick={() => onRemove(line.key)}
-                          className="ml-auto flex size-[44px] items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground"
+                          className="ml-auto flex size-[44px] touch-manipulation items-center justify-center rounded-md text-muted-foreground transition-colors duration-[var(--duration-micro)] hover:bg-muted hover:text-foreground active:bg-loss-soft active:text-loss"
                           aria-label={`Remove ${line.name}`}
                         >
                           <Trash2 className="size-4" aria-hidden="true" />
@@ -182,7 +182,7 @@ export function OrderBuilder({
             )}
 
             {priced && priced.rejected.length > 0 && (
-              <p role="alert" className="mt-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
+              <p role="alert" className="mt-3 rounded-md border-l-2 border-flag bg-flag-soft/60 px-3 py-2 text-sm">
                 {priced.rejected.length === 1
                   ? "One item is no longer on the menu and was left out of the total."
                   : `${priced.rejected.length} items are no longer on the menu and were left out of the total.`}
@@ -200,7 +200,7 @@ export function OrderBuilder({
                     <button
                       type="button"
                       onClick={onRetry}
-                      className="flex min-h-[44px] items-center justify-center rounded-md border border-border-strong px-4 text-sm font-semibold hover:bg-surface-muted"
+                      className="flex min-h-[44px] touch-manipulation items-center justify-center rounded-md border border-border-strong bg-panel px-4 text-sm font-semibold transition-colors duration-[var(--duration-micro)] hover:bg-muted active:bg-muted"
                     >
                       Try again
                     </button>
@@ -228,8 +228,8 @@ export function OrderBuilder({
                       isPricing && "opacity-50",
                     )}
                   >
-                    <span className="font-heading text-base font-semibold">Total</span>
-                    <span className="tabular text-xl font-bold">{priced.total}</span>
+                    <span className="text-[13px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Total</span>
+                    <span className="tabular font-money text-[28px] leading-none tracking-[-0.01em]">{priced.total}</span>
                   </div>
                 </dl>
               ) : (
@@ -247,7 +247,7 @@ export function OrderBuilder({
                 type="button"
                 onClick={onCharge}
                 disabled={!online || priced === null || isPricing || pricingError !== null}
-                className="mt-3 flex min-h-[56px] w-full items-center justify-center gap-2 rounded-md bg-primary px-4 text-base font-bold text-primary-foreground transition-opacity disabled:opacity-50"
+                className="mt-3 flex min-h-[56px] w-full touch-manipulation select-none items-center justify-center gap-2 rounded-lg bg-primary px-4 text-base font-bold text-primary-foreground transition-[opacity,background-color,transform] duration-[var(--duration-micro)] hover:bg-primary-strong active:translate-y-px disabled:opacity-50"
               >
                 <Banknote className="size-5" aria-hidden="true" />
                 {priced ? `Charge ${priced.total}` : "Charge"}

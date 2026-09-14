@@ -48,14 +48,14 @@ export function ProductGrid({
           onChange={(event) => onSearchChange(event.target.value)}
           placeholder="Search the whole menu"
           autoComplete="off"
-          className="h-[44px] w-full rounded-md border border-border bg-surface pl-9 pr-9 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="h-11 w-full rounded-md border border-border bg-panel pl-9 pr-9 text-sm transition-[border-color,box-shadow] duration-[var(--duration-micro)] placeholder:text-muted-foreground/70 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/20"
         />
         {search !== "" && (
           <button
             type="button"
             onClick={() => onSearchChange("")}
             aria-label="Clear search"
-            className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted hover:text-foreground"
+            className="absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 touch-manipulation items-center justify-center rounded-md text-muted-foreground transition-colors duration-[var(--duration-micro)] hover:bg-muted hover:text-foreground active:bg-muted"
           >
             <X className="size-4" aria-hidden="true" />
           </button>
@@ -63,7 +63,7 @@ export function ProductGrid({
       </div>
 
       {disabled && disabledReason && (
-        <p role="status" className="mb-3 rounded-md border border-border bg-surface-muted px-3 py-2 text-sm text-muted-foreground">
+        <p role="status" className="mb-3 rounded-md border border-border bg-panel px-3 py-2 text-sm text-muted-foreground">
           {disabledReason}
         </p>
       )}
@@ -133,12 +133,12 @@ export function ProductTile({
         if (!hasOptions) setJustAdded(true);
       }}
       className={cn(
-        "group relative flex min-h-[56px] flex-col overflow-hidden rounded-xl border border-border bg-panel text-left transition-[border-color,box-shadow] duration-[var(--duration-micro)]",
-        "hover:border-border-strong focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50",
+        "group relative flex min-h-[56px] touch-manipulation select-none flex-col overflow-hidden rounded-xl border border-border bg-panel text-left transition-[border-color,box-shadow,background-color] duration-[var(--duration-micro)]",
+        "hover:border-border-strong focus-visible:border-primary focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/20 active:border-border-strong active:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50",
       )}
     >
       {unavailable && (
-        <span className="absolute inset-x-1.5 top-1.5 z-10 rounded-md bg-[var(--destructive)] px-1.5 py-0.5 text-center text-[11px] font-bold leading-tight text-white">
+        <span className="absolute inset-x-1.5 top-1.5 z-10 rounded-md bg-loss px-1.5 py-0.5 text-center text-[11px] font-semibold leading-tight text-white">
           {product.availability.status === "SOLD_OUT_TODAY" ? "Sold out today" : product.availability.reason ?? "Unavailable"}
         </span>
       )}
@@ -154,8 +154,8 @@ export function ProductTile({
           />
         </div>
       ) : (
-        <div className="flex h-24 shrink-0 items-center justify-center bg-surface-muted" aria-hidden="true">
-          <span className="font-heading text-2xl font-black text-muted-foreground">
+        <div className="flex h-24 shrink-0 items-center justify-center bg-ramp-4" aria-hidden="true">
+          <span className="font-money text-[30px] text-muted-foreground/70">
             {product.name.charAt(0)}
           </span>
         </div>
@@ -166,14 +166,14 @@ export function ProductTile({
           <VegMark veg={product.veg} className="mt-0.5" />
           {product.name}
         </span>
-        <span className="tabular mt-auto text-sm font-bold text-primary">
+        <span className="tabular mt-auto text-sm font-semibold">
           {formatINR(product.price)}
           {hasOptions && <span className="ml-1 font-normal text-muted-foreground">+</span>}
         </span>
       </div>
 
       {quantity > 0 && (
-        <span className="tabular absolute right-1.5 top-1.5 flex min-w-[22px] items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-xs font-bold text-primary-foreground">
+        <span className="tabular absolute right-1.5 top-1.5 flex min-w-[22px] items-center justify-center rounded-full bg-inverse px-1.5 py-0.5 text-xs font-semibold text-inverse-foreground">
           {quantity}
         </span>
       )}
@@ -181,7 +181,7 @@ export function ProductTile({
       {justAdded && (
         <span
           aria-hidden="true"
-          className="absolute inset-0 flex items-center justify-center bg-primary/90 text-sm font-bold text-primary-foreground opacity-100 transition-opacity duration-100"
+          className="absolute inset-0 flex items-center justify-center bg-inverse/90 text-sm font-semibold text-inverse-foreground opacity-100 transition-opacity duration-[var(--duration-micro)]"
         >
           Added
         </span>

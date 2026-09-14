@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Plus, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -69,8 +70,8 @@ export function IngredientsTable({ ingredients, suppliers, canManage }: { ingred
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
-        <div className="max-w-full overflow-x-auto rounded-lg border border-border" role="tablist" aria-label="Filter ingredients">
-          <div className="inline-flex divide-x divide-border">
+        <div className="max-w-full overflow-x-auto rounded-[10px] border border-border bg-panel p-1" role="tablist" aria-label="Filter ingredients">
+          <div className="inline-flex gap-0.5">
             {FILTERS.map((item) => (
               <button
                 key={item.key}
@@ -79,11 +80,11 @@ export function IngredientsTable({ ingredients, suppliers, canManage }: { ingred
                 aria-selected={filter === item.key}
                 onClick={() => setFilter(item.key)}
                 className={cn(
-                  "whitespace-nowrap px-3.5 py-2 text-sm transition-colors first:rounded-l-lg last:rounded-r-lg",
-                  filter === item.key ? "bg-surface-muted font-semibold text-foreground" : "text-muted-foreground hover:text-foreground",
+                  "h-7 whitespace-nowrap rounded-[7px] px-3 text-[13px] font-medium transition-colors duration-[120ms]",
+                  filter === item.key ? "bg-secondary font-semibold text-foreground" : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                {item.label} <span className="tabular text-xs">({counts[item.key]})</span>
+                {item.label} <span className="tabular text-[12px] font-normal text-muted-foreground">{counts[item.key]}</span>
               </button>
             ))}
           </div>
@@ -93,10 +94,10 @@ export function IngredientsTable({ ingredients, suppliers, canManage }: { ingred
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, SKU or supplier" aria-label="Search ingredients" className="h-9 pl-8" />
         </div>
         {canManage && (
-          <button type="button" onClick={() => setAdding(true)} className="inline-flex min-h-[44px] items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground">
-            <Plus className="size-4" aria-hidden="true" />
+          <Button variant="inverse" onClick={() => setAdding(true)}>
+            <Plus data-icon="inline-start" aria-hidden="true" />
             Add ingredient
-          </button>
+          </Button>
         )}
       </div>
 
@@ -141,7 +142,7 @@ export function IngredientsTable({ ingredients, suppliers, canManage }: { ingred
                     {row.onHand} {UNIT[row.baseUnit]}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={row.isActive ? "secondary" : "destructive"}>{row.isActive ? "Active" : "Inactive"}</Badge>
+                    <Badge variant={row.isActive ? "success" : "outline"}>{row.isActive ? "Active" : "Inactive"}</Badge>
                   </TableCell>
                 </TableRow>
               ))

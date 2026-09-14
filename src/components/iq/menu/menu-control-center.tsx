@@ -8,6 +8,13 @@ import { ActionButton } from "./action-button";
 import { BulkActionBar } from "./bulk-action-bar";
 import { ProductAdminCard } from "./product-admin-card";
 
+/** The category rail's rows and the filter row share the kit's 36px controls. */
+const RAIL_ROW = "relative flex h-9 items-center justify-between rounded-lg px-2.5 text-left text-[13.5px] transition-colors duration-[120ms]";
+const RAIL_ACTIVE = "bg-sidebar-accent font-semibold text-foreground before:absolute before:inset-y-2 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary";
+const RAIL_IDLE = "font-medium text-foreground/85 hover:bg-surface-muted hover:text-foreground";
+const CONTROL = "h-9 rounded-md border border-border bg-panel text-[13px] transition-[border-color,box-shadow] duration-[120ms] focus-visible:border-primary focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/20";
+const CHECK_LABEL = `${CONTROL} flex cursor-pointer items-center gap-1.5 px-3 hover:border-border-strong`;
+
 type AvailabilityFilter = "all" | "available" | "unavailable";
 type SortKey = "menu-order" | "az" | "price-asc" | "price-desc" | "newest";
 
@@ -96,13 +103,13 @@ export function MenuControlCenter({
   const addProductHref = selectedCategory === "all" ? "/app/iq/menu/products/new" : `/app/iq/menu/products/new?category=${selectedCategory}`;
 
   return (
-    <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[240px_1fr]">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[232px_1fr]">
       {/* Category sidebar */}
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
-          <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">Categories</h2>
+          <h2 className="px-2.5 text-[11px] font-semibold tracking-[0.04em] text-muted-foreground">Categories</h2>
           {canEdit && (
-            <Link href="/app/iq/menu/categories/new" className="text-xs font-semibold text-primary hover:underline">
+            <Link href="/app/iq/menu/categories/new" className="text-[12.5px] font-semibold text-foreground underline-offset-4 hover:underline">
               + Add
             </Link>
           )}
@@ -113,12 +120,10 @@ export function MenuControlCenter({
             type="button"
             onClick={() => setSelectedCategory("all")}
             aria-current={selectedCategory === "all" ? "true" : undefined}
-            className={`flex min-h-[40px] items-center justify-between rounded-md px-3 text-left text-sm font-semibold transition-colors ${
-              selectedCategory === "all" ? "bg-secondary text-secondary-foreground" : "text-foreground hover:bg-surface-muted"
-            }`}
+            className={`${RAIL_ROW} ${selectedCategory === "all" ? RAIL_ACTIVE : RAIL_IDLE}`}
           >
             All products
-            <span className="tabular text-xs font-normal text-muted-foreground">{products.length}</span>
+            <span className="tabular text-[12px] font-normal text-muted-foreground">{products.length}</span>
           </button>
 
           {categories.map((category) => (
@@ -127,16 +132,14 @@ export function MenuControlCenter({
                 type="button"
                 onClick={() => setSelectedCategory(category.id)}
                 aria-current={selectedCategory === category.id ? "true" : undefined}
-                className={`flex min-h-[40px] flex-1 items-center justify-between rounded-md px-3 text-left text-sm font-semibold transition-colors ${
-                  selectedCategory === category.id ? "bg-secondary text-secondary-foreground" : "text-foreground hover:bg-surface-muted"
-                }`}
+                className={`${RAIL_ROW} flex-1 ${selectedCategory === category.id ? RAIL_ACTIVE : RAIL_IDLE}`}
               >
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="truncate">{category.name}</span>
-                  {category.status === "DRAFT" && <span className="shrink-0 text-[10px] font-bold uppercase text-[var(--warning)]">Draft</span>}
-                  {!category.isActive && <span className="shrink-0 text-[10px] font-bold uppercase text-muted-foreground">Off</span>}
+                  {category.status === "DRAFT" && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.06em] text-flag">Draft</span>}
+                  {!category.isActive && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Off</span>}
                 </span>
-                <span className="tabular shrink-0 text-xs font-normal text-muted-foreground">{category.productCount}</span>
+                <span className="tabular shrink-0 text-[12px] font-normal text-muted-foreground">{category.productCount}</span>
               </button>
               {canEdit && (
                 <div className="hidden items-center group-hover:flex">
@@ -153,8 +156,8 @@ export function MenuControlCenter({
         </nav>
 
         {selectedCategory !== "all" && canEdit && (
-          <div className="mt-2 flex flex-col gap-1.5 rounded-md border border-border bg-surface p-2">
-            <Link href={`/app/iq/menu/categories/${selectedCategory}`} className="text-xs font-semibold text-primary hover:underline">
+          <div className="mt-2 flex flex-col gap-1.5 rounded-lg border border-border bg-panel p-2.5">
+            <Link href={`/app/iq/menu/categories/${selectedCategory}`} className="text-[12.5px] font-semibold text-foreground underline-offset-4 hover:underline">
               Edit this category →
             </Link>
             <div className="flex gap-1.5">
@@ -183,40 +186,40 @@ export function MenuControlCenter({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search products or SKU"
-            className="h-[40px] min-w-[200px] flex-1 rounded-md border border-border bg-surface px-3 text-sm"
+            className={`${CONTROL} min-w-[200px] flex-1 px-3`}
           />
-          <select value={availability} onChange={(e) => setAvailability(e.target.value as AvailabilityFilter)} className="h-[40px] rounded-md border border-border bg-surface px-2 text-sm">
+          <select value={availability} onChange={(e) => setAvailability(e.target.value as AvailabilityFilter)} className={`${CONTROL} px-2`}>
             <option value="all">Any availability</option>
             <option value="available">Available now</option>
             <option value="unavailable">Unavailable now</option>
           </select>
-          <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="h-[40px] rounded-md border border-border bg-surface px-2 text-sm">
+          <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className={`${CONTROL} px-2`}>
             <option value="menu-order">Menu order</option>
             <option value="az">A–Z</option>
             <option value="price-asc">Price: low to high</option>
             <option value="price-desc">Price: high to low</option>
           </select>
-          <label className="flex h-[40px] cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-sm">
+          <label className={CHECK_LABEL}>
             <input type="checkbox" checked={vegOnly} onChange={(e) => setVegOnly(e.target.checked)} className="size-4 accent-primary" />
             Veg only
           </label>
-          <label className="flex h-[40px] cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-sm">
+          <label className={CHECK_LABEL}>
             <input type="checkbox" checked={draftOnly} onChange={(e) => setDraftOnly(e.target.checked)} className="size-4 accent-primary" />
             Drafts only
           </label>
-          <label className="flex h-[40px] cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-sm">
+          <label className={CHECK_LABEL}>
             <input type="checkbox" checked={noPhotoOnly} onChange={(e) => setNoPhotoOnly(e.target.checked)} className="size-4 accent-primary" />
             Missing photo
           </label>
           {canEdit && (
-            <label className="flex h-[40px] cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-sm">
+            <label className={CHECK_LABEL}>
               <input type="checkbox" checked={allShownSelected} onChange={toggleAllShown} disabled={filtered.length === 0} className="size-4 accent-primary" />
               Select all shown
             </label>
           )}
 
           {canEdit && (
-            <Link href={addProductHref} className="ml-auto inline-flex h-[40px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground">
+            <Link href={addProductHref} className="ml-auto inline-flex h-9 items-center rounded-md bg-inverse px-3.5 text-[13px] font-semibold text-inverse-foreground transition-colors duration-[120ms] hover:bg-inverse/85">
               + Add product{selectedCategoryName ? ` to ${selectedCategoryName}` : ""}
             </Link>
           )}
@@ -233,12 +236,12 @@ export function MenuControlCenter({
         )}
 
         {filtered.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border py-16 text-center">
-            <p className="text-sm text-muted-foreground">
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border bg-panel py-16 text-center">
+            <p className="text-[13.5px] text-muted-foreground">
               {products.length === 0 ? "No products yet." : selectedCategory !== "all" ? "This category has no products yet." : "Nothing matches those filters."}
             </p>
             {canEdit && (
-              <Link href={addProductHref} className="inline-flex min-h-[40px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground">
+              <Link href={addProductHref} className="inline-flex h-9 items-center rounded-md bg-inverse px-3.5 text-[13px] font-semibold text-inverse-foreground transition-colors duration-[120ms] hover:bg-inverse/85">
                 + Add product
               </Link>
             )}

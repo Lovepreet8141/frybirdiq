@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { type InventoryFormState, saveSupplierAction } from "@/lib/inventory/actions";
-import { Field, inputClass } from "./field";
+import { Field, errorNoteClass, inputClass, submitClass, successNoteClass } from "./field";
 
 export interface SupplierFormValues {
   readonly id?: string;
@@ -18,7 +18,7 @@ export interface SupplierFormValues {
 function Submit({ label }: { label: string }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending} className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-5 text-sm font-semibold text-primary-foreground disabled:opacity-60">
+    <button type="submit" disabled={pending} className={submitClass}>
       {pending ? "Saving…" : label}
     </button>
   );
@@ -31,12 +31,12 @@ export function SupplierForm({ initial }: { initial?: SupplierFormValues }) {
     <form action={action} className="flex flex-col gap-4">
       {initial?.id && <input type="hidden" name="id" value={initial.id} />}
       {state.status === "error" && (
-        <p role="alert" className="border-l-2 border-[var(--destructive)] bg-surface px-4 py-3 text-sm">
+        <p role="alert" className={errorNoteClass}>
           {state.message}
         </p>
       )}
       {state.status === "success" && (
-        <p role="status" className="border-l-2 border-[var(--success)] bg-surface px-4 py-3 text-sm">
+        <p role="status" className={successNoteClass}>
           {state.message}
         </p>
       )}
@@ -58,8 +58,8 @@ export function SupplierForm({ initial }: { initial?: SupplierFormValues }) {
       <Field id="supplier-address" label="Address">
         <input id="supplier-address" name="address" maxLength={300} defaultValue={initial?.address ?? ""} className={inputClass} />
       </Field>
-      <label className="flex min-h-[44px] items-center gap-2 text-sm">
-        <input type="checkbox" name="isActive" defaultChecked={initial?.isActive ?? true} className="size-4 accent-[var(--primary)]" />
+      <label className="flex min-h-[40px] items-center gap-2 text-sm">
+        <input type="checkbox" name="isActive" defaultChecked={initial?.isActive ?? true} className="size-4 accent-primary" />
         Active — appears when recording prices and purchases
       </label>
 

@@ -22,7 +22,8 @@ export interface BulkSelection {
   readonly isActive: boolean;
 }
 
-const BUTTON = "inline-flex min-h-[36px] items-center rounded-md px-3 text-sm font-semibold transition-colors disabled:opacity-50";
+const BUTTON = "inline-flex h-9 items-center rounded-md px-3 text-[13px] font-semibold transition-colors duration-[120ms] disabled:opacity-50";
+const SELECT = "h-9 rounded-md border border-border bg-panel px-2 text-[13px] focus-visible:border-primary focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/20";
 
 /**
  * Appears above the product grid once something is ticked. Every button is
@@ -67,20 +68,15 @@ export function BulkActionBar({
   }
 
   return (
-    <div role="region" aria-label="Bulk actions" className="sticky top-2 z-10 flex flex-col gap-2 rounded-lg border border-primary/40 bg-surface p-3 shadow-sm">
+    <div role="region" aria-label="Bulk actions" className="sticky top-2 z-10 flex flex-col gap-2 rounded-xl border border-border bg-panel p-3 shadow-md">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="tabular text-sm font-semibold">{count} selected</span>
-        <button type="button" onClick={onClear} disabled={isPending} className={`${BUTTON} text-muted-foreground hover:bg-surface-muted`}>
+        <span className="tabular text-[13px] font-semibold">{count} selected</span>
+        <button type="button" onClick={onClear} disabled={isPending} className={`${BUTTON} text-muted-foreground hover:bg-muted hover:text-foreground`}>
           Clear
         </button>
         <span aria-hidden="true" className="mx-1 h-6 w-px bg-border" />
 
-        <button
-          type="button"
-          disabled={isPending}
-          onClick={() => run(() => bulkMarkAvailableAction(ids))}
-          className={`${BUTTON} bg-[var(--success)]/15 text-[var(--success)] hover:bg-[var(--success)]/25`}
-        >
+        <button type="button" disabled={isPending} onClick={() => run(() => bulkMarkAvailableAction(ids))} className={`${BUTTON} bg-gain-soft text-gain hover:bg-gain-soft/70`}>
           Make available
         </button>
 
@@ -88,13 +84,7 @@ export function BulkActionBar({
           <label className="sr-only" htmlFor="bulk-reason">
             Reason
           </label>
-          <select
-            id="bulk-reason"
-            value={reason}
-            onChange={(event) => setReason(event.target.value as Reason)}
-            disabled={isPending}
-            className="min-h-[36px] rounded-md border border-border bg-surface px-2 text-sm"
-          >
+          <select id="bulk-reason" value={reason} onChange={(event) => setReason(event.target.value as Reason)} disabled={isPending} className={SELECT}>
             {BULK_REASONS.map((option) => (
               <option key={option} value={option}>
                 {option}
@@ -105,7 +95,7 @@ export function BulkActionBar({
             type="button"
             disabled={isPending}
             onClick={() => run(() => bulkMarkUnavailableAction(ids, reason), `Mark ${plural(count)} unavailable — "${reason}"?`)}
-            className={`${BUTTON} bg-[var(--destructive)]/10 text-[var(--destructive)] hover:bg-[var(--destructive)]/20`}
+            className={`${BUTTON} bg-loss-soft text-loss hover:bg-loss-soft/70`}
           >
             Mark unavailable
           </button>
@@ -126,7 +116,7 @@ export function BulkActionBar({
                 event.target.value = "";
                 run(() => bulkMoveProductsToCategoryAction(ids, value === "__none__" ? null : value));
               }}
-              className="min-h-[36px] rounded-md border border-border bg-surface px-2 text-sm"
+              className={SELECT}
             >
               <option value="" disabled>
                 Move to category…
@@ -146,7 +136,7 @@ export function BulkActionBar({
             type="button"
             disabled={isPending}
             onClick={() => run(() => bulkPublishProductsAction(draftIds), `Publish ${draftIds.length} draft${draftIds.length === 1 ? "" : "s"}? They go live on the website and the counter.`)}
-            className={`${BUTTON} bg-primary text-primary-foreground hover:bg-primary/90`}
+            className={`${BUTTON} bg-inverse text-inverse-foreground hover:bg-inverse/85`}
           >
             Publish {draftIds.length} draft{draftIds.length === 1 ? "" : "s"}
           </button>
@@ -157,26 +147,26 @@ export function BulkActionBar({
             type="button"
             disabled={isPending}
             onClick={() => run(() => bulkSetProductActiveAction(activeIds, false), `Archive ${plural(activeIds.length)}? They disappear from the menu until restored.`)}
-            className={`${BUTTON} text-muted-foreground hover:bg-surface-muted`}
+            className={`${BUTTON} text-muted-foreground hover:bg-muted hover:text-foreground`}
           >
             Archive
           </button>
         )}
         {archivedIds.length > 0 && (
-          <button type="button" disabled={isPending} onClick={() => run(() => bulkSetProductActiveAction(archivedIds, true))} className={`${BUTTON} text-muted-foreground hover:bg-surface-muted`}>
+          <button type="button" disabled={isPending} onClick={() => run(() => bulkSetProductActiveAction(archivedIds, true))} className={`${BUTTON} text-muted-foreground hover:bg-muted hover:text-foreground`}>
             Restore
           </button>
         )}
 
         {isPending && (
-          <span role="status" className="text-sm text-muted-foreground">
+          <span role="status" className="text-[13px] text-muted-foreground">
             Working…
           </span>
         )}
       </div>
 
       {error && (
-        <div role="alert" className="flex flex-col items-start gap-1.5 text-sm text-[var(--destructive)]">
+        <div role="alert" className="flex flex-col items-start gap-1.5 text-[13px] text-loss">
           {error}
           {error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton />}
         </div>
