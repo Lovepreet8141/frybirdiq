@@ -10,10 +10,12 @@ describe("provider registry", () => {
 
   it("refuses an unknown provider rather than falling back", () => {
     // A silent fallback would let a typo route real money through cash.
-    expect(() => getProvider("razorpay")).toThrow(/no provider named/);
+    expect(() => getProvider("paytm")).toThrow(/no provider named/);
   });
 
-  it("offers only cash for now", () => {
+  it("offers only cash without gateway keys", () => {
+    delete process.env.RAZORPAY_KEY_ID;
+    delete process.env.RAZORPAY_KEY_SECRET;
     const methods = availableMethods();
     expect(methods).toHaveLength(1);
     expect(methods[0]!.method).toBe("CASH");
