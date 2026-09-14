@@ -38,16 +38,37 @@ function useLatest<T>(value: T) {
   return ref;
 }
 
+let subscriberSeq = 0;
+
+/**
+ * A channel name no other subscriber on this page shares.
+ *
+ * `supabase.channel(name)` hands back the existing channel when the name
+ * matches, and a channel that has already joined throws on the next `.on()`.
+ * Two screens listening to the same organization — the new-order alert in
+ * the chrome and the orders board under it — must therefore each own a
+ * channel; the topic on the wire is what they have in common, not the name.
+ */
+export function uniqueChannelName(base: string, seq: number): string {
+  return `${base}:s${seq}`;
+}
+
+function useChannelName(base: string | null): string | null {
+  const [seq] = useState(() => ++subscriberSeq);
+  return base ? uniqueChannelName(base, seq) : null;
+}
+
 /** Staff: every new order_events row for the organization, as it lands. */
 export function useOrderEvents(orgId: string | null, onEvent: (event: OrderEventRow) => void, enabled = true): LiveStatus {
   const [status, setStatus] = useState<LiveStatus>("off");
   const handler = useLatest(onEvent);
+  const name = useChannelName(orgId ? `orders:${orgId}` : null);
 
   useEffect(() => {
-    if (!enabled || !orgId || !isSupabaseConfigured()) return;
+    if (!enabled || !orgId || !name || !isSupabaseConfigured()) return;
     const supabase = createClient();
     const channel: RealtimeChannel = supabase
-      .channel(`orders:${orgId}`)
+      .channel(name)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "order_events", filter: `org_id=eq.${orgId}` }, (payload) => {
         handler.current(payload.new as OrderEventRow);
       })
@@ -60,7 +81,7 @@ export function useOrderEvents(orgId: string | null, onEvent: (event: OrderEvent
       void supabase.removeChannel(channel);
       setStatus("off");
     };
-  }, [orgId, enabled, handler]);
+  }, [orgId, name, enabled, handler]);
 
   return status;
 }
@@ -69,12 +90,13 @@ export function useOrderEvents(orgId: string | null, onEvent: (event: OrderEvent
 export function useMenuChanges(orgId: string | null, onChange: () => void, enabled = true): LiveStatus {
   const [status, setStatus] = useState<LiveStatus>("off");
   const handler = useLatest(onChange);
+  const name = useChannelName(orgId ? `menu:${orgId}` : null);
 
   useEffect(() => {
-    if (!enabled || !orgId || !isSupabaseConfigured()) return;
+    if (!enabled || !orgId || !name || !isSupabaseConfigured()) return;
     const supabase = createClient();
     const channel = supabase
-      .channel(`menu:${orgId}`)
+      .channel(name)
       .on("postgres_changes", { event: "*", schema: "public", table: "products", filter: `org_id=eq.${orgId}` }, () => handler.current())
       .on("postgres_changes", { event: "*", schema: "public", table: "product_availability", filter: `org_id=eq.${orgId}` }, () => handler.current())
       .subscribe((state) => {
@@ -86,7 +108,7 @@ export function useMenuChanges(orgId: string | null, onChange: () => void, enabl
       void supabase.removeChannel(channel);
       setStatus("off");
     };
-  }, [orgId, enabled, handler]);
+  }, [orgId, name, enabled, handler]);
 
   return status;
 }
