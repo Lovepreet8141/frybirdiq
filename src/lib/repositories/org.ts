@@ -19,7 +19,7 @@ import "server-only";
 import { cache } from "react";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { organizations } from "@/db/schema";
+import { locations, organizations } from "@/db/schema";
 import { DEFAULT_PRICE_BASIS, type PriceBasis, type PricingContext, pricingContext } from "@/lib/pricing";
 import { isSupabaseConfigured } from "@/lib/env";
 
@@ -71,3 +71,16 @@ export async function resolvePricingContext(): Promise<PricingContext> {
   const org = await getOrg();
   return pricingContext(org ?? { priceBasis: DEFAULT_PRICE_BASIS });
 }
+
+export interface StoreHeadline {
+  readonly name: string;
+  /** "Sector 9 · Ambala City" — the outlet and its city, from the location row. */
+  readonly line: string;
+}
+
+/** What the shell shows under the wordmark: the store, from the org and location rows. */
+export const getStoreHeadline = cache(async (orgId: string): Promise<StoreHeadline> => {
+  const [org] = await db().select({ name: organizations.name }).from(organizations).where(eq(organizations.id, orgId)).limit(1);
+  const [location] = await db().select({ name: locations.name, city: locations.city }).from(locations).where(eq(locations.orgId, orgId)).orderBy(locations.createdAt).limit(1);
+  return { name: org?.name ?? "FRYBIRD", line: [location?.name, location?.city].filter(Boolean).join(" · ") || "1 store" };
+});

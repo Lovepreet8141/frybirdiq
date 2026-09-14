@@ -27,7 +27,7 @@ export function OverviewControls({ range, compare, options }: { range: OverviewR
 
   return (
     <div className="flex flex-wrap items-center gap-2.5">
-      <nav aria-label="Period" className="inline-flex max-w-full overflow-x-auto rounded-[10px] border border-border bg-surface p-1">
+      <nav aria-label="Period" className="inline-flex max-w-full overflow-x-auto rounded-[10px] border border-border bg-panel p-1">
         {OVERVIEW_RANGES.map((option) => (
           <button
             key={option.key}
@@ -35,7 +35,7 @@ export function OverviewControls({ range, compare, options }: { range: OverviewR
             aria-current={option.key === range ? "page" : undefined}
             onClick={() => go(option.key, compare?.key ?? null)}
             className={cn(
-              "flex min-h-[44px] items-center whitespace-nowrap rounded-[7px] px-3.5 text-sm md:min-h-0 md:h-8",
+              "flex min-h-[44px] items-center whitespace-nowrap rounded-[7px] px-3.5 text-[13px] transition-colors duration-[120ms] md:min-h-0 md:h-8",
               option.key === range ? "bg-secondary font-semibold text-secondary-foreground" : "font-medium text-muted-foreground hover:text-foreground",
             )}
           >
@@ -46,7 +46,7 @@ export function OverviewControls({ range, compare, options }: { range: OverviewR
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" className="h-10 rounded-[10px] bg-surface px-3 text-sm font-normal text-muted-foreground md:h-10">
+          <Button variant="outline" className="h-10 rounded-[10px] px-3 text-[13px] font-normal text-muted-foreground md:h-10">
             vs <span className="font-semibold text-foreground">{compare ? compare.label.toLowerCase() : "no comparison"}</span>
             <ChevronDown className="size-4 text-muted-foreground" aria-hidden="true" />
           </Button>

@@ -28,22 +28,22 @@ export function RightNow({ tiles }: { tiles: readonly RightNowTile[] }) {
               aria-controls="right-now-drawer"
               onClick={() => setOpen(active ? null : tile.key)}
               className={cn(
-                "flex min-h-[112px] flex-col gap-1.5 rounded-[14px] border bg-surface px-4 py-4 text-left transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                active ? "border-foreground shadow-[0_0_0_1px_var(--foreground)]" : "border-border",
+                "flex min-h-[108px] flex-col gap-1 rounded-xl border bg-panel px-4 py-3.5 text-left transition-[border-color,background-color] duration-[120ms] hover:border-border-strong focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/20",
+                active ? "border-foreground bg-secondary/40" : "border-border",
               )}
             >
-              <span className="text-[11px] font-semibold tracking-[0.1em] text-muted-foreground">{tile.label}</span>
-              <span className={cn("tabular font-heading text-[28px] font-semibold leading-[1.1] tracking-[-0.01em]", tile.tone === "alert" ? "text-destructive" : tile.tone === "good" ? "text-success" : "text-foreground")}>
+              <span className="text-[12px] font-medium text-muted-foreground">{tile.label.charAt(0) + tile.label.slice(1).toLowerCase()}</span>
+              <span className={cn("tabular font-heading text-[26px] font-semibold leading-[1.1] tracking-[-0.015em]", tile.tone === "alert" ? "text-loss" : tile.tone === "good" ? "text-gain" : "text-foreground")}>
                 {tile.value}
               </span>
-              <span className="text-[13px] leading-[1.35] text-muted-foreground">{tile.sub}</span>
+              <span className="text-[12.5px] leading-[1.35] text-muted-foreground">{tile.sub}</span>
             </button>
           );
         })}
       </div>
 
       {focused && (
-        <div id="right-now-drawer" className="overflow-hidden rounded-[14px] border border-border bg-surface">
+        <div id="right-now-drawer" className="overflow-hidden rounded-xl border border-border bg-panel">
           <div className="flex items-center justify-between gap-3 border-b border-border bg-surface-muted px-5 py-3.5">
             <div className="flex min-w-0 flex-col gap-0.5">
               <span className="text-base font-semibold">{focused.drawerTitle}</span>

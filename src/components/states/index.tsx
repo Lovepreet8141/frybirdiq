@@ -36,7 +36,7 @@ function Shell({
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center gap-3 rounded-lg border border-border bg-surface px-6 py-12 text-center",
+        "flex flex-col items-center justify-center gap-2.5 rounded-xl border border-dashed border-border-strong/70 bg-panel px-6 py-10 text-center",
         className,
       )}
     >
@@ -53,9 +53,9 @@ function Shell({
       >
         {icon}
       </span>
-      <p className="font-heading text-lg font-semibold">{title}</p>
-      {detail && <p className="max-w-sm text-sm text-muted-foreground">{detail}</p>}
-      {action}
+      <p className="font-heading text-[15px] font-semibold">{title}</p>
+      {detail && <p className="max-w-sm text-[13px] leading-[1.5] text-muted-foreground">{detail}</p>}
+      {action && <div className="mt-1">{action}</div>}
     </div>
   );
 }

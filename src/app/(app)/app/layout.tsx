@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getStaff, staffCan } from "@/lib/auth";
+import { getStoreHeadline } from "@/lib/repositories/org";
 import { AppChrome } from "@/components/staff/app-chrome";
 import { resolveHome } from "@/lib/auth/route-home";
 
@@ -65,12 +66,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const sidebarState = (await cookies()).get("sidebar_state")?.value;
   const sidebarDefaultOpen = sidebarState === undefined || sidebarState === "true";
 
+  const store = await getStoreHeadline(staff.orgId);
+
   return (
     /* The whole staff area is the IQ surface: light, where the customer
        site is dark. They are different rooms. */
-    <div data-surface="iq" className="surface-dark flex min-h-full flex-col bg-background text-foreground">
+    <div data-surface="iq" className="surface-dark flex min-h-dvh flex-col bg-background text-foreground">
       <AppChrome
         staff={{ displayName: staff.displayName, roles: staff.roles }}
+        store={store}
         sidebarDefaultOpen={sidebarDefaultOpen}
         permissions={{
           canSeeOrders,

@@ -104,6 +104,15 @@ to read to order.
 
 ---
 
+### FRYBIRD IQ (the staff surface)
+
+The staff surface sets in **Instrument Sans**, with **Instrument Serif**
+reserved for money at display size only — the KPI figure (40px, 28 on a
+phone) and nothing smaller. Section titles are 20/600, panel titles 14/600,
+body 14/400, table rows 13/500 with 13px secondary text, labels 12 in
+sentence case. Every figure is tabular. "The number is the hero; everything
+else is quiet." Utility: `font-money` for the serif figure.
+
 ## 4. Space, radius, elevation
 
 Spacing is a 4px base scale: 4, 8, 12, 16, 24, 32, 48, 64, 96.
@@ -149,6 +158,26 @@ success           (green)        warning           amber
 Success is the one colour outside the brand set, because a kitchen ticket that
 has gone green cannot also be the brand red — status has to survive being
 glanced at from two metres away. It is used only for status, never decoration.
+
+### IQ signals (staff surface only)
+
+Brand red is identity — the mark, the active nav bar, the page's one primary
+action — never a signal. Meaning comes from four tokens, always with a dot
+or a sign and a word beside the colour:
+
+| Token | Light value | Use |
+|---|---|---|
+| `--gain` / `--gain-soft` | `#0f7b4f` / `#e6f2ec` | A delta that is good, "Synced", "Connected" |
+| `--loss` / `--loss-soft` | `#c2410c` / `#fbede4` | A delta that is bad, late, unsettled |
+| `--flag` / `--flag-soft` | `#b45309` / `#fdf4e1` | A warning that is not a loss: partial, estimated, setup |
+| `--inverse` / `--inverse-foreground` | ink / white | A panel's own primary action ("Review 7 products") |
+
+`--panel` is the white card ground; `--ramp-1` … `--ramp-5` is the warm
+neutral ramp for categorical bars, darkest first. Utilities: `bg-gain-soft
+text-gain`, `bg-loss-soft text-loss`, `bg-flag-soft text-flag`, `bg-inverse
+text-inverse-foreground`, `bg-panel`, `bg-ramp-4`. Components:
+`src/components/iq/ui` — `KpiTile`, `DeltaChip`, `StatusWord`, `DataTrust`,
+`Panel`, `InsightCard`, `BarList`, `CountUp`.
 
 ### Charts (staff surface only)
 

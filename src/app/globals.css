@@ -12,6 +12,8 @@
   --font-heading: var(--font-display);
   --font-display: var(--font-display);
   --font-devanagari: var(--font-devanagari);
+  /* Money at display size, on the IQ surface only (MASTER.md §3 "IQ"). */
+  --font-money: var(--font-money-family);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
@@ -20,6 +22,26 @@
   --color-surface-elevated: var(--surface-elevated);
   --color-surface-muted: var(--surface-muted);
   --color-border-strong: var(--border-strong);
+  /* IQ signal tokens — MASTER.md §5 "IQ": gain and loss for deltas, flag for
+     a warning that is not a loss, inverse for the ink-on-panel action, panel
+     for the white card ground, and a warm neutral ramp for categorical
+     charts. Utilities: bg-gain-soft text-gain, bg-loss-soft text-loss,
+     bg-flag-soft text-flag, bg-inverse text-inverse-foreground, bg-panel,
+     bg-ramp-1 … bg-ramp-5. */
+  --color-gain: var(--gain);
+  --color-gain-soft: var(--gain-soft);
+  --color-loss: var(--loss);
+  --color-loss-soft: var(--loss-soft);
+  --color-flag: var(--flag);
+  --color-flag-soft: var(--flag-soft);
+  --color-inverse: var(--inverse);
+  --color-inverse-foreground: var(--inverse-foreground);
+  --color-panel: var(--panel);
+  --color-ramp-1: var(--ramp-1);
+  --color-ramp-2: var(--ramp-2);
+  --color-ramp-3: var(--ramp-3);
+  --color-ramp-4: var(--ramp-4);
+  --color-ramp-5: var(--ramp-5);
   /* Order type and status tints — MASTER.md §5 "Order tints". Utilities:
      bg-type-dine-in, text-type-dine-in-fg, border-type-dine-in-line,
      bg-type-dine-in-swatch; bg-status-new, text-status-new-fg,
@@ -183,6 +205,24 @@
 
   --radius: 0.875rem;
 
+  /* IQ signal tokens, with customer-site defaults so a component that uses
+     them never falls back to nothing. Rebound on [data-surface="iq"]. */
+  --font-money-family: var(--font-instrument-serif), Georgia, serif;
+  --gain: #0a7d3c;
+  --gain-soft: #e6f2ec;
+  --loss: #b81e1e;
+  --loss-soft: #fbe9e4;
+  --flag: #9a6100;
+  --flag-soft: #fbf0d9;
+  --inverse: var(--ink);
+  --inverse-foreground: var(--cream-hi);
+  --panel: var(--cream-hi);
+  --ramp-1: #2c211b;
+  --ramp-2: #7a6b5d;
+  --ramp-3: #a89078;
+  --ramp-4: #c9b69c;
+  --ramp-5: #e4d9c6;
+
   /* Motion. The POS ceiling is enforced by review, not by CSS — see
      design-system/motion.md. */
   --duration-micro: 120ms;
@@ -273,14 +313,42 @@
   --iq-secondary: #55504a;
   --iq-muted: #726c63;
   --iq-red: #d92b2b;
+  --iq-red-ink: #a81e1e;
   --iq-cream: #f5edd8;
   --iq-hairline: #e2e3e5;
+
+  /* Type: Instrument Sans for the interface, Instrument Serif for money at
+     display size only (KPI 40 / mobile 28). Everything else is Sans. */
+  --font-body: var(--font-instrument-sans), "Noto Sans Devanagari", system-ui, sans-serif;
+  --font-display: var(--font-instrument-sans), system-ui, sans-serif;
+  --font-money-family: var(--font-instrument-serif), Georgia, serif;
+  font-family: var(--font-body);
 
   --background: #f4f5f6;
   --foreground: var(--ink);
   --surface: #ffffff;
   --surface-elevated: #ffffff;
   --surface-muted: #f4f5f6;
+  --panel: #ffffff;
+
+  /* Signals. Deltas are gain / loss with a sign and an arrow as well as a
+     colour; flag is a warning that is not a loss; inverse is the ink button
+     a panel uses for its own primary action (brand red stays the page's
+     one action). */
+  --gain: #0f7b4f;
+  --gain-soft: #e6f2ec;
+  --loss: #c2410c;
+  --loss-soft: #fbede4;
+  --flag: #b45309;
+  --flag-soft: #fdf4e1;
+  --inverse: var(--ink);
+  --inverse-foreground: #ffffff;
+  /* Categorical chart ramp — warm neutrals, darkest first. */
+  --ramp-1: #191512;
+  --ramp-2: #7a6b5d;
+  --ramp-3: #a89078;
+  --ramp-4: #c9b69c;
+  --ramp-5: #e4d9c6;
 
   --card: #ffffff;
   --card-foreground: var(--ink);
@@ -296,7 +364,7 @@
   --accent: var(--iq-cream);
   --accent-foreground: var(--ink);
 
-  --muted: #f4f5f6;
+  --muted: #eceef0;
   --muted-foreground: var(--iq-secondary);
 
   --destructive: #c2410c;
@@ -312,6 +380,9 @@
   --border-strong: #cfd1d4;
   --input: var(--iq-hairline);
   --ring: var(--iq-red);
+
+  /* Panels 12px, controls ~10px, pills full. */
+  --radius: 0.75rem;
 
   /* Chart palette (MASTER.md §5 "Charts"): chart-1 is the neutral a data
      series is drawn in; red sits last and is reached for only when a series

@@ -7,6 +7,73 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Design system — the FRYBIRD IQ OS language across the staff app (phase 1)
+
+**Status:** Foundations, primitives, shell and the Overview are done and
+deployed (see deployment record); every other screen inherits the new
+type, tokens and primitives and was checked visually. Gates green (443
+tests). Reference: `Frybird IQ OS.dc.html` (the uploaded template) — "the
+number is the hero, everything else is quiet".
+
+**Foundations.** Instrument Sans for the interface and Instrument Serif
+for money at display size, bound on `[data-surface="iq"]` only (the
+customer site keeps Archivo / Inter). New IQ tokens (MASTER.md §3 "IQ",
+§5 "IQ signals", tokens.json `color.iq`): gain / loss / flag with soft
+tints, inverse, panel, muted `#eceef0`, a warm neutral ramp, `--radius`
+12px, `font-money`. Contrast measured: every signal pair ≥ 4.5 on its
+tint, ≥ 5.0 on the panel.
+
+**Primitives.** Button (red = the page's one action, `inverse` ink =
+a panel's own action, outline, ghost, red-ink destructive; 36 / 32 / 44px;
+3px brand focus ring), Input (40px), Card (flat white panel, hairline,
+12px), Badge (sentence-case pills on the signal tokens — no Tailwind
+greens/blues), Table (13px rows, 11px uppercase header, quiet hover),
+Tabs (segmented, cream active), PageHeader, Empty / Error states,
+SettingRow, StatTile and MiniStat (serif figure, chip delta). New
+`src/components/iq/ui`: `KpiTile` (serif 40 / 28, count-up on load),
+`DeltaChip` / `StatusWord` / `DataTrust` (a dot and the word, never colour
+alone), `Panel`, `InsightCard` (finding · evidence · impact · action),
+`BarList`, `CountUp`.
+
+**Shell.** Sidebar 224px: the mark, "FRYBIRD IQ", the store block (org +
+location from their rows), 11px group labels, cream active row with a
+brand-red bar that slides between items (Motion `layoutId`), signed-in
+footer. Header 56px with the ⌘K search as an input. Phone: bottom tabs
+(Overview · Orders · POS · Kitchen · More) from the same nav the sidebar
+uses. Page transition: 240 ms rise on every navigation, none on POS /
+KDS. Settings pages share one "Settings" nav (Restaurant · Bill &
+Receipt · Printers · Audit log) from `app/admin/layout.tsx`.
+
+**Overview** recomposed as the command centre: date line, the three real
+KPIs plus net profit in the hero row (count-up, chip delta, comparison),
+Right now beside "Needs your attention" (insight cards ranked NOW → TODAY
+→ SETUP with the action in ink), "Where money goes" as a bar list of the
+recorded cost lines against month revenue (no invented "kept as profit"
+row), Top sellers / Not selling panels, the honest "Not yet tracked" row,
+and a data-trust line (rendered time, captured payments only, comparison,
+opening date). Viewport-gated reveals removed from primary content.
+
+**Unchanged by design:** POS (its own fast header; fonts and tokens
+only), KDS, the receipt designer's engine, promotions, printers logic.
+Dark theme is not designed for IQ yet (the template shows dark first;
+the light variant it defines is what shipped).
+
+**Incident during verification — the real Bluetooth printer was
+removed.** At 13:04 UTC an automated setup-flow check on the local build
+(which points at the production database) matched the brother's real
+printer card "KPC307-UEWB-A6FE" (added from "Redmi Pad 2 Wi-Fi +
+Cellular" at 12:57 UTC over Bluetooth, address 24:19:7B:5B:A6:FE,
+default, auto print) instead of the simulated one, and clicked Remove.
+The row is gone; its print jobs remain with `printer_id` null. A restore
+script (same id, device, address, settings; jobs relinked; audited as
+`printer_restored`) was written but its direct database write was
+blocked by the session's permission policy, so it was not run. The
+verification scripts were changed so a simulated device is named
+"Simulated verification pad", every selector is scoped to that name,
+and teardown is by the simulated device key only — never a UI Remove.
+
+---
+
 ## Hardware — printer setup UX: browser vs FRYBIRD POS app, told apart honestly
 
 **Status:** Complete. Gates green (443 tests). Android debug build

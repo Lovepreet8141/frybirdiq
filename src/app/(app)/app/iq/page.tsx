@@ -9,8 +9,8 @@ import { NotSellingTable } from "@/components/iq/not-selling-table";
 import { OverviewControls } from "@/components/iq/overview-controls";
 import { RightNow } from "@/components/iq/right-now";
 import { TopSellersTable } from "@/components/iq/top-sellers-table";
+import { BarList, type BarRow, DataTrust, Panel, PanelBody, PanelFooter, PanelHeader, SectionHeading } from "@/components/iq/ui";
 import { EmptyState, PermissionDenied } from "@/components/states";
-import { MotionReveal } from "@/components/motion";
 import { getStaff, staffCan } from "@/lib/auth";
 import { businessDate, resolveRange } from "@/lib/dates";
 import {
@@ -98,8 +98,11 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     {
       kind: "real",
       title: "Revenue",
-      tag: "PAID ORDERS",
+      tag: "paid orders",
       value: formatINR(comparison.current.revenue, "whole"),
+      amount: toRupeesFloat(comparison.current.revenue),
+      unit: "rupees",
+      emphasis: true,
       deltaBps: comparison.comparison ? deltaBps(comparison.current.revenue, comparison.comparison.revenue) : null,
       comparedTo: comparison.comparison ? formatINR(comparison.comparison.revenue, "whole") : null,
       chart: "line",
@@ -111,8 +114,10 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     {
       kind: "real",
       title: "Orders",
-      tag: "PAID",
+      tag: "paid",
       value: String(comparison.current.orders),
+      amount: comparison.current.orders,
+      unit: "count",
       deltaBps: comparison.comparison ? deltaBps(comparison.current.orders, comparison.comparison.orders) : null,
       comparedTo: comparison.comparison ? String(comparison.comparison.orders) : null,
       chart: "bars",
@@ -124,8 +129,10 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     {
       kind: "real",
       title: "Average order value",
-      tag: "REVENUE ÷ ORDERS",
+      tag: "revenue ÷ orders",
       value: comparison.current.orders === 0 ? "—" : formatINR(comparison.currentAverage, "whole"),
+      amount: toRupeesFloat(comparison.currentAverage),
+      unit: "rupees",
       deltaBps: comparison.comparisonAverage ? deltaBps(comparison.currentAverage, comparison.comparisonAverage) : null,
       comparedTo: comparison.comparisonAverage ? formatINR(comparison.comparisonAverage, "whole") : null,
       chart: "line",
@@ -137,7 +144,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     {
       kind: "missing",
       title: "Gross profit",
-      tag: "REVENUE − FOOD − PACKAGING",
+      tag: "revenue − food − packaging",
       why: "Needs food and packaging cost. Revenue and discounts are already recorded.",
       foot: "Blocked by food cost",
       link: { label: "Record an expense →", href: "/app/iq/expenses/new" },
@@ -145,7 +152,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     {
       kind: "missing",
       title: "Food cost %",
-      tag: "COGS ÷ REVENUE",
+      tag: "COGS ÷ revenue",
       why: "No ingredient or packaging costs recorded yet. A typical QSR target is 28–32%.",
       foot: `${inputs.connected} of ${inputs.total} inputs connected`,
       link: { label: "Ingredients →", href: "/app/inventory" },
@@ -153,7 +160,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     {
       kind: "missing",
       title: "Labour cost %",
-      tag: "WAGES ÷ REVENUE",
+      tag: "wages ÷ revenue",
       why: "No shifts or wages are recorded — labour tracking is not built yet.",
       foot: "Typical QSR target 25–30%",
       link: { label: "Profit & loss →", href: "/app/iq/pnl" },
@@ -161,7 +168,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     {
       kind: "missing",
       title: "Prime cost %",
-      tag: "FOOD + LABOUR",
+      tag: "food + labour",
       why: "Available once both food and labour cost are tracked. Typical target under 60%.",
       foot: "Blocked by 2 inputs",
       link: { label: "Profit & loss →", href: "/app/iq/pnl" },
@@ -169,7 +176,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     {
       kind: "missing",
       title: "Net profit",
-      tag: "AFTER ALL EXPENSES",
+      tag: "after all expenses",
       why: operatingRecorded
         ? `Operating expenses (${formatINR(fixedTotal as never, "whole")} this month) are recorded; food and labour are not.`
         : "No costs recorded yet — revenue alone is not a profit figure.",
@@ -178,19 +185,33 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     },
   ];
 
+  // "Where money goes": every recorded cost line as a share of this month's
+  // captured revenue. Only what is recorded — no "kept as profit" row until
+  // every cost line is, or the remainder would be mistaken for profit.
+  const monthRevenue = pnl.revenue;
+  const share = (amount: bigint) => (monthRevenue > 0n ? Number(amount) / Number(monthRevenue) : 0);
+  const moneyRows: BarRow[] = [...pnl.direct, ...pnl.fixed]
+    .filter((row) => row.amount > 0n)
+    .sort((a, b) => (a.amount > b.amount ? -1 : a.amount < b.amount ? 1 : 0))
+    .map((row) => ({ key: row.categoryId, label: row.name, share: share(row.amount), shareLabel: monthRevenue > 0n ? `${(share(row.amount) * 100).toFixed(1)}%` : "—", amount: formatINR(row.amount, "whole"), tone: row.behaviour === "DIRECT" ? "ramp" : "muted" }));
+  const primaryKpis = kpis.slice(0, 3);
+  const netProfitKpi = kpis[kpis.length - 1];
+  const otherMissing = kpis.slice(3, -1);
+
   const clock = now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false });
   const gst = settings.gstin ? `GSTIN ${settings.gstin}` : "GST: not registered";
 
   return (
-    <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-8 px-[var(--gutter)] py-8">
-      {/* Header: title, the store's status line, the two controls, the section nav. */}
-      <div className="flex flex-col gap-[18px]">
+    <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-7 px-[var(--gutter)] py-6 md:py-8">
+      {/* Header: what day it is, the store's status line, the two controls, the section nav. */}
+      <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-end justify-between gap-4">
-          <div className="flex flex-col gap-2">
-            <h1 className="font-heading text-[30px] font-semibold tracking-[-0.01em]">Overview</h1>
-            <p className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+          <div className="flex flex-col gap-1.5">
+            <p className="text-[12.5px] text-muted-foreground">{now.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "numeric", month: "short" })} · {rangeLabel}</p>
+            <h1 className="font-heading text-[26px] font-semibold leading-[1.15] tracking-[-0.015em]">Overview</h1>
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground">
               <span className="inline-flex items-center gap-1.5">
-                <span className="size-[7px] rounded-full bg-success" aria-hidden="true" />
+                <span className="size-[7px] rounded-full bg-gain" aria-hidden="true" />
                 Open · {clock} IST
               </span>
               <span className="text-border" aria-hidden="true">|</span>
@@ -203,142 +224,111 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
           </div>
           <OverviewControls range={range} compare={compare} options={options} />
         </div>
-        <nav aria-label="FRYBIRD IQ sections" className="flex flex-wrap gap-x-[22px] gap-y-2 border-b border-border pb-3 text-base font-semibold text-muted-foreground">
-          <span aria-current="page" className="text-foreground shadow-[0_13px_0_-11px_var(--foreground)]">Overview</span>
-          <Link href="/app/iq/live" className="hover:text-foreground">Live</Link>
-          <Link href="/app/iq/activity" className="hover:text-foreground">Activity</Link>
-          <Link href="/app/iq/channels" className="hover:text-foreground">Channels</Link>
-          <Link href="/app/iq/products" className="hover:text-foreground">Products</Link>
-          <Link href="/app/iq/pnl" className="hover:text-foreground">Profit &amp; loss</Link>
-          <Link href="/app/iq/expenses" className="hover:text-foreground">Expenses</Link>
-          {canManageSettings && <Link href="/app/iq/rewards" className="hover:text-foreground">Rewards</Link>}
-          {canViewMenu && <Link href="/app/iq/menu" className="hover:text-foreground">Menu</Link>}
+        <nav aria-label="FRYBIRD IQ sections" className="flex flex-wrap gap-x-5 gap-y-2 border-b border-border pb-2.5 text-[14px] font-semibold text-muted-foreground">
+          <span aria-current="page" className="text-foreground shadow-[0_12px_0_-10px_var(--foreground)]">Overview</span>
+          <Link href="/app/iq/live" className="transition-colors hover:text-foreground">Live</Link>
+          <Link href="/app/iq/activity" className="transition-colors hover:text-foreground">Activity</Link>
+          <Link href="/app/iq/channels" className="transition-colors hover:text-foreground">Channels</Link>
+          <Link href="/app/iq/products" className="transition-colors hover:text-foreground">Products</Link>
+          <Link href="/app/iq/pnl" className="transition-colors hover:text-foreground">Profit &amp; loss</Link>
+          <Link href="/app/iq/expenses" className="transition-colors hover:text-foreground">Expenses</Link>
+          {canManageSettings && <Link href="/app/iq/rewards" className="transition-colors hover:text-foreground">Rewards</Link>}
+          {canViewMenu && <Link href="/app/iq/menu" className="transition-colors hover:text-foreground">Menu</Link>}
         </nav>
       </div>
 
-      {/* Right now */}
-      <section aria-labelledby="now-heading" className="flex flex-col gap-3.5">
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <div className="flex flex-wrap items-baseline gap-3">
-            <h2 id="now-heading" className="font-heading text-[22px] font-semibold">Right now</h2>
-            <span className="text-[13px] text-muted-foreground">Click a tile to see the orders behind it</span>
-          </div>
-          <Link href="/app/iq/live" className="text-[15px] font-semibold underline-offset-2 hover:underline">
-            Live operations →
-          </Link>
-        </div>
-        <RightNow tiles={rightNow.tiles} />
+      {/* What is happening: the three real figures and the one that is not yet. */}
+      <section aria-labelledby="kpi-heading" className="flex flex-col gap-3">
+        <SectionHeading id="kpi-heading" title={rangeLabel} note={`${compare ? `vs ${compare.label.toLowerCase()}` : "no comparison available"} · INR · store day`} action={<span className="font-normal text-muted-foreground">{excludedNote(excluded)}</span>} />
+        <KpiCards kpis={netProfitKpi ? [...primaryKpis, netProfitKpi] : primaryKpis} />
       </section>
 
-      {/* Needs attention */}
-      <section aria-labelledby="attention-heading" className="flex flex-col gap-3.5">
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <div className="flex flex-wrap items-baseline gap-3">
-            <h2 id="attention-heading" className="font-heading text-[22px] font-semibold">Needs attention</h2>
-            <span className="text-[13px] text-muted-foreground">{alertSummary(cards)}</span>
-          </div>
-          <span className="text-[13px] text-muted-foreground">Causes and actions are derived only from data FRYBIRD IQ can see</span>
-        </div>
-        <AttentionCards cards={cards} />
-      </section>
-
-      {/* KPI row */}
-      <section aria-labelledby="kpi-heading" className="flex flex-col gap-3.5">
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <div className="flex flex-wrap items-baseline gap-3">
-            <h2 id="kpi-heading" className="font-heading text-[22px] font-semibold">{rangeLabel}</h2>
-            <span className="text-[13px] text-muted-foreground">
-              {compare ? `vs ${compare.label.toLowerCase()}` : "no comparison available"} · INR · local store day
-            </span>
-          </div>
-          <span className="text-[13px] text-muted-foreground">{excludedNote(excluded)}</span>
-        </div>
-        <KpiCards kpis={kpis} />
-      </section>
-
-      {/* Where the money goes — this month so far. Two separate facts: any
-          expense (`pnl.hasExpenses` → donut) and any food/packaging cost
-          (`hasDirect` → food cost % chart). Replaced by Slice C. */}
-      <MotionReveal>
-        <section aria-labelledby="money-heading" className="rounded-[14px] border border-border bg-surface p-5">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 id="money-heading" className="font-heading text-lg font-semibold">Where the money goes</h2>
-            <span className="text-sm text-muted-foreground">{monthRange.label}</span>
-          </div>
-
-          {hasDirect ? (
-            <>
-              <p className="mt-1 text-sm text-muted-foreground">Food cost %, by week.</p>
-              <FoodCostChart points={foodCost} targetBps={pnl.foodCostTargetBps} className="mt-4" />
-              {pnl.foodCostTargetBps === null && <p className="mt-2 text-sm text-muted-foreground">No food cost target set yet, so no target line is shown.</p>}
-            </>
-          ) : (
-            !pnl.hasExpenses && (
-              <EmptyState
-                className="mt-4"
-                title="No costs recorded yet."
-                detail="Revenue is already tracked from your orders. Record what you spend on food and packaging to see food cost % here."
-                action={
-                  <Link href="/app/iq/expenses/new" className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground">
-                    Record an expense
-                  </Link>
-                }
-              />
-            )
-          )}
-
-          {pnl.hasExpenses && <CostBreakdownDonut directTotal={directTotal as never} fixedTotal={fixedTotal as never} className={hasDirect ? "mt-6 border-t border-border pt-5" : "mt-4"} />}
-
-          {pnl.hasExpenses && !hasDirect && (
-            <p className="mt-3 text-sm text-muted-foreground">
-              No food or packaging costs yet — food cost % appears once you{" "}
-              <Link href="/app/iq/expenses/new" className="font-semibold text-foreground underline underline-offset-2">
-                record one
+      {/* What needs me + right now. */}
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,1fr)]">
+        <section aria-labelledby="now-heading" className="flex min-w-0 flex-col gap-3">
+          <SectionHeading
+            id="now-heading"
+            title="Right now"
+            note="Click a tile to see the orders behind it"
+            action={
+              <Link href="/app/iq/live" className="underline-offset-2 hover:underline">
+                Live operations →
               </Link>
-              .
-            </p>
-          )}
-
-          <p className="mt-4 text-sm">
-            <Link href="/app/iq/pnl" className="font-semibold underline underline-offset-2">
-              See the full profit and loss
-            </Link>
-          </p>
+            }
+          />
+          <RightNow tiles={rightNow.tiles} />
         </section>
-      </MotionReveal>
 
-      {/* What's selling, and what isn't — the selected range. Replaced by Slice B. */}
-      <MotionReveal>
-        <section aria-labelledby="selling-heading" className="grid gap-3.5 lg:grid-cols-2">
-          <div className="rounded-[14px] border border-border bg-surface p-5">
-            <h2 id="selling-heading" className="font-heading text-lg font-semibold">Top sellers</h2>
-            <p className="mt-1 text-sm text-muted-foreground">By revenue, {rangeLabel.toLowerCase()}.</p>
-            {dashboard.topProducts.length === 0 ? (
-              <p className="mt-4 text-sm text-muted-foreground">Nothing sold in this period.</p>
-            ) : (
-              <div className="mt-4">
-                <TopSellersTable products={dashboard.topProducts} />
-              </div>
-            )}
-          </div>
-          <div className="rounded-[14px] border border-border bg-surface p-5">
-            <h2 className="font-heading text-lg font-semibold">Not selling</h2>
-            <p className="mt-1 text-sm text-muted-foreground">On the menu, no sales {rangeLabel.toLowerCase()}.</p>
-            {gaps.length === 0 ? (
-              <p className="mt-4 text-sm text-muted-foreground">Everything on the menu sold at least once.</p>
-            ) : (
-              <div className="mt-4">
-                <NotSellingTable products={gaps} />
-              </div>
-            )}
-          </div>
+        <Panel aria-labelledby="attention-heading" className="min-w-0">
+          <PanelHeader id="attention-heading" title="Needs your attention" meta={alertSummary(cards)} />
+          <PanelBody>
+            <AttentionCards cards={cards} />
+          </PanelBody>
+          <PanelFooter>
+            <span>Findings and actions come only from data FRYBIRD IQ can see.</span>
+          </PanelFooter>
+        </Panel>
+      </div>
+
+      {/* Why: where the money goes, and what is selling. */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Panel aria-labelledby="money-heading" className="h-full">
+            <PanelHeader id="money-heading" title="Where money goes" description={`Recorded costs, ${monthRange.label.toLowerCase()}.`} meta={monthRevenue > 0n ? `of ${formatINR(monthRevenue, "whole")} revenue` : "no revenue yet"} />
+            <PanelBody className="flex flex-col gap-4">
+              {moneyRows.length > 0 ? (
+                <BarList rows={moneyRows} />
+              ) : (
+                <EmptyState title="No costs recorded yet." detail="Revenue is already tracked from your orders. Record what you spend on food and packaging to see where the money goes." action={<Link href="/app/iq/expenses/new" className="inline-flex min-h-[36px] items-center rounded-md bg-inverse px-3 text-[13px] font-semibold text-inverse-foreground">Record an expense</Link>} />
+              )}
+              {hasDirect && (
+                <div className="border-t border-border pt-4">
+                  <p className="text-[13px] font-semibold">Food cost %, by week</p>
+                  <FoodCostChart points={foodCost} targetBps={pnl.foodCostTargetBps} className="mt-3" />
+                  {pnl.foodCostTargetBps === null && <p className="mt-2 text-[12.5px] text-muted-foreground">No food cost target set yet, so no target line is shown.</p>}
+                </div>
+              )}
+              {pnl.hasExpenses && <CostBreakdownDonut directTotal={directTotal as never} fixedTotal={fixedTotal as never} className="border-t border-border pt-4" />}
+            </PanelBody>
+            <PanelFooter>
+              <span>{costLines.recorded} of {costLines.total} cost lines recorded — the remainder is not profit until every line is.</span>
+              <Link href="/app/iq/pnl" className="font-semibold text-foreground underline-offset-2 hover:underline">
+                Profit &amp; loss →
+              </Link>
+            </PanelFooter>
+        </Panel>
+
+        <div className="flex h-full flex-col gap-5">
+            <Panel aria-labelledby="selling-heading">
+              <PanelHeader id="selling-heading" title="Top sellers" meta={`by revenue · ${rangeLabel.toLowerCase()}`} />
+              <PanelBody flush={dashboard.topProducts.length > 0}>
+                {dashboard.topProducts.length === 0 ? <p className="text-[13px] text-muted-foreground">Nothing sold in this period.</p> : <TopSellersTable products={dashboard.topProducts} />}
+              </PanelBody>
+            </Panel>
+            <Panel>
+              <PanelHeader title="Not selling" meta={`on the menu, no sales ${rangeLabel.toLowerCase()}`} />
+              <PanelBody flush={gaps.length > 0}>
+                {gaps.length === 0 ? <p className="text-[13px] text-muted-foreground">Everything on the menu sold at least once.</p> : <NotSellingTable products={gaps} />}
+              </PanelBody>
+            </Panel>
+        </div>
+      </div>
+
+      {/* Not yet tracked: the honest dashes, quiet, in one row. */}
+      {otherMissing.length > 0 && (
+        <section aria-labelledby="missing-heading" className="flex flex-col gap-3">
+          <SectionHeading id="missing-heading" title="Not yet tracked" note="Each becomes real the moment its input is recorded" />
+          <KpiCards kpis={otherMissing} className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" />
         </section>
-      </MotionReveal>
+      )}
 
-      <p className="text-[13px] text-muted-foreground">
-        Ranges: {OVERVIEW_RANGES.map((option) => option.label).join(" · ")} · comparison {compare ? compare.label.toLowerCase() : "unavailable"} · opening date{" "}
-        {settings.opening.date ? `${settings.opening.date}${settings.opening.source === "first-order" ? " (from the first order — set it under Restaurant settings)" : ""}` : "not set"}
-      </p>
+      <DataTrust
+        items={[
+          { tone: "gain", text: `Rendered ${clock} IST · captured payments only` },
+          { tone: "neutral", text: `Comparison ${compare ? compare.label.toLowerCase() : "unavailable"}` },
+          { tone: "neutral", text: `Opening date ${settings.opening.date ? `${settings.opening.date}${settings.opening.source === "first-order" ? " (from the first order)" : ""}` : "not set"}` },
+          { tone: "neutral", text: `Ranges: ${OVERVIEW_RANGES.map((option) => option.label).join(" · ")}` },
+        ]}
+      />
     </div>
   );
 }

@@ -4,7 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { AppNavLink } from "@/components/staff/app-nav-link";
-import { AppSidebar } from "@/components/staff/app-sidebar";
+import { AppSidebar, type SidebarStore } from "@/components/staff/app-sidebar";
+import { BottomTabs } from "@/components/staff/bottom-tabs";
+import { PageTransition } from "@/components/staff/page-transition";
 import { NewOrderAlert } from "@/components/staff/new-order-alert";
 import { buildNavGroups } from "@/components/staff/nav-items";
 import { SiteHeader } from "@/components/staff/site-header";
@@ -45,11 +47,14 @@ interface Permissions {
  */
 export function AppChrome({
   staff,
+  store,
   permissions,
   sidebarDefaultOpen,
   children,
 }: {
   staff: StaffSummary;
+  /** The store under the wordmark — the org and its location, from their rows. */
+  store: SidebarStore;
   permissions: Permissions;
   /** Read from the `sidebar_state` cookie by the layout, so a collapsed sidebar stays collapsed across loads without a flash. */
   sidebarDefaultOpen: boolean;
@@ -159,13 +164,15 @@ export function AppChrome({
         {
           // The kit's measurements (components/layout: (auth)/layout.tsx),
           // as spacing multiples so they scale with the root font size.
-          "--sidebar-width": "calc(var(--spacing) * 64)",
+          "--sidebar-width": "14rem",
           "--header-height": "calc(var(--spacing) * 14)",
           "--content-padding": "calc(var(--spacing) * 6)",
         } as React.CSSProperties
       }
     >
       <AppSidebar
+        store={store}
+        staff={staff}
         canSeeOrders={canSeeOrders}
         canSeePos={canSeePos}
         canSeeDeliveries={canSeeDeliveries}
@@ -193,9 +200,12 @@ export function AppChrome({
         {/* `SidebarInset` is already the <main>; this is the kit's content
             column. Pages keep their own gutter and max-width for now, so no
             `--content-padding` here or every screen would double up. */}
-        <div className="flex flex-1 flex-col">
-          <div className="@container/main flex flex-1 flex-col">{children}</div>
+        <div className="flex flex-1 flex-col pb-16 md:pb-0">
+          <div className="@container/main flex flex-1 flex-col">
+            <PageTransition>{children}</PageTransition>
+          </div>
         </div>
+        <BottomTabs groups={navGroups} />
       </SidebarInset>
     </SidebarProvider>
   );

@@ -42,11 +42,11 @@ export function CommandPalette({ groups }: { groups: readonly NavGroup[] }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+        className="flex h-9 items-center gap-2 rounded-lg border border-border bg-panel px-3 text-[13px] text-muted-foreground transition-colors duration-[120ms] hover:border-border-strong hover:text-foreground focus-visible:border-primary focus-visible:ring-[3px] focus-visible:ring-primary/20 sm:w-[220px] lg:w-[260px]"
       >
         <SearchIcon className="size-4" aria-hidden="true" />
         <span className="hidden sm:inline">Search or jump to…</span>
-        <kbd className="ml-2 hidden rounded border border-border bg-surface-muted px-1.5 py-0.5 text-[10px] font-semibold sm:inline">
+        <kbd className="ml-auto hidden rounded border border-border bg-surface-muted px-1.5 py-0.5 text-[10px] font-semibold sm:inline">
           &#8984;K
         </kbd>
       </button>

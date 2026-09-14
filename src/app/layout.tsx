@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Archivo, Baloo_2, Inter } from "next/font/google";
+import { Archivo, Baloo_2, Instrument_Sans, Instrument_Serif, Inter } from "next/font/google";
 import "./globals.css";
 
 /**
@@ -19,6 +19,25 @@ const archivo = Archivo({
 const inter = Inter({
   variable: "--font-body",
   subsets: ["latin"],
+  display: "swap",
+});
+
+/**
+ * FRYBIRD IQ (the staff surface) sets in Instrument Sans, with Instrument
+ * Serif reserved for money at display size — design-system/MASTER.md §3
+ * "IQ". The customer site keeps Archivo and Inter; the variables are
+ * loaded once here and bound per surface in globals.css.
+ */
+const instrumentSans = Instrument_Sans({
+  variable: "--font-instrument-sans",
+  subsets: ["latin"],
+  display: "swap",
+});
+
+const instrumentSerif = Instrument_Serif({
+  variable: "--font-instrument-serif",
+  subsets: ["latin"],
+  weight: "400",
   display: "swap",
 });
 
@@ -46,7 +65,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${archivo.variable} ${inter.variable} ${baloo.variable} h-full`}
+    <html lang="en" className={`${archivo.variable} ${inter.variable} ${baloo.variable} ${instrumentSans.variable} ${instrumentSerif.variable} h-full`}
       /* The inline script below sets data-menu-density on this element before
          hydration, so the server's markup and the client's first read differ
          by design. Without this React reports it as a mismatch on every load. */

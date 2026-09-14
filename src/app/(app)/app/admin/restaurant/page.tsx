@@ -15,12 +15,12 @@ export const dynamic = "force-dynamic";
 
 function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
-    <section className="flex flex-col gap-3">
-      <div>
-        <h2 className="font-heading text-lg font-semibold">{title}</h2>
-        {description && <p className="text-sm text-muted-foreground">{description}</p>}
+    <section className="flex flex-col rounded-xl border border-border bg-panel">
+      <div className="px-5 pt-4 pb-2">
+        <h2 className="font-heading text-sm font-semibold">{title}</h2>
+        {description && <p className="mt-0.5 text-[13px] text-muted-foreground">{description}</p>}
       </div>
-      <div className="flex flex-col gap-2">{children}</div>
+      <div className="flex flex-col px-4 pb-3">{children}</div>
     </section>
   );
 }
@@ -55,7 +55,7 @@ export default async function RestaurantSettingsPage() {
   const inclusive = organization.priceBasis === "inclusive";
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-[var(--gutter)] py-8">
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-[var(--gutter)] py-6 md:py-8">
       <PageHeader
         title="Restaurant"
         description="What FRYBIRD is configured as. These values already drive every invoice, price, reward and delivery quote; changing any of them is a business decision, so this page shows them and edits only the operations settings the Overview reads."

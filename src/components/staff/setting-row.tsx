@@ -8,12 +8,12 @@ import type { ReactNode } from "react";
  */
 export function SettingRow({ label, description, value }: { label: string; description?: string; value: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 rounded-lg border border-border p-4">
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 border-b border-border px-1 py-3 last:border-b-0">
       <div className="flex min-w-0 flex-col gap-0.5">
-        <span className="text-base font-medium">{label}</span>
-        {description && <span className="text-sm text-muted-foreground">{description}</span>}
+        <span className="text-[13.5px] font-medium">{label}</span>
+        {description && <span className="text-[12.5px] text-muted-foreground">{description}</span>}
       </div>
-      <div className="tabular text-right text-base font-semibold">{value}</div>
+      <div className="tabular text-right text-[13.5px] font-semibold">{value}</div>
     </div>
   );
 }
