@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { DeliveryCard, type RiderDelivery } from "@/components/staff/delivery-card";
+import { LiveRefresh } from "@/components/staff/live-refresh";
 import { EmptyState } from "@/components/states";
 import { getStaff, staffCan } from "@/lib/auth";
 import { listDeliveries } from "@/lib/repositories/orders";
@@ -55,9 +56,7 @@ export default async function DeliveriesPage() {
         </ul>
       )}
 
-      <p className="mt-8 text-sm text-muted-foreground">
-        This list updates when you reload. Live updates are not built yet.
-      </p>
+      <LiveRefresh orgId={staff.orgId} />
     </div>
   );
 }

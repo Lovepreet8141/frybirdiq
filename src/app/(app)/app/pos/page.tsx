@@ -74,6 +74,7 @@ export default async function PosPage() {
         // The device agent registers a FRYBIRD POS device, watches its printer and prints; a plain browser gets nothing but the truth.
         <DeviceAgent autoRegister>
           <PosShell
+            orgId={staff.orgId}
             categories={menu}
             canLookupCustomers={canLookupCustomers}
             canDuplicate={canDuplicate}

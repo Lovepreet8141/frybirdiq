@@ -1,18 +1,20 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { AlarmClock, Loader2 } from "lucide-react";
 import { ReloadAppButton } from "@/components/reload-app-button";
 import { OfflineState } from "@/components/states";
 import { useOnline } from "@/components/pos/use-online";
+import { useChime } from "@/components/staff/use-chime";
+import { useOrderEvents } from "@/lib/realtime/client";
 import { pollKitchenTickets } from "@/lib/auth/kitchen-action";
 import { advanceOrderAction } from "@/lib/auth/staff-actions";
 import { STALE_DEPLOYMENT_MESSAGE, isStaleDeploymentError } from "@/lib/errors/stale-deployment";
 import { type KitchenStatus, type KitchenTicket, isLate, nextKitchenStatus, waitingMinutes } from "@/lib/kitchen/tickets";
 import { cn } from "@/lib/utils";
 
-/** Tickets move every few minutes, not every second; 10s keeps a new one from sitting unseen without hammering a screen that is on all shift. */
-const POLL_MS = 10_000;
+/** Fallback only: the order_events channel moves tickets the moment they change (roadmap 2.2); this catches a dropped socket. */
+const POLL_MS = 60_000;
 /** How often the "waiting" minutes re-render between polls. */
 const CLOCK_MS = 30_000;
 
@@ -43,11 +45,33 @@ function clock(iso: string): string {
  * promised time), not a model. Nothing animates: a screen a cook glances at
  * two hundred times a shift must never be mid-transition.
  */
-export function KdsBoard({ initial, canUpdate }: { initial: readonly KitchenTicket[]; canUpdate: boolean }) {
+export function KdsBoard({ initial, canUpdate, orgId }: { initial: readonly KitchenTicket[]; canUpdate: boolean; orgId: string }) {
   const [tickets, setTickets] = useState<readonly KitchenTicket[]>(initial);
   const [now, setNow] = useState(() => Date.now());
   const [staleDeployment, setStaleDeployment] = useState(false);
   const online = useOnline();
+  const tickRef = useRef<(() => Promise<void>) | null>(null);
+  const { play } = useChime();
+  /** Ticket ids already on the board, so only a genuinely new one sounds. Null until the first render has been seen. */
+  const seenIds = useRef<Set<string> | null>(null);
+
+  // A new order event anywhere in the organization re-reads the tickets at
+  // once (roadmap 2.2, 2.4). The 60 s poll below is only for a dropped socket.
+  useOrderEvents(orgId, () => void tickRef.current?.(), online);
+
+  // Sound once per new ticket — one burst, not the counter's persistent
+  // alarm: the cook is looking at this screen, the counter may not be.
+  useEffect(() => {
+    const ids = new Set(tickets.map((ticket) => ticket.id));
+    if (seenIds.current === null) {
+      seenIds.current = ids;
+      return;
+    }
+    let fresh = false;
+    for (const id of ids) if (!seenIds.current.has(id)) fresh = true;
+    seenIds.current = ids;
+    if (fresh) play();
+  }, [tickets, play]);
 
   useEffect(() => {
     if (!online) return;
@@ -67,6 +91,7 @@ export function KdsBoard({ initial, canUpdate }: { initial: readonly KitchenTick
       setNow(Date.now());
     };
 
+    tickRef.current = tick;
     const poll = setInterval(() => void tick(), POLL_MS);
     const clockTimer = setInterval(() => setNow(Date.now()), CLOCK_MS);
     return () => {

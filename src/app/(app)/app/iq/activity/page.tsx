@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { ActivityFeed } from "@/components/staff/activity-feed";
-import { AutoRefresh } from "@/components/staff/auto-refresh";
+import { LiveRefresh } from "@/components/staff/live-refresh";
 import { PageHeader } from "@/components/staff/page-header";
 import { PermissionDenied } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
@@ -30,10 +30,10 @@ export default async function ActivityPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-[var(--gutter)] py-8">
-      <AutoRefresh everyMs={REFRESH_MS} />
+      <LiveRefresh orgId={staff.orgId} fallbackMs={REFRESH_MS} />
       <PageHeader
         title="Activity"
-        description={`The last ${events.length} order events — who moved what, and when. Refreshes every ${REFRESH_MS / 1000} seconds.`}
+        description={`The last ${events.length} order events — who moved what, and when. Updates as orders move.`}
       />
       <ActivityFeed events={events.map((event) => ({ ...event, at: event.at.toISOString() }))} />
     </div>

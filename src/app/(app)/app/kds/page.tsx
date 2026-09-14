@@ -35,7 +35,7 @@ export default async function KdsPage() {
 
   return (
     <div className="lg:h-[calc(100dvh-68px)]">
-      <KdsBoard initial={tickets} canUpdate={canUpdate} />
+      <KdsBoard initial={tickets} canUpdate={canUpdate} orgId={staff.orgId} />
     </div>
   );
 }

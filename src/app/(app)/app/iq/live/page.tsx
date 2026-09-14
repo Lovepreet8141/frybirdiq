@@ -3,7 +3,7 @@ import Link from "next/link";
 import { AlarmClock, ChefHat } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { AutoRefresh } from "@/components/staff/auto-refresh";
+import { LiveRefresh } from "@/components/staff/live-refresh";
 import { DataTrust, KpiTile, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
 import { PermissionDenied } from "@/components/states";
@@ -88,7 +88,7 @@ export default async function LiveOperationsPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-6 md:py-8">
-      <AutoRefresh everyMs={REFRESH_MS} />
+      <LiveRefresh orgId={staff.orgId} fallbackMs={REFRESH_MS} />
 
       <PageHeader
         title="Live operations"

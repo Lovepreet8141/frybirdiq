@@ -16,6 +16,7 @@ import { lineKey } from "@/lib/cart/schema";
 import { type PriceDraftOk, placeCounterOrderAction, pollPosMenu, priceDraftOrder } from "@/lib/pos/actions";
 import type { MenuCategory, MenuProduct } from "@/lib/repositories/menu";
 import { recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
+import { useMenuChanges } from "@/lib/realtime/client";
 import { CategoryRail } from "./category-rail";
 import { CustomerControl } from "./customer-control";
 import { ModifierPicker } from "./modifier-picker";
@@ -43,9 +44,11 @@ const PRICE_DEBOUNCE_MS = 200;
  * shorter is unnecessary load on a screen that stays open for a whole
  * shift.
  */
-const MENU_POLL_MS = 25_000;
+/** Fallback only: product and availability changes arrive over the menu channel (roadmap 2.2); this catches a dropped socket. */
+const MENU_POLL_MS = 60_000;
 
 export function PosShell({
+  orgId,
   categories: initialCategories,
   canLookupCustomers,
   tables,
@@ -53,6 +56,7 @@ export function PosShell({
   receiptTemplate,
   canDuplicate,
 }: {
+  orgId: string;
   categories: readonly MenuCategory[];
   canLookupCustomers: boolean;
   /** `orders.refund` — may print a second copy of a bill. */
@@ -79,6 +83,7 @@ export function PosShell({
   const [isPricing, startPricing] = useTransition();
 
   const online = useOnline();
+  const menuTickRef = useRef<(() => Promise<void>) | null>(null);
   const router = useRouter();
   // The local printer, if this device has one. Null outside the agent (tests, other screens).
   const localPrinter = useLocalPrinter();
@@ -103,12 +108,16 @@ export function PosShell({
       setCategories(result.categories);
     };
 
+    menuTickRef.current = tick;
     const timer = setInterval(() => void tick(), MENU_POLL_MS);
     return () => {
       stopped = true;
       clearInterval(timer);
     };
   }, [online, channel]);
+
+  // The Menu Manager marking something sold out reaches the grid at once.
+  useMenuChanges(orgId, () => void menuTickRef.current?.(), online);
 
   // If the category picked before a refresh no longer exists (renamed,
   // unpublished), fall back to the first still-available one rather than
