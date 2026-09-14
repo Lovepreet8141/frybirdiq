@@ -159,7 +159,7 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
 
       {/* THIS DEVICE */}
       <section className="flex flex-col gap-3">
-        <h2 className="font-heading text-lg font-semibold">This device</h2>
+        <h2 className="font-heading text-xl font-semibold tracking-[-0.01em]">This device</h2>
         {!local?.ready ? (
           <p className="rounded-lg border border-border bg-surface px-4 py-4 text-sm text-muted-foreground">Checking this device…</p>
         ) : bridge ? (
@@ -236,7 +236,7 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
       {/* DEVICES */}
       <section className="flex flex-col gap-3">
         <div>
-          <h2 className="font-heading text-lg font-semibold">Devices</h2>
+          <h2 className="font-heading text-xl font-semibold tracking-[-0.01em]">Devices</h2>
           <p className="text-sm text-muted-foreground">Only devices that registered themselves appear here. Online means heard from in the last three minutes.</p>
         </div>
         {devices.length === 0 ? (
@@ -296,7 +296,7 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
 
       {/* PRINTERS */}
       <section className="flex flex-col gap-3">
-        <h2 className="font-heading text-lg font-semibold">Printers</h2>
+        <h2 className="font-heading text-xl font-semibold tracking-[-0.01em]">Printers</h2>
         {printers.length === 0 ? (
           <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
             No printer yet. {devices.length === 0 ? "Register the POS device first, then add the printer." : canManage ? "Add the POSIFLOW from the device next to it, or from here with its IP." : "An owner or admin can add one."}
@@ -379,7 +379,7 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
       {/* RECENT PRINT JOBS */}
       {jobs.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="font-heading text-lg font-semibold">Recent print jobs</h2>
+          <h2 className="font-heading text-xl font-semibold tracking-[-0.01em]">Recent print jobs</h2>
           <ul className="divide-y divide-border rounded-lg border border-border bg-surface">
             {jobs.map((job) => (
               <li key={job.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm">
@@ -403,7 +403,7 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
 
       {/* SETUP GUIDE */}
       <section id="setup" className="flex flex-col gap-3">
-        <h2 className="font-heading text-lg font-semibold">Set up printing at the counter</h2>
+        <h2 className="font-heading text-xl font-semibold tracking-[-0.01em]">Set up printing at the counter</h2>
         <ol className="list-decimal space-y-1 rounded-lg border border-border bg-surface px-8 py-4 text-sm">
           <li>Install and open the FRYBIRD POS Android app on the tablet at the counter and sign in. The device registers itself and appears under Devices.</li>
           <li>On that tablet, open Settings → Hardware → Printers and tap Add Printer.</li>

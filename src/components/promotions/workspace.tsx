@@ -188,18 +188,20 @@ export function PromotionsWorkspace({ promos, products, today, canEdit }: { prom
       {/* Title row */}
       <div className="flex flex-wrap items-end gap-4">
         <div className="min-w-[260px] flex-1">
-          <h1 className="font-heading text-[30px] font-bold tracking-[-0.02em]">Promotions</h1>
-          <p className="text-base text-muted-foreground">Build offers as drafts. Nothing reaches the counter until you push it to a channel.</p>
+          <h1 className="font-heading text-[26px] font-semibold leading-[1.15] tracking-[-0.015em]">Promotions</h1>
+          <p className="mt-1 text-[13.5px] text-muted-foreground">Build offers as drafts. Nothing reaches the counter until you push it to a channel.</p>
         </div>
-        <div className="flex gap-5 text-sm text-muted-foreground">
-          <span>
-            <b className="mr-1 text-xl text-foreground">{liveCount}</b>live
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            <span className={cn("size-[7px] rounded-full", liveCount > 0 ? "bg-gain" : "bg-muted-foreground/60")} aria-hidden="true" />
+            <b className="tabular text-foreground">{liveCount}</b> live
           </span>
-          <span>
-            <b className="mr-1 text-xl text-foreground">{draftCount}</b>drafts
+          <span className="inline-flex items-center gap-1.5">
+            <span className="size-[7px] rounded-full bg-muted-foreground/60" aria-hidden="true" />
+            <b className="tabular text-foreground">{draftCount}</b> drafts
           </span>
         </div>
-        <button type="button" onClick={() => setLibraryOpen(true)} className="inline-flex min-h-[44px] items-center rounded-md border border-border bg-surface px-3.5 text-sm font-semibold lg:hidden">
+        <button type="button" onClick={() => setLibraryOpen(true)} className="inline-flex h-10 items-center rounded-md border border-border bg-panel px-3.5 text-sm font-semibold lg:hidden">
           Library ({promos.length})
         </button>
       </div>
@@ -208,9 +210,9 @@ export function PromotionsWorkspace({ promos, products, today, canEdit }: { prom
         {/* Library — a column on desktop, a drawer on a phone */}
         <aside className="sticky top-[76px] hidden overflow-hidden rounded-xl border border-border bg-panel lg:block">
           <div className="flex items-center border-b border-border px-4 py-3.5">
-            <span className="text-[15px] font-semibold">Promotion library</span>
+            <span className="text-sm font-semibold">Promotion library</span>
             {canEdit && (
-              <button type="button" onClick={() => startNew()} className="ml-auto inline-flex min-h-[32px] items-center gap-1 rounded-md border border-border bg-surface px-2.5 text-[13px] font-semibold">
+              <button type="button" onClick={() => startNew()} className="ml-auto inline-flex h-8 items-center gap-1 rounded-md bg-inverse px-2.5 text-[13px] font-semibold text-inverse-foreground transition-colors hover:bg-inverse/85">
                 <Plus className="size-3.5" aria-hidden="true" /> New
               </button>
             )}
@@ -448,7 +450,7 @@ export function PromotionsWorkspace({ promos, products, today, canEdit }: { prom
           {/* Preview + actions */}
           <div className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-[76px]">
             <div className="rounded-xl border border-border bg-panel px-5 py-[18px]">
-              <h3 className="mb-3 text-xs font-semibold tracking-[0.1em] text-muted-foreground">CUSTOMER SEES</h3>
+              <h3 className="mb-3 font-heading text-sm font-semibold">Customer sees</h3>
               <div className="rounded-xl bg-promo-live p-[18px]">
                 <p className="text-[11px] font-bold tracking-[0.08em] text-promo-live-fg">OFFER</p>
                 <p className="mt-1 break-words text-xl font-bold leading-[1.2]">{draft.name || "Untitled promotion"}</p>
@@ -466,10 +468,10 @@ export function PromotionsWorkspace({ promos, products, today, canEdit }: { prom
             <div className="rounded-xl border border-border bg-panel px-5 py-[18px]">
               {errors.length > 0 && (
                 <div className="mb-3.5">
-                  <h3 className="mb-2 text-xs font-semibold tracking-[0.1em] text-warning">BEFORE YOU CAN PUSH</h3>
+                  <h3 className="mb-2 font-heading text-sm font-semibold text-flag">Before you can push</h3>
                   <ul className="flex flex-col gap-1.5">
                     {errors.map((message) => (
-                      <li key={message} className="flex gap-1.5 text-[13px] text-warning">
+                      <li key={message} className="flex gap-1.5 text-[13px] text-flag">
                         <span aria-hidden="true">⚠</span>
                         <span>{message}</span>
                       </li>
@@ -484,17 +486,17 @@ export function PromotionsWorkspace({ promos, products, today, canEdit }: { prom
               )}
               {canEdit ? (
                 <div className="flex flex-col gap-2">
-                  <button type="button" onClick={() => save("save")} disabled={pending} className="min-h-[44px] rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60">
+                  <button type="button" onClick={() => save("save")} disabled={pending} className="h-11 rounded-md bg-primary px-4 text-[15px] font-semibold text-primary-foreground transition-colors duration-[120ms] hover:bg-primary-strong disabled:opacity-50">
                     {pending ? "Saving…" : meta.status === "live" ? "Update promotion" : "Save"}
                   </button>
-                  <button type="button" onClick={() => save("draft")} disabled={pending} className="min-h-[44px] rounded-lg border border-border bg-surface px-4 text-sm font-semibold disabled:opacity-60">
+                  <button type="button" onClick={() => save("draft")} disabled={pending} className="h-11 rounded-md border border-border bg-panel px-4 text-[15px] font-semibold transition-colors duration-[120ms] hover:border-border-strong disabled:opacity-50">
                     Save as draft
                   </button>
                   <div className="flex gap-2">
-                    <button type="button" onClick={duplicate} disabled={pending || !saved} className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-[13px] font-semibold disabled:opacity-50">
+                    <button type="button" onClick={duplicate} disabled={pending || !saved} className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md border border-border bg-panel px-3 text-[13px] font-semibold transition-colors duration-[120ms] hover:border-border-strong disabled:opacity-50">
                       <Copy className="size-3.5" aria-hidden="true" /> Duplicate
                     </button>
-                    <button type="button" onClick={remove} disabled={pending} className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-order-late-line bg-surface px-3 text-[13px] font-semibold text-destructive disabled:opacity-50">
+                    <button type="button" onClick={remove} disabled={pending} className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md bg-loss-soft px-3 text-[13px] font-semibold text-primary-strong transition-colors duration-[120ms] hover:bg-loss-soft/70 disabled:opacity-50">
                       <Trash2 className="size-3.5" aria-hidden="true" /> Delete
                     </button>
                   </div>
@@ -507,7 +509,7 @@ export function PromotionsWorkspace({ promos, products, today, canEdit }: { prom
 
             {saved && (
               <div className="rounded-xl border border-border bg-panel px-5 py-[18px] text-sm">
-                <h3 className="mb-2 text-xs font-semibold tracking-[0.1em] text-muted-foreground">SO FAR</h3>
+                <h3 className="mb-2 font-heading text-sm font-semibold">So far</h3>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
                   <dt className="text-muted-foreground">Applied</dt>
                   <dd className="tabular">
