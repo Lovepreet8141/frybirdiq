@@ -9,14 +9,19 @@
  * this product cannot leave out: §20 makes the POS offline-first, and §41 is
  * explicit that hiding a button is not authorization.
  *
- * Copy follows design-system/content.md — say what happened, then what to do.
- * No "oops", no jokes, no exclamation marks.
+ * The shell is the purchased kit's `Empty` composition (media · title ·
+ * description · content), so every empty, error, offline and denied state on
+ * every screen shares one anatomy. Copy follows design-system/content.md —
+ * say what happened, then what to do. No "oops", no jokes, no exclamation
+ * marks, and offline never offers "try again": queued orders sync on their
+ * own when the connection returns (§57).
  */
 
 import { AlertTriangle, Inbox, Lock, WifiOff } from "lucide-react";
 import type { ReactNode } from "react";
-import { cn } from "@/lib/utils";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 
 function Shell({
   icon,
@@ -34,29 +39,26 @@ function Shell({
   className?: string;
 }) {
   return (
-    <div
-      className={cn(
-        "flex flex-col items-center justify-center gap-2.5 rounded-xl border border-dashed border-border-strong/70 bg-panel px-6 py-10 text-center",
-        className,
-      )}
-    >
-      <span
-        aria-hidden="true"
-        className={cn(
-          "flex size-10 items-center justify-center rounded-full",
-          tone === "neutral" && "bg-surface-muted text-muted-foreground",
-          tone === "warning" && "bg-warning/15 text-warning",
-          // Ember fails AA as text on charred, so the destructive tone tints a
-          // container and keeps the glyph readable rather than colouring copy.
-          tone === "error" && "bg-destructive/20 text-foreground",
-        )}
-      >
-        {icon}
-      </span>
-      <p className="font-heading text-[15px] font-semibold">{title}</p>
-      {detail && <p className="max-w-sm text-[13px] leading-[1.5] text-muted-foreground">{detail}</p>}
-      {action && <div className="mt-1">{action}</div>}
-    </div>
+    <Empty className={cn("border border-dashed border-border-strong/70 bg-panel px-6 py-10", className)}>
+      <EmptyHeader>
+        <EmptyMedia
+          variant="icon"
+          className={cn(
+            "mb-0 size-10 rounded-full [&_svg:not([class*='size-'])]:size-5",
+            tone === "neutral" && "bg-surface-muted text-muted-foreground",
+            tone === "warning" && "bg-warning/15 text-warning",
+            // Ember fails AA as text on charred, so the destructive tone tints a
+            // container and keeps the glyph readable rather than colouring copy.
+            tone === "error" && "bg-destructive/20 text-foreground",
+          )}
+        >
+          {icon}
+        </EmptyMedia>
+        <EmptyTitle className="text-[15px] font-semibold">{title}</EmptyTitle>
+        {detail && <EmptyDescription className="text-[13px] leading-[1.5]">{detail}</EmptyDescription>}
+      </EmptyHeader>
+      {action && <EmptyContent className="gap-2">{action}</EmptyContent>}
+    </Empty>
   );
 }
 
@@ -77,7 +79,7 @@ export function EmptyState({
   action?: ReactNode;
   className?: string;
 }) {
-  return <Shell icon={<Inbox className="size-5" />} title={title} detail={detail} action={action} className={className} />;
+  return <Shell icon={<Inbox />} title={title} detail={detail} action={action} className={className} />;
 }
 
 /** Says what failed and what to do next. Never makes failure look like success. */
@@ -94,14 +96,7 @@ export function ErrorState({
 }) {
   return (
     <div role="alert">
-      <Shell
-        icon={<AlertTriangle className="size-5" />}
-        title={title}
-        detail={detail}
-        action={action}
-        tone="error"
-        className={className}
-      />
+      <Shell icon={<AlertTriangle />} title={title} detail={detail} action={action} tone="error" className={className} />
     </div>
   );
 }
@@ -110,19 +105,15 @@ export function ErrorState({
  * The POS is offline. §57's exact copy.
  *
  * `queued` is shown because a cashier needs to know the orders are not lost —
- * that is the entire promise of §20.
+ * that is the entire promise of §20. No retry button: syncing is automatic.
  */
 export function OfflineState({ queued, className }: { queued?: number; className?: string }) {
   return (
     <div role="status" aria-live="polite">
       <Shell
-        icon={<WifiOff className="size-5" />}
+        icon={<WifiOff />}
         title="You're offline"
-        detail={
-          queued
-            ? `New orders will sync when connection returns. ${queued} waiting.`
-            : "New orders will sync when connection returns."
-        }
+        detail={queued ? `New orders will sync when connection returns. ${queued} waiting.` : "New orders will sync when connection returns."}
         tone="warning"
         className={className}
       />
@@ -145,14 +136,7 @@ export function PermissionDenied({
   detail?: string;
   className?: string;
 }) {
-  return (
-    <Shell
-      icon={<Lock className="size-5" />}
-      title={`You don't have permission to ${action}`}
-      detail={detail}
-      className={className}
-    />
-  );
+  return <Shell icon={<Lock />} title={`You don't have permission to ${action}`} detail={detail} className={className} />;
 }
 
 /**

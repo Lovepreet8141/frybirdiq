@@ -7,6 +7,80 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Purchased-kit integrations — the five approved of thirteen
+
+**Status:** Local commit on `kit-radix-nova`, **not pushed, not
+deployed** — waiting for approval. Production is on `73ea37b`.
+
+Of the 13 components in the purchased kit zip, the KEEP/MAYBE/SKIP
+review left five. Every registry source was fetched with
+`npx shadcn view @shadcnuikit/<name>` and matched the zip byte for byte
+before anything was written. No SKIP component was installed.
+
+**1. `data-table4` → drag-to-reorder in the Menu Manager.** The block's
+dnd-kit mechanics (pointer, touch and keyboard sensors, vertical-only
+modifier, a grip handle per row) lifted into
+`src/components/iq/menu/sortable-list.tsx` and wired onto the category
+rail (`menu-control-center.tsx`) and a modifier group's options
+(`modifier-list.tsx`). A drop is turned into the **existing** one-step
+move action — `moveCategoryAction` / `moveModifierPositionAction`,
+`menu.edit`, `planSwap` untouched — called once per row crossed
+(`planMove` in `src/lib/menu-admin/reorder.ts`, 3 tests), then
+`router.refresh()`. No new ordering logic, schema or action; the ↑/↓
+buttons stay as the keyboard and fallback path. New dependencies:
+`@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/modifiers`,
+`@dnd-kit/utilities`.
+
+**2. `button-group14` → POS quantity stepper.** `ButtonGroup` +
+`ButtonGroupText` (`src/components/pos/quantity-stepper.tsx`); the kit's
+editable input is gone, the count is read-only with `aria-live`, and both
+buttons keep the 56px touch target. `order-builder.tsx` swaps its
+hand-rolled −/+ for it; `onQuantityChange` and every price path are as
+they were.
+
+**3. `data-table2` → order HISTORY, not the live board.** The shared
+`DataTable` gains `rowExpandingFeature` + `createExpandedRowModel`, an
+`expandColumn()` (the kit's rotating chevron) and `renderExpanded`. New
+read-only repository `src/lib/repositories/order-history.ts`
+(`listOrderHistory`: terminal orders in a range with their `order_items`
+/ `order_item_modifiers` snapshots and a captured-payment flag — SELECT
+only, org-scoped). New page `/app/orders/history` (`orders.view`,
+`force-dynamic`), `OrderHistoryTable` with search, status/channel filter
+and the expanded lines panel; nav item and breadcrumb added. `/app/orders`
+is unchanged.
+
+**4. `Empty` primitive → `src/components/states`.** `EmptyState`,
+`ErrorState`, `OfflineState`, `PermissionDenied` now render on
+`Empty`/`EmptyHeader`/`EmptyMedia`/`EmptyTitle`/`EmptyDescription`/
+`EmptyContent`; props, copy, tones, `role="alert"`/`role="status"` kept.
+Offline still says "You're offline · New orders will sync when connection
+returns." with no retry — the kit's "Try Again" was not adopted.
+
+**5. `button-group3` → `PeriodSwitch`** (`src/components/iq/period-switch.tsx`,
+a Server Component of `Link`s on `ButtonGroup`). Replaces the five
+hand-rolled period navs (Finance, Products — keeps `&tab=`, Channels, P&L,
+Expenses) and is used by Order history. Still `?range=` resolved by the
+server through `resolveRange`; nothing is re-sliced on the client.
+
+**Gates:** typecheck, lint (clean), 488/488 tests in 38 files, both RSC
+checks, `pnpm build` (63 routes). **Authenticated verification** — the
+standalone build served locally with the production env and an owner
+session, figures compared with direct SQL under the page's own rule:
+`/app/pos` 200 · `/app/iq/menu` 200 with 9 drag handles · a modifier
+group page 200 with 7 · `/app/orders` 200 · `/app/orders/history?range=7d`
+200 — 31 finished orders on the page, 31 by SQL, 20 expand chevrons on
+page one; `?range=today` 1 and 1 · `/app/iq/channels?range=today` 1 paid
+order / `?range=7d` 46, both equal to SQL · `/app/finance?range=7d`
+`aria-current` on the right link · Products keeps `&tab=` across periods ·
+Expenses last month renders `EmptyState` on the `Empty` primitive. No
+"Something didn't work" anywhere. **Not exercised** (no browser in this
+session): the drag gesture itself and the stepper taps — both call
+existing, tested actions/handlers, but the persisted reorder after a real
+drag and a real tap on a tablet still need a hands-on check on
+frybirdiq.tech after deploy.
+
+---
+
 ## Incident — `/app/iq` fell into its error boundary after `f2eda03`: a Server Component called a function from a "use client" module
 
 **Status:** Fixed on `kit-radix-nova` (local commit, not pushed, not

@@ -32,3 +32,20 @@ export function planSwap<T extends Positioned>(siblings: readonly T[], id: strin
 
   return order.flatMap((row, position) => (row.position === position ? [] : [{ id: row.id, position }]));
 }
+
+/**
+ * Turns a drag from one row index to another into the moves the existing
+ * reorder actions already understand — one step up or down at a time.
+ * Ordering stays the server's: a drag is just a faster way of pressing the
+ * arrow the right number of times, so nothing about positions is decided
+ * on the client.
+ */
+export interface MovePlan {
+  readonly direction: "up" | "down";
+  readonly steps: number;
+}
+
+export function planMove(from: number, to: number): MovePlan | null {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from === to) return null;
+  return to < from ? { direction: "up", steps: from - to } : { direction: "down", steps: to - from };
+}

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { AnalyticsSectionNav } from "@/components/iq/analytics-section-nav";
+import { PeriodSwitch } from "@/components/iq/period-switch";
 import { BestSellersCard } from "@/components/iq/best-sellers-card";
 import { ProductsPerformanceTable } from "@/components/iq/products-performance-table";
 import { BarList, DataTrust, KpiTile, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
@@ -57,24 +57,7 @@ export default async function ProductsAnalyticsPage({ searchParams }: { searchPa
       <PageHeader
         title="Products & categories"
         description={`What each product did ${range.label.toLowerCase()} — revenue includes GST, as the customer paid it.`}
-        actions={
-          <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
-            {RANGES.map((option) => (
-              <Link
-                key={option.key}
-                href={`/app/iq/products?range=${option.key}${tab ? `&tab=${tab}` : ""}`}
-                aria-current={option.key === key ? "page" : undefined}
-                className={
-                  option.key === key
-                    ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
-                    : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
-                }
-              >
-                {option.label}
-              </Link>
-            ))}
-          </nav>
-        }
+        actions={<PeriodSwitch basePath="/app/iq/products" options={RANGES} current={key} params={{ tab }} />}
       />
       <AnalyticsSectionNav current="products" canSeeCustomers={canSeeCustomers} />
 

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AnalyticsSectionNav } from "@/components/iq/analytics-section-nav";
+import { PeriodSwitch } from "@/components/iq/period-switch";
 import { BarList, DataTrust, KpiTile, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
 import { EmptyState } from "@/components/states";
@@ -49,22 +50,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         description={`Money out ${range.label.toLowerCase()}, as recorded. Direct costs move with sales and set food cost; fixed costs are the month's overheads.`}
         actions={
           <>
-            <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
-              {RANGES.map((option) => (
-                <Link
-                  key={option.key}
-                  href={`/app/iq/expenses?range=${option.key}`}
-                  aria-current={option.key === key ? "page" : undefined}
-                  className={
-                    option.key === key
-                      ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
-                      : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
-                  }
-                >
-                  {option.label}
-                </Link>
-              ))}
-            </nav>
+            <PeriodSwitch basePath="/app/iq/expenses" options={RANGES} current={key} />
             {canRecord && (
               <Button variant="inverse" asChild>
                 <Link href="/app/iq/expenses/new">Record expense</Link>

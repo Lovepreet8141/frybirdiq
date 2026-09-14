@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planSwap } from "./reorder";
+import { planMove, planSwap } from "./reorder";
 
 /** Rows named r0, r1, … in the order the database returned them, at the given stored positions. */
 const rows = (...positions: number[]) => positions.map((position, index) => ({ id: `r${index}`, position }));
@@ -48,5 +48,22 @@ describe("planSwap", () => {
   it("never touches a row that is already where it belongs", () => {
     const writes = planSwap(rows(0, 1, 2, 3), "r1", "down") ?? [];
     expect(writes.map((w) => w.id).sort()).toEqual(["r1", "r2"]);
+  });
+});
+
+describe("planMove", () => {
+  it("moves up by the number of rows crossed", () => {
+    expect(planMove(4, 1)).toEqual({ direction: "up", steps: 3 });
+    expect(planMove(1, 0)).toEqual({ direction: "up", steps: 1 });
+  });
+
+  it("moves down by the number of rows crossed", () => {
+    expect(planMove(0, 2)).toEqual({ direction: "down", steps: 2 });
+  });
+
+  it("does nothing for a drop in place or a bad index", () => {
+    expect(planMove(2, 2)).toBeNull();
+    expect(planMove(-1, 0)).toBeNull();
+    expect(planMove(1.5, 0)).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { AnalyticsSectionNav } from "@/components/iq/analytics-section-nav";
 import { ChannelChart } from "@/components/iq/channel-chart";
+import { PeriodSwitch } from "@/components/iq/period-switch";
 import { DataTrust, KpiTile, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
 import { EmptyState, PermissionDenied } from "@/components/states";
@@ -57,24 +57,7 @@ export default async function ChannelsPage({ searchParams }: { searchParams: Pro
       <PageHeader
         title="Channels"
         description={`Where revenue came from ${range.label.toLowerCase()}, each against ${previous} of the same length.`}
-        actions={
-          <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
-            {RANGES.map((option) => (
-              <Link
-                key={option.key}
-                href={`/app/iq/channels?range=${option.key}`}
-                aria-current={option.key === key ? "page" : undefined}
-                className={
-                  option.key === key
-                    ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
-                    : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
-                }
-              >
-                {option.label}
-              </Link>
-            ))}
-          </nav>
-        }
+        actions={<PeriodSwitch basePath="/app/iq/channels" options={RANGES} current={key} />}
       />
       <AnalyticsSectionNav current="channels" canSeeCustomers={canSeeCustomers} />
 

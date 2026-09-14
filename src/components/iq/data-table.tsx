@@ -1,14 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
   type ColumnDef,
+  type ExpandedState,
   type RowData,
   type SortingState,
   createColumnHelper,
+  createExpandedRowModel,
   createPaginatedRowModel,
   createSortedRowModel,
   flexRender,
+  rowExpandingFeature,
   rowPaginationFeature,
   rowSortingFeature,
   tableFeatures,
@@ -26,12 +29,18 @@ import { cn } from "@/lib/utils";
  * TanStack Table v9's own API. Callers own their toolbar: search and
  * filters narrow `data` before it arrives here, so every screen's filter
  * vocabulary stays its own while sorting and paging look identical.
+ *
+ * Expanding is the purchased `data-table2` pattern — a chevron column the
+ * caller adds with `expandColumn()`, and a full-width detail row rendered
+ * by `renderExpanded` beneath the row that opened it.
  */
 export const dataTableFeatures = tableFeatures({
   rowSortingFeature,
   rowPaginationFeature,
+  rowExpandingFeature,
   sortedRowModel: createSortedRowModel(),
   paginatedRowModel: createPaginatedRowModel(),
+  expandedRowModel: createExpandedRowModel(),
   columnMeta: {} as { align?: "right"; className?: string },
 });
 
@@ -42,6 +51,29 @@ export type DataTableColumn<T extends RowData> = ColumnDef<DataTableFeatures, T,
 
 export function dataColumns<T extends RowData>() {
   return createColumnHelper<DataTableFeatures, T>();
+}
+
+/** The `data-table2` expand chevron: first column, no header, rotates when the row is open. */
+export function expandColumn<T extends RowData>(): DataTableColumn<T> {
+  return dataColumns<T>().display({
+    id: "expand",
+    header: () => <span className="sr-only">Details</span>,
+    cell: ({ row }) => (
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        onClick={(event) => {
+          event.stopPropagation();
+          row.toggleExpanded();
+        }}
+        aria-expanded={row.getIsExpanded()}
+        aria-label={row.getIsExpanded() ? "Collapse row" : "Expand row"}
+      >
+        <ChevronRight className={cn("size-4 transition-transform duration-[120ms]", row.getIsExpanded() && "rotate-90")} aria-hidden="true" />
+      </Button>
+    ),
+    meta: { className: "w-10 pr-0" },
+  });
 }
 
 const PAGE_SIZES = [10, 20, 50] as const;
@@ -62,6 +94,7 @@ export function DataTable<T extends RowData>({
   totalCount,
   empty,
   onRowClick,
+  renderExpanded,
   className,
 }: {
   columns: readonly DataTableColumn<T>[];
@@ -76,15 +109,21 @@ export function DataTable<T extends RowData>({
   /** What to show when `data` is empty. */
   empty: React.ReactNode;
   onRowClick?: (row: T) => void;
+  /** With `expandColumn()` in `columns`: the detail row shown under an open row. Clicking a row toggles it when there is no `onRowClick`. */
+  renderExpanded?: (row: T) => React.ReactNode;
   className?: string;
 }) {
   const [sorting, setSorting] = useState<SortingState>(initialSorting);
+  const [expanded, setExpanded] = useState<ExpandedState>({});
   const table = useTable({
     features: dataTableFeatures,
     columns: [...columns],
     data,
-    state: { sorting },
+    getRowId: (row) => rowKey(row),
+    state: { sorting, expanded },
     onSortingChange: setSorting,
+    onExpandedChange: setExpanded,
+    getRowCanExpand: () => renderExpanded !== undefined,
     initialState: { pagination: { pageIndex: 0, pageSize } },
     autoResetPageIndex: true,
   });
@@ -132,34 +171,47 @@ export function DataTable<T extends RowData>({
               </TableCell>
             </TableRow>
           ) : (
-            table.getRowModel().rows.map((row) => (
-              <TableRow
-                key={rowKey(row.original)}
-                {...(onRowClick
-                  ? {
-                      tabIndex: 0,
-                      role: "button" as const,
-                      onClick: () => onRowClick(row.original),
-                      onKeyDown: (event: React.KeyboardEvent) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          onRowClick(row.original);
+            table.getRowModel().rows.map((row) => {
+              const activate = onRowClick ? () => onRowClick(row.original) : renderExpanded ? () => row.toggleExpanded() : undefined;
+              const open = renderExpanded !== undefined && row.getIsExpanded();
+              return (
+                <Fragment key={rowKey(row.original)}>
+                  <TableRow
+                    data-state={open ? "open" : undefined}
+                    {...(activate
+                      ? {
+                          tabIndex: 0,
+                          role: "button" as const,
+                          onClick: activate,
+                          onKeyDown: (event: React.KeyboardEvent) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              activate();
+                            }
+                          },
+                          className: cn("cursor-pointer focus-visible:bg-muted/60 focus-visible:outline-none", open && "bg-muted/40"),
                         }
-                      },
-                      className: "cursor-pointer focus-visible:bg-muted/60 focus-visible:outline-none",
-                    }
-                  : {})}
-              >
-                {row.getAllCells().map((cell) => {
-                  const meta = cell.column.columnDef.meta;
-                  return (
-                    <TableCell key={cell.id} className={cn(meta?.align === "right" && "text-right", meta?.className)}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </TableCell>
-                  );
-                })}
-              </TableRow>
-            ))
+                      : {})}
+                  >
+                    {row.getAllCells().map((cell) => {
+                      const meta = cell.column.columnDef.meta;
+                      return (
+                        <TableCell key={cell.id} className={cn(meta?.align === "right" && "text-right", meta?.className)}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </TableCell>
+                      );
+                    })}
+                  </TableRow>
+                  {open && renderExpanded && (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={columns.length} className="whitespace-normal bg-muted/50 p-0">
+                        {renderExpanded(row.original)}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </Fragment>
+              );
+            })
           )}
         </TableBody>
       </Table>

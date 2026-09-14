@@ -6,7 +6,9 @@ import { type ActionResult, addModifierAction, deleteModifierAction, moveModifie
 import { type Paise, formatINR, toRupeesFloat } from "@/lib/money";
 import { ReloadAppButton } from "@/components/reload-app-button";
 import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
+import { cn } from "@/lib/utils";
 import { ActionButton } from "./action-button";
+import { DragHandle, SortableList } from "./sortable-list";
 
 const IDLE: ActionResult = { ok: true };
 
@@ -91,23 +93,26 @@ export function ModifierList({ groupId, modifiers }: { groupId: string; modifier
   const action = (prev: ActionResult, formData: FormData) => recoverFromStaleDeployment(() => boundAction(prev, formData));
   const [state, formAction] = useActionState<ActionResult, FormData>(action, IDLE);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const byId = new Map(modifiers.map((modifier) => [modifier.id, modifier]));
 
   return (
     <div className="flex flex-col gap-3">
       {modifiers.length === 0 ? (
         <p className="text-sm text-muted-foreground">No options yet.</p>
       ) : (
-        <ul className="divide-y divide-border rounded-md border border-border">
-          {modifiers.map((modifier) =>
-            editingId === modifier.id ? (
-              <li key={modifier.id}>
-                <ModifierEditForm modifier={modifier} onDone={() => setEditingId(null)} />
-              </li>
+        <SortableList ids={modifiers.map((modifier) => modifier.id)} move={moveModifierPositionAction} disabled={editingId !== null} className="divide-y divide-border rounded-md border border-border">
+          {(id, _index, handle, dragging) => {
+            const modifier = byId.get(id)!;
+            return editingId === modifier.id ? (
+              <ModifierEditForm modifier={modifier} onDone={() => setEditingId(null)} />
             ) : (
-              <li key={modifier.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-                <span>
-                  {modifier.name}
-                  {!modifier.isAvailable && <span className="ml-2 text-xs font-semibold text-muted-foreground">Unavailable</span>}
+              <div className={cn("flex items-center justify-between gap-3 bg-surface px-2 py-2 text-sm", dragging && "rounded-md shadow-lg ring-1 ring-border")}>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <DragHandle handle={handle} label={modifier.name} />
+                  <span>
+                    {modifier.name}
+                    {!modifier.isAvailable && <span className="ml-2 text-xs font-semibold text-muted-foreground">Unavailable</span>}
+                  </span>
                 </span>
                 <span className="flex items-center gap-2">
                   <span className="tabular text-muted-foreground">
@@ -130,10 +135,10 @@ export function ModifierList({ groupId, modifiers }: { groupId: string; modifier
                     Remove
                   </ActionButton>
                 </span>
-              </li>
-            ),
-          )}
-        </ul>
+              </div>
+            );
+          }}
+        </SortableList>
       )}
 
       <form action={formAction} className="flex flex-wrap items-end gap-2 border-t border-border pt-3">

@@ -1,6 +1,7 @@
 "use client";
 
-import { Banknote, Loader2, Minus, Plus, Trash2 } from "lucide-react";
+import { Banknote, Loader2, Trash2 } from "lucide-react";
+import { QuantityStepper } from "./quantity-stepper";
 import { ORDER_CHANNELS, ORDER_CHANNEL_LABELS, type OrderChannel, fulfilmentsFor } from "@/domain/order-channel";
 import type { PriceDraftOk } from "@/lib/pos/actions";
 import { cn } from "@/lib/utils";
@@ -143,33 +144,11 @@ export function OrderBuilder({
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => onQuantityChange(line.key, line.quantity - 1)}
-                            disabled={line.quantity <= 1}
-                            className="flex size-[44px] touch-manipulation items-center justify-center rounded-md border border-border bg-panel transition-colors duration-[var(--duration-micro)] hover:border-border-strong active:bg-surface-muted disabled:opacity-40"
-                            aria-label={`One fewer ${line.name}`}
-                          >
-                            <Minus className="size-4" aria-hidden="true" />
-                          </button>
-                          <span className="tabular w-9 text-center text-[15px] font-semibold" aria-live="polite">
-                            {line.quantity}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => onQuantityChange(line.key, line.quantity + 1)}
-                            disabled={line.quantity >= 50}
-                            className="flex size-[44px] touch-manipulation items-center justify-center rounded-md border border-border bg-panel transition-colors duration-[var(--duration-micro)] hover:border-border-strong active:bg-surface-muted disabled:opacity-40"
-                            aria-label={`One more ${line.name}`}
-                          >
-                            <Plus className="size-4" aria-hidden="true" />
-                          </button>
-                        </div>
+                        <QuantityStepper value={line.quantity} name={line.name} onChange={(next) => onQuantityChange(line.key, next)} />
                         <button
                           type="button"
                           onClick={() => onRemove(line.key)}
-                          className="ml-auto flex size-[44px] touch-manipulation items-center justify-center rounded-md text-muted-foreground transition-colors duration-[var(--duration-micro)] hover:bg-muted hover:text-foreground active:bg-loss-soft active:text-loss"
+                          className="ml-auto flex size-[56px] touch-manipulation items-center justify-center rounded-md text-muted-foreground transition-colors duration-[var(--duration-micro)] hover:bg-muted hover:text-foreground active:bg-loss-soft active:text-loss"
                           aria-label={`Remove ${line.name}`}
                         >
                           <Trash2 className="size-4" aria-hidden="true" />

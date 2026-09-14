@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { CapturedChart } from "@/components/finance/captured-chart";
 import { PaymentsTable } from "@/components/finance/payments-table";
+import { PeriodSwitch } from "@/components/iq/period-switch";
 import { BarList, DataTrust, KpiTile, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
 import { PermissionDenied } from "@/components/states";
@@ -63,22 +64,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         description={`Every payment taken ${range.label.toLowerCase()}. Captured means the money arrived; it is not the revenue figure on Overview.`}
         actions={
           <>
-            <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
-              {RANGES.map((option) => (
-                <Link
-                  key={option.key}
-                  href={`/app/finance?range=${option.key}`}
-                  aria-current={option.key === key ? "page" : undefined}
-                  className={
-                    option.key === key
-                      ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
-                      : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
-                  }
-                >
-                  {option.label}
-                </Link>
-              ))}
-            </nav>
+            <PeriodSwitch basePath="/app/finance" options={RANGES} current={key} />
             {canSeeAnalytics && (
               <>
                 <Button variant="outline" asChild>

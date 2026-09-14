@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { CategoryAdminRow, ProductAdminRow } from "@/lib/repositories/menu-admin";
 import { moveCategoryAction, publishCategoryAction, setCategoryActiveAction } from "@/lib/menu-admin/actions";
+import { cn } from "@/lib/utils";
 import { ActionButton } from "./action-button";
 import { BulkActionBar } from "./bulk-action-bar";
 import { ProductAdminCard } from "./product-admin-card";
+import { DragHandle, SortableList } from "./sortable-list";
 
 /** The category rail's rows and the filter row share the kit's 36px controls. */
 const RAIL_ROW = "relative flex h-9 items-center justify-between rounded-lg px-2.5 text-left text-[13.5px] transition-colors duration-[120ms]";
@@ -41,6 +43,7 @@ export function MenuControlCenter({
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 
   const categoryOptions = useMemo(() => categories.map((c) => ({ id: c.id, name: c.name })), [categories]);
+  const categoryById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
 
   const normalisedSearch = search.trim().toLowerCase();
 
@@ -126,33 +129,39 @@ export function MenuControlCenter({
             <span className="tabular text-[12px] font-normal text-muted-foreground">{products.length}</span>
           </button>
 
-          {categories.map((category) => (
-            <div key={category.id} className="group flex items-center gap-0.5">
-              <button
-                type="button"
-                onClick={() => setSelectedCategory(category.id)}
-                aria-current={selectedCategory === category.id ? "true" : undefined}
-                className={`${RAIL_ROW} flex-1 ${selectedCategory === category.id ? RAIL_ACTIVE : RAIL_IDLE}`}
-              >
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="truncate">{category.name}</span>
-                  {category.status === "DRAFT" && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.06em] text-flag">Draft</span>}
-                  {!category.isActive && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Off</span>}
-                </span>
-                <span className="tabular shrink-0 text-[12px] font-normal text-muted-foreground">{category.productCount}</span>
-              </button>
-              {canEdit && (
-                <div className="hidden items-center group-hover:flex">
-                  <ActionButton action={() => moveCategoryAction(category.id, "up")} variant="ghost" className="!min-h-0 !px-1.5 !py-1 text-xs">
-                    ↑
-                  </ActionButton>
-                  <ActionButton action={() => moveCategoryAction(category.id, "down")} variant="ghost" className="!min-h-0 !px-1.5 !py-1 text-xs">
-                    ↓
-                  </ActionButton>
+          <SortableList ids={categories.map((category) => category.id)} move={moveCategoryAction} disabled={!canEdit} className="flex flex-col gap-0.5">
+            {(id, _index, handle, dragging) => {
+              const category = categoryById.get(id)!;
+              return (
+                <div className={cn("group flex items-center gap-0.5", dragging && "rounded-lg bg-panel shadow-lg ring-1 ring-border")}>
+                  {canEdit && <DragHandle handle={handle} label={category.name} className="size-7" />}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory(category.id)}
+                    aria-current={selectedCategory === category.id ? "true" : undefined}
+                    className={`${RAIL_ROW} flex-1 ${selectedCategory === category.id ? RAIL_ACTIVE : RAIL_IDLE}`}
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate">{category.name}</span>
+                      {category.status === "DRAFT" && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.06em] text-flag">Draft</span>}
+                      {!category.isActive && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Off</span>}
+                    </span>
+                    <span className="tabular shrink-0 text-[12px] font-normal text-muted-foreground">{category.productCount}</span>
+                  </button>
+                  {canEdit && (
+                    <div className="hidden items-center group-hover:flex">
+                      <ActionButton action={() => moveCategoryAction(category.id, "up")} variant="ghost" className="!min-h-0 !px-1.5 !py-1 text-xs">
+                        ↑
+                      </ActionButton>
+                      <ActionButton action={() => moveCategoryAction(category.id, "down")} variant="ghost" className="!min-h-0 !px-1.5 !py-1 text-xs">
+                        ↓
+                      </ActionButton>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          ))}
+              );
+            }}
+          </SortableList>
         </nav>
 
         {selectedCategory !== "all" && canEdit && (
