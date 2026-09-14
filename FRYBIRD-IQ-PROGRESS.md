@@ -7,6 +7,35 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Hardware — printer setup UX: browser vs FRYBIRD POS app, told apart honestly
+
+**Status:** Complete. Gates green (443 tests). Android debug build
+compiles (bridge 1.2.0). Deployed (see deployment record). Verified with
+two simulated situations — Chrome on the Redmi Pad, and the FRYBIRD POS
+app bridge — on the local build and on production. Physical POSIFLOW
+still untested.
+
+**What changed.** The Printers page and Add Printer now lead with the
+device: a browser shows "Chrome on Android — No printer bridge" and the
+plain explanation that Bluetooth/USB thermal printing needs the FRYBIRD
+POS app, with [Open FRYBIRD POS] (Android intent link to the installed
+app, falling back to the guide) and [Continue with Wi-Fi / LAN] — which
+saves the printer against the POS device that will print, and never
+claims Chrome can reach port 9100. The app shows "Redmi Pad — ✓ FRYBIRD
+POS ✓ Printer Bridge Available"; Bluetooth is enabled only when the
+bridge reports a radio, USB only when it reports support. Bluetooth
+selection asks the radio: off → [Turn On Bluetooth] via Android's own
+dialog (new bridge op `BT_ENABLE`); permission denied → [Allow Bluetooth
+access]; then Scan for Printers, the real list, Connect (pairing through
+Android; PIN never stored), and a connected card with Test Connection /
+Test Print before Default Printer / Auto Print and save. Devices list
+"Android POS · Online · Printer Bridge: ✓" or "Browser on Android ·
+Browser / No printer bridge"; the existing "Chrome on Android" row was
+left as it is. The app registers under the tablet's own device name as
+ANDROID / POS_TERMINAL.
+
+---
+
 ## Hardware — Bluetooth (SPP) transport for the POSIFLOW, added to the existing printer system
 
 **Status:** Complete for everything testable without the printer in the
@@ -1787,6 +1816,20 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-14 12:10 UTC — Printer setup UX (browser vs FRYBIRD POS app)
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from
+`kit-radix-nova` at `529b4f3`. Gates in-script green (443/443, RSC check
+OK). Post-deploy: `active`; smoke `HTTP 200`; signed-in production walk
+as Chrome on the Redmi Pad (gate, Open FRYBIRD POS intent link, LAN
+continue, Bluetooth/USB disabled) and as the simulated FRYBIRD POS
+bridge (Redmi Pad / Android POS / Printer Bridge ✓, Bluetooth off →
+Turn On → scan → KPC307-UEWB-A6FE → Connect → Test Connection → Test
+Print → save → Connected card), console clean; simulated rows removed,
+the real "Chrome on Android" device and its printer untouched.
+Sessions revoked, temp scripts deleted. APK (bridge 1.2.0) built
+locally, installed by hand.
 
 ### 2026-09-13 15:05 UTC — Bluetooth transport (no migration)
 
