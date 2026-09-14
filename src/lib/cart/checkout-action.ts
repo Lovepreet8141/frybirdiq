@@ -32,6 +32,8 @@ export async function submitCheckout(_previous: CheckoutState, formData: FormDat
     // Minted when the page rendered. A double-tap sends the same key twice and
     // the second returns the first order rather than creating another. §17.
     idempotencyKey: String(formData.get("idempotencyKey") ?? ""),
+    // "COD" or "ONLINE". The server checks it against what is actually offered.
+    payment: String(formData.get("payment") ?? "COD"),
   });
 
   if (!result.ok) {
@@ -59,5 +61,7 @@ export async function submitCheckout(_previous: CheckoutState, formData: FormDat
 
   await writeCart({ lines: [] });
   revalidatePath("/", "layout");
-  redirect(`/order/${result.orderId}`);
+  // An online order lands on its page with the payment window opening at
+  // once; closing it leaves the order waiting there with a Pay now button.
+  redirect(result.payment === "ONLINE" ? `/order/${result.orderId}?pay=1` : `/order/${result.orderId}`);
 }

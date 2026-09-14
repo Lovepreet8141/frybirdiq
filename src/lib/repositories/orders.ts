@@ -36,6 +36,7 @@ import { COUNTER_PLACED_STATUS } from "@/lib/pos/counter-placement";
 import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
 import { createPendingPayment, recordCashPayment } from "./payments";
+import { CASH_PROVIDER, RAZORPAY_PROVIDER, availableMethods, codAllowed, getProvider, type PaymentMethod } from "@/lib/payments";
 import { reverseStampForOrder } from "./loyalty";
 import { IdempotencyConflict, withIdempotency } from "./idempotency";
 
@@ -80,12 +81,14 @@ export const checkoutSchema = z.object({
    * one returns the first order instead of creating another. §17.
    */
   idempotencyKey: z.string().uuid(),
+  /** How the customer pays: online now (Razorpay) or on collection / at the door. Roadmap 1.2. */
+  payment: z.enum(["COD", "ONLINE"]).default("COD"),
 });
 
 export type CheckoutInput = z.infer<typeof checkoutSchema>;
 
 export type PlaceOrderResult =
-  | { ok: true; orderId: string; orderNumber: string }
+  | { ok: true; orderId: string; orderNumber: string; payment: "COD" | "ONLINE" }
   | { ok: false; error: string; fieldErrors?: Record<string, string> };
 
 /**
@@ -256,6 +259,32 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   // discounted total, less any points spent.
   const payable = subtract(totals.gross, cart.points?.discount ?? ZERO);
 
+  /*
+   * How it is paid. The list of methods is the server's (keys present or
+   * not); the choice is the customer's; the COD cap is the shop's. A
+   * Razorpay Order is created before the order row exists so a gateway
+   * failure leaves nothing half-written — the receipt is the checkout's own
+   * idempotency key, and the pending payment row links it to the order.
+   */
+  const methods = availableMethods();
+  const onlineAvailable = methods.some((method) => method.choice === "ONLINE");
+  let payment: { provider: string; method: PaymentMethod; providerOrderId: string | null };
+  if (details.payment === "ONLINE") {
+    if (!onlineAvailable) {
+      return { ok: false, error: "Online payment isn't available right now. Choose pay on collection.", fieldErrors: { payment: "Not available right now." } };
+    }
+    try {
+      const intent = await getProvider(RAZORPAY_PROVIDER).createIntent({ orderId: details.idempotencyKey, amount: payable, method: "UPI" });
+      payment = { provider: RAZORPAY_PROVIDER, method: "UPI", providerOrderId: intent.providerOrderId };
+    } catch (error) {
+      return { ok: false, error: `We couldn't start the payment (${error instanceof Error ? error.message : "gateway error"}). Nothing has been charged — try again, or choose pay on collection.` };
+    }
+  } else {
+    const cod = codAllowed(payable, onlineAvailable);
+    if (!cod.ok) return { ok: false, error: cod.reason, fieldErrors: { payment: cod.reason } };
+    payment = { provider: CASH_PROVIDER, method: "CASH", providerOrderId: null };
+  }
+
   try {
     const { result } = await withIdempotency(
       {
@@ -341,6 +370,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     lines: cart.lines,
     totals,
     payable,
+    payment,
     actorUserId: null,
     eventReason: `Placed on the website for ${fulfilment === "DELIVERY" ? "delivery" : "collection"}`,
     extra: {
@@ -434,7 +464,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     await countPromotionUse(orgId, cart.promotion.code);
   }
 
-  return { ok: true, orderId: order.id, orderNumber };
+  return { ok: true, orderId: order.id, orderNumber, payment: details.payment };
   }
 }
 
@@ -457,6 +487,8 @@ export interface PersistOrderInput {
   readonly totals: PricedOrder;
   /** What is actually charged — the pending payment row is opened for this. */
   readonly payable: Paise;
+  /** How it will be paid. A provider-side order id when the caller already made one. */
+  readonly payment: { readonly provider: string; readonly method: PaymentMethod; readonly providerOrderId: string | null };
   /** The member of staff who rang it up; null for a customer on the website. */
   readonly actorUserId: string | null;
   readonly eventReason: string;
@@ -565,7 +597,14 @@ export async function persistOrder(input: PersistOrderInput): Promise<PersistOrd
 
   // What the order is waiting on, recorded now so the till has a row to
   // settle against rather than an implicit expectation.
-  await createPendingPayment({ orgId: input.orgId, orderId: order.id, amount: input.payable });
+  await createPendingPayment({
+    orgId: input.orgId,
+    orderId: order.id,
+    amount: input.payable,
+    provider: input.payment.provider,
+    method: input.payment.method,
+    providerOrderId: input.payment.providerOrderId,
+  });
 
   return { ok: true, order };
 }
@@ -659,6 +698,7 @@ export async function placeCounterOrder(input: CounterOrderInput): Promise<Count
           lines: draft.lines,
           totals: draft.totals,
           payable: total,
+          payment: { provider: CASH_PROVIDER, method: "CASH", providerOrderId: null },
           actorUserId: input.actorUserId,
           eventReason: `Rung up at the counter — ${input.channel === "DINE_IN" ? (tableName ? `dine-in, ${tableName}` : "dine-in") : "takeaway"}`,
         });
@@ -717,6 +757,18 @@ export interface OrderView {
   readonly stampEarned: boolean;
   /** What FRYBIRD REWARDS took off this order, if it redeemed a free item. */
   readonly stampRewardDiscount: bigint;
+  /** The payment the order is waiting on or was settled by — the latest row. Null only for an order with no payment row at all. */
+  readonly payment: {
+    readonly provider: string;
+    readonly method: PaymentMethod;
+    readonly status: "PENDING" | "AUTHORIZED" | "CAPTURED" | "FAILED" | "REFUNDED" | "PARTIALLY_REFUNDED";
+    readonly amount: bigint;
+    readonly providerOrderId: string | null;
+    readonly failureReason: string | null;
+  } | null;
+  /** For the payment window's prefill. */
+  readonly customerPhone: string | null;
+  readonly customerEmail: string | null;
 }
 
 export async function getOrder(id: string): Promise<OrderView | null> {
@@ -740,6 +792,15 @@ export async function getOrder(id: string): Promise<OrderView | null> {
     .where(and(eq(loyaltyStampEvents.orderId, id), isNull(loyaltyStampEvents.reversedAt)))
     .limit(1);
 
+  // Captured beats pending: once money has arrived that is the payment,
+  // whatever other attempts were opened along the way.
+  const paymentRows = await database.select().from(payments).where(eq(payments.orderId, id)).orderBy(desc(payments.createdAt));
+  const paymentRow = paymentRows.find((row) => row.status === "CAPTURED") ?? paymentRows[0] ?? null;
+
+  const [customerRow] = order.customerId
+    ? await database.select({ email: customers.email }).from(customers).where(eq(customers.id, order.customerId)).limit(1)
+    : [];
+
   return {
     id: order.id,
     orderNumber: order.orderNumber,
@@ -747,6 +808,18 @@ export async function getOrder(id: string): Promise<OrderView | null> {
     fulfilment: order.fulfilment,
     invoiceNumber: order.invoiceNumber,
     customerName: order.customerName,
+    customerPhone: order.customerPhone,
+    customerEmail: customerRow?.email ?? null,
+    payment: paymentRow
+      ? {
+          provider: paymentRow.provider,
+          method: paymentRow.method,
+          status: paymentRow.status,
+          amount: paymentRow.amount,
+          providerOrderId: paymentRow.providerOrderId,
+          failureReason: paymentRow.failureReason,
+        }
+      : null,
     readyEta: order.estimatedReadyAt
       ? { at: order.estimatedReadyAt, passed: order.estimatedReadyAt.getTime() <= Date.now() }
       : null,

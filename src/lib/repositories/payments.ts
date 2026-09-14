@@ -4,11 +4,16 @@ import "server-only";
  * Taking payment.
  *
  * The service layer between an order and a `PaymentProvider`. It owns the
- * consequences — the order's status, the audit trail — and the provider owns
- * only the movement of money. §32's shape, applied to payments.
+ * consequences — the order's status, the invoice number, the rewards, the
+ * audit trail — and the provider owns only the movement of money. §32's
+ * shape, applied to payments.
+ *
+ * One settlement core (`settle`) serves cash at the counter and Razorpay
+ * online; the two entry points below differ only in who is allowed to call
+ * them and in how the provider is asked to capture. Roadmap 1.1–1.3.
  */
 
-import { and, eq, like, sql } from "drizzle-orm";
+import { and, desc, eq, like, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, loyaltyAccounts, loyaltyTransactions, orderEvents, orders, payments } from "@/db/schema";
 import { type Role, authorize } from "@/domain/permissions";
@@ -17,29 +22,48 @@ import { pointsEarned } from "@/lib/loyalty";
 import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
 import { awardStampForOrder, qualifyingStampSpend, redeemStampReward } from "./loyalty";
 import { financialYear, invoiceNumber, parseInvoiceNumber } from "@/lib/invoice";
-import { CASH_PROVIDER, getProvider } from "@/lib/payments";
+import { CASH_PROVIDER, type PaymentMethod, type PaymentResult, RAZORPAY_PROVIDER, getProvider } from "@/lib/payments";
 import { withIdempotency } from "./idempotency";
 
 export type RecordPaymentResult =
   | { ok: true; paymentId: string; replayed: boolean }
   | { ok: false; error: string };
 
+const METHOD_WORD: Record<PaymentMethod, string> = {
+  CASH: "Cash",
+  UPI: "UPI",
+  CARD: "Card",
+  NETBANKING: "Net banking",
+  WALLET: "Wallet",
+  OTHER: "Online",
+};
+
 /**
  * Creates the pending payment that a new order is waiting on.
  *
  * Called as part of placing the order. Without this an order sits in
  * PENDING_PAYMENT with nothing recording what it is waiting for, and the
- * counter has no row to settle against.
+ * counter has no row to settle against. When the caller has already made the
+ * provider-side order (Razorpay, before the order row existed), it passes the
+ * reference in and no second one is created.
  */
 export async function createPendingPayment(input: {
   orgId: string;
   orderId: string;
   amount: Paise;
   provider?: string;
-}): Promise<string | null> {
+  method?: PaymentMethod;
+  providerOrderId?: string | null;
+}): Promise<{ id: string | null; providerOrderId: string | null }> {
   const providerName = input.provider ?? CASH_PROVIDER;
-  const provider = getProvider(providerName);
-  const intent = await provider.createIntent({ orderId: input.orderId, amount: input.amount, method: "CASH" });
+  const method = input.method ?? "CASH";
+  let providerOrderId = input.providerOrderId ?? null;
+
+  if (input.providerOrderId === undefined) {
+    const provider = getProvider(providerName);
+    const intent = await provider.createIntent({ orderId: input.orderId, amount: input.amount, method });
+    providerOrderId = intent.providerOrderId;
+  }
 
   const [row] = await db()
     .insert(payments)
@@ -47,14 +71,14 @@ export async function createPendingPayment(input: {
       orgId: input.orgId,
       orderId: input.orderId,
       status: "PENDING",
-      method: intent.method,
-      amount: intent.amount,
+      method,
+      amount: input.amount,
       provider: providerName,
-      providerOrderId: intent.providerOrderId,
+      providerOrderId,
     })
     .returning();
 
-  return row?.id ?? null;
+  return { id: row?.id ?? null, providerOrderId };
 }
 
 /** Whether money has actually been captured against an order — answered by the payments table, never by the status. */
@@ -68,11 +92,12 @@ export async function isOrderPaid(orderId: string): Promise<boolean> {
 }
 
 /**
- * Records cash taken at the counter and moves the order to PAID.
+ * Records cash taken at the counter (or at the door) and moves the order to
+ * PAID when it was waiting on payment.
  *
- * Needs `orders.refund`-adjacent trust: taking money is a cashier's job, so
- * `orders.update` is the permission. The actor is recorded because cash is the
- * one method with no external trail — see the note in payments/cash.ts.
+ * Taking money is a cashier's job, so `orders.update` is the permission. The
+ * actor is recorded because cash is the one method with no external trail —
+ * see the note in payments/cash.ts.
  *
  * Idempotent on the order: pressing "taken" twice does not book the money
  * twice, and the second press reports that it was already settled rather than
@@ -91,16 +116,140 @@ export async function recordCashPayment(input: {
     return { ok: false, error: "You don't have permission to take payment." };
   }
 
+  return settle({
+    orderId: input.orderId,
+    provider: CASH_PROVIDER,
+    actorUserId: input.actorUserId,
+    idempotencyKey: (order) => `cash-payment:${order.id}`,
+    // The server decides what is owed. Nothing passes an amount in.
+    amountDue: (order) => paise(order.grandTotal),
+    capture: (order, amount) =>
+      getProvider(CASH_PROVIDER).capture({ orderId: order.id, amount, actorUserId: input.actorUserId, tendered: input.tendered }),
+    methodFor: () => "CASH",
+    reasonFor: (amount) => `Cash received — ${formatINR(amount)}`,
+  });
+}
+
+/**
+ * Records a Razorpay payment the customer just made, or that Razorpay's
+ * webhook reports. No staff actor: the customer paid, the gateway confirms.
+ *
+ * Idempotent on the Razorpay payment id, which is also unique on the
+ * payments table — the Checkout handler and the webhook both arrive for the
+ * same payment and exactly one row results. The amount due is what the
+ * pending payment was opened for (the fee-inclusive, discounted, points-net
+ * figure the Razorpay Order was created with), and the provider refuses a
+ * capture that does not match it.
+ */
+export async function recordOnlinePayment(input: {
+  orderId: string;
+  providerPaymentId: string;
+  /** From Checkout; omitted for a webhook, where the provider verifies by fetching the payment instead. */
+  providerOrderId?: string;
+  signature?: string;
+}): Promise<RecordPaymentResult> {
   const database = db();
-  const [order] = await database.select().from(orders).where(eq(orders.id, input.orderId)).limit(1);
+  const [pending] = await database
+    .select()
+    .from(payments)
+    .where(and(eq(payments.orderId, input.orderId), eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.status, "PENDING")))
+    .orderBy(desc(payments.createdAt))
+    .limit(1);
+
+  const providerOrderId = input.providerOrderId ?? pending?.providerOrderId ?? undefined;
+
+  const result = await settle({
+    orderId: input.orderId,
+    provider: RAZORPAY_PROVIDER,
+    actorUserId: null,
+    idempotencyKey: () => `razorpay-payment:${input.providerPaymentId}`,
+    amountDue: (order) => (pending ? paise(pending.amount) : paise(order.grandTotal)),
+    capture: (order, amount) =>
+      getProvider(RAZORPAY_PROVIDER).capture({
+        orderId: order.id,
+        amount,
+        actorUserId: null,
+        providerPaymentId: input.providerPaymentId,
+        providerOrderId,
+        signature: input.signature,
+      }),
+    providerPaymentId: input.providerPaymentId,
+    providerOrderId: providerOrderId ?? null,
+    methodFor: (captured) => (typeof captured.payload?.method === "string" ? (captured.payload.method as PaymentMethod) : "OTHER"),
+    reasonFor: (amount, method) => `Paid online (${METHOD_WORD[method]}) — ${formatINR(amount)}`,
+  });
+
+  // A refused capture is recorded on the pending row so the order page can say
+  // "payment failed — retry" rather than sitting on a spinner. The order stays
+  // PENDING_PAYMENT; nothing here can move it to PAID.
+  if (!result.ok && pending) {
+    await database
+      .update(payments)
+      .set({ failureReason: result.error, updatedAt: new Date() })
+      .where(and(eq(payments.id, pending.id), eq(payments.status, "PENDING")));
+  }
+  return result;
+}
+
+/** Notes a failure Razorpay reported (Checkout's payment.failed, or the webhook) against the pending payment, without touching the order. */
+export async function markOnlinePaymentFailed(input: { orderId: string; reason: string }): Promise<void> {
+  const database = db();
+  const [pending] = await database
+    .select({ id: payments.id })
+    .from(payments)
+    .where(and(eq(payments.orderId, input.orderId), eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.status, "PENDING")))
+    .orderBy(desc(payments.createdAt))
+    .limit(1);
+  if (!pending) return;
+  await database
+    .update(payments)
+    .set({ failureReason: input.reason.slice(0, 250), updatedAt: new Date() })
+    .where(eq(payments.id, pending.id));
+}
+
+/* ------------------------------------------------------------------ */
+/* The settlement core                                                 */
+/* ------------------------------------------------------------------ */
+
+type OrderRow = typeof orders.$inferSelect;
+
+interface Settlement {
+  readonly orderId: string;
+  readonly provider: string;
+  readonly actorUserId: string | null;
+  readonly idempotencyKey: (order: OrderRow) => string;
+  readonly amountDue: (order: OrderRow) => Paise;
+  readonly capture: (order: OrderRow, amount: Paise) => Promise<PaymentResult>;
+  readonly methodFor: (captured: PaymentResult) => PaymentMethod;
+  readonly reasonFor: (amount: Paise, method: PaymentMethod) => string;
+  readonly providerPaymentId?: string;
+  readonly providerOrderId?: string | null;
+}
+
+async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
+  const database = db();
+  const [order] = await database.select().from(orders).where(eq(orders.id, settlement.orderId)).limit(1);
   if (!order) return { ok: false, error: "That order does not exist." };
 
+  // Already settled. For a gateway, the same payment id arriving twice (the
+  // Checkout handler and then the webhook) is the normal case and is success;
+  // anything else against a paid order is refused.
+  const [captured] = await database
+    .select({ id: payments.id, providerPaymentId: payments.providerPaymentId })
+    .from(payments)
+    .where(and(eq(payments.orderId, order.id), eq(payments.status, "CAPTURED")))
+    .limit(1);
+  if (captured) {
+    if (settlement.providerPaymentId && captured.providerPaymentId === settlement.providerPaymentId) {
+      return { ok: true, paymentId: captured.id, replayed: true };
+    }
+    return { ok: false, error: "That order has already been paid." };
+  }
   if (order.status === "PAID" || order.status === "COMPLETED") {
     return { ok: false, error: "That order has already been paid." };
   }
 
-  // The server decides what is owed. Nothing passes an amount in.
-  const amount = paise(order.grandTotal);
+  const amount = settlement.amountDue(order);
 
   /*
    * Recording a payment is not a status transition.
@@ -119,26 +268,24 @@ export async function recordCashPayment(input: {
 
   const { result, replayed } = await withIdempotency(
     {
-      key: `cash-payment:${order.id}`,
-      operation: "recordCashPayment",
+      key: settlement.idempotencyKey(order),
+      operation: "recordPayment",
       orgId: order.orgId,
-      request: { orderId: order.id, amount: amount.toString() },
+      request: { orderId: order.id, amount: amount.toString(), provider: settlement.provider, providerPaymentId: settlement.providerPaymentId ?? null },
     },
     async () => {
-      const provider = getProvider(CASH_PROVIDER);
-      const captured = await provider.capture({
-        orderId: order.id,
-        amount,
-        actorUserId: input.actorUserId,
-        tendered: input.tendered,
-      });
+      const capturedResult = await settlement.capture(order, amount);
+      if (!capturedResult.ok) return { ok: false as const, error: capturedResult.error ?? "The payment could not be recorded." };
 
-      if (!captured.ok) return { ok: false as const, error: captured.error ?? "The payment could not be recorded." };
+      const method = settlement.methodFor(capturedResult);
+      const feeAmount = typeof capturedResult.payload?.fee === "number" ? paise(capturedResult.payload.fee) : paise(0);
+      const now = new Date();
 
       const [existing] = await database
         .select()
         .from(payments)
-        .where(and(eq(payments.orderId, order.id), eq(payments.status, "PENDING")))
+        .where(and(eq(payments.orderId, order.id), eq(payments.provider, settlement.provider), eq(payments.status, "PENDING")))
+        .orderBy(desc(payments.createdAt))
         .limit(1);
 
       const paymentId = existing
@@ -147,9 +294,15 @@ export async function recordCashPayment(input: {
               .update(payments)
               .set({
                 status: "CAPTURED",
-                capturedAt: new Date(),
-                providerPayload: captured.payload,
-                updatedAt: new Date(),
+                method,
+                amount: capturedResult.capturedAmount,
+                feeAmount,
+                capturedAt: now,
+                providerPaymentId: capturedResult.providerPaymentId ?? existing.providerPaymentId,
+                providerOrderId: settlement.providerOrderId ?? existing.providerOrderId,
+                providerPayload: capturedResult.payload,
+                failureReason: null,
+                updatedAt: now,
               })
               .where(eq(payments.id, existing.id))
               .returning()
@@ -161,11 +314,14 @@ export async function recordCashPayment(input: {
                 orgId: order.orgId,
                 orderId: order.id,
                 status: "CAPTURED",
-                method: "CASH",
-                amount,
-                provider: CASH_PROVIDER,
-                capturedAt: new Date(),
-                providerPayload: captured.payload,
+                method,
+                amount: capturedResult.capturedAmount,
+                feeAmount,
+                provider: settlement.provider,
+                providerPaymentId: capturedResult.providerPaymentId,
+                providerOrderId: settlement.providerOrderId ?? null,
+                capturedAt: now,
+                providerPayload: capturedResult.payload,
               })
               .returning()
           )[0]?.id;
@@ -184,7 +340,7 @@ export async function recordCashPayment(input: {
        * constraint on (org_id, invoice_number) turns that into a failed write
        * rather than a duplicate invoice, and one counter serves one queue.
        */
-      const issuedAt = new Date();
+      const issuedAt = now;
       const year = financialYear(issuedAt);
       const issuedThisYear = await database
         .select({ invoiceNumber: orders.invoiceNumber })
@@ -291,20 +447,26 @@ export async function recordCashPayment(input: {
         orderId: order.id,
         fromStatus: order.status,
         toStatus: movesToPaid ? "PAID" : order.status,
-        actorUserId: input.actorUserId,
-        reason: `Cash received — ${formatINR(amount)}`,
+        actorUserId: settlement.actorUserId,
+        reason: settlement.reasonFor(capturedResult.capturedAmount, method),
       });
 
       // §52: money changing hands is a critical operation.
       await database.insert(auditLogs).values({
         orgId: order.orgId,
         locationId: order.locationId,
-        actorUserId: input.actorUserId,
+        actorUserId: settlement.actorUserId,
         action: "payment_captured",
         entity: "orders",
         entityId: order.id,
         before: { status: order.status },
-        after: { status: "PAID", method: "CASH", amount: amount.toString() },
+        after: {
+          status: movesToPaid ? "PAID" : order.status,
+          method,
+          provider: settlement.provider,
+          amount: capturedResult.capturedAmount.toString(),
+          providerPaymentId: capturedResult.providerPaymentId,
+        },
       });
 
       return { ok: true as const, paymentId: paymentId ?? "" };

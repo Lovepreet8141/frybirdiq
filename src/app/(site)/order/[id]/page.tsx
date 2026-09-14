@@ -7,6 +7,8 @@ import { type Paise, paise } from "@/lib/money";
 import { getOrder } from "@/lib/repositories/orders";
 import { getRating } from "@/lib/ratings";
 import { OrderRating } from "@/components/order/rating";
+import { PayOnline } from "@/components/order/pay-online";
+import { RAZORPAY_PROVIDER, razorpayConfig } from "@/lib/payments";
 import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
 
 export const metadata: Metadata = { title: "Your order" };
@@ -57,10 +59,21 @@ function stepsFor(fulfilment: FulfilmentType) {
   ] as const;
 }
 
-export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+export default async function OrderPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ pay?: string }> }) {
+  const [{ id }, { pay }] = await Promise.all([params, searchParams]);
   const order = await getOrder(id);
   if (!order) notFound();
+
+  /*
+   * Online payment states. Roadmap 1.5: a pending Razorpay payment shows the
+   * payment window (opening at once straight after checkout); a captured one
+   * says "Paid"; a failed attempt says so and offers a retry. The order's own
+   * status never changes from this page — only the server's settlement does.
+   */
+  const online = order.payment?.provider === RAZORPAY_PROVIDER ? order.payment : null;
+  const paidOnline = online?.status === "CAPTURED";
+  const awaitingOnline = online !== null && online.status === "PENDING" && order.status === "PENDING_PAYMENT";
+  const razorpay = awaitingOnline ? razorpayConfig() : null;
 
   // Only fetched for a finished order — nothing else can carry a rating.
   const rating = order.status === "COMPLETED" ? await getRating(order.id) : null;
@@ -92,8 +105,31 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
       </h1>
       <p className="mt-3 text-lg leading-relaxed text-muted-foreground">
         Thanks{order.customerName ? `, ${order.customerName}` : ""}.{" "}
-        {isDelivery ? "We'll call when it's on its way." : "We'll call when it's ready to collect."}
+        {awaitingOnline
+          ? "Pay below and the kitchen gets your order straight away."
+          : isDelivery
+            ? "We'll call when it's on its way."
+            : "We'll call when it's ready to collect."}
       </p>
+
+      {awaitingOnline && online && razorpay && online.providerOrderId && (
+        <PayOnline
+          orderId={order.id}
+          orderNumber={order.orderNumber}
+          keyId={razorpay.keyId}
+          providerOrderId={online.providerOrderId}
+          amountPaise={Number(online.amount)}
+          amountLabel={formatINR(paise(online.amount))}
+          prefill={{ name: order.customerName, email: order.customerEmail, contact: order.customerPhone }}
+          autoOpen={pay === "1"}
+          failureReason={online.failureReason}
+        />
+      )}
+      {awaitingOnline && (!razorpay || !online?.providerOrderId) && (
+        <p role="alert" className="mt-6 rounded-lg border border-border bg-surface px-4 py-3 text-sm">
+          Online payment isn&rsquo;t available right now. Call the shop and we&rsquo;ll take payment on collection.
+        </p>
+      )}
 
       {/*
         When the kitchen said it would be ready.
@@ -163,11 +199,17 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
 
         <div className="mt-4 flex items-baseline justify-between gap-4">
           <span className="font-heading text-lg font-semibold">
-            {isDelivery ? "To pay on delivery" : "To pay at the counter"}
+            {paidOnline ? "Paid online" : awaitingOnline ? "To pay now" : isDelivery ? "To pay on delivery" : "To pay at the counter"}
           </span>
           <span className="tabular text-2xl font-bold">{formatINR(order.grandTotal as Paise)}</span>
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">Cash, UPI or card.</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {paidOnline
+            ? `${online?.method === "UPI" ? "UPI" : online?.method === "CARD" ? "Card" : online?.method === "NETBANKING" ? "Net banking" : online?.method === "WALLET" ? "Wallet" : "Online"} · received, thank you.`
+            : awaitingOnline
+              ? "UPI, card, net banking or wallet."
+              : "Cash, UPI or card."}
+        </p>
       </section>
 
       {/*

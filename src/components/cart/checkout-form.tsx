@@ -2,13 +2,14 @@
 
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
-import { Bike, Loader2, Store } from "lucide-react";
+import { Bike, CreditCard, Loader2, Store, Wallet } from "lucide-react";
 import { type CheckoutState, submitCheckout } from "@/lib/cart/checkout-action";
 import { DeliveryFields, type SavedAddressOption } from "@/components/delivery/delivery-fields";
 import type { Point } from "@/components/delivery/map";
+import type { CheckoutMethod } from "@/lib/payments";
 import { cn } from "@/lib/utils";
 
-function SubmitButton() {
+function SubmitButton({ label }: { label: string }) {
   const { pending } = useFormStatus();
   return (
     <button
@@ -22,7 +23,7 @@ function SubmitButton() {
           Placing your order
         </>
       ) : (
-        "Place order"
+        label
       )}
     </button>
   );
@@ -46,6 +47,7 @@ export function CheckoutForm({
   contact,
   fromAccount,
   extras,
+  methods,
 }: {
   idempotencyKey: string;
   /** Where the outlet is. Null when it has not been placed on the map. */
@@ -59,7 +61,10 @@ export function CheckoutForm({
   fromAccount: boolean;
   /** Code, points and note — rendered by the page, kept out of this form's job. */
   extras: React.ReactNode;
+  /** What the server offers, online first when a gateway is set up. */
+  methods: readonly CheckoutMethod[];
 }) {
+  const [payment, setPayment] = useState<"COD" | "ONLINE">(methods[0]?.choice ?? "COD");
   const [fulfilment, setFulfilment] = useState<"TAKEAWAY" | "DELIVERY">("TAKEAWAY");
   /*
    * Someone we already know is not asked again.
@@ -76,6 +81,7 @@ export function CheckoutForm({
     <form action={action} className="flex flex-col gap-5">
       <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
       <input type="hidden" name="fulfilment" value={fulfilment} />
+      <input type="hidden" name="payment" value={payment} />
 
       {/*
         Collection or delivery. Rendered as a choice only when delivery is
@@ -244,9 +250,46 @@ export function CheckoutForm({
         </span>
       </label>
 
+      {/*
+        How to pay. A choice only when there is one — with cash alone the
+        page says so as a line, not a fieldset. Online first: it is what the
+        counter would rather have, and what the COD cap steers big orders to.
+      */}
+      {methods.length > 1 && (
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-2 text-sm font-semibold">How will you pay?</legend>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {methods.map((option) => {
+              const Icon = option.choice === "ONLINE" ? CreditCard : Wallet;
+              return (
+                <label
+                  key={option.choice}
+                  className={cn(
+                    "flex min-h-[56px] cursor-pointer items-center gap-3 rounded-md border px-4 py-3 transition-colors duration-[var(--duration-micro)]",
+                    payment === option.choice ? "border-primary bg-primary/10" : "border-border bg-surface hover:border-border-strong",
+                  )}
+                >
+                  <input type="radio" name="paymentChoice" value={option.choice} checked={payment === option.choice} onChange={() => setPayment(option.choice)} className="size-4 accent-[var(--primary)]" />
+                  <Icon className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                  <span className="flex flex-col">
+                    <span className="font-semibold">{option.label}</span>
+                    <span className="text-sm text-muted-foreground">{option.detail}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          {fieldErrors.payment && (
+            <p role="alert" className="text-sm text-foreground">
+              {fieldErrors.payment}
+            </p>
+          )}
+        </fieldset>
+      )}
+
       {extras}
 
-      <SubmitButton />
+      <SubmitButton label={payment === "ONLINE" ? "Continue to payment" : "Place order"} />
     </form>
   );
 }

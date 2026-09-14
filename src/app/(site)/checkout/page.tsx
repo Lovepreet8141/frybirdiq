@@ -92,6 +92,7 @@ export default async function CheckoutPage() {
           savedAddresses={savedAddresses}
           contact={contact}
           fromAccount={Boolean(customer)}
+          methods={methods}
           extras={
             <CheckoutExtras
               promotion={cart.promotion ? { code: cart.promotion.code, name: cart.promotion.name } : null}
@@ -112,12 +113,14 @@ export default async function CheckoutPage() {
         <div className="flex flex-col gap-3 lg:sticky lg:top-24">
           <OrderSummary cart={cart} />
 
-          {/* Payment, as a line rather than a section. There is one option;
-              giving it a heading and a card made it look like a choice. */}
+          {/* Payment, as a line rather than a section. With one option a
+              heading and a card made it look like a choice; with two the form
+              asks, and this line only says when money moves. */}
           <p className="flex items-start gap-2 px-1 text-sm text-muted-foreground">
             <Wallet className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
-            {methods[0]?.label ?? "Pay on collection"} — {methods[0]?.detail ?? "at the counter."} Nothing is charged
-            now.
+            {methods.length > 1
+              ? "Paying now opens a secure Razorpay window after you continue. Paying on collection charges nothing now."
+              : `${methods[0]?.label ?? "Pay on collection"} — ${methods[0]?.detail ?? "at the counter."} Nothing is charged now.`}
           </p>
         </div>
       </div>
