@@ -10,7 +10,7 @@
  * screen — no order is created, nothing is recorded.
  */
 
-import { useState, useTransition } from "react";
+import { type ReactNode, useState, useTransition } from "react";
 import { Check as CheckIcon, ChevronDown, ChevronUp, Eye, EyeOff, GripVertical, Loader2, Plus, Printer, RotateCcw, Save, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -30,6 +30,8 @@ export interface DesignerProps {
   /** ISO strings — the page serialises the repository's dates. */
   readonly draftUpdatedAt: string | null;
   readonly appliedAt: string | null;
+  /** The Admin section strip, rendered under the header so this screen sits beside the others. */
+  readonly sectionNav?: ReactNode;
 }
 
 type Status = { tone: "ok" | "error" | "info"; text: string } | null;
@@ -179,6 +181,7 @@ export function ReceiptDesigner(props: DesignerProps) {
           </div>
         }
       />
+      {props.sectionNav}
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">

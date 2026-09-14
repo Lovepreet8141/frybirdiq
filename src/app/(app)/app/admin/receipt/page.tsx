@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { ReceiptDesigner } from "@/components/receipt/designer";
+import { AdminSectionNav } from "@/components/staff/admin-section-nav";
 import { PermissionDenied } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
+import { adminNavAccess } from "@/lib/auth/admin-access";
 import { getReceiptDesign } from "@/lib/repositories/receipt";
 
 export const metadata: Metadata = { title: "Bill & Receipt", robots: { index: false, follow: false } };
@@ -23,7 +25,7 @@ export default async function ReceiptDesignerPage() {
     );
   }
 
-  const design = await getReceiptDesign(staff.orgId);
+  const [design, access] = await Promise.all([getReceiptDesign(staff.orgId), adminNavAccess()]);
   return (
     <ReceiptDesigner
       draft={design.draft}
@@ -31,6 +33,7 @@ export default async function ReceiptDesignerPage() {
       hasPrevious={design.previous !== null}
       draftUpdatedAt={design.draftUpdatedAt?.toISOString() ?? null}
       appliedAt={design.appliedAt?.toISOString() ?? null}
+      sectionNav={<AdminSectionNav current="receipt" access={access} />}
     />
   );
 }

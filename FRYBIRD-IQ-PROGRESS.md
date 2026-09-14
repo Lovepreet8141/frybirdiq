@@ -7,6 +7,68 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Batch: Menu + Analytics + Admin + Command Center — slice 3 of 4: Admin
+
+**Status:** Complete on `kit-radix-nova`, gates green (typecheck, lint,
+475/475, RSC check, build). **Not deployed.** UI only: no settings
+write, no new notification channel, no change to hardware or receipt
+actions; every gate is the one that was there.
+
+**Routes changed:** `/app/admin/restaurant`, `/app/admin/hardware`,
+`/app/admin/receipt`, `/app/admin/audit`; **new** `/app/admin/notifications`
+(`settings.manage`, in the sidebar's Admin group and the breadcrumb);
+`/app/admin/loading.tsx` for the whole segment.
+
+**Purchased kit inspection (`@shadcnuikit`).** Searched "settings page
+account preferences", "notifications list".
+- `dashboard-modal15` ("Notification settings dialog with described
+  radio options") — inspected; its described-option row (label,
+  description, control) is what `SettingRow` already is (from
+  `switch-card1`). Not adopted as a form: there is no preference to
+  save yet — one manual channel and one in-app alert — and a form that
+  saved nothing would be a fake control. The Notifications screen shows
+  channels as a `CapabilityPanel` instead.
+- `dashboard-modal20` ("Activity dialog with tabs, notification list")
+  — inspected for the audit log; the log is a table with a detail
+  sheet, not a feed, so `tables10`'s filter menu + the shared `DataTable`
+  were the right shape.
+- `tables10` / `tables12` — the audit log moves onto `DataTable`: search
+  now also matches the entity id; filter menu by entity and by actor
+  with counts; sortable time; row → Sheet unchanged in what it shows
+  (raw before/after JSON, deliberately not a reformatted diff).
+
+**What changed:**
+- **`AdminSectionNav`** on all five Admin screens — Restaurant · Bill &
+  Receipt · Printers & devices · Notifications · Audit log — each
+  shown only with its own gate (`adminNavAccess()` resolves the three
+  rules the sidebar already uses). `HardwarePage` and `ReceiptDesigner`
+  gained a `sectionNav` slot under their own headers rather than a
+  second header above them.
+- **Restaurant:** a trust line that names what is still unset (GSTIN,
+  legal name, outlet, map pin, GST state, rates) from the same rows;
+  the sections are Panels in a two-column grid (Business; Operations +
+  GST rates; Location; Delivery; Rewards full-width with "Change on
+  Rewards" as the panel action). Every value and every `SettingRow` is
+  the one that was there; the operations form is unchanged.
+- **Notifications (new):** what the `NotificationProvider` interface
+  can do today — WhatsApp by link (a person presses send) and the staff
+  new-order alert connected; Business API, SMS, email and push not —
+  plus a Sender panel (business name, the runtime `SITE_URL` the order
+  link uses, with a red badge when unset because sending is refused
+  without it) and the order message rendered from
+  `src/lib/notifications/messages.ts` with placeholder values under a
+  `SampleTag`. No preference form, no fake toggles.
+- **Audit log:** trust line (latest N events, distinct actors, how far
+  back), the `DataTable` with filters, empty state for a log with no
+  events.
+
+**Functionality preserved:** `settings.manage` / `audit.view` /
+`integrations.manage`-or-`orders.create` gates; the operations settings
+form; every printer/device action and the receipt designer's
+save/apply/restore; the audit Sheet's exact JSON.
+
+---
+
 ## Batch: Menu + Analytics + Admin + Command Center — slice 2 of 4: Analytics reports
 
 **Status:** Complete on `kit-radix-nova`, gates green (typecheck, lint,

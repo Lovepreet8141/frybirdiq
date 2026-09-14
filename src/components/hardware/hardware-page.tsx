@@ -11,7 +11,7 @@
  * the device that owns the printer; from anywhere else they say so.
  */
 
-import { useState, useSyncExternalStore, useTransition } from "react";
+import { type ReactNode, useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Loader2, Pencil, Plus, Printer, RefreshCw, Smartphone, Trash2, X } from "lucide-react";
 import { PageHeader } from "@/components/staff/page-header";
@@ -53,7 +53,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-export function HardwarePage({ devices, printers, jobs, shopName, canManage }: { devices: readonly DeviceRecord[]; printers: readonly PrinterRecord[]; jobs: readonly PrintJobRecord[]; shopName: string; canManage: boolean }) {
+export function HardwarePage({ devices, printers, jobs, shopName, canManage, sectionNav }: { devices: readonly DeviceRecord[]; printers: readonly PrinterRecord[]; jobs: readonly PrintJobRecord[]; shopName: string; canManage: boolean; /** The Admin section strip, rendered under the header so this screen sits beside the others. */ sectionNav?: ReactNode }) {
   const local = useLocalPrinter();
   const router = useRouter();
   const now = useNow();
@@ -150,6 +150,7 @@ export function HardwarePage({ devices, printers, jobs, shopName, canManage }: {
           ) : null
         }
       />
+      {sectionNav}
 
       {notice && (
         <p role={notice.tone === "error" ? "alert" : "status"} className={cn("border-l-2 bg-surface px-4 py-3 text-sm", notice.tone === "error" ? "border-[var(--destructive)]" : "border-[var(--success)]")}>
