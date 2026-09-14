@@ -89,10 +89,10 @@ export default async function PnlPage({
     <div className="mx-auto w-full max-w-4xl px-[var(--gutter)] py-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="font-heading text-3xl font-bold tracking-tight">Profit and loss</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{range.label}</p>
+          <h1 className="font-heading text-[26px] font-semibold leading-[1.15] tracking-[-0.015em]">Profit and loss</h1>
+          <p className="mt-1 text-[13.5px] text-muted-foreground">{range.label} · captured payments only · INR</p>
         </div>
-        <nav aria-label="Period" className="flex flex-wrap gap-1">
+        <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
           {RANGES.map((option) => (
             <Link
               key={option.key}
@@ -100,8 +100,8 @@ export default async function PnlPage({
               aria-current={option.key === key ? "page" : undefined}
               className={
                 option.key === key
-                  ? "bg-primary flex min-h-[44px] items-center rounded-md px-4 text-sm font-semibold text-primary-foreground"
-                  : "flex min-h-[44px] items-center rounded-md px-4 text-sm font-semibold text-muted-foreground transition-colors hover:bg-surface"
+                  ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
+                  : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
               }
             >
               {option.label}
@@ -131,7 +131,7 @@ export default async function PnlPage({
         </div>
       ) : (
         <>
-          <div className="mt-8 grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3">
+          <div className="mt-6 grid gap-3 sm:grid-cols-3">
             <StatTile label="Revenue" value={formatINR(pnl.revenue, "whole")} detail={`${pnl.orderCount} paid orders`} />
             <StatTile
               label="Gross profit"
@@ -145,7 +145,7 @@ export default async function PnlPage({
             />
           </div>
 
-          <table className="tabular-nums mt-8 w-full text-sm">
+          <div className="mt-6 rounded-xl border border-border bg-panel px-5 py-3"><table className="tabular-nums w-full text-[13px]">
             <caption className="sr-only">Profit and loss for {range.label}</caption>
             <thead>
               <tr className="border-b border-border text-xs uppercase tracking-[0.08em] text-muted-foreground">
@@ -190,7 +190,7 @@ export default async function PnlPage({
                 />
               )}
             </tbody>
-          </table>
+          </table></div>
 
           {pnl.nonOperating.length > 0 && (
             <p className="mt-3 text-sm text-muted-foreground">

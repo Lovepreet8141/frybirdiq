@@ -143,7 +143,7 @@ function Ticket({ ticket, now, canUpdate, onChanged }: { ticket: KitchenTicket; 
   return (
     <article
       aria-label={`Order ${ticket.orderNumber}`}
-      className={cn("flex flex-col gap-3 rounded-lg border-2 bg-background p-4", late ? "border-destructive" : "border-border")}
+      className={cn("flex flex-col gap-3 rounded-xl border-2 bg-panel p-4", late ? "border-loss" : "border-border")}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col">

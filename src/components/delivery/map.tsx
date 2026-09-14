@@ -141,7 +141,7 @@ export function Map({
   return (
     <div
       ref={container}
-      className={cn("h-64 w-full overflow-hidden rounded-lg border border-border bg-surface-muted", className)}
+      className={cn("h-64 w-full overflow-hidden rounded-xl border border-border bg-panel-muted", className)}
       // Leaflet renders an interactive canvas of its own; the surrounding UI
       // carries the accessible controls.
       role="application"

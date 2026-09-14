@@ -96,7 +96,7 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
                 href: "/app/iq",
                 label: "Overview",
                 icon: LayoutGrid,
-                exclude: ["/app/iq/menu", "/app/iq/live", "/app/iq/activity", "/app/iq/channels", "/app/iq/products"],
+                exclude: ["/app/iq/menu", "/app/iq/live", "/app/iq/activity", "/app/iq/channels", "/app/iq/products", "/app/iq/pnl", "/app/iq/expenses", "/app/iq/rewards"],
               },
             ]
           : []),

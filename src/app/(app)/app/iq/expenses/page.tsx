@@ -43,7 +43,7 @@ export default async function ExpensesPage({
           <p className="mt-1 text-sm text-muted-foreground">{range.label}</p>
         </div>
         <div className="flex items-center gap-3">
-          <nav aria-label="Period" className="flex flex-wrap gap-1">
+          <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
             {RANGES.map((option) => (
               <Link
                 key={option.key}
@@ -51,8 +51,8 @@ export default async function ExpensesPage({
                 aria-current={option.key === key ? "page" : undefined}
                 className={
                   option.key === key
-                    ? "bg-primary flex min-h-[44px] items-center rounded-md px-4 text-sm font-semibold text-primary-foreground"
-                    : "flex min-h-[44px] items-center rounded-md px-4 text-sm font-semibold text-muted-foreground transition-colors hover:bg-surface"
+                    ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
+                    : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
                 }
               >
                 {option.label}
@@ -96,7 +96,7 @@ export default async function ExpensesPage({
             {rows.length} {rows.length === 1 ? "entry" : "entries"}
           </p>
 
-          <table className="mt-4 w-full text-sm">
+          <div className="rounded-xl border border-border bg-panel px-5 py-2"><table className="tabular-nums w-full text-[13px]">
             <caption className="sr-only">Expenses for {range.label}</caption>
             <thead>
               <tr className="border-b border-border text-xs uppercase tracking-[0.08em] text-muted-foreground">
@@ -128,7 +128,7 @@ export default async function ExpensesPage({
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         </>
       )}
 

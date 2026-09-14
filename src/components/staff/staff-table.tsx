@@ -50,7 +50,7 @@ export function StaffTable({ staff }: { staff: readonly StaffRow[] }) {
         />
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
+      <div className="overflow-hidden rounded-xl border border-border bg-panel">
         <Table>
           <TableHeader>
             <TableRow>
@@ -81,7 +81,7 @@ export function StaffTable({ staff }: { staff: readonly StaffRow[] }) {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={member.isActive ? "secondary" : "destructive"}>{member.isActive ? "Active" : "Inactive"}</Badge>
+                    <Badge variant={member.isActive ? "success" : "destructive"}>{member.isActive ? "Active" : "Inactive"}</Badge>
                   </TableCell>
                   <TableCell className="tabular text-right text-muted-foreground">{formatDate(member.joinedAt)}</TableCell>
                 </TableRow>

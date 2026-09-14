@@ -59,7 +59,7 @@ export default async function ProductsAnalyticsPage({ searchParams }: { searchPa
         title="Products"
         description={`What each product did, ${range.label.toLowerCase()} — revenue includes GST, as the customer paid it.`}
         actions={
-          <nav className="flex flex-wrap gap-1" aria-label="Period">
+          <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
             {RANGES.map((option) => (
               <Link
                 key={option.key}
@@ -67,8 +67,8 @@ export default async function ProductsAnalyticsPage({ searchParams }: { searchPa
                 aria-current={option.key === key ? "page" : undefined}
                 className={
                   option.key === key
-                    ? "flex min-h-[44px] items-center rounded-md bg-secondary px-4 text-sm font-semibold text-secondary-foreground"
-                    : "flex min-h-[44px] items-center rounded-md px-4 text-sm font-semibold text-muted-foreground transition-colors hover:bg-surface"
+                    ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
+                    : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
                 }
               >
                 {option.label}
@@ -130,7 +130,7 @@ export default async function ProductsAnalyticsPage({ searchParams }: { searchPa
             <h2 id="products-heading" className="font-heading text-lg font-semibold">
               Every product
             </h2>
-            <div className="overflow-hidden rounded-lg border border-border bg-surface">
+            <div className="overflow-hidden rounded-xl border border-border bg-panel">
               <Table>
                 <TableHeader>
                   <TableRow>

@@ -13,6 +13,8 @@ import { advanceOrderAction } from "@/lib/auth/staff-actions";
 import { formatINR } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { OrderCard, type StaffOrder, nextStep, statusLabel } from "@/components/staff/order-card";
+import { StatusWord } from "@/components/iq/ui";
+import { EmptyState } from "@/components/states";
 import { openKotWindow } from "@/components/staff/print-kot";
 
 /**
@@ -318,7 +320,7 @@ function OrderRow({
   );
 
   const shell = cn(
-    "cursor-pointer overflow-hidden rounded-[14px] border bg-surface shadow-xs transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+    "cursor-pointer overflow-hidden rounded-xl border bg-panel transition-[border-color,box-shadow] duration-[120ms] hover:border-border-strong hover:shadow-[0_2px_8px_rgba(25,21,18,0.06)] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/20",
     due.late ? "border-order-late-line" : "border-border",
   );
 
@@ -465,6 +467,7 @@ export function OrdersBoard({
     return map;
   }, [orders]);
   const dueSoon = useMemo(() => orders.filter((order) => (dues.get(order.id)?.minutes ?? Infinity) <= SOON_MINUTES).length, [orders, dues]);
+  const lateCount = orders.filter((order) => (dues.get(order.id) ?? dueFor(order, now)).late).length;
 
   const q = query.trim().toLowerCase();
   const rows = useMemo(
@@ -497,23 +500,28 @@ export function OrdersBoard({
     <div className="flex flex-col gap-[22px]">
       {/* Title row */}
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="flex flex-wrap items-baseline gap-3.5">
-          <h1 className="font-heading text-xl font-bold tracking-tight lg:text-2xl">Orders</h1>
-          <p className="flex items-center gap-2 whitespace-nowrap text-[13px] text-muted-foreground" aria-live="polite">
-            <span className="inline-block size-[7px] rounded-full bg-success" aria-hidden="true" />
-            <span className="tabular">{orders.length} open</span>
-            <span aria-hidden="true">·</span>
-            <span className={cn("tabular font-medium", dueSoon > 0 && "text-warning")}>{dueSoon} due soon</span>
+        <div className="flex flex-col gap-1.5">
+          <h1 className="font-heading text-[26px] font-semibold leading-[1.15] tracking-[-0.015em]">Orders</h1>
+          <p className="flex flex-wrap items-center gap-x-4 gap-y-1" aria-live="polite">
+            <StatusWord tone="gain">
+              <span className="tabular">{orders.length} open</span>
+            </StatusWord>
+            <StatusWord tone={dueSoon > 0 ? "flag" : "neutral"}>
+              <span className="tabular">{dueSoon} due soon</span>
+            </StatusWord>
+            <StatusWord tone={lateCount > 0 ? "loss" : "neutral"}>
+              <span className="tabular">{lateCount} late</span>
+            </StatusWord>
           </p>
         </div>
-        <div className="relative w-[300px] max-w-full">
+        <div className="relative w-[320px] max-w-full">
           <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Order #, name, phone or table"
             aria-label="Search orders"
-            className="h-10 rounded-[10px] bg-surface pl-10"
+            className="h-10 pl-10"
           />
         </div>
       </div>
@@ -533,19 +541,19 @@ export function OrdersBoard({
                   aria-selected={active}
                   onClick={() => setStatusFilter(tab.status)}
                   className={cn(
-                    "inline-flex h-[34px] items-center gap-[7px] rounded-full border px-3 text-[13px] font-medium transition-colors",
-                    active ? "border-foreground bg-foreground text-background" : "border-border bg-surface text-foreground hover:bg-surface-muted",
+                    "inline-flex h-9 items-center gap-[7px] rounded-full border px-3 text-[13px] font-medium transition-colors duration-[120ms]",
+                    active ? "border-inverse bg-inverse text-inverse-foreground" : "border-border bg-panel text-foreground hover:border-border-strong",
                   )}
                 >
                   {tab.status !== "all" && <span className={cn("size-2 rounded-full", STATUS[statusKey(tab.status)].dot)} aria-hidden="true" />}
                   <span>{tab.label}</span>
-                  <span className={cn("tabular font-semibold", active ? "text-background/60" : "text-muted-foreground")}>{tab.count}</span>
+                  <span className={cn("tabular font-semibold", active ? "text-inverse-foreground/70" : "text-muted-foreground")}>{tab.count}</span>
                 </button>
               );
             })}
         </div>
 
-        <div className="inline-flex max-w-full gap-0.5 overflow-x-auto rounded-[10px] bg-surface-muted p-[3px]" role="tablist" aria-label="Filter by type">
+        <div className="inline-flex max-w-full gap-0.5 overflow-x-auto rounded-[10px] border border-border bg-panel p-1" role="tablist" aria-label="Filter by type">
           {[{ type: "all" as const, label: "All types", count: orders.length }, ...TYPES.map((type) => ({ type, label: TYPE[type].label, count: typeCounts.get(type) ?? 0 }))].map((tab) => {
             const active = typeFilter === tab.type;
             return (
@@ -556,8 +564,8 @@ export function OrdersBoard({
                 aria-selected={active}
                 onClick={() => setTypeFilter(tab.type)}
                 className={cn(
-                  "inline-flex h-[30px] shrink-0 items-center gap-[7px] rounded-lg px-3 text-[13px] font-medium transition-colors",
-                  active ? "bg-surface text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
+                  "inline-flex h-[30px] shrink-0 items-center gap-[7px] rounded-[7px] px-3 text-[13px] font-medium transition-colors duration-[120ms]",
+                  active ? "bg-secondary font-semibold text-foreground" : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 {tab.type !== "all" && <span className={cn("size-2.5 rounded-[3px]", TYPE[tab.type].swatch)} aria-hidden="true" />}
@@ -586,9 +594,11 @@ export function OrdersBoard({
         </div>
 
         {rows.length === 0 ? (
-          <div className="rounded-[14px] border border-dashed border-border bg-surface p-14 text-center text-sm text-muted-foreground">
-            {orders.length === 0 ? "No open orders." : "No orders match."}
-          </div>
+          orders.length === 0 ? (
+            <EmptyState title="No open orders." detail="New website orders appear here the moment they are placed; counter orders as the till rings them up." />
+          ) : (
+            <EmptyState title="No orders match." detail="Try another status or type, or clear the search." action={<Button type="button" variant="outline" size="sm" onClick={() => { setQuery(""); setStatusFilter("all"); setTypeFilter("all"); }}>Clear filters</Button>} />
+          )
         ) : (
           <ul className="flex flex-col gap-2">
             {rows.map((order) => (

@@ -32,7 +32,7 @@ const SEGMENT_LABEL: Record<(typeof CUSTOMER_SEGMENTS)[number], string> = { ever
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-xl border border-border bg-surface px-5 py-5">
+    <section className="rounded-xl border border-border bg-panel px-5 py-5">
       <h3 className="mb-3.5 text-xs font-semibold tracking-[0.1em] text-muted-foreground">{title}</h3>
       {children}
     </section>
@@ -206,7 +206,7 @@ export function PromotionsWorkspace({ promos, products, today, canEdit }: { prom
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(200px,260px)_minmax(0,1fr)]">
         {/* Library — a column on desktop, a drawer on a phone */}
-        <aside className="sticky top-[76px] hidden overflow-hidden rounded-xl border border-border bg-surface lg:block">
+        <aside className="sticky top-[76px] hidden overflow-hidden rounded-xl border border-border bg-panel lg:block">
           <div className="flex items-center border-b border-border px-4 py-3.5">
             <span className="text-[15px] font-semibold">Promotion library</span>
             {canEdit && (
@@ -447,7 +447,7 @@ export function PromotionsWorkspace({ promos, products, today, canEdit }: { prom
 
           {/* Preview + actions */}
           <div className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-[76px]">
-            <div className="rounded-xl border border-border bg-surface px-5 py-[18px]">
+            <div className="rounded-xl border border-border bg-panel px-5 py-[18px]">
               <h3 className="mb-3 text-xs font-semibold tracking-[0.1em] text-muted-foreground">CUSTOMER SEES</h3>
               <div className="rounded-xl bg-promo-live p-[18px]">
                 <p className="text-[11px] font-bold tracking-[0.08em] text-promo-live-fg">OFFER</p>
@@ -463,7 +463,7 @@ export function PromotionsWorkspace({ promos, products, today, canEdit }: { prom
               </div>
             </div>
 
-            <div className="rounded-xl border border-border bg-surface px-5 py-[18px]">
+            <div className="rounded-xl border border-border bg-panel px-5 py-[18px]">
               {errors.length > 0 && (
                 <div className="mb-3.5">
                   <h3 className="mb-2 text-xs font-semibold tracking-[0.1em] text-warning">BEFORE YOU CAN PUSH</h3>
@@ -506,7 +506,7 @@ export function PromotionsWorkspace({ promos, products, today, canEdit }: { prom
             </div>
 
             {saved && (
-              <div className="rounded-xl border border-border bg-surface px-5 py-[18px] text-sm">
+              <div className="rounded-xl border border-border bg-panel px-5 py-[18px] text-sm">
                 <h3 className="mb-2 text-xs font-semibold tracking-[0.1em] text-muted-foreground">SO FAR</h3>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
                   <dt className="text-muted-foreground">Applied</dt>

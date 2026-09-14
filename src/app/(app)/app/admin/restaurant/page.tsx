@@ -86,7 +86,7 @@ export default async function RestaurantSettingsPage() {
         {taxRates.length === 0 ? (
           <p className="rounded-lg border border-border bg-surface px-4 py-6 text-center text-sm text-muted-foreground">No tax rates configured.</p>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-border bg-surface">
+          <div className="overflow-hidden rounded-xl border border-border bg-panel">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -157,7 +157,7 @@ export default async function RestaurantSettingsPage() {
           value={delivery ? `${(delivery.rates.roadFactorBps / 10_000).toFixed(2)}×` : "—"}
         />
         {delivery && delivery.rates.bands.length > 0 && (
-          <div className="overflow-hidden rounded-lg border border-border bg-surface">
+          <div className="overflow-hidden rounded-xl border border-border bg-panel">
             <Table>
               <TableHeader>
                 <TableRow>

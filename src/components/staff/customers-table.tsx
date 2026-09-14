@@ -85,25 +85,23 @@ export function CustomersTable({ customers }: { customers: readonly CustomerRow[
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
-        <div className="max-w-full overflow-x-auto rounded-lg border border-border" role="tablist" aria-label="Customer segment">
-          <div className="inline-flex divide-x divide-border">
-            {SEGMENTS.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                role="tab"
-                aria-selected={segment === item.key}
-                title={item.description}
-                onClick={() => setSegment(item.key)}
-                className={cn(
-                  "whitespace-nowrap px-3.5 py-2 text-sm transition-colors first:rounded-l-lg last:rounded-r-lg",
-                  segment === item.key ? "bg-surface-muted font-semibold text-foreground" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {item.label} <span className="tabular text-xs">({counts.get(item.key) ?? 0})</span>
-              </button>
-            ))}
-          </div>
+        <div className="flex max-w-full flex-wrap gap-1.5" role="tablist" aria-label="Customer segment">
+          {SEGMENTS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              role="tab"
+              aria-selected={segment === item.key}
+              title={item.description}
+              onClick={() => setSegment(item.key)}
+              className={cn(
+                "inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-[13px] transition-colors duration-[120ms]",
+                segment === item.key ? "border-inverse bg-inverse font-semibold text-inverse-foreground" : "border-border bg-panel text-muted-foreground hover:border-border-strong hover:text-foreground",
+              )}
+            >
+              {item.label} <span className={cn("tabular text-xs", segment === item.key ? "text-inverse-foreground/70" : "text-muted-foreground")}>{counts.get(item.key) ?? 0}</span>
+            </button>
+          ))}
         </div>
         <div className="relative ml-auto w-full max-w-xs">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
@@ -116,9 +114,9 @@ export function CustomersTable({ customers }: { customers: readonly CustomerRow[
           />
         </div>
       </div>
-      {active && active.key !== "all" && <p className="text-sm text-muted-foreground">{active.description}.</p>}
+      {active && active.key !== "all" && <p className="text-[13px] text-muted-foreground">{active.description}.</p>}
 
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
+      <div className="overflow-hidden rounded-xl border border-border bg-panel">
         <Table>
           <TableHeader>
             <TableRow>

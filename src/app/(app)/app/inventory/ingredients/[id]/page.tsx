@@ -104,7 +104,7 @@ export default async function IngredientPage({ params, searchParams }: { params:
         {ingredient.prices.length === 0 ? (
           <p className="rounded-lg border border-border bg-surface px-4 py-6 text-center text-sm text-muted-foreground">No prices recorded yet.</p>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-border bg-surface">
+          <div className="overflow-hidden rounded-xl border border-border bg-panel">
             <Table>
               <TableHeader>
                 <TableRow>

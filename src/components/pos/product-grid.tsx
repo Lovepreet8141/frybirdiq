@@ -133,7 +133,7 @@ export function ProductTile({
         if (!hasOptions) setJustAdded(true);
       }}
       className={cn(
-        "group relative flex min-h-[56px] flex-col overflow-hidden rounded-lg border border-border bg-surface text-left transition-[border-color,box-shadow] duration-[var(--duration-micro)]",
+        "group relative flex min-h-[56px] flex-col overflow-hidden rounded-xl border border-border bg-panel text-left transition-[border-color,box-shadow] duration-[var(--duration-micro)]",
         "hover:border-border-strong focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50",
       )}
     >

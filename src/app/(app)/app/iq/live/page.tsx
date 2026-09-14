@@ -4,7 +4,7 @@ import { AlarmClock, ChefHat } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AutoRefresh } from "@/components/staff/auto-refresh";
-import { MiniStat } from "@/components/staff/mini-stat";
+import { DataTrust, KpiTile, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
 import { PermissionDenied } from "@/components/states";
 import type { FulfilmentType } from "@/domain/order-status";
@@ -21,9 +21,9 @@ export const dynamic = "force-dynamic";
 const REFRESH_MS = 15_000;
 
 const STAGE: Record<KitchenStatus, { label: string; dot: string }> = {
-  ACCEPTED: { label: "New", dot: "bg-muted-foreground" },
-  PREPARING: { label: "Cooking", dot: "bg-warning" },
-  READY: { label: "Ready", dot: "bg-[#3F9D52]" },
+  ACCEPTED: { label: "New", dot: "bg-status-accepted-dot" },
+  PREPARING: { label: "Cooking", dot: "bg-status-cooking-dot" },
+  READY: { label: "Ready", dot: "bg-status-ready-dot" },
 };
 
 function fulfilmentLabel(fulfilment: FulfilmentType, tableName?: string | null): string {
@@ -87,19 +87,19 @@ export default async function LiveOperationsPage() {
           : "Nothing in the kitchen and nothing waiting.";
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-6 md:py-8">
       <AutoRefresh everyMs={REFRESH_MS} />
 
       <PageHeader
         title="Live operations"
-        description={`${headline} Refreshes every ${REFRESH_MS / 1000} seconds · last at ${clock(new Date(now))}.`}
+        description={headline}
         actions={
           <div className="flex flex-wrap gap-2">
-            <Link href="/app/orders" className="flex min-h-[44px] items-center rounded-md border border-border px-4 text-sm font-semibold transition-colors hover:bg-surface-muted">
+            <Link href="/app/orders" className="inline-flex h-10 items-center rounded-md border border-border bg-panel px-4 text-sm font-semibold transition-colors hover:border-border-strong">
               Orders
             </Link>
             {canSeeKitchen && (
-              <Link href="/app/kds" className="flex min-h-[44px] items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground">
+              <Link href="/app/kds" className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-strong">
                 <ChefHat className="size-4" aria-hidden="true" />
                 Kitchen display
               </Link>
@@ -108,22 +108,30 @@ export default async function LiveOperationsPage() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <MiniStat label="Awaiting decision" value={String(awaiting.length)} hint="New orders the counter hasn't accepted" />
-        <MiniStat label="In the kitchen" value={String(tickets.length)} hint={`${count("ACCEPTED")} new · ${count("PREPARING")} cooking · ${count("READY")} ready`} />
-        <MiniStat label="Late" value={String(late.length)} hint="Past the promised time" />
-        <MiniStat label="Longest wait" value={tickets.length === 0 ? "—" : `${longest} min`} hint="Oldest ticket in the kitchen, since placed" />
+      <DataTrust items={[{ tone: "gain", text: `Live · refreshes every ${REFRESH_MS / 1000} s · last at ${clock(new Date(now))} IST` }, { tone: "neutral", text: "Every figure is a fact from the order rows — no score, no forecast" }]} />
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <KpiTile label="Awaiting decision" value={String(awaiting.length)} note="New orders the counter hasn't accepted" className="min-h-[124px]" />
+        <KpiTile label="In the kitchen" value={String(tickets.length)} note={`${count("ACCEPTED")} new · ${count("PREPARING")} cooking · ${count("READY")} ready`} className="min-h-[124px]" />
+        <KpiTile label="Late" value={String(late.length)} note="Past the promised time" className={cn("min-h-[124px]", late.length > 0 && "[&_.font-money]:text-loss")} />
+        <KpiTile label="Longest wait" value={tickets.length === 0 ? "—" : `${longest} min`} note="Oldest ticket in the kitchen, since placed" className="min-h-[124px]" />
       </div>
 
-      <section aria-labelledby="late-heading" className="flex flex-col gap-3">
-        <h2 id="late-heading" className="flex items-center gap-2 font-heading text-lg font-semibold">
-          <AlarmClock className={cn("size-5", late.length > 0 ? "text-destructive" : "text-muted-foreground")} aria-hidden="true" />
-          Late
-        </h2>
-        {late.length === 0 ? (
-          <p className="rounded-lg border border-border bg-surface px-4 py-6 text-center text-sm text-muted-foreground">Nothing is past its promised time.</p>
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-destructive bg-surface">
+      <Panel aria-labelledby="late-heading">
+        <PanelHeader
+          id="late-heading"
+          title={
+            <span className="inline-flex items-center gap-2">
+              <AlarmClock className={cn("size-4", late.length > 0 ? "text-loss" : "text-muted-foreground")} aria-hidden="true" />
+              Late
+            </span>
+          }
+          meta={late.length === 0 ? "nothing past its promised time" : `${late.length} past the promised time`}
+        />
+        <PanelBody flush={late.length > 0}>
+          {late.length === 0 ? (
+            <p className="text-[13px] text-muted-foreground">Nothing is past its promised time.</p>
+          ) : (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -146,32 +154,32 @@ export default async function LiveOperationsPage() {
                     </TableCell>
                     <TableCell>{row.customerName ?? "Walk-in"}</TableCell>
                     <TableCell className="tabular hidden text-muted-foreground sm:table-cell">{row.estimatedReadyAt ? clock(row.estimatedReadyAt) : "—"}</TableCell>
-                    <TableCell className="tabular text-right font-bold text-destructive">
-                      {row.estimatedReadyAt ? `${minutesSince(row.estimatedReadyAt, now)} min` : "—"}
-                    </TableCell>
+                    <TableCell className="tabular text-right font-semibold text-loss">{row.estimatedReadyAt ? `${minutesSince(row.estimatedReadyAt, now)} min` : "—"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
-          </div>
-        )}
-      </section>
-
-      <section aria-labelledby="awaiting-heading" className="flex flex-col gap-3">
-        <div className="flex items-baseline justify-between gap-3">
-          <h2 id="awaiting-heading" className="font-heading text-lg font-semibold">
-            Awaiting a decision
-          </h2>
-          {awaiting.length > 0 && (
-            <Link href="/app/orders" className="text-sm font-semibold underline underline-offset-2">
-              Review on Orders
-            </Link>
           )}
-        </div>
-        {awaiting.length === 0 ? (
-          <p className="rounded-lg border border-border bg-surface px-4 py-6 text-center text-sm text-muted-foreground">Nothing waiting on the counter.</p>
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-border bg-surface">
+        </PanelBody>
+      </Panel>
+
+      <Panel aria-labelledby="awaiting-heading">
+        <PanelHeader
+          id="awaiting-heading"
+          title="Awaiting a decision"
+          meta={awaiting.length === 0 ? "nothing waiting on the counter" : undefined}
+          action={
+            awaiting.length > 0 ? (
+              <Link href="/app/orders" className="font-semibold text-foreground underline-offset-2 hover:underline">
+                Review on Orders →
+              </Link>
+            ) : undefined
+          }
+        />
+        <PanelBody flush={awaiting.length > 0}>
+          {awaiting.length === 0 ? (
+            <p className="text-[13px] text-muted-foreground">Nothing waiting on the counter.</p>
+          ) : (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -199,18 +207,16 @@ export default async function LiveOperationsPage() {
                 ))}
               </TableBody>
             </Table>
-          </div>
-        )}
-      </section>
+          )}
+        </PanelBody>
+      </Panel>
 
-      <section aria-labelledby="kitchen-heading" className="flex flex-col gap-3">
-        <h2 id="kitchen-heading" className="font-heading text-lg font-semibold">
-          In the kitchen
-        </h2>
-        {tickets.length === 0 ? (
-          <p className="rounded-lg border border-border bg-surface px-4 py-6 text-center text-sm text-muted-foreground">The kitchen is clear.</p>
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-border bg-surface">
+      <Panel aria-labelledby="kitchen-heading">
+        <PanelHeader id="kitchen-heading" title="In the kitchen" meta={tickets.length === 0 ? "the kitchen is clear" : `${tickets.length} ${tickets.length === 1 ? "ticket" : "tickets"} · oldest ${longest} min`} />
+        <PanelBody flush={tickets.length > 0}>
+          {tickets.length === 0 ? (
+            <p className="text-[13px] text-muted-foreground">The kitchen is clear.</p>
+          ) : (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -248,7 +254,7 @@ export default async function LiveOperationsPage() {
                       </TableCell>
                       <TableCell className="tabular hidden text-muted-foreground sm:table-cell">{ticket.promisedAt ? clock(new Date(ticket.promisedAt)) : "—"}</TableCell>
                       <TableCell className="text-right">
-                        <span className={cn("tabular font-semibold", ticketLate && "text-destructive")}>
+                        <span className={cn("tabular font-semibold", ticketLate && "text-loss")}>
                           {waitingMinutes(ticket, now)} min{ticketLate ? " · late" : ""}
                         </span>
                       </TableCell>
@@ -257,9 +263,9 @@ export default async function LiveOperationsPage() {
                 })}
               </TableBody>
             </Table>
-          </div>
-        )}
-      </section>
+          )}
+        </PanelBody>
+      </Panel>
     </div>
   );
 }
