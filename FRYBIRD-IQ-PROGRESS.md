@@ -7,6 +7,38 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Fix — Products analytics tied every sale to "Removed from menu"
+
+**Status:** Fixed and deployed (`573dcab`). Gates green (444 tests, 1
+new). Verified read-only on production before and after; no product,
+order or line was created, changed or removed.
+
+**Cause.** Placement wrote every order line with `product_id = NULL`
+(`placeOrderRows` passed `productId: null` explicitly), and every product
+report — `getMenuPerformance`, `notSelling`, `productLastSales` — joined
+sold lines to the catalogue on `product_id` alone. So Products showed
+"Removed from menu" for items live on the POS, the only category was
+"Removed products", and the Overview's Not selling rule treated every
+product as never sold. Read-only check on production: 65 of 65 lines had
+no id; all 65 snapshot names match exactly one live product; product
+names are unique in the org. Not stale data, not a status mapping — a
+query/join keyed on a column nothing ever wrote.
+
+**Fix (code only).** `MenuProduct` now carries the catalogue `id` (null
+only from the static transcription); the order-line snapshot keeps it as
+`productId` and placement writes it — the copied name and price remain
+the record (§51). Reports tie lines by id, or, for lines placed before
+the id was recorded, by exact snapshot name within the org, and say so
+(`matchedBy: "name"`, shown as "· by name" on Products). `notSelling`
+and `productLastSales` join on id OR (id IS NULL AND name). Legacy rows
+keep their null id; new orders carry one.
+
+**After.** Products: Burgers 88.3%, Smash Burgers, Chicken, Wraps;
+photos; 0 / 12 costed recipes. Overview: Not selling lists the products
+that genuinely have not sold (37 of 49 live products in the range).
+
+---
+
 ## Design phase 2, wave 1 — Orders, Live operations, lists and reports
 
 **Status:** Deployed (see deployment record). Gates green (443 tests).
@@ -1946,6 +1978,14 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-14 14:45 UTC — Products analytics join fix
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from
+`kit-radix-nova` at `573dcab`. Gates in-script green (444/444). Post-
+deploy: `active`; smoke `HTTP 200`; read-only production check of
+Products and the Overview. No production record touched; sessions
+revoked; temp scripts deleted.
 
 ### 2026-09-14 14:20 UTC — Design phase 2, wave 2
 
