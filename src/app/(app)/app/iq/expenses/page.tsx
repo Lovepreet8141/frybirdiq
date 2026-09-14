@@ -28,6 +28,8 @@ export default async function ExpensesPage({
   const staff = await getStaff();
   if (!staff) redirect("/sign-in");
   if (!(await staffCan("analytics.view"))) redirect("/app/orders");
+  // Seeing the ledger is analytics; recording into it is finance.
+  const canRecord = await staffCan("finance.view");
 
   const { range: requested, saved } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "mtd") as RangeKey;
@@ -59,12 +61,14 @@ export default async function ExpensesPage({
               </Link>
             ))}
           </nav>
-          <Link
-            href="/app/iq/expenses/new"
-            className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
-          >
-            Record expense
-          </Link>
+          {canRecord && (
+            <Link
+              href="/app/iq/expenses/new"
+              className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
+            >
+              Record expense
+            </Link>
+          )}
         </div>
       </div>
 
@@ -80,12 +84,14 @@ export default async function ExpensesPage({
             title="Nothing recorded for this period."
             detail="Rent, gas, chicken, packaging, wages. Record them and FRYBIRD IQ can show net profit rather than just sales."
             action={
-              <Link
-                href="/app/iq/expenses/new"
-                className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
-              >
-                Record the first one
-              </Link>
+              canRecord ? (
+                <Link
+                  href="/app/iq/expenses/new"
+                  className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
+                >
+                  Record the first one
+                </Link>
+              ) : undefined
             }
           />
         </div>

@@ -244,6 +244,14 @@ describe("permissions", () => {
     expect(can(["ANALYST"], "finance.view")).toBe(false);
   });
 
+  it("recording money is a finance write, not an analytics read (roadmap 0.5)", () => {
+    // The expense and target actions gate on finance.view. An analyst reads
+    // the P&L; they never write into it. Promotion writes sit on settings.manage.
+    expect(can(["ANALYST"], "finance.view")).toBe(false);
+    expect(can(["CASHIER"], "settings.manage")).toBe(false);
+    expect(can(["MANAGER"], "finance.view")).toBe(true);
+  });
+
   it("adding finance.view took nothing away from admin", () => {
     for (const permission of ["audit.view", "staff.manage", "orders.refund", "analytics.view", "menu.price"] as const) {
       expect(can(["ADMIN"], permission), permission).toBe(true);

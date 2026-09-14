@@ -69,6 +69,7 @@ export default async function PnlPage({
   const staff = await getStaff();
   if (!staff) redirect("/sign-in");
   if (!(await staffCan("analytics.view"))) redirect("/app/orders");
+  const canRecord = await staffCan("finance.view");
 
   const { range: requested } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "mtd") as RangeKey;
@@ -116,12 +117,14 @@ export default async function PnlPage({
             title="No costs recorded for this period."
             detail="Revenue is already tracked from your orders. Record what you spend — rent, gas, chicken, packaging — and this becomes a real profit figure rather than a sales total."
             action={
-              <Link
-                href="/app/iq/expenses/new"
-                className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
-              >
-                Record an expense
-              </Link>
+              canRecord ? (
+                <Link
+                  href="/app/iq/expenses/new"
+                  className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
+                >
+                  Record an expense
+                </Link>
+              ) : undefined
             }
           />
           <p className="tabular mt-6 text-sm text-muted-foreground">

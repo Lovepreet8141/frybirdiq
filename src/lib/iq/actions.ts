@@ -37,8 +37,11 @@ export async function recordExpense(
 ): Promise<ExpenseFormState> {
   const staff = await getStaff();
   if (!staff) return { status: "error", message: "Sign in to record an expense." };
-  if (!(await staffCan("analytics.view"))) {
-    return { status: "error", message: "You do not have access to the money side of FRYBIRD IQ." };
+  // Recording a cost is a finance write, so it takes the finance permission
+  // (OWNER, MANAGER) — not analytics.view, which is read-only by design and
+  // is held by ANALYST.
+  if (!(await staffCan("finance.view"))) {
+    return { status: "error", message: "Recording an expense needs the finance permission." };
   }
 
   const parsed = expenseSchema.safeParse({
@@ -104,8 +107,8 @@ export async function setFoodCostTarget(
 ): Promise<ExpenseFormState> {
   const staff = await getStaff();
   if (!staff) return { status: "error", message: "Sign in first." };
-  if (!(await staffCan("analytics.view"))) {
-    return { status: "error", message: "You do not have access to targets." };
+  if (!(await staffCan("finance.view"))) {
+    return { status: "error", message: "Setting a target needs the finance permission." };
   }
 
   const parsed = targetSchema.safeParse({
