@@ -1,0 +1,21 @@
+# Nightly database backup. Started by frybird-backup.timer; never by hand
+# except to test:  systemctl start frybird-backup
+#
+#   cp deploy/backup.sh /usr/local/bin/frybird-backup && chmod 750 /usr/local/bin/frybird-backup
+#   cp deploy/frybird-backup.service deploy/frybird-backup.timer /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now frybird-backup.timer
+
+[Unit]
+Description=FRYBIRD database backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/frybird-backup
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=frybird-backup

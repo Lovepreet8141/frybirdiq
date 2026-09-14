@@ -1,0 +1,13 @@
+# 03:30 IST every night (22:00 UTC) — after the last delivery, before the
+# first prep. Persistent, so a box that was off at 03:30 backs up on boot.
+
+[Unit]
+Description=Run the FRYBIRD database backup nightly
+
+[Timer]
+OnCalendar=*-*-* 22:00:00 UTC
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

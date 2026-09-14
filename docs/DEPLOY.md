@@ -139,7 +139,19 @@ SITE_URL=https://frybirdiq.tech
 
 # The SESSION POOLER string. See the warning above.
 DATABASE_URL=postgresql://postgres.shbmprmarlubyhaklmpr:PASSWORD%40HERE@aws-0-<region>.pooler.supabase.com:5432/postgres
+
+# Online payment (roadmap Phase 1). Leave all three unset and checkout offers
+# cash only; set them and "Pay now" appears. The webhook secret is the one you
+# type into the Razorpay dashboard when you add the webhook URL
+#   https://frybirdiq.tech/api/payments/razorpay/webhook
+# for the events payment.captured, payment.failed and order.paid.
+RAZORPAY_KEY_ID=rzp_live_...
+RAZORPAY_KEY_SECRET=...
+RAZORPAY_WEBHOOK_SECRET=...
 ```
+
+After changing this file: `systemctl restart frybird`. Razorpay keys are read
+at runtime, so no rebuild is needed for them.
 
 ```bash
 chown root:frybird /etc/frybird/env
@@ -291,12 +303,37 @@ services, not during one.
 
 ---
 
+## 8. Backups (roadmap 0.7)
+
+Supabase backs the database up on its own schedule; this is FRYBIRD's own
+nightly copy on the VPS, verified and pruned, with an optional offsite copy.
+
+```bash
+apt install -y postgresql-client            # pg_dump / pg_restore
+cp deploy/backup.sh /usr/local/bin/frybird-backup && chmod 750 /usr/local/bin/frybird-backup
+cp deploy/frybird-backup.service deploy/frybird-backup.timer /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now frybird-backup.timer
+systemctl start frybird-backup && journalctl -u frybird-backup -n 20   # run one now
+ls -la /var/backups/frybird/
+```
+
+Dumps are custom-format, `public` schema only, kept 14 days, root-only
+(they hold every customer's phone number). For an offsite copy, configure an
+rclone remote (Backblaze B2, Google Drive, any S3) and put
+`BACKUP_RCLONE_REMOTE=remote:frybird-backups` in `/etc/frybird/backup.env`.
+
+Prove a restore once — and again after any schema change you would not want
+to discover cannot be restored:
+
+```bash
+apt install -y postgresql                  # a scratch server the app never touches
+bash deploy/restore-check.sh               # restores the newest dump, counts rows, drops the scratch db
+```
+
 ## What this does not have yet
 
 - **No zero-downtime deploy.** `systemctl restart` stops the old process before
   the new one is listening — a second or two of 502s.
-- **No backups of your own.** Supabase backs up the database on its own
-  schedule. Nothing here backs up WordPress; that is separate.
 - **No error monitoring.** §53 asks for structured logging, request IDs and
   error monitoring. Right now there is `journalctl` and nothing else, so a
   failure at 9pm on a Saturday is invisible until someone rings up.
