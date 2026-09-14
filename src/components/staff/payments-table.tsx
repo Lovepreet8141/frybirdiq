@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { RefundDialog } from "./refund-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ORDER_CHANNEL_LABELS, type OrderChannel } from "@/domain/order-channel";
 import { type Paise, formatINR } from "@/lib/money";
@@ -18,6 +20,7 @@ export interface PaymentRowView {
   readonly feeAmount: Paise;
   readonly capturedBy: string | null;
   readonly at: string;
+  readonly refunded: Paise;
 }
 
 const METHOD_LABELS: Record<string, string> = {
@@ -53,8 +56,9 @@ function formatWhen(iso: string): string {
  * Customers; the method pills stand in for Orders' status pills. Every
  * figure is the server's — this only slices the rows it was given.
  */
-export function PaymentsTable({ payments }: { payments: readonly PaymentRowView[] }) {
+export function PaymentsTable({ payments, canRefund = false }: { payments: readonly PaymentRowView[]; canRefund?: boolean }) {
   const [method, setMethod] = useState<string | "all">("all");
+  const [refunding, setRefunding] = useState<PaymentRowView | null>(null);
 
   const methods = useMemo(() => {
     const counts = new Map<string, number>();
@@ -111,12 +115,13 @@ export function PaymentsTable({ payments }: { payments: readonly PaymentRowView[
               <TableHead className="hidden text-right lg:table-cell">Fee</TableHead>
               <TableHead className="text-right">Amount</TableHead>
               <TableHead className="hidden text-right sm:table-cell">When</TableHead>
+              {canRefund && <TableHead className="w-24" aria-label="Actions" />}
             </TableRow>
           </TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-24 whitespace-normal text-center text-muted-foreground">
+                <TableCell colSpan={canRefund ? 8 : 7} className="h-24 whitespace-normal text-center text-muted-foreground">
                   {payments.length === 0 ? "No payments in this period." : "No payments by that method in this period."}
                 </TableCell>
               </TableRow>
@@ -143,12 +148,28 @@ export function PaymentsTable({ payments }: { payments: readonly PaymentRowView[
                   </TableCell>
                   <TableCell className="tabular text-right font-semibold">{formatINR(row.amount)}</TableCell>
                   <TableCell className="tabular hidden text-right text-muted-foreground sm:table-cell">{formatWhen(row.at)}</TableCell>
+                  {canRefund && (
+                    <TableCell className="text-right">
+                      {(row.status === "CAPTURED" || row.status === "PARTIALLY_REFUNDED") && row.amount > row.refunded && (
+                        <Button variant="outline" size="sm" onClick={() => setRefunding(row)}>
+                          Refund
+                        </Button>
+                      )}
+                    </TableCell>
+                  )}
                 </TableRow>
               ))
             )}
           </TableBody>
         </Table>
       </div>
+      <RefundDialog
+        open={refunding !== null}
+        onOpenChange={(open) => {
+          if (!open) setRefunding(null);
+        }}
+        payment={refunding ? { id: refunding.id, orderNumber: refunding.orderNumber, amount: refunding.amount, refunded: refunding.refunded, provider: refunding.provider, method: refunding.method } : null}
+      />
     </div>
   );
 }

@@ -39,6 +39,9 @@ export interface PaymentRow {
   readonly feeAmount: Paise;
   readonly capturedBy: string | null;
   readonly at: Date;
+  /** What has already gone back on this payment, so a second refund cannot exceed what is left. */
+  readonly refunded: Paise;
+  readonly providerPaymentId: string | null;
 }
 
 export interface RefundRow {
@@ -88,12 +91,26 @@ export async function getPaymentsLedger(orgId: string, range: DateRange): Promis
       feeAmount: payments.feeAmount,
       capturedAt: payments.capturedAt,
       createdAt: payments.createdAt,
+      providerPaymentId: payments.providerPaymentId,
     })
     .from(payments)
     .innerJoin(orders, eq(orders.id, payments.orderId))
     .where(and(eq(payments.orgId, orgId), gte(payments.createdAt, range.from), lt(payments.createdAt, range.to)))
     .orderBy(desc(payments.createdAt))
     .limit(500);
+
+  // Refunds already booked against the payments in view, whenever they were
+  // made — a refund next month still reduces what this month's payment can
+  // give back.
+  const paymentIds = paymentRows.map((row) => row.id);
+  const refundedByPayment = new Map<string, Paise>();
+  if (paymentIds.length > 0) {
+    const booked = await database
+      .select({ paymentId: refunds.paymentId, amount: refunds.amount })
+      .from(refunds)
+      .where(and(eq(refunds.orgId, orgId), inArray(refunds.paymentId, paymentIds)));
+    for (const row of booked) refundedByPayment.set(row.paymentId, add(refundedByPayment.get(row.paymentId) ?? ZERO, paise(row.amount)));
+  }
 
   const refundRows = await database
     .select({
@@ -142,8 +159,10 @@ export async function getPaymentsLedger(orgId: string, range: DateRange): Promis
     provider: row.provider,
     amount: paise(row.amount),
     feeAmount: paise(row.feeAmount),
-    capturedBy: row.status === "CAPTURED" ? nameOf(actorByOrder.get(row.orderId)) : null,
+    capturedBy: row.status === "CAPTURED" || row.status === "PARTIALLY_REFUNDED" || row.status === "REFUNDED" ? nameOf(actorByOrder.get(row.orderId)) : null,
     at: row.capturedAt ?? row.createdAt,
+    refunded: refundedByPayment.get(row.id) ?? ZERO,
+    providerPaymentId: row.providerPaymentId,
   }));
 
   const captured = ledger.filter((row) => row.status === "CAPTURED");

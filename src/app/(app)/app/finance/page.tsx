@@ -39,7 +39,7 @@ const METHOD_LABELS: Record<string, string> = {
  */
 export default async function FinancePage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
   const staff = await requireStaff();
-  const canView = await staffCan("finance.view");
+  const [canView, canRefund] = await Promise.all([staffCan("finance.view"), staffCan("orders.refund")]);
 
   if (!canView) {
     return (
@@ -120,7 +120,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         <h2 id="payments-heading" className="font-heading text-lg font-semibold">
           Payments
         </h2>
-        <PaymentsTable payments={ledger.payments.map((row) => ({ ...row, at: row.at.toISOString() }))} />
+        <PaymentsTable payments={ledger.payments.map((row) => ({ ...row, at: row.at.toISOString() }))} canRefund={canRefund} />
       </section>
 
       <section aria-labelledby="refunds-heading" className="flex flex-col gap-3">

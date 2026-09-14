@@ -15,15 +15,17 @@ import "server-only";
 
 import { and, desc, eq, like, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLogs, loyaltyAccounts, loyaltyTransactions, orderEvents, orders, payments } from "@/db/schema";
+import { auditLogs, loyaltyAccounts, loyaltyTransactions, orderEvents, orders, payments, refunds } from "@/db/schema";
 import { type Role, authorize } from "@/domain/permissions";
-import { type Paise, formatINR, paise, subtract } from "@/lib/money";
+import { type Paise, ZERO, add, formatINR, paise, subtract } from "@/lib/money";
 import { pointsEarned } from "@/lib/loyalty";
 import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
 import { awardStampForOrder, qualifyingStampSpend, redeemStampReward } from "./loyalty";
 import { financialYear, invoiceNumber, parseInvoiceNumber } from "@/lib/invoice";
 import { CASH_PROVIDER, type PaymentMethod, type PaymentResult, RAZORPAY_PROVIDER, getProvider } from "@/lib/payments";
 import { withIdempotency } from "./idempotency";
+import { canTransition } from "@/domain/order-status";
+import { advanceOrder } from "./orders";
 
 export type RecordPaymentResult =
   | { ok: true; paymentId: string; replayed: boolean }
@@ -475,4 +477,126 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
 
   if (!result.ok) return { ok: false, error: result.error };
   return { ok: true, paymentId: result.paymentId, replayed };
+}
+
+/* ------------------------------------------------------------------ */
+/* Refunds — roadmap 1.4                                               */
+/* ------------------------------------------------------------------ */
+
+export type RefundPaymentResult = { ok: true; refundId: string; orderId: string; fullyRefunded: boolean } | { ok: false; error: string };
+
+/**
+ * Gives money back.
+ *
+ * Online: Razorpay is asked to refund and the row is written only once it
+ * agrees. Cash: the till hands it over and the row records who did. The
+ * amount can never exceed what was captured less what has already gone
+ * back; a full refund moves the order to REFUNDED (through `advanceOrder`,
+ * which also voids the FRYBIRD REWARDS stamp) when the lifecycle allows the
+ * move, and a partial one leaves the order where it is. Every refund lands
+ * a `refunds` row, an `order_events` row and an audit row with the actor.
+ */
+export async function refundPayment(input: {
+  paymentId: string;
+  amount: Paise;
+  reason: string;
+  actorUserId: string;
+  actorRoles: readonly Role[];
+  orgId: string;
+}): Promise<RefundPaymentResult> {
+  try {
+    authorize(input.actorRoles, "orders.refund");
+  } catch {
+    return { ok: false, error: "Refunds need a manager or the owner." };
+  }
+  if (input.amount <= ZERO) return { ok: false, error: "A refund has to be more than nothing." };
+  const reason = input.reason.trim();
+  if (reason.length < 3) return { ok: false, error: "Say why, in a few words." };
+
+  const database = db();
+  const [payment] = await database
+    .select()
+    .from(payments)
+    .where(and(eq(payments.id, input.paymentId), eq(payments.orgId, input.orgId)))
+    .limit(1);
+  if (!payment) return { ok: false, error: "That payment does not exist." };
+  if (payment.status !== "CAPTURED" && payment.status !== "PARTIALLY_REFUNDED") {
+    return { ok: false, error: `Only a captured payment can be refunded; this one is ${payment.status.toLowerCase().replace("_", " ")}.` };
+  }
+
+  const [order] = await database.select().from(orders).where(eq(orders.id, payment.orderId)).limit(1);
+  if (!order) return { ok: false, error: "That order does not exist." };
+
+  const booked = await database.select({ amount: refunds.amount }).from(refunds).where(eq(refunds.paymentId, payment.id));
+  const alreadyRefunded = booked.reduce((sum, row) => add(sum, paise(row.amount)), ZERO);
+  const remaining = subtract(paise(payment.amount), alreadyRefunded);
+  if (input.amount > remaining) {
+    return { ok: false, error: `Only ${formatINR(remaining)} is left to refund on this payment.` };
+  }
+
+  const provider = getProvider(payment.provider);
+  const refunded = await provider.refund({ providerPaymentId: payment.providerPaymentId, amount: input.amount, reason });
+  if (!refunded.ok) return { ok: false, error: refunded.error ?? "The refund could not be made." };
+
+  const now = new Date();
+  const [row] = await database
+    .insert(refunds)
+    .values({
+      orgId: input.orgId,
+      paymentId: payment.id,
+      orderId: order.id,
+      amount: refunded.refundedAmount,
+      reason,
+      actorUserId: input.actorUserId,
+      provider: payment.provider,
+      providerRefundId: refunded.providerRefundId,
+    })
+    .returning({ id: refunds.id });
+  if (!row) return { ok: false, error: "The refund was made but could not be recorded. Tell the owner." };
+
+  const fullyRefunded = add(alreadyRefunded, refunded.refundedAmount) >= paise(payment.amount);
+  await database
+    .update(payments)
+    .set({ status: fullyRefunded ? "REFUNDED" : "PARTIALLY_REFUNDED", updatedAt: now })
+    .where(eq(payments.id, payment.id));
+
+  await database.insert(auditLogs).values({
+    orgId: input.orgId,
+    locationId: order.locationId,
+    actorUserId: input.actorUserId,
+    action: "payment_refunded",
+    entity: "payments",
+    entityId: payment.id,
+    before: { status: payment.status, refunded: alreadyRefunded.toString() },
+    after: {
+      status: fullyRefunded ? "REFUNDED" : "PARTIALLY_REFUNDED",
+      amount: refunded.refundedAmount.toString(),
+      reason,
+      provider: payment.provider,
+      providerRefundId: refunded.providerRefundId,
+      orderId: order.id,
+    },
+  });
+
+  // A full refund closes the order as REFUNDED where the lifecycle allows
+  // it (paid, cooking, ready, out, completed). advanceOrder writes the event
+  // and voids the stamp. A partial refund, or an order the graph will not
+  // move, gets an event of its own so the trail still shows the money.
+  if (fullyRefunded && canTransition(order.status, "REFUNDED", order.fulfilment)) {
+    const moved = await advanceOrder({ orderId: order.id, to: "REFUNDED", actorUserId: input.actorUserId, orgId: input.orgId });
+    if (!moved.ok) {
+      await database.insert(orderEvents).values({ orgId: input.orgId, orderId: order.id, fromStatus: order.status, toStatus: order.status, actorUserId: input.actorUserId, reason: `Refunded ${formatINR(refunded.refundedAmount)} — ${reason}` });
+    }
+  } else {
+    await database.insert(orderEvents).values({
+      orgId: input.orgId,
+      orderId: order.id,
+      fromStatus: order.status,
+      toStatus: order.status,
+      actorUserId: input.actorUserId,
+      reason: `${fullyRefunded ? "Refunded" : "Part refunded"} ${formatINR(refunded.refundedAmount)} — ${reason}`,
+    });
+  }
+
+  return { ok: true, refundId: row.id, orderId: order.id, fullyRefunded };
 }
