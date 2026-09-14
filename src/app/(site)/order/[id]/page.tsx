@@ -8,6 +8,7 @@ import { getOrder } from "@/lib/repositories/orders";
 import { getRating } from "@/lib/ratings";
 import { OrderRating } from "@/components/order/rating";
 import { PayOnline } from "@/components/order/pay-online";
+import { OrderLive } from "@/components/order/order-live";
 import { RAZORPAY_PROVIDER, razorpayConfig } from "@/lib/payments";
 import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
 
@@ -21,8 +22,9 @@ export const metadata: Metadata = { title: "Your order" };
  * the system does not actually have reliable data." The shop calls when it is
  * ready, and the page says exactly that.
  *
- * Realtime status updates are Phase 3. Until then the page reflects the status
- * at load, which is honest rather than stale-pretending-to-be-live.
+ * The page keeps itself current (roadmap 2.3): the order's own broadcast
+ * topic re-runs this render when the kitchen moves it, with a slow poll
+ * behind it, until the order is finished.
  */
 /**
  * The steps an order actually passes through, which differ by how it is going
@@ -99,6 +101,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
 
   return (
     <div className="mx-auto w-full max-w-2xl px-[var(--gutter)] py-10 sm:py-14">
+      <OrderLive orderId={order.id} active={!cancelled && status !== "COMPLETED"} />
       <p className="text-xs font-semibold uppercase tracking-[0.08em] text-primary">Order received</p>
       <h1 className="mt-2 font-heading text-4xl font-bold tracking-tight sm:text-5xl">
         <span className="tabular">#{order.orderNumber}</span>
