@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { StaffOrder } from "@/components/staff/order-card";
+import { LiveRefresh } from "@/components/staff/live-refresh";
 import { OrdersBoard } from "@/components/staff/orders-board";
 import { requireStaff, staffCan } from "@/lib/auth";
 import { listActiveOrders } from "@/lib/repositories/orders";
@@ -49,12 +50,8 @@ export default async function StaffOrdersPage({ searchParams }: { searchParams: 
         initialSelectedId={open ?? null}
       />
 
-      {/*
-        Orders do not appear on their own yet — realtime is Phase 3. Saying so
-        beats a screen that looks live and silently isn't, which is how a
-        counter misses an order.
-      */}
-      <p className="text-sm text-muted-foreground">This list updates when you reload. Live updates are not built yet.</p>
+      {/* Orders arrive on their own: every order event re-runs this page (roadmap 2.1), with a slow poll behind it. */}
+      <LiveRefresh orgId={staff.orgId} />
     </div>
   );
 }
