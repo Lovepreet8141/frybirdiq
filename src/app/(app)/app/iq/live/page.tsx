@@ -4,6 +4,7 @@ import { AlarmClock, ChefHat } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { LiveRefresh } from "@/components/staff/live-refresh";
+import { CommandCenterNav } from "@/components/iq/command-center-nav";
 import { DataTrust, KpiTile, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
 import { PermissionDenied } from "@/components/states";
@@ -107,8 +108,9 @@ export default async function LiveOperationsPage() {
           </div>
         }
       />
+      <CommandCenterNav current="live" />
 
-      <DataTrust items={[{ tone: "gain", text: `Live · refreshes every ${REFRESH_MS / 1000} s · last at ${clock(new Date(now))} IST` }, { tone: "neutral", text: "Every figure is a fact from the order rows — no score, no forecast" }]} />
+      <DataTrust items={[{ tone: "gain", text: `Live · updates as orders move, ${REFRESH_MS / 1000} s fallback · rendered ${clock(new Date(now))} IST` }, { tone: "neutral", text: "Every figure is a fact from the order rows — no score, no forecast" }]} />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <KpiTile label="Awaiting decision" value={String(awaiting.length)} note="New orders the counter hasn't accepted" className="min-h-[124px]" />

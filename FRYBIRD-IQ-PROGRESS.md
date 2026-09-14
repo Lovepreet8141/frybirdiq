@@ -7,6 +7,68 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Batch: Menu + Analytics + Admin + Command Center — slice 4 of 4: Command Center
+
+**Status:** Complete on `kit-radix-nova`, gates green (typecheck, lint,
+480/480 in 37 files, RSC check, build — 62 routes). **Not deployed; the
+whole batch now waits for one approval.** UI only: no new query, no
+new rule, no model call.
+
+**Routes changed:** `/app/iq` (Overview), `/app/iq/live`,
+`/app/iq/activity`; **new** `/app/iq/alerts` and `/app/iq/brief` (both
+`analytics.view`, in the sidebar's Operations group and the breadcrumb;
+Overview's active-match excludes them).
+
+**Purchased kit inspection (`@shadcnuikit`).** Searched "alerts status
+list warning", "AI assistant chat prompt".
+- `tables5` / `tables11` (status tabs, filters) and `tables14` (orders
+  with expandable rows) — inspected for Alerts; an alert is a finding
+  with a cause and two actions, not a row, so the app's own
+  `InsightCard` (via `AttentionCards`) stays the unit and the kit
+  contributes the grouped-by-status structure (sections per level with
+  counts) rather than a table.
+- Nothing in the registry is an AI/chat block (the search returns
+  menubars, progress bars and badges), which settles it: the AI brief
+  page is a `Panel` + `CapabilityPanel` foundation, not an imitation of a
+  chat UI, and it has no input box because nothing would answer it.
+- `skeleton2–5` — inspected; `/app/iq/loading.tsx` already covers the
+  segment.
+
+**What changed:**
+- **`CommandCenterNav`** on Overview, Live, Activity, Alerts and AI
+  brief — the Alerts tab carries the urgent count (NOW + TODAY) as a
+  loss-toned badge. It replaces Overview's inline text nav, whose
+  analytics links now live in the sidebar's Analytics group.
+- **Alerts (new):** the Overview's `attentionCards` rules, fed by the
+  same repositories through a new pure helper
+  (`src/lib/iq/alerts.ts` — `attentionInput`, `daysOfHistory`,
+  `groupAlerts`, `urgentCount`; 6 tests), so the two screens can never
+  disagree. Four tiles (needs a hand now, later this week, late orders,
+  cash unsettled — the last `missing` when there is none), the cards
+  grouped Now / Today / This week / Setup with each level's note, a
+  **What the rules can see** panel (five connected signals; **Rush
+  mode**, **Smart 86** and **alerts to your phone** marked not
+  connected with the reason), and **Order health right now** — the
+  Overview's own `RightNow` tiles with their drawers. Live via the
+  order-events channel with a 30 s fallback.
+- **AI brief (new):** "Not connected" said in the panel meta and the
+  trust line; what the brief will contain, what it will be allowed to
+  read (each a tool over an existing repository), and a prerequisites
+  panel — conversation tables present, `ANTHROPIC_API_KEY` present or
+  not on the server (boolean only, never the value), tools / brief /
+  Ask FRYBIRD not built. No fake result, no disabled input.
+- **Overview:** the strip; "All alerts →" as the attention panel's
+  action; "Live operations →" stays on Right now. Everything else on
+  the screen is untouched.
+- **Live operations / Activity:** the strip and a trust line that says
+  how the screen updates (channel, fallback) and how far back it reaches.
+
+**Functionality preserved:** every Overview control, comparison and
+panel; Live's three tables and links; the activity feed; all
+`analytics.view` gates.
+
+---
+
 ## Batch: Menu + Analytics + Admin + Command Center — slice 3 of 4: Admin
 
 **Status:** Complete on `kit-radix-nova`, gates green (typecheck, lint,
@@ -2462,7 +2524,7 @@ shipped to production so far.
 ## Cumulative state of validation
 
 As of the most recent slice above: `pnpm typecheck` clean, `pnpm lint`
-clean, `pnpm test` 475/475 passing (36 files), `pnpm build` succeeds (60
+clean, `pnpm test` 480/480 passing (37 files), `pnpm build` succeeds (62
 routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record

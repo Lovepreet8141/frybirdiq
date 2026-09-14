@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AttentionCards } from "@/components/iq/attention-cards";
+import { CommandCenterNav } from "@/components/iq/command-center-nav";
 import { CostBreakdownDonut } from "@/components/iq/cost-breakdown-donut";
 import { FoodCostChart } from "@/components/iq/food-cost-chart";
 import { type Kpi, KpiCards } from "@/components/iq/kpi-cards";
@@ -53,7 +54,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     );
   }
 
-  const [canManageSettings, canViewMenu, { range: requestedRange, vs }, { now }] = await Promise.all([staffCan("settings.manage"), staffCan("menu.view"), searchParams, snapshot()]);
+  const [{ range: requestedRange, vs }, { now }] = await Promise.all([searchParams, snapshot()]);
   const range: OverviewRange = isOverviewRange(requestedRange) ? requestedRange : "today";
   const rangeLabel = RANGE_LABEL[range];
   const today = businessDate(now);
@@ -224,17 +225,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
           </div>
           <OverviewControls range={range} compare={compare} options={options} />
         </div>
-        <nav aria-label="FRYBIRD IQ sections" className="flex flex-wrap gap-x-5 gap-y-2 border-b border-border pb-2.5 text-[14px] font-semibold text-muted-foreground">
-          <span aria-current="page" className="text-foreground shadow-[0_12px_0_-10px_var(--foreground)]">Overview</span>
-          <Link href="/app/iq/live" className="transition-colors hover:text-foreground">Live</Link>
-          <Link href="/app/iq/activity" className="transition-colors hover:text-foreground">Activity</Link>
-          <Link href="/app/iq/channels" className="transition-colors hover:text-foreground">Channels</Link>
-          <Link href="/app/iq/products" className="transition-colors hover:text-foreground">Products</Link>
-          <Link href="/app/iq/pnl" className="transition-colors hover:text-foreground">Profit &amp; loss</Link>
-          <Link href="/app/iq/expenses" className="transition-colors hover:text-foreground">Expenses</Link>
-          {canManageSettings && <Link href="/app/iq/rewards" className="transition-colors hover:text-foreground">Rewards</Link>}
-          {canViewMenu && <Link href="/app/iq/menu" className="transition-colors hover:text-foreground">Menu</Link>}
-        </nav>
+        <CommandCenterNav current="overview" alertCount={cards.filter((card) => card.level === "NOW" || card.level === "TODAY").length} />
       </div>
 
       {/* What is happening: the three real figures and the one that is not yet. */}
@@ -260,7 +251,16 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
         </section>
 
         <Panel aria-labelledby="attention-heading" className="min-w-0">
-          <PanelHeader id="attention-heading" title="Needs your attention" meta={alertSummary(cards)} />
+          <PanelHeader
+            id="attention-heading"
+            title="Needs your attention"
+            meta={alertSummary(cards)}
+            action={
+              <Link href="/app/iq/alerts" className="font-semibold text-foreground underline-offset-2 hover:underline">
+                All alerts →
+              </Link>
+            }
+          />
           <PanelBody>
             <AttentionCards cards={cards} />
           </PanelBody>

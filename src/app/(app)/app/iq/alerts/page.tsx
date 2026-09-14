@@ -1,0 +1,114 @@
+import type { Metadata } from "next";
+import { AttentionCards } from "@/components/iq/attention-cards";
+import { CommandCenterNav } from "@/components/iq/command-center-nav";
+import { RightNow } from "@/components/iq/right-now";
+import { type Capability, CapabilityPanel, DataTrust, KpiTile, SectionHeading } from "@/components/iq/ui";
+import { LiveRefresh } from "@/components/staff/live-refresh";
+import { PageHeader } from "@/components/staff/page-header";
+import { PermissionDenied } from "@/components/states";
+import { requireStaff, staffCan } from "@/lib/auth";
+import { businessDate, resolveRange } from "@/lib/dates";
+import { LEVEL_COPY, attentionInput, groupAlerts, urgentCount } from "@/lib/iq/alerts";
+import { alertSummary, attentionCards } from "@/lib/iq/overview";
+import { type Paise, formatINR } from "@/lib/money";
+import { foodCostWeeklySeries, getProfitAndLoss } from "@/lib/repositories/expenses";
+import { getOverviewSettings, getRightNow, productLastSales } from "@/lib/repositories/overview";
+
+export const metadata: Metadata = { title: "Alerts", robots: { index: false, follow: false } };
+export const dynamic = "force-dynamic";
+
+const REFRESH_MS = 30_000;
+
+/** Which signals feed the rules, and which would-be signals have no source yet. */
+const SIGNALS: readonly Capability[] = [
+  { name: "Orders past their promised time", connected: true, note: "From the order rows and the time the counter promised" },
+  { name: "Prep time this hour", connected: true, note: "Measured from accepted to ready on today's tickets" },
+  { name: "Cash orders not yet settled", connected: true, note: "Payments the till has not taken against orders out with a rider or at the counter" },
+  { name: "Menu items not selling", connected: true, note: "Days since each live product last sold, once the shop has 7 days of history" },
+  { name: "Cost inputs missing", connected: true, note: "Which of food, packaging, labour and operating costs have been recorded" },
+  { name: "Rush mode", connected: false, note: "No hold switch or promise-time override exists; today the counter turns orders down one at a time" },
+  { name: "Projected stockouts (Smart 86)", connected: false, note: "Needs stock on hand and consumption — roadmap 3.2 to 3.6" },
+  { name: "Alerts to your phone", connected: false, note: "No automatic channel is wired yet — see Admin › Notifications" },
+];
+
+/**
+ * COMMAND CENTER › Alerts. Every finding the Overview's "Needs your
+ * attention" panel can raise, grouped by urgency, with the measurements
+ * behind them. Same rules (`attentionCards`), same inputs, same
+ * repositories — never a second opinion.
+ */
+export default async function AlertsPage() {
+  const staff = await requireStaff();
+  if (!(await staffCan("analytics.view"))) {
+    return (
+      <div className="mx-auto w-full max-w-lg px-[var(--gutter)] py-16">
+        <PermissionDenied action="view alerts" />
+      </div>
+    );
+  }
+
+  const now = new Date();
+  const today = businessDate(now);
+  const settings = await getOverviewSettings(staff.orgId);
+  const [rightNow, lastSales, pnl, foodCost] = await Promise.all([getRightNow(staff.orgId, settings.kitchenCapacity, now.getTime()), productLastSales(staff.orgId, now), getProfitAndLoss(staff.orgId, resolveRange("mtd")), foodCostWeeklySeries(staff.orgId)]);
+
+  const cards = attentionCards(
+    attentionInput({
+      late: rightNow.late,
+      prep: rightNow.prep,
+      pendingCash: rightNow.pendingCash,
+      unsold: lastSales.map((product) => ({ name: product.name, days: product.days, isHighestPriced: product.isHighestPriced })),
+      openingDate: settings.opening.date,
+      today,
+      directTotal: pnl.direct.reduce((sum, row) => sum + row.amount, 0n) as Paise,
+      fixedTotal: pnl.fixed.reduce((sum, row) => sum + row.amount, 0n) as Paise,
+      anyWeeklyDirectCost: foodCost.some((point) => point.directCost > 0n),
+    }),
+  );
+  const groups = groupAlerts(cards);
+  const urgent = urgentCount(cards);
+  const clock = now.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false });
+
+  return (
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
+      <LiveRefresh orgId={staff.orgId} fallbackMs={REFRESH_MS} />
+      <PageHeader title="Alerts" description={alertSummary(cards)} />
+      <CommandCenterNav current="alerts" alertCount={urgent} />
+
+      <DataTrust
+        items={[
+          { tone: "gain", text: `Rules over measured numbers · rendered ${clock} IST · updates as orders move` },
+          { tone: "neutral", text: "Findings and actions come only from data FRYBIRD IQ can see — no score, no forecast" },
+        ]}
+      />
+
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <KpiTile label="Needs a hand now" value={String(urgent)} note={urgent === 0 ? "Nothing urgent" : "Now and today"} emphasis={urgent > 0} className={urgent > 0 ? "[&_.font-money]:text-loss" : undefined} />
+        <KpiTile label="Later this week" value={String(cards.length - urgent)} note="Decisions and setup" />
+        <KpiTile label="Late orders" value={String(rightNow.late.count)} note={rightNow.late.count === 0 ? "Nothing past its promised time" : `Oldest ${rightNow.late.oldestLateMinutes} min over`} className={rightNow.late.count > 0 ? "[&_.font-money]:text-loss" : undefined} />
+        <KpiTile label="Cash unsettled" value={rightNow.pendingCash.count === 0 ? "—" : formatINR(rightNow.pendingCash.total, "whole")} missing={rightNow.pendingCash.count === 0} note={rightNow.pendingCash.count === 0 ? "Every cash order is settled" : `${rightNow.pendingCash.count} ${rightNow.pendingCash.count === 1 ? "order" : "orders"} · oldest ${rightNow.pendingCash.oldestMinutes} min`} />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="flex flex-col gap-6 lg:col-span-2">
+          {groups.length === 0 ? (
+            <AttentionCards cards={[]} />
+          ) : (
+            groups.map((group) => (
+              <section key={group.level} aria-labelledby={`alerts-${group.level}`} className="flex flex-col gap-3">
+                <SectionHeading id={`alerts-${group.level}`} title={LEVEL_COPY[group.level].title} note={`${group.cards.length} · ${LEVEL_COPY[group.level].note}`} />
+                <AttentionCards cards={group.cards} />
+              </section>
+            ))
+          )}
+        </div>
+        <CapabilityPanel title="What the rules can see" items={SIGNALS} />
+      </div>
+
+      <section aria-labelledby="health-heading" className="flex flex-col gap-3">
+        <SectionHeading id="health-heading" title="Order health right now" note="The measurements the rules read · click a tile for the orders behind it" />
+        <RightNow tiles={rightNow.tiles} />
+      </section>
+    </div>
+  );
+}

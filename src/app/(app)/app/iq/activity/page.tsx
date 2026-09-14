@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { CommandCenterNav } from "@/components/iq/command-center-nav";
+import { DataTrust } from "@/components/iq/ui";
 import { ActivityFeed } from "@/components/staff/activity-feed";
 import { LiveRefresh } from "@/components/staff/live-refresh";
 import { PageHeader } from "@/components/staff/page-header";
@@ -27,13 +29,18 @@ export default async function ActivityPage() {
   }
 
   const events = await listRecentOrderEvents(staff.orgId);
+  const oldest = events[events.length - 1];
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-[var(--gutter)] py-8">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
       <LiveRefresh orgId={staff.orgId} fallbackMs={REFRESH_MS} />
-      <PageHeader
-        title="Activity"
-        description={`The last ${events.length} order events — who moved what, and when. Updates as orders move.`}
+      <PageHeader title="Activity" description="Every order status change — who moved what, and when — from the append-only order history." />
+      <CommandCenterNav current="activity" />
+      <DataTrust
+        items={[
+          { tone: "gain", text: `Latest ${events.length} events · updates as orders move` },
+          ...(oldest ? [{ tone: "neutral" as const, text: `Back to ${oldest.at.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} IST` }] : []),
+        ]}
       />
       <ActivityFeed events={events.map((event) => ({ ...event, at: event.at.toISOString() }))} />
     </div>
