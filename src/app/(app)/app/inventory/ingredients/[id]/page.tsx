@@ -55,11 +55,11 @@ export default async function IngredientPage({ params, searchParams }: { params:
         />
         <MiniStat label="Yield" value={formatBps(ingredient.yieldBps, 0)} hint="Survives trimming" />
         <MiniStat label="Waste" value={formatBps(ingredient.wasteBps, 1)} hint="Lost after prep" />
-        <MiniStat label="On hand" value={`${ingredient.onHand} ${unit}`} hint="Stock movements are a later slice" />
+        <MiniStat label="On hand" value="Not tracked" hint="Needs stock movements (roadmap 3.2) — no quantity is real yet" />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Panel>
+        <Panel id="price" className="scroll-mt-24">
           <PanelHeader title="Record a price" description="What you last paid, in the unit you bought it in. Usable cost follows from yield and waste." />
           <PanelBody>
             {canManage ? (

@@ -7,6 +7,102 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice (UI Kit): Inventory workspace — `tables12` mechanics over real master data, honest about what is not connected
+
+**Status:** Complete on `kit-radix-nova`, gates green (typecheck, lint
+with no warnings, 466/466 tests in 35 files, RSC check, `pnpm build`).
+**Not deployed** — the owner asked for explicit approval before any
+deploy, so the frybirdiq.tech walk is still owed. Read-only UI slice: no
+inventory write path, no schema, no change to repository, action, money,
+tax, order or inventory logic. No figure on the screen is invented.
+
+**Purchased kit inspection (`@shadcnuikit`, real registry source via the
+CLI, not screenshots).** Searched "inventory", "products table filter",
+"stats card metric".
+- `@shadcnuikit/tables12` ("Product inventory table with sortable
+  columns, status filter, CSV export, add product dialog, page size
+  selector, and pagination") — **adopted**: sortable headers (with an
+  explicit asc/desc arrow and `aria-sort`, an improvement on its neutral
+  glyph), the checkbox filter menu with a count badge, the page-size
+  `Select`, the numbered pagination strip (`getPageNumbers` kept
+  verbatim as `pageNumbers`), the row action menu, and CSV export.
+  **Not adopted**: row selection, bulk status changes, duplicate and
+  delete (no write path exists for any of them), the add-product form
+  with price/stock fields (the existing `IngredientForm` is the add
+  dialog), and its per-status tint classes (`amber-500/15` etc. — status
+  is `Badge success/outline` per MASTER.md).
+- `@shadcnuikit/tables9` — already the basis of the app's table shell;
+  re-read, nothing new taken.
+- `@shadcnuikit/stat-card1` ("KPI and pipeline cards") — inspected; the
+  app's `KpiTile` already carries the design system's version of this
+  card, including the `missing` state this screen needs. Its lime/indigo
+  split bar was not taken (colour is status-only on the IQ surface).
+- `@shadcnuikit/welcome-card1` ("Onboarding and empty-state cards") —
+  inspected; it is a congratulations card with a `+65%` figure and a
+  `DASHBOARD_BASE_URL` star image, not an empty state. The app's
+  `EmptyState` (§56) is used instead.
+
+**Kit-version note.** The kit's table blocks are written for TanStack
+Table v8 (`useReactTable`, `getSortedRowModel`). The repo has
+`@tanstack/react-table` **9.2.4**, whose v8 compat export is untyped —
+every callback came back `any`. The table is therefore the first
+TanStack usage in the repo and is written on v9's own API:
+`tableFeatures({ rowSortingFeature, rowPaginationFeature,
+sortedRowModel, paginatedRowModel, columnMeta })`, `useTable`,
+`createColumnHelper`. The `columnMeta` slot types the per-column
+alignment and responsive visibility. `Select` was added from the
+canonical registry (`radix-ui`, style `radix-nova`); its generated
+`import { cn } from "cn"` was corrected to `@/lib/utils`.
+
+**What it is (`/app/inventory`):**
+- Header with a Suppliers link; a `DataTrust` line — "● Master data
+  live · N ingredients, N active suppliers" / "● Stock, waste and
+  purchasing not connected".
+- Four `KpiTile`s: Ingredients (active · packaging), Priced (x of y,
+  emphasised while any is unpriced), Suppliers (how many active
+  ingredients have no usual supplier), and **Stock on hand as
+  `missing`** — "Not yet tracked", with the note naming roadmap 3.2.
+  The old `0 g` on-hand column is gone from the list and the ingredient
+  page's tile now reads "Not tracked"; a zero that was never measured is
+  not a quantity.
+- **Needs attention** (new pure module `src/lib/inventory/attention.ts`,
+  7 tests): unpriced ingredients first, then prices older than 30 days
+  (oldest first), then no usual supplier — active ingredients only,
+  derived from `costPerBaseUnit`, `lastPricedAt` and `supplierId`. Six
+  shown, the rest counted with a pointer to the "No price yet" filter.
+- **Where ingredients come from** — `BarList` of the top five active
+  suppliers by how many ingredients name them (share of sourced
+  ingredients).
+- **What this screen knows** (`CapabilityPanel`) — six capabilities,
+  each "● Connected" or "● Not connected" with the roadmap slice that
+  connects it: ingredients & suppliers, price records (connected); stock
+  & movements 3.2, waste 3.3, consumption 3.4, purchasing 3.7 (not).
+- The ingredients table: search across name / SKU / supplier; filters
+  Active, Inactive, No price yet, Ingredients, Packaging; 10/20/50 rows;
+  "1–20 of 49 · 61 in total"; columns collapse by breakpoint (yield ·
+  waste ≥ md, supplier ≥ lg, last priced ≥ sm); "Never" priced shows in
+  the flag tone; row menu → View ingredient / Record a price (deep-links
+  to `#price` on the ingredient page); Export CSV renders only with
+  `reports.export` and writes the sorted, filtered rows with `formatINR`.
+- States: `loading.tsx` shaped like the finished screen; `error.tsx`
+  ("Inventory couldn't load", stale-deployment aware); `EmptyState` with
+  "Add the first ingredient" (or the permission sentence) when there are
+  no ingredients; a "Nothing matches" row with a clear-filters action;
+  `PermissionDenied` without `inventory.view`; add/price controls only
+  with `purchasing.manage`, re-checked in every action.
+
+**Files:** `src/app/(app)/app/inventory/{page,loading,error}.tsx`,
+`src/app/(app)/app/inventory/ingredients/[id]/page.tsx` (on-hand tile,
+`#price` anchor), `src/components/inventory/{ingredients-table,
+capability-panel}.tsx`, `src/components/ui/select.tsx` (new),
+`src/lib/inventory/attention.ts` + test.
+
+**Owed before "done":** the walk on frybirdiq.tech at 1440 and 390 —
+sort, filter, page, export, the empty and no-match states, and the
+ingredient page anchor — once the deploy is approved.
+
+---
+
 ## Fix — realtime subscribers shared one channel; the staff app fell into its error boundary
 
 **Status:** Fixed and deployed (`1025fc0`) at 17:19 UTC. Gates green
@@ -2070,7 +2166,7 @@ shipped to production so far.
 ## Cumulative state of validation
 
 As of the most recent slice above: `pnpm typecheck` clean, `pnpm lint`
-clean, `pnpm test` 459/459 passing (34 files), `pnpm build` succeeds (60
+clean, `pnpm test` 466/466 passing (35 files), `pnpm build` succeeds (60
 routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record
