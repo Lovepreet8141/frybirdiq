@@ -79,6 +79,12 @@ export function AppChrome({
     canSeeHardware,
   } = permissions;
 
+  // The Driver App prototype is a phone in a frame with its own notes; the
+  // staff chrome around it would only confuse what is being reviewed.
+  if (pathname.startsWith("/app/driver-preview")) {
+    return <main className="flex flex-1 flex-col">{children}</main>;
+  }
+
   // POS and the kitchen display: touch/speed screens that should not spend
   // 16rem of width on navigation chrome.
   const isFullBleed = pathname.startsWith("/app/pos") || pathname.startsWith("/app/kds");
