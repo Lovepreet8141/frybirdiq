@@ -7,6 +7,54 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Design phase 2, wave 1 — Orders, Live operations, lists and reports
+
+**Status:** Deployed (see deployment record). Gates green (443 tests).
+Verified read-only on the local build against production data at 1440
+and 390 — no real record was created, changed or removed; the earlier
+simulated-device flows were not re-run against production.
+
+**Orders** (`orders-board.tsx`): title with dot-and-word counts (open ·
+due soon · late — the late count is new), the search as a proper input,
+status pills in ink with counts, the type filter as the segmented
+control, rows as panels with a quiet hover and the late edge, and honest
+empty states ("No open orders" vs "No orders match" with Clear filters).
+Every action is the same `advanceOrderAction` / sheet as before.
+
+**Live operations**: KPI tiles (late in loss red), a live data-trust line
+("refreshes every 15 s · last at …", "every figure is a fact from the
+order rows"), and three panels — Late, Awaiting a decision, In the
+kitchen — whose headers state the count and the oldest wait.
+
+**Lists**: Customers segments as ink pills with counts; Staff status on
+the signal tokens; every hand-rolled panel in the app moved to the one
+panel look; every period nav (Finance, Products, Channels, Expenses,
+P&L) became the same segmented control; the Overview nav item no longer
+stays lit on P&L, Expenses or Rewards.
+
+**Reports**: Profit & loss header states the period, "captured payments
+only" and INR; the three figures are tiles; the statement sits in a
+panel. Expenses ledger in a panel. Products / Channels / Finance inherit
+the tiles (a name such as "OG Frybird Classic" or "Cash" stays in the
+interface face — the serif is for figures).
+
+**KDS**: tickets on the panel ground with a loss edge when late; nothing
+else, the POS/KDS motion ceiling stands.
+
+**Seen, not changed (data, not design):** every product on Products
+reads "Removed from menu" and the only category is "Removed products",
+while the same items are live on the POS — the analytics join between
+sold lines and the menu rows needs a look. Thirty-odd open orders from
+the launch days are still open and late by thousands of minutes; they
+should be completed or cancelled from Orders.
+
+**Next waves:** Menu control centre, ingredient detail and supplier
+screens, the promotions workspace header and library, the receipt
+designer and printers pages on Panel/PanelHeader, then POS touch
+polish within the 120 ms ceiling.
+
+---
+
 ## Design system — the FRYBIRD IQ OS language across the staff app (phase 1)
 
 **Status:** Foundations, primitives, shell and the Overview are done and
@@ -1893,6 +1941,16 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-14 13:55 UTC — Design phase 2, wave 1
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from
+`kit-radix-nova` at `da46b7a`. Gates in-script green (443/443, RSC check
+OK). Post-deploy: `active`; smoke `HTTP 200`. Verified read-only on the
+local build before deploying (Orders, Live, Customers, Staff, Inventory,
+Finance, P&L, Expenses, Products, Channels, Promotions, KDS, Printers at
+1440 and 390, console clean). No production record touched; session
+revoked; temp helpers deleted.
 
 ### 2026-09-14 13:15 UTC — Design language phase 1 (no migration)
 
