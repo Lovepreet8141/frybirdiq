@@ -7,6 +7,63 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Command Center redesign — `/app/iq` on the purchased Sales + E-commerce compositions
+
+**Status:** Implemented on `kit-radix-nova`, gates green (typecheck, lint,
+480/480, RSC check, build). **Not deployed, not pushed** — waiting for
+review. The browser review could not run in this session (the Chrome
+tools were not attached to the session); the local production build was
+served and `/app/iq` responds (307 to sign-in unauthenticated, no
+runtime error). The signed-in visual pass at desktop / tablet / phone /
+light / dark is owed.
+
+**Purchased dashboard selected:** the **Sales dashboard's first row**
+(`app/dashboard/(auth)/sales/page.tsx`: `RevenueChart` 4 cols beside a
+2×2 of compact KPI cards) over the **E-commerce dashboard's lower page**
+(`…/ecommerce/page.tsx`: 12-col grid, 4/4/4 then 8/4 then 8/4). Also
+inspected in full source: Default, Website analytics, Finance, Payment.
+
+**Exact purchased source used (kit checkout on disk + registry):**
+| FRYBIRD component | Purchased source |
+|---|---|
+| `overview/sales-trend-card.tsx` | `sales/components/revenue-chart.tsx` (registry `ecommerce-chart2`) — header toggle buttons that are the series totals, `CartesianGrid vertical={false}`, bar chart |
+| `overview/kpi-compact.tsx` | `sales/components/balance-card.tsx` figure + `website-analytics/components/stat-cards.tsx` trend badge in `CardAction` |
+| `overview/channel-performance-card.tsx` | `ecommerce/components/sales-by-location.tsx` — name, delta badge, share, `Progress` |
+| `overview/payment-methods-card.tsx` | `ecommerce/components/visit-by-source.tsx` — `Pie` with inner radius, centre `Label`, dot legend |
+| `overview/products-card.tsx` | `sales/components/best-selling-products.tsx` (registry `product-list-card1`) + the kit's tabs-in-`CardHeader` idiom |
+| `overview/open-orders-card.tsx` | `ecommerce/components/recent-orders.tsx` (registry `tables14` / `tables9`) — dense table in a card with a header action |
+| `overview/attention-card.tsx`, `overview/activity-card.tsx` | kit `Card`/`CardAction` chrome; content is FRYBIRD's `InsightCard` and the order-events feed (no kit block is an alerts or activity panel) |
+| Card chrome | the repo's `Card` (radix-nova; `CardAction`, `--card-spacing`, `size="sm"`) |
+
+**Data functions connected (all existing, none changed):**
+`getRangeComparison` + `compareOptions`/`resolveCompare`/`deltaBps`
+(Revenue, Paid orders, Average order); `getProfitAndLoss(mtd)` (Net
+profit · month, `missing` until expenses exist); `getDashboard(7d | range)`
+series (Sales trend, toggle Revenue ⇄ Orders); `getChannelBreakdown(range)`
+(Channels); `getPaymentsLedger(range).byMethod` + `capturedTotal`
+(Payment methods donut, "captured", never revenue); `attentionCards` via
+the shared `attentionInput` (Needs attention, top 3, urgent count on the
+strip); `getRightNow` tiles through the existing `RightNow` drawers
+(Order health); `dashboard.topProducts` + `notSelling(range)` (Products
+tabs); `listActiveOrders` (Open orders — late = past `estimatedReadyAt`,
+same fact Live uses); `listRecentOrderEvents(orgId, 8)` (Activity).
+
+**Deliberate omissions:** the four "Not yet tracked" KPI dashes (food
+cost %, labour %, prime cost, gross profit) and the "Where money goes"
+panel left the Overview — they live on Food cost & P&L, and Net profit's
+card says "Not yet tracked" with the cost-lines count. No loyalty card:
+no aggregate loyalty query exists and none was invented.
+
+**Removed (orphaned by the redesign):** `iq/kpi-cards.tsx`,
+`iq/revenue-chart.tsx`, `iq/stat-tile.tsx`, `iq/top-sellers-table.tsx`,
+`iq/not-selling-table.tsx`, `iq/overview-kpis.tsx`.
+
+**Theme:** `x29171c`'s exported CSS is client-rendered on the generator
+and was not retrievable headlessly; the page uses the repo's existing IQ
+token set (`--panel`, gain/loss/flag, `--chart-1…5`, `--radius`).
+
+---
+
 ## Batch: Menu + Analytics + Admin + Command Center — slice 4 of 4: Command Center
 
 **Status:** Complete on `kit-radix-nova`, gates green (typecheck, lint,
