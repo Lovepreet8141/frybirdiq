@@ -67,7 +67,17 @@ default, auto print) instead of the simulated one, and clicked Remove.
 The row is gone; its print jobs remain with `printer_id` null. A restore
 script (same id, device, address, settings; jobs relinked; audited as
 `printer_restored`) was written but its direct database write was
-blocked by the session's permission policy, so it was not run. The
+blocked by the session's permission policy, so it was not run until the
+owner authorised it. **Restored 2026-09-14 13:25 UTC** on that
+instruction: the script verified the device (id, name, ANDROID,
+POS_TERMINAL), the printer id being free, the `printer_removed` and
+`printer_added` audit rows for that id, and that no other default printer
+existed, then recreated the row with the original id, device, address,
+default and auto print, relinked its one orphaned print job, set last
+print 12:58 UTC, and wrote a `printer_restored` audit row. Confirmed in
+Settings → Printers on production: "KPC307-UEWB-A6FE · Bluetooth ·
+24:19:7B:5B:A6:FE · Device Redmi Pad 2 Wi-Fi + Cellular · Auto Print ON ·
+Default YES · Last Print 13 minutes ago". Nothing else was touched. The
 verification scripts were changed so a simulated device is named
 "Simulated verification pad", every selector is scoped to that name,
 and teardown is by the simulated device key only — never a UI Remove.
