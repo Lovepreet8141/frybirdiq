@@ -17,6 +17,8 @@ import type { Role } from "@/domain/permissions";
 interface StaffSummary {
   readonly displayName: string | null;
   readonly roles: readonly Role[];
+  /** For the realtime channel: which organization's order events to listen to. */
+  readonly orgId: string;
 }
 
 interface Permissions {
@@ -136,7 +138,7 @@ export function AppChrome({
 
         {canSeeOrders && (
           <div className="print:hidden">
-            <NewOrderAlert canReject={canReject} />
+            <NewOrderAlert canReject={canReject} orgId={staff.orgId} />
           </div>
         )}
 
@@ -199,7 +201,7 @@ export function AppChrome({
 
         {canSeeOrders && (
           <div className="print:hidden">
-            <NewOrderAlert canReject={canReject} />
+            <NewOrderAlert canReject={canReject} orgId={staff.orgId} />
           </div>
         )}
 

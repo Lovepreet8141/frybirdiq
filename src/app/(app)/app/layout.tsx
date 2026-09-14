@@ -73,7 +73,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
        site is dark. They are different rooms. */
     <div data-surface="iq" className="surface-dark flex min-h-dvh flex-col bg-background text-foreground">
       <AppChrome
-        staff={{ displayName: staff.displayName, roles: staff.roles }}
+        staff={{ displayName: staff.displayName, roles: staff.roles, orgId: staff.orgId }}
         store={store}
         sidebarDefaultOpen={sidebarDefaultOpen}
         permissions={{

@@ -10,9 +10,11 @@ import { ReloadAppButton } from "@/components/reload-app-button";
 import { STALE_DEPLOYMENT_MESSAGE, isStaleDeploymentError } from "@/lib/errors/stale-deployment";
 import { openKotWindow } from "./print-kot";
 import { useChime } from "./use-chime";
+import { useOrderEvents } from "@/lib/realtime/client";
 import { cn } from "@/lib/utils";
 
-const POLL_MS = 12_000;
+/** Fallback only: the order_events channel prompts a check the moment an order lands (roadmap 2.4); this catches a dropped socket. */
+const POLL_MS = 60_000;
 /**
  * Gap between bursts while an order is in front of someone.
  *
@@ -36,9 +38,14 @@ const DEFERRED_MS = 8_000;
  * ever cooks. "Later" is there for when the counter genuinely cannot deal with
  * it yet — it drops to a persistent banner rather than disappearing.
  */
-export function NewOrderAlert({ canReject }: { canReject: boolean }) {
+export function NewOrderAlert({ canReject, orgId }: { canReject: boolean; orgId: string }) {
   const router = useRouter();
   const { play, ready: soundReady } = useChime();
+  const tickRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Realtime: an order event re-runs the same permission-checked poll at
+  // once, so the chime fires within a second or two of placement.
+  useOrderEvents(orgId, () => void tickRef.current?.());
 
   const [queue, setQueue] = useState<NewOrder[]>([]);
   const [deferred, setDeferred] = useState<NewOrder[]>([]);
@@ -110,6 +117,7 @@ export function NewOrderAlert({ canReject }: { canReject: boolean }) {
       router.refresh();
     };
 
+    tickRef.current = tick;
     void tick();
     const timer = setInterval(() => void tick(), POLL_MS);
     return () => {
