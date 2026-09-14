@@ -2,7 +2,9 @@
 
 Concrete file list for what actually gets pulled into the repo, adapted from `FRYBIRD-REFERENCE-CATALOG.md`. Nothing here is a wholesale copy — see "How each entry is built" below the table.
 
-## Primitives (via `shadcn add`, base-nova/Base UI — not hand-translated from the kit)
+## Primitives (via `shadcn add`, radix-nova / `radix-ui` — not hand-translated from the kit)
+
+> Updated 14 Sep 2026 (roadmap 0.6): the primitive layer moved from Base UI to the shadcn **radix-nova** style in `b6d2aaa`. Every file in `src/components/ui` now imports from `radix-ui` or is plain markup; `@base-ui/react` is no longer a dependency.
 
 Already done this session: `avatar`, `tooltip`, `progress`, `dropdown-menu`, `table`, `chart`.
 
@@ -42,4 +44,4 @@ One new migration: `tables` table + `orders.table_id` (nullable FK). See `FRYBIR
 
 ## How each entry is built (process, not just outcome)
 
-For every "adapted" component: read the reference file for its layout/interaction shape and state transitions, then write a new FRYBIRD file from scratch — real prop types against FRYBIRD's actual repository return shapes, `formatINR` at the render boundary only, Base UI primitives, house conventions (`cn` from `"cn"`, `data-slot`, the existing `Card`/`Table`/`Dialog` primitives already in `src/components/ui/`). No reference file is ever copied into this repo, imported from, or left as a dependency — this satisfies the brief's explicit "never copy kit files into this repo wholesale" and the licensing concern (the kit is licensed to you personally; this repo is on GitHub).
+For every "adapted" component: read the reference file for its layout/interaction shape and state transitions, then write a new FRYBIRD file from scratch — real prop types against FRYBIRD's actual repository return shapes, `formatINR` at the render boundary only, radix-nova primitives, house conventions (`cn` from `"cn"`, `data-slot`, the existing `Card`/`Table`/`Dialog` primitives already in `src/components/ui/`). No reference file is ever copied into this repo, imported from, or left as a dependency — this satisfies the brief's explicit "never copy kit files into this repo wholesale" and the licensing concern (the kit is licensed to you personally; this repo is on GitHub).
