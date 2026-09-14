@@ -1884,6 +1884,17 @@ clean.
 
 ## Deployment record
 
+### 2026-09-14 13:15 UTC — Design language phase 1 (no migration)
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from
+`kit-radix-nova` at `904a883`. Gates in-script green (443/443, RSC check
+OK). Post-deploy: `active`; smoke `HTTP 200`. Verified on the local build
+before deploying: Overview, Orders, Printers, Promotions, Bill & Receipt,
+Products, Channels, Restaurant, Ingredients, POS and KDS at 1440 and 390,
+console clean; the printer setup flows (browser and simulated app) re-run
+end to end on the restyled primitives. See the incident note in the slice
+entry above: the real Bluetooth printer row needs restoring.
+
 ### 2026-09-14 12:10 UTC — Printer setup UX (browser vs FRYBIRD POS app)
 
 Deployed via `./deploy/deploy.sh root@194.238.16.200` from
