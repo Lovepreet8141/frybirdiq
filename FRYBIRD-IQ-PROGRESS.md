@@ -48,10 +48,15 @@ sold lines and the menu rows needs a look. Thirty-odd open orders from
 the launch days are still open and late by thousands of minutes; they
 should be completed or cancelled from Orders.
 
-**Next waves:** Menu control centre, ingredient detail and supplier
-screens, the promotions workspace header and library, the receipt
-designer and printers pages on Panel/PanelHeader, then POS touch
-polish within the 120 ms ceiling.
+**Wave 2 (deployed `19919ff`):** the Promotions workspace — title,
+live/draft counts as dot-and-word, library "New" as the ink action,
+panel titles in sentence case, save / draft / duplicate / delete on the
+primitive styles, handlers untouched — and the Printers page section
+titles.
+
+**Next waves:** Menu control centre and product cards, ingredient
+detail and supplier screens, the receipt designer column headers, then
+POS touch polish within the 120 ms ceiling.
 
 ---
 
@@ -1941,6 +1946,13 @@ routes — the three inventory routes are new), `scripts/check-rsc-boundaries.sh
 clean.
 
 ## Deployment record
+
+### 2026-09-14 14:20 UTC — Design phase 2, wave 2
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from
+`kit-radix-nova` at `19919ff` (and `22f8e9a` before it). Gates
+in-script green. Post-deploy: `active`; smoke `HTTP 200`. Read-only
+verification on the local build; no production record touched.
 
 ### 2026-09-14 13:55 UTC — Design phase 2, wave 1
 
