@@ -536,7 +536,9 @@ export async function persistOrder(input: PersistOrderInput): Promise<PersistOrd
   for (const { modifiers, ...columns } of snapshotLines(input.lines)) {
     const [item] = await database
       .insert(orderItems)
-      .values({ orgId: input.orgId, orderId: order.id, productId: null, ...columns })
+      // `productId` comes from the snapshot: the catalogue row for reporting,
+      // beside the copied name and price the order actually keeps. §51.
+      .values({ orgId: input.orgId, orderId: order.id, ...columns })
       .returning();
 
     if (item && modifiers.length > 0) {

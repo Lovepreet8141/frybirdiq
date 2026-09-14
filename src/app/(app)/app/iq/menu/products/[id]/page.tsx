@@ -79,6 +79,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
   const comboSavings = comboItemsTotal - product.basePrice;
 
   const previewProduct: MenuProduct = {
+    id: product.id,
     slug: product.slug,
     name: product.name,
     description: product.description,

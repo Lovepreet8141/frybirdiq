@@ -458,7 +458,7 @@ export async function productLastSales(orgId: string, now: Date): Promise<readon
         SELECT max(o.created_at) FROM order_items oi
         INNER JOIN orders o ON o.id = oi.order_id
         INNER JOIN payments p ON p.order_id = o.id AND p.status = 'CAPTURED'
-        WHERE oi.product_id = products.id
+        WHERE (oi.product_id = products.id OR (oi.product_id IS NULL AND oi.product_name = products.name))
           AND o.org_id = ${orgId}
           AND o.status NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')
       )`,

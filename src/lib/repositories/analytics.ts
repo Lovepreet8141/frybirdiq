@@ -13,7 +13,7 @@ import "server-only";
  * nobody has paid for.
  */
 
-import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { categories, orderItems, orders, payments, products, recipeItems, recipes } from "@/db/schema";
 import { ORDER_CHANNELS, type OrderChannel } from "@/domain/order-channel";
@@ -254,8 +254,14 @@ export async function getChannelBreakdown(orgId: string, range: DateRange): Prom
 }
 
 export interface ProductPerformance {
-  /** Null when the product has since been deleted; the snapshot name still identifies it. */
+  /** Null when no catalogue row matches the line by id or by name; the snapshot name still identifies it. */
   readonly productId: string | null;
+  /**
+   * How the sold lines were tied to the catalogue: by the line's product id,
+   * or — for lines written before placement recorded one — by the exact
+   * snapshot name. Null when neither matched.
+   */
+  readonly matchedBy: "id" | "name" | null;
   readonly name: string;
   readonly category: string | null;
   readonly imageUrl: string | null;
@@ -328,10 +334,16 @@ export async function getMenuPerformance(orgId: string, range: DateRange): Promi
     priorRevenue.set(key, add(priorRevenue.get(key) ?? ZERO, paise(item.lineTotal)));
   }
 
+  // Tie each sold line to today's catalogue: by the product id the line
+  // carries, or — for lines placed before the id was recorded — by the exact
+  // snapshot name within this org. The name is a lookup, never an identity
+  // (§ "Identity is stored"): a renamed product simply stops matching, and
+  // the line keeps reading under the name it was sold as.
   const productIds = [...byKey.values()].map((value) => value.productId).filter((id): id is string => id !== null);
-  const [catalogue, recipeRows] = await Promise.all([
-    productIds.length > 0
-      ? database
+  const unlinkedNames = [...byKey.values()].filter((value) => value.productId === null).map((value) => value.name);
+  const catalogue =
+    productIds.length > 0 || unlinkedNames.length > 0
+      ? await database
           .select({
             id: products.id,
             name: products.name,
@@ -341,29 +353,34 @@ export async function getMenuPerformance(orgId: string, range: DateRange): Promi
           })
           .from(products)
           .leftJoin(categories, eq(categories.id, products.categoryId))
-          .where(and(eq(products.orgId, orgId), inArray(products.id, productIds)))
-      : [],
-    productIds.length > 0
-      ? database
+          .where(and(eq(products.orgId, orgId), or(productIds.length > 0 ? inArray(products.id, productIds) : sql`false`, unlinkedNames.length > 0 ? inArray(products.name, unlinkedNames) : sql`false`)))
+      : [];
+  const catalogueById = new Map(catalogue.map((row) => [row.id, row]));
+  const catalogueByName = new Map<string, (typeof catalogue)[number]>();
+  for (const row of catalogue) if (!catalogueByName.has(row.name)) catalogueByName.set(row.name, row);
+  const resolvedIds = [...new Set([...productIds, ...unlinkedNames.map((name) => catalogueByName.get(name)?.id).filter((id): id is string => Boolean(id))])];
+  const recipeRows =
+    resolvedIds.length > 0
+      ? await database
           .select({ productId: recipes.productId, lines: sql<number>`count(${recipeItems.id})::int` })
           .from(recipes)
           .leftJoin(recipeItems, eq(recipeItems.recipeId, recipes.id))
-          .where(and(eq(recipes.orgId, orgId), inArray(recipes.productId, productIds)))
+          .where(and(eq(recipes.orgId, orgId), inArray(recipes.productId, resolvedIds)))
           .groupBy(recipes.productId)
-      : [],
-  ]);
-  const catalogueById = new Map(catalogue.map((row) => [row.id, row]));
+      : [];
   const recipeByProduct = new Map(recipeRows.map((row) => [row.productId, row.lines]));
 
   const total = add(...[...byKey.values()].map((value) => value.revenue));
 
   const productList: ProductPerformance[] = [...byKey.entries()]
     .map(([key, value]) => {
-      const live = value.productId ? catalogueById.get(value.productId) : undefined;
+      const live = value.productId ? catalogueById.get(value.productId) : catalogueByName.get(value.name);
+      const productId = value.productId ?? live?.id ?? null;
       const before = priorRevenue.get(key) ?? ZERO;
-      const lines = value.productId ? recipeByProduct.get(value.productId) : undefined;
+      const lines = productId ? recipeByProduct.get(productId) : undefined;
       return {
-        productId: value.productId,
+        productId,
+        matchedBy: value.productId ? ("id" as const) : live ? ("name" as const) : null,
         name: live?.name ?? value.name,
         category: live?.category ?? null,
         imageUrl: live?.images?.[0]?.url ?? null,
@@ -553,7 +570,7 @@ export async function notSelling(orgId: string, range: DateRange, limit = 6): Pr
           SELECT 1 FROM ${orderItems}
           INNER JOIN ${orders} ON ${orders.id} = ${orderItems.orderId}
           INNER JOIN ${payments} ON ${payments.orderId} = ${orders.id} AND ${payments.status} = 'CAPTURED'
-          WHERE ${orderItems.productId} = ${products.id}
+          WHERE (${orderItems.productId} = ${products.id} OR (${orderItems.productId} IS NULL AND ${orderItems.productName} = ${products.name}))
             AND ${orders.orgId} = ${orgId}
             AND ${orders.createdAt} >= ${range.from.toISOString()}
             AND ${orders.createdAt} < ${range.to.toISOString()}

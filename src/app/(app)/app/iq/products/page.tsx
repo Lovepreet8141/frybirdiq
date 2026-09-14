@@ -152,6 +152,11 @@ export default async function ProductsAnalyticsPage({ searchParams }: { searchPa
                           <span className="font-semibold">{product.name}</span>
                           <span className="text-xs text-muted-foreground">
                             {product.productId === null ? "Removed from menu" : (product.category ?? "Uncategorised")}
+                            {product.matchedBy === "name" && (
+                              <span className="ml-1 text-muted-foreground/70" title="These sales were recorded before order lines carried the product id; they are tied to the product by its name.">
+                                · by name
+                              </span>
+                            )}
                             {product.productId !== null && !product.isActive ? " · inactive" : ""}
                           </span>
                         </div>

@@ -13,6 +13,8 @@ import type { Paise } from "@/lib/money";
 import type { PricedLine } from "@/lib/pricing";
 
 export interface SnapshotProduct {
+  /** The catalogue row, kept on the line for reporting (§51: the name and price are still copied, never looked up). */
+  readonly id?: string | null;
   readonly name: string;
   readonly taxRateBps: number;
   readonly hsnCode: string | null;
@@ -41,6 +43,8 @@ export interface OrderModifierSnapshot {
 }
 
 export interface OrderItemSnapshot {
+  /** Null when the product was not a catalogue row (the static menu fallback). */
+  readonly productId: string | null;
   readonly productName: string;
   readonly quantity: number;
   readonly unitPrice: Paise;
@@ -62,6 +66,7 @@ function groupNameFor(product: SnapshotProduct, slug: string): string {
 
 export function snapshotLines(lines: readonly SnapshotLineInput[]): OrderItemSnapshot[] {
   return lines.map((line, position) => ({
+    productId: line.product.id ?? null,
     productName: line.product.name,
     quantity: line.quantity,
     unitPrice: line.unitPrice,

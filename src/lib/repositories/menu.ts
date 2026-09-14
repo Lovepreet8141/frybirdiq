@@ -62,6 +62,12 @@ export interface MenuModifierGroup {
 }
 
 export interface MenuProduct {
+  /**
+   * The product row's id — what an order line records so reporting can join
+   * back to the catalogue. Null only when the menu came from the static
+   * transcription (`src/db/menu-data.ts`), which has no rows.
+   */
+  readonly id: string | null;
   readonly slug: string;
   readonly name: string;
   readonly description: string | null;
@@ -183,6 +189,8 @@ function chickenGroups(cut: (typeof CHICKEN_CUTS)[number]): MenuModifierGroup[] 
  * available.
  */
 const TRANSCRIPTION_DEFAULTS = {
+  /** The transcription has no rows, so no id — an order line from it records null. */
+  id: null,
   sku: null,
   prepMinutes: null,
   kdsStation: null,
@@ -465,6 +473,7 @@ async function readFromDatabase(channel: string | null): Promise<MenuCategory[]>
     if (hiddenCategoryIds.has(row.categoryId)) continue;
 
     const product: MenuProduct = {
+      id: row.productId,
       slug: row.productSlug,
       name: row.productName,
       description: row.description,

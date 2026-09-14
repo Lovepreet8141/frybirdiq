@@ -81,3 +81,17 @@ describe("snapshotLines", () => {
     expect(snapshotLines([line, line, line]).map((row) => row.position)).toEqual([0, 1, 2]);
   });
 });
+
+describe("snapshotLines — product id", () => {
+  it("keeps the catalogue id on the line for reporting, and null when the product had none", () => {
+    const base = { name: "OG Frybird Classic", taxRateBps: 500, hsnCode: "996331", modifierGroups: [] };
+    const priced = { listed: 9900n, discount: 0n, taxable: 9429n, total: 471n, gross: 9900n, cgst: 236n, sgst: 235n, igst: 0n } as never;
+    const [withId, without] = snapshotLines([
+      { product: { ...base, id: "2f6a0f0e-0000-4000-8000-000000000001" }, quantity: 1, modifiers: [], unitPrice: 9900n as never, priced },
+      { product: base, quantity: 1, modifiers: [], unitPrice: 9900n as never, priced },
+    ]);
+    expect(withId?.productId).toBe("2f6a0f0e-0000-4000-8000-000000000001");
+    expect(without?.productId).toBeNull();
+    expect(withId?.productName).toBe("OG Frybird Classic");
+  });
+});
