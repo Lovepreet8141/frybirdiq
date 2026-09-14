@@ -109,7 +109,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KpiTile label="Captured" value={formatINR(ledger.capturedTotal, "whole")} note={ledger.capturedCount === 0 ? `No captured payments ${range.label.toLowerCase()}` : `${ledger.capturedCount} ${ledger.capturedCount === 1 ? "payment" : "payments"} · ${range.label}`} emphasis={ledger.capturedCount > 0} />
-        <KpiTile label="Cash at the till" value={split.cashBps === null ? "—" : formatBps(split.cashBps, 0)} missing={split.cashBps === null} note={split.cashBps === null ? "Nothing captured yet, so no split to show" : `${formatINR(split.cash, "whole")} cash · ${formatINR(split.online, "whole")} through a provider`} />
+        <KpiTile label="Cash payments" value={split.cashBps === null ? "—" : formatBps(split.cashBps, 0)} missing={split.cashBps === null} note={split.cashBps === null ? "Nothing captured yet, so no split to show" : `${formatINR(split.cash, "whole")} cash · ${formatINR(split.online, "whole")} through a provider`} />
         <KpiTile label="Provider fees" value={ledger.feeTotal === 0n ? "—" : formatINR(ledger.feeTotal)} note={ledger.feeTotal === 0n ? "No provider fees recorded; cash carries none" : "Kept separate so a payout reconciles"} />
         <KpiTile label="Refunded" value={ledger.refunds.length === 0 ? "—" : formatINR(ledger.refundedTotal, "whole")} note={ledger.refunds.length === 0 ? `No refunds ${range.label.toLowerCase()}` : `${ledger.refunds.length} ${ledger.refunds.length === 1 ? "refund" : "refunds"}`} />
       </div>

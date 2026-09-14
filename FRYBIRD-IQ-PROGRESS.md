@@ -61,7 +61,7 @@ chart expenses".
   sessions, rider handovers and reconciliation not connected (roadmap
   5.1–5.3)".
 - Four `KpiTile`s from ledger fields: **Captured** (count, emphasised
-  when non-zero), **Cash at the till** — cash as a share of captured,
+  when non-zero), **Cash payments** — cash as a share of captured,
   with the ₹ cash / ₹ provider split beneath; `missing` when nothing
   was captured — **Provider fees**, **Refunded**.
 - **Captured by day** — the stacked chart (cash under, provider over)
