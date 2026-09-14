@@ -103,7 +103,7 @@ yesterday's order. §51.
 | Layer | Choice |
 |---|---|
 | Framework | Next.js 16, App Router, TypeScript strict |
-| Styling | Tailwind CSS v4 + shadcn/ui on Base UI primitives |
+| Styling | Tailwind CSS v4 + shadcn/ui `radix-nova` style on Radix primitives (`asChild`, `onCheckedChange`). Migrated from Base UI in b6d2aaa — never add `@base-ui/*` imports |
 | Motion | Motion for React |
 | Icons | Lucide |
 | Database | Supabase Postgres, row-level security on `org_id` |
