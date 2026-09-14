@@ -1,17 +1,21 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Card, CardContent } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { MiniStat } from "@/components/staff/mini-stat";
+import { ArrowUpRight } from "lucide-react";
+import { CapturedChart } from "@/components/finance/captured-chart";
+import { PaymentsTable } from "@/components/finance/payments-table";
+import { BarList, DataTrust, KpiTile, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
-import { PaymentsTable } from "@/components/staff/payments-table";
 import { PermissionDenied } from "@/components/states";
+import { Button } from "@/components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { requireStaff, staffCan } from "@/lib/auth";
-import { type RangeKey, resolveRange } from "@/lib/dates";
-import { formatINR } from "@/lib/money";
+import { type RangeKey, daysInRange, resolveRange } from "@/lib/dates";
+import { capturedByDay, methodShares, tillSplit } from "@/lib/finance/ledger-view";
+import { formatBps, formatINR } from "@/lib/money";
 import { getPaymentsLedger } from "@/lib/repositories/finance";
 
-export const metadata: Metadata = { title: "Payments", robots: { index: false, follow: false } };
+export const metadata: Metadata = { title: "Finance", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
 
 const RANGES: { key: RangeKey; label: string }[] = [
@@ -22,29 +26,21 @@ const RANGES: { key: RangeKey; label: string }[] = [
   { key: "mtd", label: "This month" },
 ];
 
-const METHOD_LABELS: Record<string, string> = {
-  CASH: "Cash",
-  UPI: "UPI",
-  CARD: "Card",
-  NETBANKING: "Net banking",
-  WALLET: "Wallet",
-  OTHER: "Other",
-};
-
 /**
- * The payments ledger. FINANCE > Payments. Gated on `finance.view`
- * (OWNER and MANAGER) — the till-level view of who took what, by what
- * method, which is a different question from the dashboard's revenue
- * figure and deliberately labelled "captured", never "revenue".
+ * FINANCE — the workspace over the payments ledger. Gated on
+ * `finance.view` (OWNER and MANAGER). Everything on it is `getPaymentsLedger`
+ * regrouped: captured is money that arrived and is deliberately never
+ * called revenue (that figure is Overview's); cash sessions, handovers and
+ * reconciliation are not connected yet and the screen says so.
  */
 export default async function FinancePage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
   const staff = await requireStaff();
-  const [canView, canRefund] = await Promise.all([staffCan("finance.view"), staffCan("orders.refund")]);
+  const [canView, canRefund, canExport, canSeeAnalytics] = await Promise.all([staffCan("finance.view"), staffCan("orders.refund"), staffCan("reports.export"), staffCan("analytics.view")]);
 
   if (!canView) {
     return (
       <div className="mx-auto w-full max-w-lg px-[var(--gutter)] py-16">
-        <PermissionDenied action="view payments" />
+        <PermissionDenied action="view finance" />
       </div>
     );
   }
@@ -54,112 +50,168 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const range = resolveRange(key);
   const ledger = await getPaymentsLedger(staff.orgId, range);
 
+  const days = daysInRange(range);
+  const series = capturedByDay(ledger.payments, days);
+  const shares = methodShares(ledger.byMethod, ledger.capturedTotal);
+  const split = tillSplit(ledger.byMethod);
+  const top = shares[0];
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
       <PageHeader
-        title="Payments"
-        description={`Every payment taken, ${range.label.toLowerCase()}. Captured means the money arrived; it is not the revenue figure on Overview.`}
+        title="Finance"
+        description={`Every payment taken ${range.label.toLowerCase()}. Captured means the money arrived; it is not the revenue figure on Overview.`}
         actions={
-          <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
-            {RANGES.map((option) => (
-              <Link
-                key={option.key}
-                href={`/app/finance?range=${option.key}`}
-                aria-current={option.key === key ? "page" : undefined}
-                className={
-                  option.key === key
-                    ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
-                    : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
-                }
-              >
-                {option.label}
-              </Link>
-            ))}
-          </nav>
+          <>
+            <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
+              {RANGES.map((option) => (
+                <Link
+                  key={option.key}
+                  href={`/app/finance?range=${option.key}`}
+                  aria-current={option.key === key ? "page" : undefined}
+                  className={
+                    option.key === key
+                      ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
+                      : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
+                  }
+                >
+                  {option.label}
+                </Link>
+              ))}
+            </nav>
+            {canSeeAnalytics && (
+              <>
+                <Button variant="outline" asChild>
+                  <Link href="/app/iq/pnl">
+                    Profit &amp; loss
+                    <ArrowUpRight data-icon="inline-end" aria-hidden="true" />
+                  </Link>
+                </Button>
+                <Button variant="outline" asChild>
+                  <Link href="/app/iq/expenses">
+                    Expenses
+                    <ArrowUpRight data-icon="inline-end" aria-hidden="true" />
+                  </Link>
+                </Button>
+              </>
+            )}
+          </>
         }
       />
 
+      <DataTrust
+        items={[
+          { tone: "gain", text: `Payments ledger live · ${ledger.payments.length} ${ledger.payments.length === 1 ? "record" : "records"} ${range.label.toLowerCase()}` },
+          { tone: "neutral", text: "Captured payments only are summed; pending and failed are listed, never counted" },
+          { tone: "flag", text: "Cash sessions, rider handovers and reconciliation not connected (roadmap 5.1–5.3)" },
+        ]}
+      />
+
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <MiniStat label="Captured" value={formatINR(ledger.capturedTotal, "whole")} hint={`${ledger.capturedCount} ${ledger.capturedCount === 1 ? "payment" : "payments"}`} />
-        <MiniStat label="Provider fees" value={ledger.feeTotal === 0n ? "—" : formatINR(ledger.feeTotal)} hint="Kept separate so a payout reconciles" />
-        <MiniStat label="Refunded" value={ledger.refunds.length === 0 ? "—" : formatINR(ledger.refundedTotal, "whole")} hint={`${ledger.refunds.length} ${ledger.refunds.length === 1 ? "refund" : "refunds"}`} />
-        <MiniStat
-          label="Top method"
-          value={ledger.byMethod[0] ? (METHOD_LABELS[ledger.byMethod[0].method] ?? ledger.byMethod[0].method) : "—"}
-          hint={ledger.byMethod[0] ? `${formatINR(ledger.byMethod[0].total, "whole")} across ${ledger.byMethod[0].count}` : "No captured payments"}
-        />
+        <KpiTile label="Captured" value={formatINR(ledger.capturedTotal, "whole")} note={ledger.capturedCount === 0 ? `No captured payments ${range.label.toLowerCase()}` : `${ledger.capturedCount} ${ledger.capturedCount === 1 ? "payment" : "payments"} · ${range.label}`} emphasis={ledger.capturedCount > 0} />
+        <KpiTile label="Cash at the till" value={split.cashBps === null ? "—" : formatBps(split.cashBps, 0)} missing={split.cashBps === null} note={split.cashBps === null ? "Nothing captured yet, so no split to show" : `${formatINR(split.cash, "whole")} cash · ${formatINR(split.online, "whole")} through a provider`} />
+        <KpiTile label="Provider fees" value={ledger.feeTotal === 0n ? "—" : formatINR(ledger.feeTotal)} note={ledger.feeTotal === 0n ? "No provider fees recorded; cash carries none" : "Kept separate so a payout reconciles"} />
+        <KpiTile label="Refunded" value={ledger.refunds.length === 0 ? "—" : formatINR(ledger.refundedTotal, "whole")} note={ledger.refunds.length === 0 ? `No refunds ${range.label.toLowerCase()}` : `${ledger.refunds.length} ${ledger.refunds.length === 1 ? "refund" : "refunds"}`} />
       </div>
 
-      {ledger.byMethod.length > 1 && (
-        <Card>
-          <CardContent className="flex flex-col gap-3">
-            <h2 className="font-heading text-lg font-semibold">By method</h2>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Method</TableHead>
-                  <TableHead className="text-right">Payments</TableHead>
-                  <TableHead className="text-right">Captured</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {ledger.byMethod.map((row) => (
-                  <TableRow key={row.method}>
-                    <TableCell className="font-medium">{METHOD_LABELS[row.method] ?? row.method}</TableCell>
-                    <TableCell className="tabular text-right text-muted-foreground">{row.count}</TableCell>
-                    <TableCell className="tabular text-right font-semibold">{formatINR(row.total, "whole")}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Panel className="lg:col-span-2">
+          <PanelHeader title="Captured by day" description="Cash under, provider payments over — the two piles a payout has to reconcile against." meta={ledger.capturedCount > 0 ? `${days.length} ${days.length === 1 ? "day" : "days"}` : undefined} />
+          <PanelBody className="pt-0">
+            {ledger.capturedCount === 0 ? (
+              <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-[13px] text-muted-foreground">Nothing captured {range.label.toLowerCase()}.</p>
+            ) : days.length === 1 ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-border px-4 py-3">
+                  <p className="text-[13px] text-muted-foreground">Cash</p>
+                  <p className="tabular font-money mt-1 text-[26px] leading-none">{formatINR(split.cash, "whole")}</p>
+                </div>
+                <div className="rounded-lg border border-border px-4 py-3">
+                  <p className="text-[13px] text-muted-foreground">Through a provider</p>
+                  <p className="tabular font-money mt-1 text-[26px] leading-none">{formatINR(split.online, "whole")}</p>
+                </div>
+              </div>
+            ) : (
+              <CapturedChart days={series} />
+            )}
+          </PanelBody>
+        </Panel>
 
-      <section aria-labelledby="payments-heading" className="flex flex-col gap-3">
-        <h2 id="payments-heading" className="font-heading text-lg font-semibold">
-          Payments
-        </h2>
-        <PaymentsTable payments={ledger.payments.map((row) => ({ ...row, at: row.at.toISOString() }))} canRefund={canRefund} />
-      </section>
+        <Panel>
+          <PanelHeader title="By method" meta={top ? `${top.label} leads` : undefined} />
+          <PanelBody className="pt-0">
+            {shares.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground">No captured payments to split.</p>
+            ) : (
+              <BarList rows={shares.map((row) => ({ key: row.method, label: `${row.label} · ${row.count}`, share: row.share, shareLabel: row.shareLabel, amount: formatINR(row.total, "whole") }))} />
+            )}
+          </PanelBody>
+        </Panel>
+      </div>
 
-      <section aria-labelledby="refunds-heading" className="flex flex-col gap-3">
-        <h2 id="refunds-heading" className="font-heading text-lg font-semibold">
-          Refunds
-        </h2>
-        {ledger.refunds.length === 0 ? (
-          <p className="rounded-lg border border-border bg-surface px-4 py-6 text-center text-sm text-muted-foreground">
-            No refunds in this period.
-          </p>
-        ) : (
-          <div className="overflow-hidden rounded-xl border border-border bg-panel">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Order</TableHead>
-                  <TableHead>Reason</TableHead>
-                  <TableHead className="hidden md:table-cell">By</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="hidden text-right sm:table-cell">When</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {ledger.refunds.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell className="tabular font-semibold">#{row.orderNumber}</TableCell>
-                    <TableCell className="whitespace-normal">{row.reason}</TableCell>
-                    <TableCell className="hidden text-muted-foreground md:table-cell">{row.by ?? "System"}</TableCell>
-                    <TableCell className="tabular text-right font-semibold">{formatINR(row.amount)}</TableCell>
-                    <TableCell className="tabular hidden text-right text-muted-foreground sm:table-cell">
-                      {row.at.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })}
-                    </TableCell>
+      <Tabs defaultValue="payments" className="flex flex-col gap-4">
+        <TabsList variant="line" aria-label="Ledger">
+          <TabsTrigger value="payments">
+            Payments <span className="tabular ml-1.5 text-xs text-muted-foreground">{ledger.payments.length}</span>
+          </TabsTrigger>
+          <TabsTrigger value="refunds">
+            Refunds <span className="tabular ml-1.5 text-xs text-muted-foreground">{ledger.refunds.length}</span>
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="payments">
+          <PaymentsTable
+            payments={ledger.payments.map((row) => ({
+              id: row.id,
+              orderNumber: row.orderNumber,
+              channel: row.channel,
+              status: row.status,
+              method: row.method,
+              provider: row.provider,
+              providerPaymentId: row.providerPaymentId,
+              amount: row.amount,
+              feeAmount: row.feeAmount,
+              capturedBy: row.capturedBy,
+              at: row.at.toISOString(),
+              refunded: row.refunded,
+            }))}
+            periodLabel={range.label}
+            canRefund={canRefund}
+            canExport={canExport}
+          />
+        </TabsContent>
+
+        <TabsContent value="refunds">
+          {ledger.refunds.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-border-strong/70 bg-panel px-4 py-10 text-center text-[13px] text-muted-foreground">No refunds {range.label.toLowerCase()}.</p>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-border bg-panel">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Order</TableHead>
+                    <TableHead>Reason</TableHead>
+                    <TableHead className="hidden md:table-cell">By</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead className="hidden text-right sm:table-cell">When</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </section>
+                </TableHeader>
+                <TableBody>
+                  {ledger.refunds.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="tabular font-semibold">#{row.orderNumber}</TableCell>
+                      <TableCell className="whitespace-normal">{row.reason}</TableCell>
+                      <TableCell className="hidden text-muted-foreground md:table-cell">{row.by ?? "System"}</TableCell>
+                      <TableCell className="tabular text-right font-semibold">{formatINR(row.amount)}</TableCell>
+                      <TableCell className="tabular hidden text-right text-muted-foreground sm:table-cell">{row.at.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

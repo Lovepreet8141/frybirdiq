@@ -7,6 +7,102 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Slice (UI Kit): Finance workspace — the payments ledger regrouped, nothing redefined
+
+**Status:** Complete on `kit-radix-nova`, gates green (typecheck, lint
+with no warnings, 475/475 tests in 36 files, RSC check, `pnpm build`).
+**Not deployed** — awaiting review and explicit approval. Read-only UI
+slice: no change to `getPaymentsLedger`, the P&L, expenses, payments,
+refunds, tax or pricing code; no schema; no second financial data path.
+Every figure on the screen is a field of the ledger the page already
+loaded, or a regrouping of its rows.
+
+**Purchased kit inspection (`@shadcnuikit`, real source via the CLI).**
+Searched "finance dashboard", "payment transactions table", "revenue
+chart expenses".
+- `@shadcnuikit/tables10` ("Transaction history table with date picker
+  filter, category filter, card account details, and numbered
+  pagination") — **adopted**: the checkbox filter menu with a count
+  badge (method and status here, category there) and the numbered
+  pagination strip. **Not adopted**: its single-date `Calendar` picker
+  (the ledger's period is already the server's `resolveRange`, which
+  keeps every total consistent with the rest of IQ), card-brand logos,
+  ± signed amounts, row selection and bulk delete.
+- `@shadcnuikit/tables16` ("Payment list with card style rows, sortable
+  headers, inline transaction detail columns, quick actions, and
+  pagination") — **adopted**: sortable amount/time headers and the
+  per-payment detail set (reference, fee, who, when). Its inline
+  `min-w-[1250px]` detail row is a Sheet here — on a tablet a wide row
+  is a horizontal scroll, a sheet is a tap. Its "Mark as paid" and
+  billing cycles were not taken; no such action exists.
+- `@shadcnuikit/tables12` — the sort/page/export mechanics already
+  written for Inventory, reused as-is (same TanStack v9 pattern).
+- `@shadcnuikit/ecommerce-chart1` ("Charts for store visits, sales, and
+  revenue") — **adopted** through the app's existing `ChannelChart`
+  adaptation: `Card` + `BarChart` + `XAxis` + tooltip, stacked. Colours
+  are `--chart-1` / `--chart-3`, the two neutral IQ series tokens; a
+  payment method is not a status.
+- `@shadcnuikit/line-chart1` ("balance, trends") — inspected, not used:
+  its period buttons re-slice a client-side array, whereas the period
+  here changes the server query; a balance line would also imply a
+  running balance the ledger does not hold.
+- `@shadcnuikit/tabs1` — the plain shadcn `Tabs`; used with the
+  `line` variant for Payments / Refunds.
+- `stat-card1` — re-read; the app's `KpiTile` remains the design
+  system's version (serif figure, `missing` state).
+
+**What it is (`/app/finance`):**
+- Header: the same five server-side periods; **Profit & loss** and
+  **Expenses** links (existing `/app/iq/*` routes, shown with
+  `analytics.view`) so the finance answers are one click apart without
+  moving any route.
+- `DataTrust`: "● Payments ledger live · N records", "● Captured only
+  are summed; pending and failed are listed, never counted", "● Cash
+  sessions, rider handovers and reconciliation not connected (roadmap
+  5.1–5.3)".
+- Four `KpiTile`s from ledger fields: **Captured** (count, emphasised
+  when non-zero), **Cash at the till** — cash as a share of captured,
+  with the ₹ cash / ₹ provider split beneath; `missing` when nothing
+  was captured — **Provider fees**, **Refunded**.
+- **Captured by day** — the stacked chart (cash under, provider over)
+  for multi-day periods; for a single day, two figures instead of a
+  one-bar chart. Bucketed by IST business day.
+- **By method** — `BarList` of each method's share of captured, with
+  counts (replaces the old three-column table).
+- **Payments / Refunds tabs**. Payments: search (order number, who took
+  it, provider reference), filter menu (methods present, with counts;
+  statuses), sort by order / fee / amount / time, 10/20/50 rows,
+  "1–20 of 143 · 143 in the period", CSV export with `reports.export`
+  (rupees as plain decimals, ISO UTC timestamps, every cell quoted).
+  Row → **Sheet**: amount in the serif, status and method badges,
+  provider, reference (mono), fee, refunded so far, left to refund,
+  taken by, full timestamp; **Refund this payment** only with
+  `orders.refund` and only while something is left — it opens the
+  existing `RefundDialog`, unchanged. Refunds: the existing table.
+- States: `loading.tsx` shaped like the screen; `error.tsx` ("The
+  payments ledger couldn't load" — no figure shown until it does);
+  `EmptyState` for a period with no payments; a no-match row with
+  clear-filters; `PermissionDenied` without `finance.view`.
+
+**New pure module** `src/lib/finance/ledger-view.ts` (9 tests):
+`capturedByDay` (captured only, by business day, cash vs online, quiet
+days are zeros), `methodShares`, `tillSplit`, `paymentsCsv`, and the
+method/status labels the old table kept privately. `tillOf`: cash is
+the one method with no gateway record.
+
+**Removed:** `src/components/staff/payments-table.tsx` (only the
+finance page used it) → `src/components/finance/payments-table.tsx`.
+
+**Files:** `src/app/(app)/app/finance/{page,loading,error}.tsx`,
+`src/components/finance/{payments-table,captured-chart}.tsx`,
+`src/lib/finance/ledger-view.ts` + test.
+
+**Owed before "done":** the walk on frybirdiq.tech at 1440 and 390 —
+periods, chart tooltip, filters, sort, page, export, the sheet and the
+refund hand-off, the refunds tab, empty and no-match states.
+
+---
+
 ## Slice (UI Kit): Inventory workspace — `tables12` mechanics over real master data, honest about what is not connected
 
 **Status:** Complete on `kit-radix-nova`, gates green (typecheck, lint
@@ -2166,7 +2262,7 @@ shipped to production so far.
 ## Cumulative state of validation
 
 As of the most recent slice above: `pnpm typecheck` clean, `pnpm lint`
-clean, `pnpm test` 466/466 passing (35 files), `pnpm build` succeeds (60
+clean, `pnpm test` 475/475 passing (36 files), `pnpm build` succeeds (60
 routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record
