@@ -61,4 +61,11 @@ if [ "$fail" -eq 0 ]; then
   echo "OK — no Server Component passes a function literal as a JSX prop"
 fi
 
+# The second runtime-only RSC failure this project has shipped: a Server
+# Component importing a function from a "use client" module and calling it
+# (see scripts/check-rsc-client-imports.mjs for what is and is not flagged).
+if ! node scripts/check-rsc-client-imports.mjs; then
+  fail=1
+fi
+
 exit $fail

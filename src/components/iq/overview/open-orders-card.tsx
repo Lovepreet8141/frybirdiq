@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
-import { statusLabel } from "@/components/staff/order-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
+import { statusLabel } from "@/domain/order-status-labels";
 import { type Paise, formatINR } from "@/lib/money";
 import { cn } from "@/lib/utils";
 

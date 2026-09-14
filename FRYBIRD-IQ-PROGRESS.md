@@ -7,6 +7,45 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Incident — `/app/iq` fell into its error boundary after `f2eda03`: a Server Component called a function from a "use client" module
+
+**Status:** Fixed on `kit-radix-nova` (local commit, not pushed, not
+deployed — awaiting approval). Production is still on `f2eda03` with
+the fault; every other Command Center screen renders.
+
+**What happened.** Every signed-in visit to `/app/iq` after the 21:14
+UTC deploy logged
+`⨯ Error: Attempted to call statusLabel() from the server but statusLabel is on the client`
+and the `/app` boundary showed "Something didn't work" (nginx logged 200,
+so no smoke test noticed). `open-orders-card.tsx` — a Server Component —
+imported `statusLabel` from `order-card.tsx`, which is `"use client"`.
+Across the RSC boundary that import is a client reference, not a
+function; the call throws only when the page renders with rows to map,
+which production has (32 open orders) and an unauthenticated curl never
+reaches. typecheck, lint, `next build` and the existing boundary script
+(which only checks function-literal props) all passed.
+
+**Fix.** `statusLabel` and `statusTone` moved verbatim into a pure module,
+`src/domain/order-status-labels.ts` (6 tests pin every label and tone);
+`order-card.tsx`, `orders-board.tsx` and `open-orders-card.tsx` import
+from there. No status, label, tone or gate changed.
+
+**Protection.** `scripts/check-rsc-client-imports.mjs`, run by
+`check-rsc-boundaries.sh`: a file under `src/app`/`src/components` with
+no directive that names-imports from a module that starts with
+`"use client"` and *calls* that identifier (`name(`) fails the gate.
+`import type` / `type X` are ignored, and rendering `<Name />` or
+passing the import as a prop is not flagged — 66 server files import
+from client modules legitimately and none trip it. Proven on a probe
+file (exit 1) and on the fixed tree (exit 0).
+
+**Verified before asking to deploy:** the standalone build served
+locally with the production env and an owner session — `/app/iq` 200,
+every section rendered over the real open orders, no error in the server
+log; `/app/orders` 200.
+
+---
+
 ## Command Center redesign — `/app/iq` on the purchased Sales + E-commerce compositions
 
 **Status:** Implemented on `kit-radix-nova`, gates green (typecheck, lint,

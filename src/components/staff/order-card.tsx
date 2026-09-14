@@ -7,6 +7,9 @@ import { Check, Clock, FileText, Loader2, Printer } from "lucide-react";
 import { type Paise, formatINR } from "@/lib/money";
 import { advanceOrderAction, markPaidAction } from "@/lib/auth/staff-actions";
 import type { OrderStatus } from "@/domain/order-status";
+// Pure, so the Command Center's Server Component can call it too — a
+// function exported from this "use client" file is a client reference there.
+import { statusLabel, statusTone } from "@/domain/order-status-labels";
 import { cn } from "@/lib/utils";
 import { DeliveryPanel } from "./delivery-panel";
 import { openKotWindow } from "./print-kot";
@@ -73,37 +76,6 @@ export function nextStep(
       return { to: "COMPLETED", label: "Delivered" };
     default:
       return null;
-  }
-}
-
-/**
- * The three-tier colour a status reads as, shared by every surface that
- * shows a status badge (this card, the orders table) so the mapping can
- * never drift between them. Ready/out-for-delivery reads as done; an unpaid
- * new order reads as needing attention; everything in between is neutral.
- */
-export function statusTone(status: OrderStatus): "success" | "warning" | "neutral" {
-  if (status === "READY" || status === "OUT_FOR_DELIVERY") return "success";
-  if (status === "PENDING_PAYMENT") return "warning";
-  return "neutral";
-}
-
-export function statusLabel(status: OrderStatus, fulfilment: StaffOrder["fulfilment"]): string {
-  switch (status) {
-    case "PENDING_PAYMENT":
-      return "New";
-    case "PAID":
-      return "Paid";
-    case "ACCEPTED":
-      return "Accepted";
-    case "PREPARING":
-      return "Cooking";
-    case "READY":
-      return fulfilment === "DELIVERY" ? "Ready to send" : "Ready to collect";
-    case "OUT_FOR_DELIVERY":
-      return "Out for delivery";
-    default:
-      return status;
   }
 }
 
