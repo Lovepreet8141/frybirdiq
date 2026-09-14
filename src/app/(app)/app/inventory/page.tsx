@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Truck } from "lucide-react";
-import { CapabilityPanel } from "@/components/inventory/capability-panel";
 import { IngredientsTable } from "@/components/inventory/ingredients-table";
-import { BarList, type BarRow, DataTrust, KpiTile, Panel, PanelBody, PanelHeader, SectionHeading, StatusWord } from "@/components/iq/ui";
+import { BarList, type BarRow, type Capability, CapabilityPanel, DataTrust, KpiTile, Panel, PanelBody, PanelHeader, SectionHeading, StatusWord } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
 import { PermissionDenied } from "@/components/states";
 import { Button } from "@/components/ui/button";
@@ -15,6 +14,16 @@ export const metadata: Metadata = { title: "Inventory", robots: { index: false, 
 export const dynamic = "force-dynamic";
 
 const ATTENTION_SHOWN = 6;
+
+/** Which ledgers exist behind this screen, and which roadmap slice (docs/ROADMAP.md, Phase 3) connects the rest. */
+const CAPABILITIES: readonly Capability[] = [
+  { name: "Ingredients and suppliers", connected: true, note: "Master data, editable under purchasing" },
+  { name: "Price records and usable cost", connected: true, note: "Every price recorded moves the ingredient's cost" },
+  { name: "Stock on hand and movements", connected: false, note: "Needs receive, adjust and count — roadmap 3.2" },
+  { name: "Waste log", connected: false, note: "Roadmap 3.3" },
+  { name: "Consumption on order", connected: false, note: "Roadmap 3.4, after recipes" },
+  { name: "Purchase orders and receiving", connected: false, note: "Roadmap 3.7" },
+];
 
 /**
  * INVENTORY — the workspace. Reads only the master data that exists
@@ -143,7 +152,7 @@ export default async function InventoryPage() {
               )}
             </PanelBody>
           </Panel>
-          <CapabilityPanel />
+          <CapabilityPanel items={CAPABILITIES} />
         </div>
       </div>
 

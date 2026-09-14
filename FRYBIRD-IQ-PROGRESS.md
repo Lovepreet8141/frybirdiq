@@ -7,6 +7,73 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Batch: Menu + Analytics + Admin + Command Center — slice 1 of 4: Menu sections
+
+**Status:** Complete on `kit-radix-nova`, gates green (typecheck, lint,
+475/475, RSC check, build). **Not deployed** — the whole batch waits for
+one approval. UI only: every server action, repository call and
+permission gate is the one that was there.
+
+**Routes changed:** `/app/iq/menu` (hub), `/app/iq/menu/modifiers`,
+`/app/iq/menu/combos`, `/app/iq/menu/media`, `/app/iq/menu/review`.
+`/app/inventory` touched only to consume the now-shared capability
+panel.
+
+**Purchased kit inspection (`@shadcnuikit`).** Searched "product list
+grid catalog", "file manager media gallery upload", "settings form
+profile", "activity timeline feed log", "page header tabs navigation".
+- `tables9` (segmented status filters with counts) — the pattern behind
+  the activity-log kind filter on Review: pills with per-kind counts,
+  only kinds that have changes.
+- `tables12` / `tables16` — the `Card`+`Table` shell, status badges and
+  right-aligned row actions, as already adopted on Inventory and
+  Finance; reused for Modifiers, Combos and the two Review tables.
+- `product-category3` ("Category layout with filters or tabs and product
+  grid") — inspected for the hub; the existing Control Center already
+  is this layout (category rail + filters + card grid, restyled in wave
+  3), so it was kept, not rebuilt.
+- `attachment1–4`, `combobox1–4` — inspected for Media; the existing
+  `MediaLibrary` (search, unused filter, upload, delete) already covers
+  the library, so only its page shell changed.
+- `navigation-menu2–4`, `dashboard-shell5/9` — inspected for a section
+  strip; none is a routed sub-navigation, so `MenuSectionNav` is a
+  small link strip on the kit's line-tab look (`border-b-2` active
+  tab), with the review count as a flag badge.
+
+**What changed:**
+- **`MenuSectionNav`** on all five Menu screens — Products · Modifiers ·
+  Combos · Media (`menu.edit`) · Review changes (`menu.publish`, with the
+  draft count). Replaces the hub's four outline buttons and the "←
+  Menu Control Center" back-links.
+- **Hub:** a `DataTrust` line stating what is live (products,
+  categories, modifiers, combos; availability per channel and timed
+  unavailability — the availability engine's `SCHEDULED_UNAVAILABLE`
+  already exists) and what is not (channel-specific pricing). The
+  health strip and Control Center are unchanged.
+- **Modifiers:** table — group (option count, how many carry a price),
+  first three options, the selection rule in words ("Exactly one", "Up
+  to 3, optional"), Draft/Live badge, Publish/Delete via the same bound
+  server actions; `EmptyState` with a first-group action.
+- **Combos:** table — photo or "No photo", SKU, category, `formatINR`
+  price, Draft/Live/Archived badge, the `AvailabilityBadge`, Contents
+  and Edit; `EmptyState` explaining a combo is a product typed Combo.
+- **Review:** two panels — "Waiting to publish" (item, kind badge,
+  Publish per row; Publish all in the header) and "Activity log" (when,
+  item linked to its editor, field, old → new with the old struck
+  through) with the kind filter as counted pills.
+- **Media:** page shell only (header, section nav, trust line with the
+  unused count); `MediaLibrary` untouched.
+- **`CapabilityPanel`** promoted to `src/components/iq/ui` with an
+  `items` prop; Inventory passes its list. The inventory-specific file
+  is removed.
+
+**Functionality preserved:** publish/delete/publish-all actions and
+their confirm prompts, `menu.view` / `menu.edit` / `menu.publish` gates
+(Media still requires `menu.edit`, Review still `menu.publish`), the
+`?kind=` filter on Review, every link target.
+
+---
+
 ## Slice (UI Kit): Finance workspace — the payments ledger regrouped, nothing redefined
 
 **Status:** Complete on `kit-radix-nova`, gates green (typecheck, lint

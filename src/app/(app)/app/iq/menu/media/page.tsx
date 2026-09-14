@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { redirect } from "next/navigation";
+import { MediaLibrary } from "@/components/iq/menu/media-library";
+import { MenuSectionNav } from "@/components/iq/menu/menu-section-nav";
+import { DataTrust } from "@/components/iq/ui";
+import { PageHeader } from "@/components/staff/page-header";
+import { PermissionDenied } from "@/components/states";
 import { getStaff, staffCan } from "@/lib/auth";
 import { listMediaWithUsage } from "@/lib/repositories/media";
-import { MediaLibrary } from "@/components/iq/menu/media-library";
-import { PermissionDenied } from "@/components/states";
+import { listDraftItems } from "@/lib/repositories/menu-admin";
 
 export const metadata: Metadata = { title: "Media library — FRYBIRD IQ", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -20,21 +23,20 @@ export default async function MediaLibraryPage() {
     );
   }
 
-  const items = await listMediaWithUsage(staff.orgId);
+  const [canPublish, items, drafts] = await Promise.all([staffCan("menu.publish"), listMediaWithUsage(staff.orgId), listDraftItems(staff.orgId)]);
+  const unused = items.filter((item) => item.usedBy.length === 0).length;
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-[var(--gutter)] py-8">
-      <Link href="/app/iq/menu" className="text-sm text-muted-foreground underline underline-offset-2">
-        ← Menu Control Center
-      </Link>
-      <h1 className="mt-3 font-heading text-3xl font-bold tracking-tight">Media library</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Upload once, use on any product or category. Uploads only accept JPEG, PNG or WebP up to 8MB, and only an owner, admin or manager can upload or delete —
-        the public site only ever gets read access. Search by product or category to find a photo, or filter to unused uploads to see what nothing is wearing.
-      </p>
-      <div className="mt-6">
-        <MediaLibrary initialItems={items} />
-      </div>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
+      <PageHeader title="Media library" description="Upload once, use on any product or category. JPEG, PNG or WebP up to 8 MB; only an owner, admin or manager can upload or delete, and the public site only ever reads." />
+      <MenuSectionNav current="media" draftCount={drafts.length} canEdit canPublish={canPublish} />
+      <DataTrust
+        items={[
+          { tone: "gain", text: `${items.length} ${items.length === 1 ? "upload" : "uploads"}` },
+          ...(unused > 0 ? [{ tone: "neutral" as const, text: `${unused} not used by any product or category` }] : []),
+        ]}
+      />
+      <MediaLibrary initialItems={items} />
     </div>
   );
 }

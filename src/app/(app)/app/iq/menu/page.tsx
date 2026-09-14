@@ -6,6 +6,8 @@ import { PageHeader } from "@/components/staff/page-header";
 import { getStaff, staffCan } from "@/lib/auth";
 import { getMenuHealth, listCategoriesAdmin, listDraftItems, listProductsAdmin } from "@/lib/repositories/menu-admin";
 import { MenuControlCenter } from "@/components/iq/menu/menu-control-center";
+import { MenuSectionNav } from "@/components/iq/menu/menu-section-nav";
+import { DataTrust } from "@/components/iq/ui";
 import { PermissionDenied } from "@/components/states";
 import { cn } from "@/lib/utils";
 
@@ -53,21 +55,22 @@ export default async function MenuManagerPage() {
         title="Menu Control Center"
         description="The single source the website, the counter and every future ordering surface read from."
         actions={
-          <>
-            <Button variant="outline" asChild>
-              <Link href="/app/iq/menu/media">Media library</Link>
+          canPublish &&
+          drafts.length > 0 && (
+            <Button variant="outline" asChild className="border-flag/30 bg-flag-soft text-flag hover:bg-flag-soft/70">
+              <Link href="/app/iq/menu/review">Review {drafts.length} in draft</Link>
             </Button>
-            <Button variant="outline" asChild>
-              <Link href="/app/iq/menu/modifiers">Modifiers</Link>
-            </Button>
-            <Button variant="outline" asChild>
-              <Link href="/app/iq/menu/combos">Combos</Link>
-            </Button>
-            <Button variant="outline" asChild className={cn(drafts.length > 0 && "border-flag/30 bg-flag-soft text-flag hover:bg-flag-soft/70")}>
-              <Link href="/app/iq/menu/review">Review changes{drafts.length > 0 ? ` (${drafts.length})` : ""}</Link>
-            </Button>
-          </>
+          )
         }
+      />
+      <MenuSectionNav current="products" draftCount={drafts.length} canEdit={canEdit} canPublish={canPublish} />
+
+      <DataTrust
+        items={[
+          { tone: "gain", text: "Products, categories, modifiers and combos live — one source for the website and the counter" },
+          { tone: "gain", text: "Availability per channel and timed unavailability live, set on each product or category" },
+          { tone: "flag", text: "Channel-specific pricing not connected — one listed price everywhere" },
+        ]}
       />
 
       {/* Menu health — one strip, the figures in the serif, a tone only where something is missing. */}

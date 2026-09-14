@@ -4,3 +4,4 @@ export { Panel, PanelHeader, PanelBody, PanelFooter, SectionHeading } from "./pa
 export { KpiTile, type KpiTileProps } from "./kpi-tile";
 export { InsightCard, type InsightCardProps } from "./insight-card";
 export { BarList, type BarRow } from "./bar-list";
+export { CapabilityPanel, type Capability } from "./capability-panel";
