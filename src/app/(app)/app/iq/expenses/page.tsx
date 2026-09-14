@@ -1,17 +1,19 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-
+import { AnalyticsSectionNav } from "@/components/iq/analytics-section-nav";
+import { BarList, DataTrust, KpiTile, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
+import { PageHeader } from "@/components/staff/page-header";
 import { EmptyState } from "@/components/states";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getStaff, staffCan } from "@/lib/auth";
 import { type RangeKey, resolveRange } from "@/lib/dates";
-import { formatINR } from "@/lib/money";
+import { type Paise, ZERO, add, formatBps, formatINR, ratioBps } from "@/lib/money";
 import { listExpenses } from "@/lib/repositories/expenses";
 
-export const metadata: Metadata = {
-  title: "Expenses — FRYBIRD IQ",
-  robots: { index: false, follow: false },
-};
+export const metadata: Metadata = { title: "Expenses — FRYBIRD IQ", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
 
 const RANGES: { key: RangeKey; label: string }[] = [
@@ -20,130 +22,137 @@ const RANGES: { key: RangeKey; label: string }[] = [
   { key: "30d", label: "Last 30 days" },
 ];
 
-export default async function ExpensesPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ range?: string; saved?: string }>;
-}) {
+const paidOn = (date: string) => new Date(`${date}T12:00:00+05:30`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+
+/** ANALYTICS › Expenses — the ledger of money out that the P&L reads. Seeing it is analytics; recording into it is finance. */
+export default async function ExpensesPage({ searchParams }: { searchParams: Promise<{ range?: string; saved?: string }> }) {
   const staff = await getStaff();
   if (!staff) redirect("/sign-in");
   if (!(await staffCan("analytics.view"))) redirect("/app/orders");
-  // Seeing the ledger is analytics; recording into it is finance.
-  const canRecord = await staffCan("finance.view");
 
   const { range: requested, saved } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "mtd") as RangeKey;
   const range = resolveRange(key);
-  const rows = await listExpenses(staff.orgId, range);
-  const total = rows.reduce((sum, row) => sum + row.amount, 0n);
+  const [rows, canRecord, canSeeCustomers] = await Promise.all([listExpenses(staff.orgId, range), staffCan("finance.view"), staffCan("customers.view")]);
+
+  const total = add(...rows.map((row) => row.amount));
+  const direct = add(...rows.filter((row) => row.behaviour === "DIRECT").map((row) => row.amount));
+  const fixed = add(...rows.filter((row) => row.behaviour === "FIXED").map((row) => row.amount));
+  const byCategory = new Map<string, Paise>();
+  for (const row of rows) byCategory.set(row.categoryName, add(byCategory.get(row.categoryName) ?? ZERO, row.amount));
+  const categories = [...byCategory.entries()].sort((a, b) => (b[1] > a[1] ? 1 : b[1] < a[1] ? -1 : 0));
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-[var(--gutter)] py-8">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="font-heading text-3xl font-bold tracking-tight">Expenses</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{range.label}</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
-            {RANGES.map((option) => (
-              <Link
-                key={option.key}
-                href={`/app/iq/expenses?range=${option.key}`}
-                aria-current={option.key === key ? "page" : undefined}
-                className={
-                  option.key === key
-                    ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
-                    : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
-                }
-              >
-                {option.label}
-              </Link>
-            ))}
-          </nav>
-          {canRecord && (
-            <Link
-              href="/app/iq/expenses/new"
-              className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
-            >
-              Record expense
-            </Link>
-          )}
-        </div>
-      </div>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
+      <PageHeader
+        title="Expenses"
+        description={`Money out ${range.label.toLowerCase()}, as recorded. Direct costs move with sales and set food cost; fixed costs are the month's overheads.`}
+        actions={
+          <>
+            <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
+              {RANGES.map((option) => (
+                <Link
+                  key={option.key}
+                  href={`/app/iq/expenses?range=${option.key}`}
+                  aria-current={option.key === key ? "page" : undefined}
+                  className={
+                    option.key === key
+                      ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
+                      : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
+                  }
+                >
+                  {option.label}
+                </Link>
+              ))}
+            </nav>
+            {canRecord && (
+              <Button variant="inverse" asChild>
+                <Link href="/app/iq/expenses/new">Record expense</Link>
+              </Button>
+            )}
+          </>
+        }
+      />
+      <AnalyticsSectionNav current="expenses" canSeeCustomers={canSeeCustomers} />
 
       {saved === "1" && (
-        <p role="status" className="mt-5 border-l-2 border-[var(--success)] bg-surface px-4 py-3 text-sm">
+        <p role="status" className="rounded-md border-l-2 border-gain bg-gain-soft/60 px-4 py-3 text-sm">
           Expense recorded.
         </p>
       )}
 
       {rows.length === 0 ? (
-        <div className="mt-8">
-          <EmptyState
-            title="Nothing recorded for this period."
-            detail="Rent, gas, chicken, packaging, wages. Record them and FRYBIRD IQ can show net profit rather than just sales."
-            action={
-              canRecord ? (
-                <Link
-                  href="/app/iq/expenses/new"
-                  className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
-                >
-                  Record the first one
-                </Link>
-              ) : undefined
-            }
-          />
-        </div>
+        <EmptyState
+          title={`Nothing recorded ${range.label.toLowerCase()}`}
+          detail="Rent, gas, chicken, packaging, wages. Record them and FRYBIRD IQ can show net profit rather than just sales."
+          action={
+            canRecord ? (
+              <Button variant="inverse" asChild>
+                <Link href="/app/iq/expenses/new">Record the first one</Link>
+              </Button>
+            ) : undefined
+          }
+        />
       ) : (
         <>
-          <p className="tabular mt-6 text-sm text-muted-foreground">
-            <strong className="text-foreground">{formatINR(total as never, "whole")}</strong> across{" "}
-            {rows.length} {rows.length === 1 ? "entry" : "entries"}
-          </p>
+          <DataTrust items={[{ tone: "gain", text: `${rows.length} ${rows.length === 1 ? "entry" : "entries"} · feeds the P&L for ${range.label.toLowerCase()}` }, { tone: "flag", text: "Purchase orders and receiving not connected — every entry here is typed in (roadmap 3.7)" }]} />
 
-          <div className="rounded-xl border border-border bg-panel px-5 py-2"><table className="tabular-nums w-full text-[13px]">
-            <caption className="sr-only">Expenses for {range.label}</caption>
-            <thead>
-              <tr className="border-b border-border text-xs uppercase tracking-[0.08em] text-muted-foreground">
-                <th scope="col" className="pb-2 text-left font-semibold">Date</th>
-                <th scope="col" className="pb-2 text-left font-semibold">What for</th>
-                <th scope="col" className="pb-2 text-left font-semibold">Category</th>
-                <th scope="col" className="pb-2 text-right font-semibold">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id} className="border-b border-border/60">
-                  <td className="tabular py-2.5 whitespace-nowrap text-muted-foreground">{row.paidOn}</td>
-                  <td className="py-2.5">
-                    {row.description}
-                    {row.accountName && (
-                      <span className="text-muted-foreground"> · {row.accountName}</span>
-                    )}
-                  </td>
-                  <td className="py-2.5">
-                    {row.categoryName}
-                    {/* The behaviour is written, not colour-coded: it decides
-                        which side of the P&L this lands on. */}
-                    <span className="block text-xs text-muted-foreground">
-                      {row.behaviour === "DIRECT" ? "moves with sales" : "fixed"}
-                    </span>
-                  </td>
-                  <td className="tabular py-2.5 text-right font-semibold">{formatINR(row.amount)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table></div>
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <KpiTile label="Recorded" value={formatINR(total, "whole")} note={`${rows.length} ${rows.length === 1 ? "entry" : "entries"}`} emphasis />
+            <KpiTile label="Direct costs" value={formatINR(direct, "whole")} meta={total > ZERO ? formatBps(ratioBps(direct, total), 0) : undefined} note="Move with sales — food, packaging, riders" />
+            <KpiTile label="Fixed costs" value={formatINR(fixed, "whole")} meta={total > ZERO ? formatBps(ratioBps(fixed, total), 0) : undefined} note="The month's overheads" />
+            <KpiTile label="Largest category" value={categories[0] ? formatINR(categories[0][1], "whole") : "—"} missing={!categories[0]} note={categories[0] ? categories[0][0] : "No entries"} link={{ label: "Profit & loss", href: "/app/iq/pnl" }} />
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-3">
+            <Panel>
+              <PanelHeader title="By category" meta={`${categories.length}`} />
+              <PanelBody className="pt-0">
+                <BarList rows={categories.map(([name, amount]) => ({ key: name, label: name, share: total > ZERO ? ratioBps(amount, total) / 10_000 : 0, shareLabel: total > ZERO ? formatBps(ratioBps(amount, total), 0) : "—", amount: formatINR(amount, "whole") }))} />
+              </PanelBody>
+            </Panel>
+            <Panel className="lg:col-span-2">
+              <PanelHeader title="Every entry" meta={`${rows.length}`} />
+              <PanelBody flush className="border-t border-border pb-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="hidden sm:table-cell">Paid on</TableHead>
+                      <TableHead>What for</TableHead>
+                      <TableHead className="hidden md:table-cell">Category</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {rows.map((row) => (
+                      <TableRow key={row.id}>
+                        <TableCell className="tabular hidden whitespace-nowrap text-muted-foreground sm:table-cell">{paidOn(row.paidOn)}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5">
+                            <span className="font-medium">{row.description}</span>
+                            <span className="text-xs text-muted-foreground">
+                              <span className="sm:hidden">{paidOn(row.paidOn)} · </span>
+                              <span className="md:hidden">{row.categoryName}</span>
+                              {row.accountName && <span className="hidden md:inline">{row.accountName}</span>}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell">
+                          <div className="flex items-center gap-2">
+                            <span>{row.categoryName}</span>
+                            <Badge variant={row.behaviour === "DIRECT" ? "info" : "outline"}>{row.behaviour === "DIRECT" ? "Moves with sales" : "Fixed"}</Badge>
+                          </div>
+                        </TableCell>
+                        <TableCell className="tabular text-right font-semibold">{formatINR(row.amount)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </PanelBody>
+            </Panel>
+          </div>
         </>
       )}
-
-      <p className="mt-8 text-sm text-muted-foreground">
-        <Link href="/app/iq/pnl" className="underline underline-offset-2">
-          See the profit and loss
-        </Link>{" "}
-        these feed into.
-      </p>
     </div>
   );
 }

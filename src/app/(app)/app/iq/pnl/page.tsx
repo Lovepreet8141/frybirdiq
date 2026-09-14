@@ -1,40 +1,28 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-
-import { StatTile } from "@/components/iq/stat-tile";
+import { AnalyticsSectionNav } from "@/components/iq/analytics-section-nav";
+import { CostBreakdownDonut } from "@/components/iq/cost-breakdown-donut";
+import { FoodCostChart } from "@/components/iq/food-cost-chart";
+import { DataTrust, KpiTile, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
+import { PageHeader } from "@/components/staff/page-header";
 import { EmptyState } from "@/components/states";
+import { Button } from "@/components/ui/button";
 import { getStaff, staffCan } from "@/lib/auth";
 import { type RangeKey, resolveRange } from "@/lib/dates";
-import { formatBps, formatINR } from "@/lib/money";
-import { type CategoryTotal, getProfitAndLoss } from "@/lib/repositories/expenses";
+import { type Paise, formatBps, formatINR } from "@/lib/money";
+import { type CategoryTotal, foodCostWeeklySeries, getProfitAndLoss } from "@/lib/repositories/expenses";
 
-export const metadata: Metadata = {
-  title: "Profit and loss — FRYBIRD IQ",
-  robots: { index: false, follow: false },
-};
+export const metadata: Metadata = { title: "Profit and loss — FRYBIRD IQ", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
 
-/**
- * Calendar months only. A profit-and-loss over a rolling window double-counts
- * or misses the monthly costs it is meant to account for.
- */
+/** Calendar months only. A P&L over a rolling window double-counts or misses the monthly costs it is meant to account for. */
 const RANGES: { key: RangeKey; label: string }[] = [
   { key: "mtd", label: "This month" },
   { key: "lastMonth", label: "Last month" },
 ];
 
-function Section({
-  title,
-  rows,
-  revenue,
-  total,
-}: {
-  title: string;
-  rows: readonly CategoryTotal[];
-  revenue: bigint;
-  total: string;
-}) {
+function Section({ title, rows, revenue, total }: { title: string; rows: readonly CategoryTotal[]; revenue: bigint; total: string }) {
   if (rows.length === 0) return null;
   return (
     <>
@@ -47,9 +35,7 @@ function Section({
         <tr key={row.categoryId}>
           <td className="py-1.5 pl-4">{row.name}</td>
           <td className="tabular py-1.5 text-right">{formatINR(row.amount, "whole")}</td>
-          <td className="tabular py-1.5 text-right text-muted-foreground">
-            {revenue > 0n ? formatBps(Number((row.amount * 10_000n) / revenue), 1) : "—"}
-          </td>
+          <td className="tabular py-1.5 text-right text-muted-foreground">{revenue > 0n ? formatBps(Number((row.amount * 10_000n) / revenue), 1) : "—"}</td>
         </tr>
       ))}
       <tr className="font-semibold">
@@ -61,158 +47,168 @@ function Section({
   );
 }
 
-export default async function PnlPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ range?: string }>;
-}) {
+/**
+ * ANALYTICS › Food cost & P&L. Revenue is the dashboard's (paid orders);
+ * costs are the recorded expenses; the statement is `profit()` in
+ * `src/lib/iq/profit`. Nothing here is typed in twice or computed a second
+ * way.
+ */
+export default async function PnlPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
   const staff = await getStaff();
   if (!staff) redirect("/sign-in");
   if (!(await staffCan("analytics.view"))) redirect("/app/orders");
-  const canRecord = await staffCan("finance.view");
 
   const { range: requested } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "mtd") as RangeKey;
   const range = resolveRange(key);
-  const pnl = await getProfitAndLoss(staff.orgId, range);
+  const [pnl, foodCost, canRecord, canSeeCustomers] = await Promise.all([getProfitAndLoss(staff.orgId, range), foodCostWeeklySeries(staff.orgId), staffCan("finance.view"), staffCan("customers.view")]);
   const { result } = pnl;
 
-  const directTotal = pnl.direct.reduce((sum, row) => sum + row.amount, 0n);
-  const fixedTotal = pnl.fixed.reduce((sum, row) => sum + row.amount, 0n);
-  const nonOperatingTotal = pnl.nonOperating.reduce((sum, row) => sum + row.amount, 0n);
-
-  const overTarget =
-    pnl.foodCostTargetBps !== null &&
-    result.foodCostBps !== null &&
-    result.foodCostBps > pnl.foodCostTargetBps;
+  const directTotal = pnl.direct.reduce((sum, row) => sum + row.amount, 0n) as Paise;
+  const fixedTotal = pnl.fixed.reduce((sum, row) => sum + row.amount, 0n) as Paise;
+  const nonOperatingTotal = pnl.nonOperating.reduce((sum, row) => sum + row.amount, 0n) as Paise;
+  const overTarget = pnl.foodCostTargetBps !== null && result.foodCostBps !== null && result.foodCostBps > pnl.foodCostTargetBps;
+  const weeksWithData = foodCost.filter((point) => point.foodCostBps !== null).length;
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-[var(--gutter)] py-8">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="font-heading text-[26px] font-semibold leading-[1.15] tracking-[-0.015em]">Profit and loss</h1>
-          <p className="mt-1 text-[13.5px] text-muted-foreground">{range.label} · captured payments only · INR</p>
-        </div>
-        <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
-          {RANGES.map((option) => (
-            <Link
-              key={option.key}
-              href={`/app/iq/pnl?range=${option.key}`}
-              aria-current={option.key === key ? "page" : undefined}
-              className={
-                option.key === key
-                  ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
-                  : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
-              }
-            >
-              {option.label}
-            </Link>
-          ))}
-        </nav>
-      </div>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
+      <PageHeader
+        title="Food cost & P&L"
+        description={`${range.label} · paid orders as revenue, recorded expenses as cost · INR`}
+        actions={
+          <>
+            <nav className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[10px] border border-border bg-panel p-1" aria-label="Period">
+              {RANGES.map((option) => (
+                <Link
+                  key={option.key}
+                  href={`/app/iq/pnl?range=${option.key}`}
+                  aria-current={option.key === key ? "page" : undefined}
+                  className={
+                    option.key === key
+                      ? "flex h-9 items-center rounded-[7px] bg-secondary px-3.5 text-[13px] font-semibold text-foreground md:h-8"
+                      : "flex h-9 items-center rounded-[7px] px-3.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[120ms] hover:text-foreground md:h-8"
+                  }
+                >
+                  {option.label}
+                </Link>
+              ))}
+            </nav>
+            {canRecord && (
+              <Button variant="inverse" asChild>
+                <Link href="/app/iq/expenses/new">Record an expense</Link>
+              </Button>
+            )}
+          </>
+        }
+      />
+      <AnalyticsSectionNav current="food-cost" canSeeCustomers={canSeeCustomers} />
+
+      <DataTrust
+        items={[
+          { tone: "gain", text: `Revenue ${formatINR(pnl.revenue, "whole")} across ${pnl.orderCount} paid ${pnl.orderCount === 1 ? "order" : "orders"}` },
+          pnl.hasExpenses ? { tone: "gain", text: "Costs from recorded expenses, by category" } : { tone: "flag", text: "No expenses recorded for this period — costs and profit cannot be shown" },
+          { tone: "flag", text: "Theoretical food cost from recipes not connected — roadmap 3.5" },
+        ]}
+      />
 
       {!pnl.hasExpenses ? (
-        <div className="mt-8">
-          <EmptyState
-            title="No costs recorded for this period."
-            detail="Revenue is already tracked from your orders. Record what you spend — rent, gas, chicken, packaging — and this becomes a real profit figure rather than a sales total."
-            action={
-              canRecord ? (
-                <Link
-                  href="/app/iq/expenses/new"
-                  className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
-                >
-                  Record an expense
-                </Link>
-              ) : undefined
-            }
-          />
-          <p className="tabular mt-6 text-sm text-muted-foreground">
-            Revenue so far: <strong className="text-foreground">{formatINR(pnl.revenue, "whole")}</strong>{" "}
-            across {pnl.orderCount} paid {pnl.orderCount === 1 ? "order" : "orders"}.
-          </p>
-        </div>
+        <EmptyState
+          title="No costs recorded for this period"
+          detail="Revenue is already tracked from your orders. Record what you spend — rent, gas, chicken, packaging — and this becomes a real profit figure rather than a sales total."
+          action={
+            canRecord ? (
+              <Button variant="inverse" asChild>
+                <Link href="/app/iq/expenses/new">Record an expense</Link>
+              </Button>
+            ) : undefined
+          }
+        />
       ) : (
         <>
-          <div className="mt-6 grid gap-3 sm:grid-cols-3">
-            <StatTile label="Revenue" value={formatINR(pnl.revenue, "whole")} detail={`${pnl.orderCount} paid orders`} />
-            <StatTile
-              label="Gross profit"
-              value={formatINR(result.grossProfit, "whole")}
-              detail={result.grossMarginBps === null ? "No sales yet" : `${formatBps(result.grossMarginBps, 1)} margin`}
-            />
-            <StatTile
-              label="Net profit"
-              value={formatINR(result.netProfit, "whole")}
-              detail={result.netMarginBps === null ? "No sales yet" : `${formatBps(result.netMarginBps, 1)} margin`}
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <KpiTile label="Revenue" value={formatINR(pnl.revenue, "whole")} note={`${pnl.orderCount} paid ${pnl.orderCount === 1 ? "order" : "orders"}`} />
+            <KpiTile label="Gross profit" value={formatINR(result.grossProfit, "whole")} note={result.grossMarginBps === null ? "No sales yet" : `${formatBps(result.grossMarginBps, 1)} margin after direct costs`} />
+            <KpiTile label="Net profit" value={formatINR(result.netProfit, "whole")} note={result.netMarginBps === null ? "No sales yet" : `${formatBps(result.netMarginBps, 1)} margin after operating expenses`} emphasis />
+            <KpiTile
+              label="Food cost"
+              value={result.foodCostBps === null ? "—" : formatBps(result.foodCostBps, 1)}
+              missing={result.foodCostBps === null}
+              meta={pnl.foodCostTargetBps !== null ? `target ${formatBps(pnl.foodCostTargetBps, 1)}` : undefined}
+              note={
+                result.foodCostBps === null
+                  ? "Needs revenue and a direct cost in the period"
+                  : overTarget && pnl.foodCostTargetBps !== null
+                    ? `Over target by ${formatBps(result.foodCostBps - pnl.foodCostTargetBps, 1)} — about ${formatINR((pnl.revenue / 10_000n) as Paise, "whole")} of profit per point at this revenue`
+                    : pnl.foodCostTargetBps === null
+                      ? "No target set for this month"
+                      : "Within target"
+              }
             />
           </div>
 
-          <div className="mt-6 rounded-xl border border-border bg-panel px-5 py-3"><table className="tabular-nums w-full text-[13px]">
-            <caption className="sr-only">Profit and loss for {range.label}</caption>
-            <thead>
-              <tr className="border-b border-border text-xs uppercase tracking-[0.08em] text-muted-foreground">
-                <th scope="col" className="pb-2 text-left font-semibold">Line</th>
-                <th scope="col" className="pb-2 text-right font-semibold">Amount</th>
-                <th scope="col" className="pb-2 text-right font-semibold">% of revenue</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr className="font-semibold">
-                <td className="py-2">Revenue</td>
-                <td className="tabular py-2 text-right">{formatINR(pnl.revenue, "whole")}</td>
-                <td className="tabular py-2 text-right text-muted-foreground">100.0%</td>
-              </tr>
+          <div className="grid gap-6 lg:grid-cols-3">
+            <Panel className="lg:col-span-2">
+              <PanelHeader title="Statement" description="Revenue, direct costs, gross profit, operating expenses, net profit." />
+              <PanelBody className="pt-0">
+                <table className="tabular-nums w-full text-[13px]">
+                  <caption className="sr-only">Profit and loss for {range.label}</caption>
+                  <thead>
+                    <tr className="border-b border-border text-xs uppercase tracking-[0.08em] text-muted-foreground">
+                      <th scope="col" className="pb-2 text-left font-semibold">
+                        Line
+                      </th>
+                      <th scope="col" className="pb-2 text-right font-semibold">
+                        Amount
+                      </th>
+                      <th scope="col" className="pb-2 text-right font-semibold">
+                        % of revenue
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="font-semibold">
+                      <td className="py-2">Revenue</td>
+                      <td className="tabular py-2 text-right">{formatINR(pnl.revenue, "whole")}</td>
+                      <td className="tabular py-2 text-right text-muted-foreground">100.0%</td>
+                    </tr>
+                    <Section title="Direct costs" rows={pnl.direct} revenue={pnl.revenue} total={formatINR(directTotal, "whole")} />
+                    <tr className="border-t border-border font-semibold">
+                      <td className="py-2">Gross profit</td>
+                      <td className="tabular py-2 text-right">{formatINR(result.grossProfit, "whole")}</td>
+                      <td className="tabular py-2 text-right text-muted-foreground">{result.grossMarginBps === null ? "—" : formatBps(result.grossMarginBps, 1)}</td>
+                    </tr>
+                    <Section title="Operating expenses" rows={pnl.fixed} revenue={pnl.revenue} total={formatINR(fixedTotal, "whole")} />
+                    <tr className="border-t-2 border-foreground text-base font-bold">
+                      <td className="py-3">Net profit</td>
+                      <td className="tabular py-3 text-right">{formatINR(result.netProfit, "whole")}</td>
+                      <td className="tabular py-3 text-right">{result.netMarginBps === null ? "—" : formatBps(result.netMarginBps, 1)}</td>
+                    </tr>
+                    {pnl.nonOperating.length > 0 && <Section title="Not operating costs" rows={pnl.nonOperating} revenue={pnl.revenue} total={formatINR(nonOperatingTotal, "whole")} />}
+                  </tbody>
+                </table>
+                {pnl.nonOperating.length > 0 && <p className="mt-3 text-[12.5px] text-muted-foreground">Drawings and loan principal are real money leaving the business, but they are not a cost of running the month — counting them above would make a profitable month read as a loss.</p>}
+              </PanelBody>
+            </Panel>
 
-              <Section title="Direct costs" rows={pnl.direct} revenue={pnl.revenue} total={formatINR(directTotal as never, "whole")} />
-
-              <tr className="border-t border-border font-semibold">
-                <td className="py-2">Gross profit</td>
-                <td className="tabular py-2 text-right">{formatINR(result.grossProfit, "whole")}</td>
-                <td className="tabular py-2 text-right text-muted-foreground">
-                  {result.grossMarginBps === null ? "—" : formatBps(result.grossMarginBps, 1)}
-                </td>
-              </tr>
-
-              <Section title="Operating expenses" rows={pnl.fixed} revenue={pnl.revenue} total={formatINR(fixedTotal as never, "whole")} />
-
-              <tr className="border-t-2 border-foreground text-base font-bold">
-                <td className="py-3">Net profit</td>
-                <td className="tabular py-3 text-right">{formatINR(result.netProfit, "whole")}</td>
-                <td className="tabular py-3 text-right">
-                  {result.netMarginBps === null ? "—" : formatBps(result.netMarginBps, 1)}
-                </td>
-              </tr>
-
-              {pnl.nonOperating.length > 0 && (
-                <Section
-                  title="Not operating costs"
-                  rows={pnl.nonOperating}
-                  revenue={pnl.revenue}
-                  total={formatINR(nonOperatingTotal as never, "whole")}
-                />
-              )}
-            </tbody>
-          </table></div>
-
-          {pnl.nonOperating.length > 0 && (
-            <p className="mt-3 text-sm text-muted-foreground">
-              Drawings and loan principal are real money leaving the business, but they are not a cost of
-              running the month — counting them above would make a profitable month read as a loss.
-            </p>
-          )}
-
-          {overTarget && result.foodCostBps !== null && pnl.foodCostTargetBps !== null && (
-            <p className="mt-6 border-l-2 border-[var(--destructive)] bg-surface px-4 py-3 text-sm">
-              <strong>Food cost is {formatBps(result.foodCostBps, 1)}</strong>, against your target of{" "}
-              {formatBps(pnl.foodCostTargetBps, 1)}. Every point above target is{" "}
-              {formatINR((pnl.revenue / 10_000n) as never, "whole")} of profit a month at this revenue.
-            </p>
-          )}
+            <div className="flex flex-col gap-6">
+              <Panel>
+                <PanelHeader title="Where the money went" description="Direct against operating." />
+                <PanelBody className="pt-0">
+                  <CostBreakdownDonut directTotal={directTotal} fixedTotal={fixedTotal} />
+                </PanelBody>
+              </Panel>
+              <Panel>
+                <PanelHeader title="Food cost by week" description="Direct costs against revenue, the last eight weeks." meta={weeksWithData > 0 ? `${weeksWithData} of 8 weeks` : undefined} />
+                <PanelBody className="pt-0">
+                  {weeksWithData === 0 ? <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground">No week in the last eight has both revenue and a recorded direct cost.</p> : <FoodCostChart points={foodCost} targetBps={pnl.foodCostTargetBps} />}
+                </PanelBody>
+              </Panel>
+            </div>
+          </div>
         </>
       )}
 
-      <p className="mt-8 text-sm text-muted-foreground">
+      <p className="text-[13px] text-muted-foreground">
         Revenue comes from your paid orders — nothing here is typed in twice.{" "}
         <Link href="/app/iq/expenses" className="underline underline-offset-2">
           Record what you spend

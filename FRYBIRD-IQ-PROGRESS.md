@@ -7,6 +7,77 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Batch: Menu + Analytics + Admin + Command Center — slice 2 of 4: Analytics reports
+
+**Status:** Complete on `kit-radix-nova`, gates green (typecheck, lint,
+475/475, RSC check, build). **Not deployed.** UI only: `getMenuPerformance`,
+`getChannelBreakdown`, `getProfitAndLoss`, `foodCostWeeklySeries` and
+`listExpenses` are read exactly as before; no figure is computed a
+second way. Every number on these screens is a repository field or a
+share of one (`ratioBps`).
+
+**Routes changed:** `/app/iq/products`, `/app/iq/channels`,
+`/app/iq/pnl`, `/app/iq/expenses`. Sidebar: the Analytics group gains
+"Food cost & P&L" and "Expenses" (same `analytics.view` gate; both were
+already excluded from Overview's active match).
+
+**Purchased kit inspection (`@shadcnuikit`).** Searched "analytics
+dashboard chart cards", plus the earlier chart/table searches.
+- `tables12` — its sort / page-size / pagination mechanics are now one
+  shared component, **`DataTable`** (`src/components/iq/data-table.tsx`,
+  TanStack v9 `tableFeatures` + `useTable`, typed `columnMeta` for
+  alignment and responsive visibility). Callers own their toolbar and
+  narrow the rows first; the engine only sorts and pages. First consumer:
+  the products performance table (search, category filter menu with
+  counts, "include removed from menu", CSV export on `reports.export`).
+- `tables10` — the counted checkbox filter menu, reused for categories.
+- `ecommerce-chart1` — already the shape of `ChannelChart`; `ecommerce-
+  chart2` ("Revenue Chart … Last 28 days", a bar chart with a
+  series toggle in the card action) was inspected and not taken: the
+  channel series is a stack, not a toggle, and the period is the server's.
+- `line-chart1` — the existing `FoodCostChart` is this shape (line,
+  no dots, monotone, tooltip); its period buttons were not taken because
+  the P&L period is calendar-month by rule.
+- `tabs1` — `Tabs` with the `line` variant for Products / Categories.
+- `stat-card1` — `KpiTile` stays the design system's card; on Channels
+  it now carries the real `deltaBps` and "vs the previous …" the old
+  `StatTile` showed, so `StatTile` has one fewer consumer.
+
+**What changed:**
+- **`AnalyticsSectionNav`** on all four reports — Products &
+  categories · Channels · Food cost & P&L · Expenses · Customers
+  (`customers.view`) — with **Waste** listed unlinked and marked "Not
+  connected" (roadmap 3.3). Same strip pattern as Menu.
+- **Products & categories:** four `KpiTile`s (product revenue; top
+  product as its share with the name beneath; top category likewise;
+  recipes with lines *x of y* — the margin prerequisite), a trust line
+  that says margin is not connected and why, then Tabs: *Products*
+  (best sellers card, a share-of-revenue `BarList` for the top ten, and
+  the full sortable table) and *Categories* (share `BarList` + table).
+  `?tab=categories` deep-links.
+- **Channels:** one `KpiTile` per channel with the real delta chip and
+  share as meta, the leader emphasised; chart and table in Panels;
+  delta columns coloured by the gain/loss tokens (and always with a sign).
+- **Food cost & P&L:** four tiles (revenue, gross profit, net profit
+  emphasised, **food cost vs target** — "over target by 2.1 pts, about
+  ₹x of profit per point"); the statement in a Panel, unchanged in
+  arithmetic; **Where the money went** (the existing donut) and **Food
+  cost by week** (the existing eight-week chart, previously only on
+  Overview) beside it; an honest line that theoretical food cost from
+  recipes is roadmap 3.5. Empty state kept for a month with no expenses.
+- **Expenses:** tiles (recorded, direct with share, fixed with share,
+  largest category), a by-category `BarList`, and the ledger table with
+  the behaviour as a badge ("Moves with sales" / "Fixed"); the
+  "Expense recorded" notice restyled on the gain tone.
+
+**Functionality preserved:** every period option and `?range=` link,
+`analytics.view` gates (`finance.view` still decides who sees "Record
+expense"), the by-name match note on legacy product lines, the
+non-operating section and food-cost-over-target message on the P&L,
+the `saved=1` confirmation on Expenses.
+
+---
+
 ## Batch: Menu + Analytics + Admin + Command Center — slice 1 of 4: Menu sections
 
 **Status:** Complete on `kit-radix-nova`, gates green (typecheck, lint,

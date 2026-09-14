@@ -6,6 +6,7 @@ import {
   ClipboardList,
   History,
   Image as ImageIcon,
+  Landmark,
   LayoutGrid,
   LayoutList,
   Layers3,
@@ -13,6 +14,7 @@ import {
   Package,
   PackageSearch,
   Printer,
+  Receipt,
   ReceiptText,
   Settings2,
   ShieldCheck,
@@ -139,6 +141,8 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
         ? [
             { href: "/app/iq/products", label: "Products", icon: BarChart3 },
             { href: "/app/iq/channels", label: "Channels", icon: Store },
+            { href: "/app/iq/pnl", label: "Food cost & P&L", icon: Landmark },
+            { href: "/app/iq/expenses", label: "Expenses", icon: Receipt },
           ]
         : [],
     },
