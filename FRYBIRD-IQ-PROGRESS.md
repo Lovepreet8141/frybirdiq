@@ -7,6 +7,43 @@ or deployed unless the entry says so explicitly.
 
 ---
 
+## Fix — realtime subscribers shared one channel; the staff app fell into its error boundary
+
+**Status:** Fixed and deployed (`1025fc0`) at 17:19 UTC. Gates green
+(459/459, 2 new). Reported by the owner minutes after the Phase 0–2
+deploy as "Something didn't work" (the `/app` error boundary's generic
+state) — the server journal and nginx showed no error, so it was a
+browser-side crash.
+
+**Cause.** `useOrderEvents` named its channel `orders:<orgId>`. The
+new-order alert in the chrome and the page's own subscriber
+(`LiveRefresh` on Orders, Deliveries, Live and Activity; `KdsBoard` on
+KDS) both mounted it. `supabase.channel(name)` returns the **existing**
+channel when the name matches (`realtime-js` 2.116 `RealtimeClient.js:340`),
+and a channel that has already joined throws on the next `.on()`:
+`cannot add postgres_changes callbacks for realtime:orders:<org> after
+subscribe()` (`RealtimeChannel.js:421`). Effects run in tree order, so
+the alert subscribed first and the page's `.on()` threw inside its
+effect — which React routes to the nearest error boundary. Every one of
+those five screens crashed for any member who can see orders. This
+deploy was also the first time the browser Supabase client ran anywhere
+in the app (`git grep supabase/client` at `573dcab` finds no client
+consumer), so nothing earlier had exercised the path.
+
+**Fix.** Postgres-changes channel names are unique per subscriber
+(`uniqueChannelName(base, seq)`, a per-mount sequence); the `org_id`
+filter, not the name, is what scopes them. The customer's `order:<id>`
+broadcast keeps its exact name on purpose — for broadcast the channel
+name *is* the topic the database trigger sends to. Test: two subscribers
+to one organization never resolve to the same name.
+
+**Verified on production.** Remote `BUILD_ID` = local; the shipped
+chunk carries the new template; service active, 0 restarts, journal
+clean. Not verified: a signed-in browser walk of the five screens — the
+owner should open Orders and KDS once and confirm the board renders.
+
+---
+
 ## Roadmap Phase 0–2 deployed — Razorpay behind the interface, realtime on `order_events`, nightly backups proven
 
 **Status:** Deployed (`6bbde8a`) at 16:12 UTC; migration `0027` applied
@@ -2033,10 +2070,20 @@ shipped to production so far.
 ## Cumulative state of validation
 
 As of the most recent slice above: `pnpm typecheck` clean, `pnpm lint`
-clean, `pnpm test` 457/457 passing (33 files), `pnpm build` succeeds (60
+clean, `pnpm test` 459/459 passing (34 files), `pnpm build` succeeds (60
 routes), `scripts/check-rsc-boundaries.sh` clean.
 
 ## Deployment record
+
+### 2026-09-14 17:19 UTC — Realtime channel fix (no migration)
+
+Deployed via `./deploy/deploy.sh root@194.238.16.200` from
+`kit-radix-nova` at `1025fc0`. Gates in-script green (459/459, RSC check
+OK). Post-deploy: `active`, 0 restarts; remote `BUILD_ID`
+`ig5S4tnB65J7wW5zp6R6Q` equals the local build; the unique-channel
+template is present in the shipped realtime chunk; smoke `HTTP 200` on
+`/`, `/menu`, `/sign-in`; `/app/orders` and `/app/kds` redirect to
+sign-in; journal clean. No production record touched.
 
 ### 2026-09-14 16:12 UTC — Roadmap Phase 0–2 (+ migration 0027), backups, main fast-forwarded
 
