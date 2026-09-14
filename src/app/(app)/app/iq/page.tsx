@@ -144,7 +144,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
         <MotionStaggerItem className="lg:col-span-8">
           <SalesTrendCard series={trend} periodLabel={trendLabel} />
         </MotionStaggerItem>
-        <MotionStaggerItem className="grid grid-cols-2 gap-4 lg:col-span-4 lg:gap-6">
+        <MotionStaggerItem className="grid h-full auto-rows-fr grid-cols-2 gap-4 lg:col-span-4 lg:gap-6">
           <KpiCompact
             label="Revenue"
             value={formatINR(comparison.current.revenue, "whole")}
