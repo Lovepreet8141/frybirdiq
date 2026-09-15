@@ -3771,3 +3771,76 @@ frybirdiq.tech is still owed per CLAUDE.md's verification rule.
 
 Still open: Categories+Combos (pending Lane A), Lane A 3.2 itself
 (stock movements, in progress).
+
+## Lane A 3.2 (stock movements) + Categories+Combos separated and merged (`494aede`, `680e779`, `98f19b0`)
+
+Lane A's worktree finished with two unrelated commits stacked on it —
+its own 3.2 work, on top of the Categories+Combos commit from the
+mid-flight worktree collision described above. Extracted both as
+patches and applied them separately onto kit-radix-nova's own tip,
+each reviewed and gated independently, rather than merging the branch
+as one unit.
+
+**Categories+Combos** (`494aede`): same modernization pattern as the
+rest of this wave — `categories/[id]`, `categories/new`, `combos/[id]`
+onto Panel/PanelHeader/PanelBody. No functional changes.
+
+**Lane A 3.2 — stock movements** (`680e779`): `receiveStock`,
+`adjustStock`, `countStock`, `listMovements` in a new
+`src/lib/repositories/stock.ts`. Every write is one transaction — a
+movement insert plus an atomic `onConflictDoUpdate` increment on
+`inventory_items.quantity_on_hand` (the same upsert pattern
+`payments.ts` uses for the loyalty ledger) — so the cached on-hand
+figure and the movement ledger can never diverge. Count computes
+`delta = counted − on-hand` inside the transaction and writes one
+ADJUSTMENT for exactly that delta, matching the roadmap's own example
+(9.4 kg counted against 10 kg on hand writes −0.6 kg); a count that
+matches on-hand exactly writes nothing. Extracted
+`recordIngredientPriceInTx` from the existing `recordIngredientPrice`
+(pure mechanical split, public API unchanged) so receiving stock
+records the supplier price and the PURCHASE movement in one shared
+transaction. Added `toBaseUnitsDecimal` to `units.ts` — bigint-exact
+decimal conversion for a scale reading, kept deliberately separate
+from the existing `toBaseUnits`, which still refuses fractional
+purchase quantities on purpose (a fractional purchase line is almost
+always a typo). No schema changes — the movements/items tables and
+their idempotency guard already existed from an earlier migration.
+
+Judgment calls made and documented rather than decided silently: all
+three writes gated on `inventory.adjust` per the roadmap table's
+literal wording (the architecture doc's write-path table assigns
+receiving to `purchasing.manage` instead — no behavioural difference
+today, every role holding one holds both); ADJUSTMENT movements valued
+at the ingredient's current usable rate (the architecture doc only
+specifies this explicitly for WASTE); no row lock on a count's
+on-hand read (no precedent for `SELECT...FOR UPDATE` anywhere in this
+codebase — low risk for a single-terminal shop, flagged for revisit
+before multi-terminal).
+
+**Real bug caught by the deploy gate, not by typecheck/lint/test**
+(`98f19b0`): the first version exported the local `explain()` error-
+formatting helper from `inventory/actions.ts` so the new
+`stock-actions.ts` could reuse it. `pnpm typecheck && pnpm lint && pnpm
+test` all passed clean — but `next build` itself refused it: every
+export from a `"use server"` file must be an async function, and
+`explain()` is synchronous. Every other actions file in this codebase
+(`staff-actions.ts`, `table-actions.ts`, `menu-admin/actions.ts`)
+already solves this the same way — a small private `explain()` local
+to that file rather than a shared import. Matched that convention:
+reverted the export, gave `stock-actions.ts` its own identical local
+copy. This is exactly why the deploy script's own `next build` gate
+runs even after local checks pass clean.
+
+typecheck, lint, 592 tests (585 + 7 new: `toBaseUnitsDecimal`, including
+the roadmap's own worked example), RSC-boundary, and (after the fix)
+`next build` all clean. Deployed; service active. Verified live:
+`/app/inventory` → 307 (sign-in redirect, not 500). journalctl clean
+of anything but the known deploy-transition artifact. **Roadmap 3.2's
+own "Done when" criterion is not yet verified with real data** — the
+UI to receive 10 kg and count 9.4 kg now exists, but exercising it
+needs a human with a staff session; route health is confirmed, the
+actual criterion is still open (same caveat as 3.1).
+
+All 6 pieces of this wave are now closed: Lane A 3.2, and Phase 8's
+Categories+Combos, Modifiers, Media+Review+Product-new. Worktrees for
+this wave fully cleaned up.
