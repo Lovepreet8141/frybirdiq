@@ -2,9 +2,9 @@
 
 /**
  * The promotions editor's writes. A promotion changes what an order costs,
- * so every write here is gated on `settings.manage` (OWNER) — the closest
- * existing permission to "decides prices" — and audited. Saving never
- * activates anything: only a push or Activate (slice B) makes one live.
+ * so every write here is gated on `promotions.manage` (OWNER today) and
+ * audited. Saving never activates anything: only a push or Activate
+ * (slice B) makes one live.
  */
 
 import { revalidatePath } from "next/cache";
@@ -49,7 +49,7 @@ const inputSchema = z.object({
 
 async function authorise(): Promise<{ orgId: string; userId: string } | { error: string }> {
   try {
-    const staff = await requirePermission("settings.manage");
+    const staff = await requirePermission("promotions.manage");
     return { orgId: staff.orgId, userId: staff.userId };
   } catch (error) {
     if (error instanceof NotSignedIn) return { error: "You've been signed out. Sign in again." };

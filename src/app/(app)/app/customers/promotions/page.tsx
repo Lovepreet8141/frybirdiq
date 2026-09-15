@@ -21,11 +21,11 @@ async function snapshot(orgId: string) {
  * CUSTOMERS › Promotions — the library and the editor (`Promotions.dc.html`,
  * IQ view). Seeing them takes `orders.discount` (if you may apply a code at
  * the counter, you may see the codes); changing them takes
- * `settings.manage`, because a promotion changes what an order costs.
+ * `promotions.manage`, because a promotion changes what an order costs.
  */
 export default async function PromotionsPage() {
   const staff = await requireStaff();
-  const [canView, canEdit] = await Promise.all([staffCan("orders.discount"), staffCan("settings.manage")]);
+  const [canView, canEdit] = await Promise.all([staffCan("orders.discount"), staffCan("promotions.manage")]);
   if (!canView) {
     return (
       <div className="mx-auto w-full max-w-lg px-[var(--gutter)] py-16">

@@ -44,6 +44,18 @@ export const PERMISSIONS = [
   "recipes.edit",
   "customers.view",
   "customers.edit",
+  /**
+   * Creating or editing a promotion — a discount that applies to every
+   * qualifying order until it's turned off, not one order in front of a
+   * cashier. Was gated on `settings.manage` ("the closest existing
+   * permission to 'decides prices'"); this is that dedicated permission.
+   * Granted to OWNER only for now, matching exactly who could write before
+   * — nobody's access changes here. Whether MANAGER or ADMIN should also
+   * hold it is open: MANAGER already has `orders.discount` (bounded, one
+   * order) but not `menu.price` (unbounded, every future order); a
+   * promotion sits between the two.
+   */
+  "promotions.manage",
   "analytics.view",
   "reports.export",
   /** The payments ledger — every capture, by whom, by method. Read only. */
@@ -89,7 +101,15 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
   // so being unable to record that money was spent was an accident of
   // finance.manage not existing yet, not a boundary anyone intended. Decided
   // 2026-09-15 — nobody's access regresses, this only adds.
-  ADMIN: PERMISSIONS.filter((permission) => permission !== "settings.manage" && permission !== "finance.view"),
+  //
+  // promotions.manage is excluded here on purpose, unlike finance.manage above
+  // — unlike that case, ADMIN never held this (it was settings.manage, OWNER
+  // only), so leaving it out of the filter default preserves current access
+  // rather than silently widening it. Whether ADMIN should get it is still an
+  // open decision — see the permission's own doc comment above.
+  ADMIN: PERMISSIONS.filter(
+    (permission) => permission !== "settings.manage" && permission !== "finance.view" && permission !== "promotions.manage",
+  ),
 
   MANAGER: [
     "orders.view",

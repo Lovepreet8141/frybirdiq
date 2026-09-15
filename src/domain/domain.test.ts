@@ -248,11 +248,30 @@ describe("permissions", () => {
     // The expense and target actions gate on finance.manage, not finance.view
     // — reading the till ledger and writing into the books are different
     // questions. An analyst reads the P&L; they never write into it.
-    // Promotion writes sit on settings.manage.
     expect(can(["OWNER"], "finance.manage")).toBe(true);
     expect(can(["MANAGER"], "finance.manage")).toBe(true);
     expect(can(["ANALYST"], "finance.manage")).toBe(false);
     expect(can(["CASHIER"], "settings.manage")).toBe(false);
+  });
+
+  it("splits seeing a promotion from changing one — seeing is orders.discount, changing is promotions.manage", () => {
+    // "If you may apply a code at the counter, you may see the codes" is a
+    // different question from "may this person change what an order costs
+    // store-wide". A cashier gets the first, not the second.
+    expect(can(["CASHIER"], "orders.discount")).toBe(true);
+    expect(can(["CASHIER"], "promotions.manage")).toBe(false);
+    expect(can(["OWNER"], "promotions.manage")).toBe(true);
+  });
+
+  it("keeps promotions.manage OWNER-only for now — was settings.manage, same access, own permission", () => {
+    // Moved off settings.manage ("the closest existing permission to
+    // 'decides prices'") onto its own name. Granted to exactly who could
+    // write before, so this changes nobody's access. Whether MANAGER or
+    // ADMIN should also hold it is still open — MANAGER already has
+    // orders.discount (bounded, one order) but not menu.price (unbounded,
+    // every future order); a promotion sits between the two.
+    expect(can(["MANAGER"], "promotions.manage")).toBe(false);
+    expect(can(["ADMIN"], "promotions.manage")).toBe(false);
   });
 
   it("gives admin finance.manage, unlike the finance.view exclusion above", () => {
