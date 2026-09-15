@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { bps, formatINR, fromRupees, paise } from "@/lib/money";
 
 import {
+  consumptionQuantity,
   costFromRate,
   priceChangeBps,
   productCost,
@@ -205,5 +206,39 @@ describe("priceChangeBps", () => {
 
   it("has nothing to say about a first price", () => {
     expect(priceChangeBps(null, 28_000n as never)).toBeNull();
+  });
+});
+
+describe("consumptionQuantity", () => {
+  it("the roadmap's own example: 2× Nashville Burger uses exactly 2× the recipe qty", () => {
+    // 150 g of chicken per burger, yield 1 (one recipe run per unit sold).
+    expect(consumptionQuantity(150, 2, 1)).toBe(300);
+  });
+
+  it("one unit sold uses exactly the recipe's line quantity", () => {
+    expect(consumptionQuantity(150, 1, 1)).toBe(150);
+  });
+
+  it("divides down for a batch recipe that yields more than one portion", () => {
+    // 100 g batch yields 2 portions — 50 g/portion — 3 sold uses 150 g.
+    expect(consumptionQuantity(100, 3, 2)).toBe(150);
+  });
+
+  it("rounds half-up when the yield does not divide evenly", () => {
+    // 150 g batch over a yield of 4 is 37.5 g/portion; 1 sold rounds to 38.
+    expect(consumptionQuantity(150, 1, 4)).toBe(38);
+  });
+
+  it("treats a yield of zero or negative the same as a yield of one", () => {
+    expect(consumptionQuantity(150, 2, 0)).toBe(consumptionQuantity(150, 2, 1));
+    expect(consumptionQuantity(150, 2, -3)).toBe(consumptionQuantity(150, 2, 1));
+  });
+
+  it("zero units sold consumes nothing", () => {
+    expect(consumptionQuantity(150, 0, 1)).toBe(0);
+  });
+
+  it("rejects a negative line quantity", () => {
+    expect(() => consumptionQuantity(150, -1, 1)).toThrow();
   });
 });

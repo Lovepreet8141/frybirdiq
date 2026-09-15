@@ -173,6 +173,27 @@ export function priceChangeBps(previous: MilliPaise | null, current: MilliPaise)
   return Number((delta * BPS_ONE) / previous) as Bps;
 }
 
+/**
+ * How much of an ingredient consuming `lineQuantity` sold units actually
+ * uses. Roadmap 3.4.
+ *
+ * A recipe version's line records usage for one full batch, which yields
+ * `yieldQuantity` portions of the product (`recipes.yieldQuantity`,
+ * default 1 — the common case, one recipe run per unit sold). Consuming 2
+ * units of a product whose recipe yields 1 portion per batch uses exactly
+ * 2× the recipe line's quantity; a batch recipe that yields more than one
+ * portion divides down first. Rounded half-up to the nearest whole base
+ * unit — inventory movements are integers, so a 150 g line split across a
+ * yield of 3 (50 g/portion) rounds rather than losing the remainder.
+ */
+export function consumptionQuantity(perBatchQuantityBase: number, lineQuantity: number, yieldQuantity: number): number {
+  if (lineQuantity < 0) {
+    throw new Error("An order line cannot consume a negative quantity.");
+  }
+  const yieldQ = Math.max(Math.trunc(yieldQuantity), 1);
+  return Math.round((perBatchQuantityBase * lineQuantity) / yieldQ);
+}
+
 /** Purchase price per base unit before yield and waste — what the supplier charged. */
 export function purchaseRatePerBaseUnit(purchaseCost: Paise, purchaseQuantityBase: number): MilliPaise {
   if (purchaseQuantityBase <= 0) {

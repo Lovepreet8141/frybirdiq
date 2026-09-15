@@ -17,11 +17,11 @@ import "server-only";
 
 import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLogs, ingredients, inventoryItems, inventoryMovements, memberships, wasteEntries } from "@/db/schema";
+import { auditLogs, ingredients, inventoryItems, inventoryMovements, memberships, recipeVersionItems, recipes, wasteEntries } from "@/db/schema";
 import { movementTypeEnum, type Unit } from "@/db/schema/inventory";
 import { getStoreLocationId } from "@/lib/repositories/hardware";
 import { type DbTx, recordIngredientPriceInTx } from "@/lib/repositories/inventory";
-import { costFromRate, type MilliPaise, purchaseRatePerBaseUnit, rateToPaise } from "@/lib/iq/costing";
+import { consumptionQuantity, costFromRate, type MilliPaise, purchaseRatePerBaseUnit, rateToPaise } from "@/lib/iq/costing";
 import { type BaseUnit, conversionFor, toBaseUnits, toBaseUnitsDecimal, unitLabel } from "@/lib/iq/units";
 import { WASTE_REASON_LABEL, type WasteReasonOption } from "@/lib/inventory/waste-reasons";
 import { paise, type Paise } from "@/lib/money";
@@ -511,5 +511,252 @@ export async function recordWaste(orgId: string, actorUserId: string, input: Rec
     });
 
     return { ok: true, onHand, delta: -magnitude };
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Consumption — order lifecycle. Roadmap 3.4.                        */
+/* ------------------------------------------------------------------ */
+
+export interface ConsumptionLineInput {
+  readonly orderItemId: string;
+  /** Null when the line's product has since been deleted, or was never linked — normal, same as `order_items.productId` being nullable per §51. */
+  readonly productId: string | null;
+  /** Units of the product sold on this line. */
+  readonly quantity: number;
+}
+
+export interface ConsumptionResult {
+  readonly ok: true;
+  /** SALE movements actually written — excludes lines with no recipe and idempotent no-ops on a retry. */
+  readonly movementsWritten: number;
+  /** Lines that consumed nothing, and why. A missing product or recipe is normal, not an error — same convention as `getRecipeDetail` returning nothing. */
+  readonly warnings: readonly string[];
+}
+
+/**
+ * Consumes stock for an order at ACCEPTED — "the moment the kitchen commits
+ * to cooking something is the moment the ingredients are actually used"
+ * (roadmap 3.4, business decision; not COMPLETED). One transaction per
+ * order — "one movement batch per order" — so a genuinely broken recipe
+ * reference on one line cannot leave the rest of the order half-consumed.
+ *
+ * Idempotent on (order item, ingredient): `inventory_movements_sale_line_unique`
+ * (a partial unique index, SALE only) is the actual guarantee, not just
+ * application logic — `onConflictDoNothing` targets it directly, so a
+ * retried call, or two calls racing past `advanceOrder`'s `assertTransition`
+ * before either commits, writes the movement at most once. A conflict is a
+ * silent no-op, not an error.
+ *
+ * A line with no product, no recipe, or no saved recipe version consumes
+ * nothing and is reported as a warning, never as `{ ok: false }` — a broken
+ * recipe reference is a data-quality problem to surface separately, not a
+ * reason to block the kitchen from accepting a real order.
+ */
+export async function recordConsumption(
+  orgId: string,
+  actorUserId: string | null,
+  input: { orderId: string; lines: readonly ConsumptionLineInput[] },
+): Promise<ConsumptionResult | { ok: false; error: string }> {
+  const locationId = await getStoreLocationId(orgId);
+  if (!locationId) return { ok: false, error: "No location is set up for this organization yet." };
+
+  return db().transaction(async (tx) => {
+    let movementsWritten = 0;
+    const warnings: string[] = [];
+
+    for (const line of input.lines) {
+      if (!line.productId) {
+        warnings.push(`Order item ${line.orderItemId} has no linked product — nothing consumed.`);
+        continue;
+      }
+      if (line.quantity <= 0) continue;
+
+      const [recipe] = await tx
+        .select({ currentVersionId: recipes.currentVersionId, yieldQuantity: recipes.yieldQuantity })
+        .from(recipes)
+        .where(and(eq(recipes.orgId, orgId), eq(recipes.productId, line.productId)))
+        .limit(1);
+
+      if (!recipe || !recipe.currentVersionId) {
+        warnings.push(`Product ${line.productId} has no saved recipe — nothing consumed for order item ${line.orderItemId}.`);
+        continue;
+      }
+
+      const versionItems = await tx
+        .select({
+          ingredientId: recipeVersionItems.ingredientId,
+          quantityBase: recipeVersionItems.quantity,
+          costPerBaseUnitMilli: ingredients.costPerBaseUnitMilli,
+        })
+        .from(recipeVersionItems)
+        .innerJoin(ingredients, eq(ingredients.id, recipeVersionItems.ingredientId))
+        .where(eq(recipeVersionItems.versionId, recipe.currentVersionId));
+
+      if (versionItems.length === 0) {
+        warnings.push(`Recipe for product ${line.productId} has no ingredient lines — nothing consumed for order item ${line.orderItemId}.`);
+        continue;
+      }
+
+      for (const item of versionItems) {
+        const magnitude = consumptionQuantity(item.quantityBase, line.quantity, recipe.yieldQuantity);
+        if (magnitude <= 0) continue;
+
+        const rate = item.costPerBaseUnitMilli as MilliPaise;
+        const costPerBaseUnit = rateToPaise(rate);
+        // Valued at the ingredient's current usable rate, not one frozen into
+        // the recipe version — recipes don't store cost snapshots.
+        const totalCost = costFromRate(rate, magnitude);
+
+        const [movement] = await tx
+          .insert(inventoryMovements)
+          .values({
+            orgId,
+            ingredientId: item.ingredientId,
+            locationId,
+            type: "SALE",
+            quantity: -magnitude,
+            costPerBaseUnit,
+            totalCost,
+            orderId: input.orderId,
+            orderItemId: line.orderItemId,
+            recipeVersionId: recipe.currentVersionId,
+            actorUserId,
+            notes: null,
+          })
+          .onConflictDoNothing({
+            target: [inventoryMovements.orderItemId, inventoryMovements.ingredientId],
+            where: sql`${inventoryMovements.type} = 'SALE'`,
+          })
+          .returning({ id: inventoryMovements.id });
+
+        // A conflict means this exact order item + ingredient was already
+        // consumed — D7's idempotent no-op, not an error.
+        if (!movement) continue;
+
+        const onHand = await applyMovementDelta(tx, orgId, item.ingredientId, locationId, -magnitude);
+        movementsWritten++;
+
+        await tx.insert(auditLogs).values({
+          orgId,
+          actorUserId,
+          action: "stock_consumed",
+          entity: "inventory_movements",
+          entityId: movement.id,
+          after: { orderId: input.orderId, orderItemId: line.orderItemId, ingredientId: item.ingredientId, magnitude, onHand },
+        });
+      }
+    }
+
+    return { ok: true, movementsWritten, warnings };
+  });
+}
+
+export interface ReversalResult {
+  readonly ok: true;
+  /** RETURN movements actually written — excludes movements already reversed on a retry. */
+  readonly movementsReversed: number;
+}
+
+/**
+ * Reverses whatever `recordConsumption` did for an order — REJECTED/CANCELLED
+ * only, never REFUNDED (roadmap 3.4, business decision: a refund happens
+ * after the food may already be cooked and handed over — the chicken was
+ * genuinely used — while a rejection/cancellation means it never was).
+ *
+ * Writes a new RETURN movement per un-reversed SALE; never edits or deletes
+ * the original (same immutability discipline as an order line or a recipe
+ * version). There is no partial unique index on `reversalOfMovementId` the
+ * way `inventory_movements_sale_line_unique` guards SALE, so this locks the
+ * order's SALE rows with `SELECT … FOR UPDATE` first — two calls racing
+ * past `advanceOrder`/`rejectOrder`'s `assertTransition` for the same order
+ * (the same kind of race the SALE unique index guards against) serialize on
+ * those rows instead of both crediting the stock back, rather than relying
+ * on a clean sequential retry alone.
+ */
+export async function reverseConsumption(
+  orgId: string,
+  actorUserId: string | null,
+  orderId: string,
+  reason: string | null,
+): Promise<ReversalResult | { ok: false; error: string }> {
+  return db().transaction(async (tx) => {
+    const saleMovements = await tx
+      .select({
+        id: inventoryMovements.id,
+        ingredientId: inventoryMovements.ingredientId,
+        locationId: inventoryMovements.locationId,
+        quantity: inventoryMovements.quantity,
+        costPerBaseUnit: inventoryMovements.costPerBaseUnit,
+        totalCost: inventoryMovements.totalCost,
+        orderItemId: inventoryMovements.orderItemId,
+      })
+      .from(inventoryMovements)
+      .where(and(eq(inventoryMovements.orgId, orgId), eq(inventoryMovements.orderId, orderId), eq(inventoryMovements.type, "SALE")))
+      .for("update");
+
+    if (saleMovements.length === 0) {
+      return { ok: true, movementsReversed: 0 };
+    }
+
+    const saleIds = saleMovements.map((movement) => movement.id);
+    const existingReturns = await tx
+      .select({ reversalOfMovementId: inventoryMovements.reversalOfMovementId })
+      .from(inventoryMovements)
+      .where(
+        and(
+          eq(inventoryMovements.orgId, orgId),
+          eq(inventoryMovements.type, "RETURN"),
+          inArray(inventoryMovements.reversalOfMovementId, saleIds),
+        ),
+      );
+    const alreadyReversed = new Set(
+      existingReturns.map((row) => row.reversalOfMovementId).filter((id): id is string => id !== null),
+    );
+
+    let movementsReversed = 0;
+
+    for (const sale of saleMovements) {
+      if (alreadyReversed.has(sale.id)) continue;
+
+      const magnitude = Math.abs(sale.quantity);
+      if (magnitude === 0) continue;
+
+      const [movement] = await tx
+        .insert(inventoryMovements)
+        .values({
+          orgId,
+          ingredientId: sale.ingredientId,
+          // Reuses the original SALE's own location rather than re-resolving
+          // the org's current location, so a reversal always lands the stock
+          // back where it was actually taken from.
+          locationId: sale.locationId,
+          type: "RETURN",
+          quantity: magnitude,
+          costPerBaseUnit: sale.costPerBaseUnit,
+          totalCost: sale.totalCost,
+          orderId,
+          orderItemId: sale.orderItemId,
+          reversalOfMovementId: sale.id,
+          actorUserId,
+          notes: reason,
+        })
+        .returning({ id: inventoryMovements.id });
+      if (!movement) throw new Error("stock: return movement insert returned no row");
+
+      const onHand = await applyMovementDelta(tx, orgId, sale.ingredientId, sale.locationId, magnitude);
+      movementsReversed++;
+
+      await tx.insert(auditLogs).values({
+        orgId,
+        actorUserId,
+        action: "stock_consumption_reversed",
+        entity: "inventory_movements",
+        entityId: movement.id,
+        after: { orderId, reversalOfMovementId: sale.id, ingredientId: sale.ingredientId, magnitude, onHand },
+      });
+    }
+
+    return { ok: true, movementsReversed };
   });
 }

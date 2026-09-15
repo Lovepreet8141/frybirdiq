@@ -38,6 +38,7 @@ import { getCustomer } from "@/lib/customer";
 import { createPendingPayment, recordCashPayment } from "./payments";
 import { CASH_PROVIDER, RAZORPAY_PROVIDER, availableMethods, codAllowed, getProvider, type PaymentMethod } from "@/lib/payments";
 import { reverseStampForOrder } from "./loyalty";
+import { recordConsumption, reverseConsumption } from "./stock";
 import { IdempotencyConflict, withIdempotency } from "./idempotency";
 
 const ORG_SLUG = "frybird";
@@ -1108,6 +1109,50 @@ export async function advanceOrder(input: {
     await reverseStampForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
   }
 
+  /*
+   * Consumption on order — roadmap 3.4. Triggers at ACCEPTED, not COMPLETED:
+   * the moment the kitchen commits to cooking something is the moment the
+   * ingredients are actually used, regardless of how long handover takes
+   * after. Reversed on CANCELLED only — never REFUNDED, a deliberate
+   * distinction: a refund happens after the food may already be cooked and
+   * handed over (the chicken was genuinely used), while a cancellation means
+   * it never was.
+   *
+   * Both run after the status write, not inside it, and their own failure
+   * never turns this into `{ ok: false }` — an order being accepted or
+   * cancelled is the operationally urgent thing; a stock-consumption problem
+   * (a broken recipe reference, say) is a data-quality issue to log and
+   * surface separately, not a reason to leave the kitchen unable to move a
+   * real order over an inventory bookkeeping wrinkle.
+   */
+  if (input.to === "ACCEPTED") {
+    try {
+      const lines = await database
+        .select({ orderItemId: orderItems.id, productId: orderItems.productId, quantity: orderItems.quantity })
+        .from(orderItems)
+        .where(eq(orderItems.orderId, order.id));
+      const consumed = await recordConsumption(input.orgId, input.actorUserId, { orderId: order.id, lines });
+      if (!consumed.ok) {
+        console.error(`orders: stock consumption failed for order ${order.id}: ${consumed.error}`);
+      } else if (consumed.warnings.length > 0) {
+        console.warn(`orders: stock consumption warnings for order ${order.id}`, consumed.warnings);
+      }
+    } catch (error) {
+      console.error(`orders: stock consumption threw for order ${order.id}`, error);
+    }
+  }
+
+  if (input.to === "CANCELLED") {
+    try {
+      const reversed = await reverseConsumption(input.orgId, input.actorUserId, order.id, `Order #${order.orderNumber} cancelled`);
+      if (!reversed.ok) {
+        console.error(`orders: stock reversal failed for order ${order.id}: ${reversed.error}`);
+      }
+    } catch (error) {
+      console.error(`orders: stock reversal threw for order ${order.id}`, error);
+    }
+  }
+
   return { ok: true };
 }
 
@@ -1340,6 +1385,24 @@ export async function rejectOrder(input: {
     actorUserId: input.actorUserId,
     reason: detail,
   });
+
+  /*
+   * `rejectOrder` writes CANCELLED directly, bypassing `advanceOrder` — so
+   * its own reversal hook (see the `to === "CANCELLED"` branch there) never
+   * fires for a rejection. An order can be rejected after ACCEPTED (kitchen
+   * out of an ingredient mid-prep, say), so consumption may genuinely have
+   * happened; `reverseConsumption` is itself idempotent and a no-op when it
+   * has not. Same non-fatal handling as `advanceOrder`: an inventory problem
+   * must never block turning an order down.
+   */
+  try {
+    const reversed = await reverseConsumption(input.orgId, input.actorUserId, order.id, detail);
+    if (!reversed.ok) {
+      console.error(`orders: stock reversal failed for order ${order.id}: ${reversed.error}`);
+    }
+  } catch (error) {
+    console.error(`orders: stock reversal threw for order ${order.id}`, error);
+  }
 
   return { ok: true };
 }
