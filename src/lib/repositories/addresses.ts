@@ -12,7 +12,7 @@ import "server-only";
  * leaves the browser that made it.
  */
 
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { addresses } from "@/db/schema";
 import { fromMicro } from "@/lib/delivery";
@@ -25,11 +25,11 @@ export interface SavedAddress {
   readonly lng: number;
 }
 
-export async function listSavedAddresses(customerId: string): Promise<readonly SavedAddress[]> {
+export async function listSavedAddresses(orgId: string, customerId: string): Promise<readonly SavedAddress[]> {
   const rows = await db()
     .select()
     .from(addresses)
-    .where(eq(addresses.customerId, customerId))
+    .where(and(eq(addresses.orgId, orgId), eq(addresses.customerId, customerId)))
     .orderBy(desc(addresses.updatedAt))
     .limit(6);
 

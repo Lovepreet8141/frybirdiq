@@ -18,6 +18,7 @@ import { formatINR } from "@/lib/money";
 import { availableMethods } from "@/lib/payments";
 import { listSavedAddresses } from "@/lib/repositories/addresses";
 import { getDeliverySettings } from "@/lib/repositories/delivery";
+import { requireOrg } from "@/lib/repositories/org";
 
 export const metadata: Metadata = { title: "Checkout" };
 
@@ -33,6 +34,7 @@ export const metadata: Metadata = { title: "Checkout" };
 export default async function CheckoutPage() {
   const cart = await getPricedCart();
   if (cart.lines.length === 0) redirect("/cart");
+  const org = await requireOrg();
 
   // Minted per render. Resubmitting the same page cannot create a second order.
   const idempotencyKey = randomUUID();
@@ -53,7 +55,7 @@ export default async function CheckoutPage() {
   // that customer row yet. Checkout still works: it falls through to the
   // same on-device remembered address a guest gets, never blocking the order.
   const savedAddresses: SavedAddressOption[] = customer?.emailVerified
-    ? (await listSavedAddresses(customer.id)).map((address) => ({
+    ? (await listSavedAddresses(org.id, customer.id)).map((address) => ({
         id: address.id,
         line1: address.line1,
         landmark: address.landmark,
