@@ -1,0 +1,99 @@
+# The gates that already exist, actually run.
+#
+# Before this file, `pnpm typecheck`, `pnpm lint`, `pnpm test` (459 tests across
+# 34 files) and `scripts/check-rsc-boundaries.sh` all passed — and nothing ran
+# any of them on a push. A green suite nobody executes is a suite that goes red
+# quietly.
+#
+# Each check is its own job so a failure names itself in the checks list rather
+# than reporting "CI failed". They are independent, so they run in parallel;
+# none of them needs a database.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# A second push to the same branch cancels the first — the older run's answer is
+# about code nobody has any more.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  rsc-boundaries:
+    # The one check here that is not a standard tool, and the one most worth
+    # having. It catches a Server Component handing a function literal to a JSX
+    # prop — which broke /app/iq/menu and the Menu Manager's product preview in
+    # production, and which neither typecheck nor build can see: TypeScript
+    # considers both shapes well-typed, and `next build` never renders a
+    # force-dynamic route, which every authenticated staff page is.
+    name: RSC boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/check-rsc-boundaries.sh
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Placeholder Supabase values, because some routes construct a client at
+      # module scope and throw without them. Verified locally: with these two
+      # set and nothing else, the build completes — it needs no database, which
+      # is what makes it runnable in CI at all. They are syntactically valid and
+      # point nowhere; a build that reached a real project would be a bug.
+      - run: pnpm build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
