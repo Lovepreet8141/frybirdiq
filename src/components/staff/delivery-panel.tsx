@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Bike, ChevronDown, ExternalLink } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Map } from "@/components/delivery/map";
 import { formatDistance } from "@/lib/delivery";
 import { type Paise, formatINR } from "@/lib/money";
@@ -35,7 +36,7 @@ export function DeliveryPanel({
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-border bg-surface-muted p-4">
+    <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface-muted p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
           <Bike className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
@@ -52,28 +53,20 @@ export function DeliveryPanel({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <a
-          href={`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex min-h-[44px] items-center gap-2 rounded-md border border-border-strong px-3 text-sm font-semibold transition-colors hover:bg-surface"
-        >
-          <ExternalLink className="size-4" aria-hidden="true" />
-          Open in Maps
-        </a>
+        <Button asChild variant="outline" size="sm" className="gap-2">
+          <a href={`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`} target="_blank" rel="noopener noreferrer">
+            <ExternalLink className="size-4" aria-hidden="true" />
+            Open in Maps
+          </a>
+        </Button>
 
-        <button
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
-          className="inline-flex min-h-[44px] items-center gap-2 rounded-md border border-border px-3 text-sm font-semibold transition-colors hover:bg-surface"
-        >
+        <Button type="button" variant="ghost" size="sm" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="gap-2">
           <ChevronDown
             className={`size-4 transition-transform duration-[var(--duration-standard)] ${open ? "rotate-180" : ""}`}
             aria-hidden="true"
           />
           {open ? "Hide map" : "Show map"}
-        </button>
+        </Button>
       </div>
 
       {open && <Map centre={{ lat, lng }} pin={{ lat, lng }} className="h-48" />}

@@ -1,8 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 
+import { Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { ExpenseForm } from "@/components/iq/expense-form";
+import { PageHeader } from "@/components/staff/page-header";
+import { EmptyState } from "@/components/states";
 import { getStaff, staffCan } from "@/lib/auth";
 import { businessDate } from "@/lib/dates";
 import { listAccounts, listCategories } from "@/lib/repositories/expenses";
@@ -26,32 +30,38 @@ export default async function NewExpensePage() {
     listAccounts(staff.orgId),
   ]);
 
-  if (categories.length === 0) {
-    return (
-      <div className="mx-auto w-full max-w-lg px-[var(--gutter)] py-8">
-        <h1 className="font-heading text-2xl font-bold">No expense categories yet</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Run <code className="bg-surface px-1.5 py-0.5">pnpm iq:categories</code> to add the standard set.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="mx-auto w-full max-w-3xl px-[var(--gutter)] py-8">
-      <Link href="/app/iq/expenses" className="text-sm text-muted-foreground underline underline-offset-2">
-        ← Expenses
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-[var(--gutter)] py-8">
+      <Link
+        href="/app/iq/expenses"
+        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground underline-offset-2 hover:underline"
+      >
+        <ArrowLeft className="size-3.5" aria-hidden="true" />
+        Expenses
       </Link>
-      <h1 className="mt-3 font-heading text-3xl font-bold tracking-tight">Record an expense</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Money out. Revenue comes from your orders automatically — this is the other half.
-      </p>
 
-      <ExpenseForm
-        categories={categories.map((c) => ({ id: c.id, name: c.name, behaviour: c.behaviour }))}
-        accounts={accounts.map((a) => ({ id: a.id, name: a.name }))}
-        today={businessDate(new Date())}
+      <PageHeader
+        title="Record an expense"
+        description="Money out. Revenue comes from your orders automatically — this is the other half."
       />
+
+      {categories.length === 0 ? (
+        <EmptyState
+          title="No expense categories yet."
+          detail="Run pnpm iq:categories to add the standard set, then come back to record this expense."
+        />
+      ) : (
+        <Panel>
+          <PanelHeader title="Details" />
+          <PanelBody>
+            <ExpenseForm
+              categories={categories.map((c) => ({ id: c.id, name: c.name, behaviour: c.behaviour }))}
+              accounts={accounts.map((a) => ({ id: a.id, name: a.name }))}
+              today={businessDate(new Date())}
+            />
+          </PanelBody>
+        </Panel>
+      )}
     </div>
   );
 }

@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Bike, Check, ExternalLink, Loader2, Phone } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { type Paise, formatINR } from "@/lib/money";
 import { formatDistance } from "@/lib/delivery";
 import { completeDeliveryAction } from "@/lib/auth/staff-actions";
@@ -50,22 +51,22 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
   const onTheRoad = delivery.status === "OUT_FOR_DELIVERY";
 
   return (
-    <li className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-5">
+    <li className="flex flex-col gap-4 rounded-xl border border-border bg-panel p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <span className="tabular font-heading text-2xl font-bold">#{delivery.orderNumber}</span>
-          <span className="text-sm text-muted-foreground">{delivery.customerName}</span>
+          <span className="text-sm text-muted-foreground">{delivery.customerName ?? "Walk-in"}</span>
         </div>
         <div className="flex flex-col items-end">
           <span className="tabular text-2xl font-bold">{formatINR(delivery.grandTotal)}</span>
-          <span className={delivery.isPaid ? "text-xs font-semibold text-[#3F9D52]" : "text-xs font-semibold text-warning"}>
+          <span className={delivery.isPaid ? "text-xs font-semibold text-gain" : "text-xs font-semibold text-flag"}>
             {delivery.isPaid ? "Already paid" : "Collect cash"}
           </span>
         </div>
       </div>
 
       {delivery.delivery && (
-        <div className="flex flex-col gap-2 rounded-md bg-surface-muted p-4">
+        <div className="flex flex-col gap-3 rounded-lg bg-surface-muted p-4">
           <div className="flex items-start gap-2">
             <Bike className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
             <div className="flex flex-col">
@@ -80,23 +81,23 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <a
-              href={`https://www.google.com/maps/search/?api=1&query=${delivery.delivery.lat},${delivery.delivery.lng}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex min-h-[56px] flex-1 items-center justify-center gap-2 rounded-md bg-primary px-4 font-semibold text-primary-foreground"
-            >
-              <ExternalLink className="size-4" aria-hidden="true" />
-              Navigate
-            </a>
-            {delivery.customerPhone && (
+            <Button asChild size="lg" className="min-h-14 flex-1 gap-2 text-base">
               <a
-                href={`tel:${delivery.customerPhone}`}
-                className="inline-flex min-h-[56px] items-center justify-center gap-2 rounded-md border border-border-strong px-4 font-semibold"
+                href={`https://www.google.com/maps/search/?api=1&query=${delivery.delivery.lat},${delivery.delivery.lng}`}
+                target="_blank"
+                rel="noopener noreferrer"
               >
-                <Phone className="size-4" aria-hidden="true" />
-                Call
+                <ExternalLink className="size-4" aria-hidden="true" />
+                Navigate
               </a>
+            </Button>
+            {delivery.customerPhone && (
+              <Button asChild variant="outline" size="lg" className="min-h-14 gap-2 text-base">
+                <a href={`tel:${delivery.customerPhone}`}>
+                  <Phone className="size-4" aria-hidden="true" />
+                  Call
+                </a>
+              </Button>
             )}
           </div>
         </div>
@@ -114,7 +115,7 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
       {delivery.notes && <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">{delivery.notes}</p>}
 
       {error && (
-        <p role="alert" className="text-sm">
+        <p role="alert" className="rounded-md border-l-2 border-loss bg-loss-soft/60 px-4 py-3 text-sm">
           {error}
         </p>
       )}
@@ -126,11 +127,12 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
             rider close the job and forget the money, or book money for an
             order still in the bag.
           */}
-          <button
+          <Button
             type="button"
             disabled={pending}
             onClick={() => close(!delivery.isPaid)}
-            className="flex min-h-[64px] items-center justify-center gap-3 rounded-md bg-primary px-6 text-lg font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+            size="lg"
+            className="min-h-16 gap-3 text-lg"
           >
             {pending ? (
               <Loader2 className="size-5 animate-spin" aria-hidden="true" />
@@ -138,17 +140,19 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
               <Check className="size-5" aria-hidden="true" />
             )}
             {delivery.isPaid ? "Delivered" : `Delivered · took ${formatINR(delivery.grandTotal)}`}
-          </button>
+          </Button>
 
           {!delivery.isPaid && (
-            <button
+            <Button
               type="button"
+              variant="outline"
               disabled={pending}
               onClick={() => close(false)}
-              className="flex min-h-[48px] items-center justify-center rounded-md border border-border px-4 text-sm font-semibold text-muted-foreground transition-colors hover:bg-surface-muted disabled:opacity-50"
+              size="lg"
+              className="min-h-12 text-muted-foreground"
             >
               Delivered without taking cash
-            </button>
+            </Button>
           )}
         </div>
       ) : (

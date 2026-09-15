@@ -3,6 +3,9 @@
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { type ExpenseFormState, recordExpense } from "@/lib/iq/actions";
 
 interface Option {
@@ -13,16 +16,15 @@ interface CategoryOption extends Option {
   behaviour: "DIRECT" | "FIXED";
 }
 
+const selectClassName =
+  "h-10 w-full min-w-0 rounded-md border border-input bg-panel px-3 py-1 text-base text-foreground transition-[border-color,box-shadow] duration-[120ms] outline-none focus-visible:border-primary focus-visible:ring-[3px] focus-visible:ring-primary/20 disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-muted disabled:opacity-60 md:text-sm";
+
 function Submit() {
   const { pending } = useFormStatus();
   return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-5 text-sm font-semibold text-primary-foreground disabled:opacity-60"
-    >
+    <Button type="submit" disabled={pending} size="lg" className="min-h-11">
       {pending ? "Saving…" : "Record expense"}
-    </button>
+    </Button>
   );
 }
 
@@ -41,43 +43,37 @@ export function ExpenseForm({
   const fixed = categories.filter((c) => c.behaviour === "FIXED");
 
   return (
-    <form action={action} className="mt-8 flex max-w-lg flex-col gap-5">
+    <form action={action} className="flex max-w-lg flex-col gap-5">
       {state.status === "error" && (
-        <p role="alert" className="border-l-2 border-[var(--destructive)] bg-surface px-4 py-3 text-sm">
+        <p role="alert" className="rounded-md border-l-2 border-loss bg-loss-soft/60 px-4 py-3 text-sm">
           {state.message}
         </p>
       )}
 
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="amount" className="text-sm font-semibold">
+        <Label htmlFor="amount" className="text-[13px] font-semibold">
           Amount
-        </label>
+        </Label>
         <div className="flex items-center gap-2">
           <span aria-hidden="true" className="text-lg text-muted-foreground">₹</span>
-          <input
+          <Input
             id="amount"
             name="amount"
             required
             inputMode="decimal"
             placeholder="2400"
             autoComplete="off"
-            className="tabular w-full min-h-[44px] w-full rounded-md border border-border bg-surface px-3 py-2.5 text-lg"
+            className="tabular text-lg"
           />
         </div>
-        <p className="text-xs text-muted-foreground">Rupees. Paise are fine — 2400.50.</p>
+        <p className="text-[12.5px] text-muted-foreground">Rupees. Paise are fine — 2400.50.</p>
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="categoryId" className="text-sm font-semibold">
+        <Label htmlFor="categoryId" className="text-[13px] font-semibold">
           Category
-        </label>
-        <select
-          id="categoryId"
-          name="categoryId"
-          required
-          defaultValue=""
-          className="w-full min-h-[44px] w-full rounded-md border border-border bg-surface px-3 py-2.5"
-        >
+        </Label>
+        <select id="categoryId" name="categoryId" required defaultValue="" className={selectClassName}>
           <option value="" disabled>
             Choose a category
           </option>
@@ -101,45 +97,25 @@ export function ExpenseForm({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="description" className="text-sm font-semibold">
+        <Label htmlFor="description" className="text-[13px] font-semibold">
           What was it for
-        </label>
-        <input
-          id="description"
-          name="description"
-          required
-          maxLength={160}
-          placeholder="Chicken from Metro, 20 kg"
-          className="w-full min-h-[44px] w-full rounded-md border border-border bg-surface px-3 py-2.5"
-        />
+        </Label>
+        <Input id="description" name="description" required maxLength={160} placeholder="Chicken from Metro, 20 kg" />
       </div>
 
       <div className="grid gap-5 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="paidOn" className="text-sm font-semibold">
+          <Label htmlFor="paidOn" className="text-[13px] font-semibold">
             Date paid
-          </label>
-          <input
-            id="paidOn"
-            name="paidOn"
-            type="date"
-            required
-            defaultValue={today}
-            max={today}
-            className="tabular w-full min-h-[44px] w-full rounded-md border border-border bg-surface px-3 py-2.5"
-          />
+          </Label>
+          <Input id="paidOn" name="paidOn" type="date" required defaultValue={today} max={today} className="tabular" />
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="accountId" className="text-sm font-semibold">
+          <Label htmlFor="accountId" className="text-[13px] font-semibold">
             Paid from <span className="font-normal text-muted-foreground">(optional)</span>
-          </label>
-          <select
-            id="accountId"
-            name="accountId"
-            defaultValue=""
-            className="w-full min-h-[44px] w-full rounded-md border border-border bg-surface px-3 py-2.5"
-          >
+          </Label>
+          <select id="accountId" name="accountId" defaultValue="" className={selectClassName}>
             <option value="">Not recorded</option>
             {accounts.map((a) => (
               <option key={a.id} value={a.id}>
@@ -151,15 +127,10 @@ export function ExpenseForm({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="reference" className="text-sm font-semibold">
+        <Label htmlFor="reference" className="text-[13px] font-semibold">
           Bill number <span className="font-normal text-muted-foreground">(optional)</span>
-        </label>
-        <input
-          id="reference"
-          name="reference"
-          maxLength={80}
-          className="w-full min-h-[44px] w-full rounded-md border border-border bg-surface px-3 py-2.5"
-        />
+        </Label>
+        <Input id="reference" name="reference" maxLength={80} />
       </div>
 
       <div className="flex items-center gap-3 pt-1">
