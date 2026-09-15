@@ -3637,3 +3637,67 @@ when" criteria are not yet verified with a real staff session** — the
 export download and the settings forms' actual save behavior need a
 human to click through; route/permission health is confirmed, the
 functional criteria are still open.
+
+## Lane D — Roadmap 6: CASHIER kitchen.update, roles matrix (6.2), staff invites (6.1) (`1e52e37`)
+
+Stale base: 4 of 16 files on the divergence list, but only one
+(`nav-items.ts`) actually needed hand reconciliation — the other three
+(`section-breadcrumb.tsx`, `domain.test.ts`, `permissions.ts`) applied
+clean because their real changes sat in regions kit-radix-nova hadn't
+touched.
+
+CASHIER gets `kitchen.update` — owner-approved (roadmap 6): a
+one-person counter is also the kitchen at slow hours, and withholding
+it forced a second login for a step one person was already doing.
+Nothing else opens up; recipes stay out of reach.
+
+Roles matrix (6.2) renders `permissionsFor()` straight from
+`domain/permissions.ts` so the page can never drift from what the
+server enforces. One real gap from the stale base: its
+`PERMISSION_INFO` is an exhaustive `Record<Permission, ...>`, so it
+failed to typecheck against `finance.manage` and `promotions.manage` —
+both added earlier this session, after the lane's base. Added their
+entries (Reporting, Customers — matching `finance.view`'s and
+`customers.*`'s existing groups).
+
+Staff invites (6.1): `inviteStaff`/`deactivateStaff`/`changeStaffRole`
+in `lib/repositories/staff.ts`, all org-scoped, atomic, audit-logged,
+gated on `staff.manage` server-side and a new `canGrantRole` ceiling
+in `domain/permissions.ts` — an actor can never grant, or act on an
+account holding, a role that holds a permission the actor's own roles
+don't. `inviteStaff` calls Supabase's Admin API
+(`auth.admin.inviteUserByEmail`) from `server-only` code the client
+never reaches.
+
+**Surfaced as a decision, not decided unilaterally:** `canGrantRole`
+has a real consequence — since MANAGER holds `finance.view`
+(OWNER+MANAGER only, decided earlier this session) and ADMIN doesn't,
+an ADMIN cannot invite, deactivate, or change the role of a MANAGER
+account. The lane's own agent flagged this as "worth a second look."
+Asked via `AskUserQuestion`; decided 2026-09-15: **keep as-is** —
+consistent with the `finance.view` boundary, and the alternative (a
+rank-based ceiling letting ADMIN outrank MANAGER structurally) would
+let ADMIN hand out money access it doesn't itself hold.
+
+`nav-items.ts` conflict: added the Roles nav item (`ShieldQuestion`
+icon, `exclude: ["/app/staff/roles"]` on the Staff item) without
+disturbing the Exports item Lane C had just added to the same file.
+
+typecheck, lint, 585 tests (577 + 8 new: `canGrantRole`'s six cases,
+CASHIER's `kitchen.update`), RSC-boundary all clean. Deployed; service
+active. Verified live: `/app/staff/roles` → 307 (sign-in redirect),
+`/app/staff` → 307, `/accept-invite` → 200 (public route), and the
+updated sign-in copy ("Accounts are set up by an owner or admin, from
+Staff") confirmed live. journalctl clean of anything but the known
+deploy-transition artifact and `NotSignedIn` from these unauthenticated
+smoke checks. **Roadmap 6.1/6.2's "Done when" criteria are not yet
+verified with a real invite sent and accepted** — route/permission
+health is confirmed, the actual invite-to-accept flow needs a human
+with a real inbox.
+
+All four lanes of the multi-lane build are now merged, gated, deployed
+and verified at the route level: Rewards (`3896625`), Deliveries +
+Expenses (`adf9f5f`), Lane A recipe editor (`72ad089`), Lane C exports
++ settings (`ab77ed3`, `8085a33`), Lane D roles + invites (`1e52e37`).
+kit-ui-batch remained untouched throughout — zero commits unique to
+it, confirmed at the start of this phase, never revisited.
