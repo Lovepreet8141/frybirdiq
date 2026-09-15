@@ -15,10 +15,11 @@ import "server-only";
  * comment says stock movements are "later slices with their own review."
  */
 
-import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, ingredients, inventoryItems, inventoryMovements, memberships, recipeVersionItems, recipes, wasteEntries } from "@/db/schema";
 import { movementTypeEnum, type Unit } from "@/db/schema/inventory";
+import type { DateRange } from "@/lib/dates";
 import { getStoreLocationId } from "@/lib/repositories/hardware";
 import { type DbTx, recordIngredientPriceInTx } from "@/lib/repositories/inventory";
 import { consumptionQuantity, costFromRate, type MilliPaise, purchaseRatePerBaseUnit, rateToPaise } from "@/lib/iq/costing";
@@ -134,6 +135,69 @@ export async function getWasteWeekTotal(orgId: string): Promise<WasteWeekTotal> 
     .from(wasteEntries)
     .where(and(eq(wasteEntries.orgId, orgId), gte(wasteEntries.occurredAt, since)));
   return { totalCost: paise(BigInt(row?.totalCost ?? "0")), entryCount: row?.entryCount ?? 0 };
+}
+
+export interface FoodCostComparison {
+  /** What the recipes say should have been used for everything sold — zero waste, zero shrinkage assumed. Sum of every SALE movement's `totalCost` in the period. */
+  readonly theoreticalCost: Paise;
+  /** What actually left the shelf, for any reason, this period — sales at their recipe cost, plus waste, plus shrinkage found on a count. */
+  readonly actualCost: Paise;
+  /** `actualCost - theoreticalCost`. Positive: waste and shrinkage cost more than the recipe math alone accounts for. */
+  readonly varianceCost: Paise;
+  /** SALE movements in the period. Zero means there is nothing to compare yet — the caller must not render 0 vs 0 as a clean result. */
+  readonly saleMovementCount: number;
+}
+
+/**
+ * Theoretical vs actual food cost for a period. Roadmap 3.5.
+ *
+ * Theoretical is exactly what a SALE movement's `totalCost` already records
+ * — recipe quantity x ingredient rate at the moment of consumption, written
+ * by `recordConsumption` above. It is not recomputed here; it is summed.
+ *
+ * Actual adds every other movement type that represents stock genuinely
+ * gone for a bad reason: WASTE in full, and the negative half of
+ * ADJUSTMENT (a physical count that came up short of the cache — real
+ * shrinkage, docs/INVENTORY-ARCHITECTURE.md D5). The positive half of
+ * ADJUSTMENT (stock found that nobody had logged) is excluded from both
+ * sides, the same as PURCHASE — it was never sold or lost, so it belongs
+ * in neither number.
+ *
+ * RETURN (a SALE reversed because its order was rejected or cancelled
+ * after ACCEPTED — `reverseConsumption` above) is deliberately excluded
+ * from both sides too, rather than netted against SALE. A RETURN's
+ * `totalCost` always equals the SALE it undoes, so including it in one
+ * number and not the other would make a cancelled order look like a
+ * saving, and netting it out of both would only matter across a period
+ * boundary that a same-transaction reversal almost never crosses. Leaving
+ * it out of both keeps `varianceCost` reading as exactly what it claims to
+ * be: the cost of waste and shrinkage, nothing else.
+ *
+ * One real SQL aggregate with `filter`, not client-side summation of an
+ * unbounded row set — the same shape as `getWasteWeekTotal` above.
+ */
+export async function getFoodCostComparison(orgId: string, range: Pick<DateRange, "from" | "to">): Promise<FoodCostComparison> {
+  const [row] = await db()
+    .select({
+      theoreticalCost: sql<string>`coalesce(sum(${inventoryMovements.totalCost}) filter (where ${inventoryMovements.type} = 'SALE'), 0)`,
+      actualCost: sql<string>`coalesce(sum(${inventoryMovements.totalCost}) filter (
+        where ${inventoryMovements.type} in ('SALE', 'WASTE')
+           or (${inventoryMovements.type} = 'ADJUSTMENT' and ${inventoryMovements.quantity} < 0)
+      ), 0)`,
+      saleMovementCount: sql<number>`count(*) filter (where ${inventoryMovements.type} = 'SALE')::int`,
+    })
+    .from(inventoryMovements)
+    .where(and(eq(inventoryMovements.orgId, orgId), gte(inventoryMovements.occurredAt, range.from), lt(inventoryMovements.occurredAt, range.to)));
+
+  const theoreticalCost = paise(BigInt(row?.theoreticalCost ?? "0"));
+  const actualCost = paise(BigInt(row?.actualCost ?? "0"));
+
+  return {
+    theoreticalCost,
+    actualCost,
+    varianceCost: (actualCost - theoreticalCost) as Paise,
+    saleMovementCount: row?.saleMovementCount ?? 0,
+  };
 }
 
 /* ------------------------------------------------------------------ */

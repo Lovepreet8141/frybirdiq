@@ -11,8 +11,10 @@ import { EmptyState } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { getStaff, staffCan } from "@/lib/auth";
 import { type RangeKey, resolveRange } from "@/lib/dates";
-import { type Paise, formatBps, formatINR } from "@/lib/money";
+import { type Paise, formatBps, formatINR, ratioBps } from "@/lib/money";
 import { type CategoryTotal, foodCostWeeklySeries, getProfitAndLoss } from "@/lib/repositories/expenses";
+import { getFoodCostComparison } from "@/lib/repositories/stock";
+import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Profit and loss — FRYBIRD IQ", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -62,7 +64,13 @@ export default async function PnlPage({ searchParams }: { searchParams: Promise<
   const { range: requested } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "mtd") as RangeKey;
   const range = resolveRange(key);
-  const [pnl, foodCost, canRecord, canSeeCustomers] = await Promise.all([getProfitAndLoss(staff.orgId, range), foodCostWeeklySeries(staff.orgId), staffCan("finance.manage"), staffCan("customers.view")]);
+  const [pnl, foodCost, foodCostComparison, canRecord, canSeeCustomers] = await Promise.all([
+    getProfitAndLoss(staff.orgId, range),
+    foodCostWeeklySeries(staff.orgId),
+    getFoodCostComparison(staff.orgId, range),
+    staffCan("finance.manage"),
+    staffCan("customers.view"),
+  ]);
   const { result } = pnl;
 
   const directTotal = pnl.direct.reduce((sum, row) => sum + row.amount, 0n) as Paise;
@@ -70,6 +78,12 @@ export default async function PnlPage({ searchParams }: { searchParams: Promise<
   const nonOperatingTotal = pnl.nonOperating.reduce((sum, row) => sum + row.amount, 0n) as Paise;
   const overTarget = pnl.foodCostTargetBps !== null && result.foodCostBps !== null && result.foodCostBps > pnl.foodCostTargetBps;
   const weeksWithData = foodCost.filter((point) => point.foodCostBps !== null).length;
+
+  // Roadmap 3.5. `varianceCost` is structurally >= 0 — it is theoretical (SALE)
+  // plus WASTE plus shrinkage, never a subtraction that could go negative — so
+  // there is no "under theoretical" case to frame, only "how much over."
+  const hasConsumptionData = foodCostComparison.saleMovementCount > 0;
+  const varianceOfTheoreticalBps = hasConsumptionData && foodCostComparison.theoreticalCost > 0n ? ratioBps(foodCostComparison.varianceCost, foodCostComparison.theoreticalCost) : null;
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
@@ -93,9 +107,48 @@ export default async function PnlPage({ searchParams }: { searchParams: Promise<
         items={[
           { tone: "gain", text: `Revenue ${formatINR(pnl.revenue, "whole")} across ${pnl.orderCount} paid ${pnl.orderCount === 1 ? "order" : "orders"}` },
           pnl.hasExpenses ? { tone: "gain", text: "Costs from recorded expenses, by category" } : { tone: "flag", text: "No expenses recorded for this period — costs and profit cannot be shown" },
-          { tone: "flag", text: "Theoretical food cost from recipes not connected — roadmap 3.5" },
+          hasConsumptionData
+            ? { tone: "gain", text: `Theoretical and actual food cost from ${foodCostComparison.saleMovementCount} recipe-driven sale ${foodCostComparison.saleMovementCount === 1 ? "movement" : "movements"}` }
+            : { tone: "flag", text: "No recipe-driven consumption recorded yet — theoretical vs actual food cost needs at least one accepted order" },
         ]}
       />
+
+      <Panel>
+        <PanelHeader title="Theoretical vs actual food cost" description="Recipes × sales, against everything that actually left the shelf." meta={range.label} />
+        <PanelBody className="pt-0">
+          {!hasConsumptionData ? (
+            <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground">
+              No recipe-driven consumption recorded for {range.label.toLowerCase()} — this fills in once an order for a product with a recipe is accepted. Add recipes from{" "}
+              <Link href="/app/iq/products" className="underline underline-offset-2">
+                product pages
+              </Link>
+              .
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
+              <div className="flex flex-col gap-1">
+                <span className="text-[13px] font-medium text-muted-foreground">Theoretical</span>
+                <span className="tabular font-money text-[26px] leading-none tracking-[-0.01em]">{formatINR(foodCostComparison.theoreticalCost, "whole")}</span>
+                <span className="text-[12.5px] leading-[1.4] text-muted-foreground">Recipe cost of {foodCostComparison.saleMovementCount} sale {foodCostComparison.saleMovementCount === 1 ? "movement" : "movements"} — zero waste assumed.</span>
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-[13px] font-medium text-muted-foreground">Actual</span>
+                <span className="tabular font-money text-[26px] leading-none tracking-[-0.01em]">{formatINR(foodCostComparison.actualCost, "whole")}</span>
+                <span className="text-[12.5px] leading-[1.4] text-muted-foreground">Sales, plus waste and shrinkage counted this period.</span>
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-[13px] font-medium text-muted-foreground">Variance</span>
+                <span className={cn("tabular font-money text-[26px] leading-none tracking-[-0.01em]", foodCostComparison.varianceCost > 0n && "text-loss")}>
+                  {foodCostComparison.varianceCost === 0n ? "₹0" : `+${formatINR(foodCostComparison.varianceCost, "whole")}`}
+                </span>
+                <span className="text-[12.5px] leading-[1.4] text-muted-foreground">
+                  {foodCostComparison.varianceCost === 0n ? "No waste or shrinkage recorded this period." : `What waste and shrinkage cost${varianceOfTheoreticalBps !== null ? ` — ${formatBps(varianceOfTheoreticalBps, 1)} above theoretical` : ""}.`}
+                </span>
+              </div>
+            </div>
+          )}
+        </PanelBody>
+      </Panel>
 
       {!pnl.hasExpenses ? (
         <EmptyState
