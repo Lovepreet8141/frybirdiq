@@ -16,6 +16,14 @@ const eslintConfig = defineConfig([
     // (see .gitignore and tsconfig "exclude").
     "frybird-iq/**",
     "shadcn-ui-kit-dashboard/**",
+    // Sibling agent worktrees under .claude/worktrees/<name>/.next — the bare
+    // ".next/**" above only matches the repo-root build output, not one
+    // nested inside a worktree. Left uncleaned, another worktree's own
+    // `pnpm build` run pollutes a bare `pnpm lint` from this checkout with
+    // thousands of unrelated errors from its compiled output. Each worktree
+    // is its own checkout with its own lint run anyway, so its build output
+    // was never in scope here.
+    ".claude/worktrees/**",
   ]),
 ]);
 
