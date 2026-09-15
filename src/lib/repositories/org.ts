@@ -99,3 +99,32 @@ export const getStoreHeadline = cache(async (orgId: string): Promise<StoreHeadli
   const [location] = await db().select({ name: locations.name, city: locations.city }).from(locations).where(eq(locations.orgId, orgId)).orderBy(locations.createdAt).limit(1);
   return { name: org?.name ?? "FRYBIRD", line: [location?.name, location?.city].filter(Boolean).join(" · ") || "1 store" };
 });
+
+export interface StoreContact {
+  readonly name: string;
+  /** Null when the field has never been set — the caller decides how to hide it, never invents a value. */
+  readonly addressLine1: string | null;
+  readonly addressLine2: string | null;
+  readonly city: string | null;
+  readonly state: string | null;
+  readonly pincode: string | null;
+  readonly phone: string | null;
+}
+
+/**
+ * The outlet's own published contact facts — for the customer-facing site
+ * (the "Find us" section, structured data), not the admin settings screen.
+ * Read-only, and every field is null rather than guessed when unset.
+ */
+export const getStoreContact = cache(async (): Promise<StoreContact | null> => {
+  const org = await getOrg();
+  if (!org) return null;
+  const [location] = await db()
+    .select({ name: locations.name, addressLine1: locations.addressLine1, addressLine2: locations.addressLine2, city: locations.city, state: locations.state, pincode: locations.pincode, phone: locations.phone })
+    .from(locations)
+    .where(eq(locations.orgId, org.id))
+    .orderBy(locations.createdAt)
+    .limit(1);
+  if (!location) return null;
+  return location;
+});

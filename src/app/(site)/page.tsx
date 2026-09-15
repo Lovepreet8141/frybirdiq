@@ -1,13 +1,16 @@
 import Link from "next/link";
-import { Bike, Clock, Flame, MapPin, Phone, ShoppingBag, Timer } from "lucide-react";
+import { Bike, Clock, MapPin, Phone, ShoppingBag } from "lucide-react";
 
-import { PremiumHero } from "@/components/hero/premium-hero";
+import { CinematicHero } from "@/components/site/cinematic-hero";
+import { CombosStrip } from "@/components/site/combos-strip";
 import { Reveal, Stagger, StaggerItem } from "@/components/motion/reveal";
 import { LoyaltySection } from "@/components/loyalty/loyalty-section";
 import { OrderNowBar } from "@/components/site/order-now-bar";
 import { ProductCard } from "@/components/menu/product-card";
-import { getAllProducts } from "@/lib/repositories/menu";
-import { getOrg } from "@/lib/repositories/org";
+import { summarizeDeliveryBands, summarizeFreeDelivery } from "@/lib/delivery/summary";
+import { getMenu } from "@/lib/repositories/menu";
+import { getDeliverySettings } from "@/lib/repositories/delivery";
+import { getOrg, getStoreContact } from "@/lib/repositories/org";
 import { formatHoursRange, restaurantSchema } from "@/lib/seo/restaurant";
 
 /**
@@ -16,36 +19,49 @@ import { formatHoursRange, restaurantSchema } from "@/lib/seo/restaurant";
  * "The home page is a conversion surface, not a portfolio piece." One
  * confident hero, the picks, how to order, the two loyalty programs, why
  * the food is what it is, then where to find it. No menu browsing here —
- * that is what /menu is for; a preview of it on the homepage duplicated the
- * same six categories a tap away and gave the page nowhere to breathe.
+ * that is what /menu is for.
  *
- * Every price and every product on this page is read from the database. The
- * design comp carries its own numbers; hardcoding them would give a homepage
- * that promises ₹139 while the checkout charges something else, and the drift
- * would be invisible until a customer complained.
+ * Redesigned toward the "stage/spotlight" cinematic identity commissioned
+ * separately (frybird-web) — three real chapters of FRYBIRD's own footage,
+ * a darker, more editorial rhythm, an oversized-glyph story beat — built
+ * on exactly the same data this page already used. Every price and every
+ * product is still read from the database; hardcoding them would give a
+ * homepage that promises a number checkout doesn't charge.
  */
 
 /** The four the menu leads with. A curatorial choice — §33: not called bestsellers. */
 const PICKS = ["nashville-bomb", "chicken-wings", "paneer-champ", "frybird-loaded-fries"];
 
-// The last two are fixed facts about how the kitchen runs, not settings —
-// "Kitchen hours" below is the one stat read from the organization, so
-// changing opening hours in Restaurant settings changes what this shows.
+// Fixed facts about how the kitchen runs, not settings — "Kitchen hours"
+// below is the one stat read from the organization, so changing opening
+// hours in Restaurant settings changes what this shows.
 const FIXED_HERO_STATS = [
   { label: "Ready in", value: "~15 minutes" },
   { label: "Heat levels", value: "Classic · Nashville" },
 ] as const;
 
 export default async function HomePage() {
-  const [products, org] = await Promise.all([getAllProducts("ONLINE"), getOrg()]);
-  const bySlug = new Map(products.map((product) => [product.slug, product]));
+  const [menu, org, delivery, contact] = await Promise.all([
+    getMenu("ONLINE"),
+    getOrg(),
+    getDeliverySettings(),
+    getStoreContact(),
+  ]);
 
-  const picks = PICKS.map((slug) => bySlug.get(slug)).filter((p) => p !== undefined);
-  const hero = bySlug.get("og-smash") ?? bySlug.get("nashville-bomb");
+  const products = menu.flatMap((category) => category.products);
+  const bySlug = new Map(products.map((product) => [product.slug, product]));
+  const picks = PICKS.map((slug) => bySlug.get(slug)).filter((p): p is NonNullable<typeof p> => p !== undefined && p.availability.available);
+  const combosCategory = menu.find((category) => category.slug === "combos");
 
   const opens = org?.openingTime ?? "11:30";
   const closes = org?.closingTime ?? "23:00";
   const heroStats = [{ label: "Kitchen hours", value: formatHoursRange(opens, closes) }, ...FIXED_HERO_STATS];
+
+  const bandLines = delivery?.enabled ? summarizeDeliveryBands(delivery.rates) : [];
+  const freeLine = delivery?.enabled ? summarizeFreeDelivery(delivery.rates) : null;
+  const deliveryDetail = freeLine ?? bandLines[0] ?? "Priced by distance at checkout";
+
+  const address = contact ? [contact.addressLine1, contact.addressLine2, contact.city, contact.state].filter(Boolean).join(", ") : "Sector 9, Ambala City, Haryana";
 
   return (
     <>
@@ -54,7 +70,7 @@ export default async function HomePage() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema({ opens, closes })) }}
       />
 
-      <PremiumHero productImage={hero?.image ?? null} stats={heroStats} />
+      <CinematicHero heroStats={heroStats} />
 
       {/* ───────────── ticker ───────────── */}
       <div
@@ -82,12 +98,12 @@ export default async function HomePage() {
       </div>
 
       {/* ───────────── the heavy hitters ───────────── */}
-      <section id="picks" aria-labelledby="picks-heading" className="border-b border-border">
+      <section id="menu" aria-labelledby="picks-heading" className="border-b border-border">
         <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-16 sm:py-20">
           <Reveal>
             <h2
               id="picks-heading"
-              className="text-center font-heading text-[clamp(2rem,6vw,3.4rem)] font-black italic leading-none tracking-[-0.03em] text-primary"
+              className="text-center font-heading text-[clamp(2rem,6vw,3.4rem)] font-black italic leading-none tracking-[-0.03em] text-primary [font-stretch:75%]"
             >
               The heavy hitters
             </h2>
@@ -96,15 +112,15 @@ export default async function HomePage() {
             <p className="mt-2 text-center text-muted-foreground">What Ambala keeps coming back for.</p>
           </Reveal>
 
-          {/* The row carries the perspective; the card's hover tilt is
-              meaningless without one on its parent. */}
-          <Stagger className="mt-10 grid gap-5 [perspective:1000px] sm:grid-cols-2 lg:grid-cols-4">
-            {picks.map((product, index) => (
-              <StaggerItem key={product.slug} className="flex">
-                <ProductCard product={product} priority={index < 4} />
-              </StaggerItem>
-            ))}
-          </Stagger>
+          {picks.length > 0 && (
+            <Stagger className="mt-10 grid gap-5 [perspective:1000px] sm:grid-cols-2 lg:grid-cols-4">
+              {picks.map((product, index) => (
+                <StaggerItem key={product.slug} className="flex">
+                  <ProductCard product={product} priority={index < 4} />
+                </StaggerItem>
+              ))}
+            </Stagger>
+          )}
 
           <Reveal delay={0.12}>
             <div className="mt-10 text-center">
@@ -119,6 +135,8 @@ export default async function HomePage() {
         </div>
       </section>
 
+      <CombosStrip category={combosCategory} />
+
       {/* ───────────── how to get it ───────────── */}
       <section aria-labelledby="how-heading" className="border-b border-border">
         <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 sm:py-16">
@@ -128,9 +146,8 @@ export default async function HomePage() {
           </Reveal>
 
           {/*
-            Two routes, not three. The design comp has a Zomato row; FRYBIRD
-            sells direct, so a link handing the order to an aggregator — and
-            its commission — has no place on the page.
+            Two routes, not three. FRYBIRD sells direct — no aggregator, no
+            commission — so a Zomato-style row has no place on the page.
           */}
           <Stagger className="mt-6 flex flex-col gap-3">
             {[
@@ -144,22 +161,22 @@ export default async function HomePage() {
                 href: "/menu?fulfilment=delivery",
                 icon: Bike,
                 title: "Delivery across Ambala City",
-                detail: "Free within 3 km · ₹30 to 5 km · ₹10/km beyond",
+                detail: deliveryDetail,
               },
             ].map((option) => (
               <StaggerItem key={option.href}>
-              <Link
-                href={option.href}
-                className="flex min-h-[76px] cursor-pointer items-center gap-4 rounded-xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] p-4 shadow-[5px_5px_0_var(--red)] transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-[3px] hover:shadow-[8px_9px_0_var(--red)]"
-              >
-                <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground">
-                  <option.icon className="size-5" aria-hidden="true" />
-                </span>
-                <span className="flex flex-col">
-                  <span className="font-semibold">{option.title}</span>
-                  <span className="mt-0.5 text-sm text-muted-foreground">{option.detail}</span>
-                </span>
-              </Link>
+                <Link
+                  href={option.href}
+                  className="flex min-h-[76px] cursor-pointer items-center gap-4 rounded-xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] p-4 shadow-[5px_5px_0_var(--red)] transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-[3px] hover:shadow-[8px_9px_0_var(--red)]"
+                >
+                  <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground">
+                    <option.icon className="size-5" aria-hidden="true" />
+                  </span>
+                  <span className="flex flex-col">
+                    <span className="font-semibold">{option.title}</span>
+                    <span className="mt-0.5 text-sm text-muted-foreground">{option.detail}</span>
+                  </span>
+                </Link>
               </StaggerItem>
             ))}
           </Stagger>
@@ -169,40 +186,40 @@ export default async function HomePage() {
       {/* ───────────── loyalty ───────────── */}
       <LoyaltySection />
 
-      {/* ───────────── why frybird ───────────── */}
-      <section id="why" aria-labelledby="why-heading" className="border-b border-border">
-        <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-14 sm:py-16">
+      {/* ───────────── story: the oversized-glyph beat ─────────────
+          "The fryer is the stage" — the same three facts this page has
+          always told (brine time, fry time, heat levels), read once as an
+          editorial metrics strip instead of three icon cards. The golden
+          "I" is the wordmark's own accent letter (design-system/MASTER.md
+          §2: "the dot on the I"), oversized as the section's one structural
+          glyph rather than decoration bolted on. */}
+      <section aria-labelledby="story-heading" className="relative overflow-hidden border-b border-[var(--cream-hi)]/10 bg-[var(--red-deep)] text-[var(--cream-hi)]">
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 right-[2%] font-heading text-[52vw] leading-none font-black text-primary/15 italic select-none sm:right-[6%] sm:text-[34vw] [font-stretch:75%]"
+        >
+          I
+        </span>
+
+        <div className="relative mx-auto w-full max-w-6xl px-[var(--gutter)] py-16 sm:py-24">
           <Reveal>
-            <h2 id="why-heading" className="font-heading text-2xl font-extrabold">Why FRYBIRD</h2>
+            <h2 id="story-heading" className="max-w-lg font-heading text-[clamp(1.9rem,5vw,3rem)] font-black italic leading-[1.02] tracking-tight [font-stretch:75%]">
+              Everything starts in the fryer.
+            </h2>
+            <p className="mt-4 max-w-md text-base leading-relaxed text-[var(--cream-2)]/90">
+              No heat lamps, no holding trays, nothing fried before your order exists. That&rsquo;s the wait, and it isn&rsquo;t negotiable.
+            </p>
           </Reveal>
 
-          <Stagger className="mt-6 grid gap-5 sm:grid-cols-3">
+          <Stagger className="mt-12 grid grid-cols-1 gap-8 border-t border-[var(--cream-hi)]/15 pt-10 sm:grid-cols-3">
             {[
-              {
-                icon: Flame,
-                title: "Fried when you order, not before",
-                body: "No heat lamps, no holding trays. Every piece hits the fryer after your order comes in — that's the wait, and it's not negotiable.",
-              },
-              {
-                icon: Clock,
-                title: "Brined twelve hours, not twenty minutes",
-                body: "Buttermilk brine, overnight, every batch. The difference between chicken seasoned through and chicken that just tastes salty outside.",
-              },
-              {
-                icon: Timer,
-                title: "Heat that builds, not just burns",
-                body: "Cayenne oil brushed on hot, layered rather than dumped. First bite is flavour. Third bite is when you reach for the drink.",
-              },
-            ].map((card) => (
-              <StaggerItem
-                key={card.title}
-                className="rounded-xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] p-5 shadow-[6px_6px_0_var(--red)]"
-              >
-                <span className="flex size-10 items-center justify-center rounded-full bg-accent text-accent-foreground">
-                  <card.icon className="size-5" aria-hidden="true" />
-                </span>
-                <h3 className="mt-3 font-bold">{card.title}</h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{card.body}</p>
+              { value: "12 hrs", label: "Buttermilk brine, every batch" },
+              { value: "15 min", label: "Fryer to your hands" },
+              { value: "2", label: "Heat levels — Classic, Nashville" },
+            ].map((stat) => (
+              <StaggerItem key={stat.label}>
+                <p className="tabular font-heading text-5xl font-black text-primary sm:text-6xl [font-stretch:75%]">{stat.value}</p>
+                <p className="mt-2 text-sm text-[var(--cream-2)]/85">{stat.label}</p>
               </StaggerItem>
             ))}
           </Stagger>
@@ -220,23 +237,40 @@ export default async function HomePage() {
             <li className="flex gap-3">
               <MapPin className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
               <span>
-                Sector 9, Ambala City, Haryana 134003
+                {address}
                 <span className="block text-muted-foreground">Fried to order — give us about fifteen minutes.</span>
               </span>
             </li>
             <li className="flex gap-3">
               <Clock className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
               <span>
-                11:30 AM – 11:00 PM
+                {formatHoursRange(opens, closes)}
                 <span className="block text-muted-foreground">Every day</span>
               </span>
             </li>
             <li className="flex gap-3">
               <Phone className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
-              <span className="text-muted-foreground">
-                Phone number not published yet — order through the site and we&rsquo;ll call you if we need to.
-              </span>
+              {contact?.phone ? (
+                <a href={`tel:${contact.phone}`} className="tabular font-semibold hover:underline">
+                  {contact.phone}
+                </a>
+              ) : (
+                <span className="text-muted-foreground">
+                  Phone number not published yet — order through the site and we&rsquo;ll call you if we need to.
+                </span>
+              )}
             </li>
+            {bandLines.length > 0 && (
+              <li className="flex gap-3">
+                <Bike className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
+                <span className="flex flex-col text-muted-foreground">
+                  {freeLine && <span className="font-semibold text-foreground">{freeLine}</span>}
+                  {bandLines.map((line) => (
+                    <span key={line}>{line}</span>
+                  ))}
+                </span>
+              </li>
+            )}
           </ul>
 
           <a
