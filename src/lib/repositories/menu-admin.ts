@@ -1611,7 +1611,7 @@ export async function inventoryAvailability(orgId: string, productId: string, no
         from ${inventoryMovements}
         where ${inventoryMovements.ingredientId} = ${recipeVersionItems.ingredientId}
           and ${inventoryMovements.type} = 'SALE'
-          and ${inventoryMovements.occurredAt} >= ${since}
+          and ${inventoryMovements.occurredAt} >= ${since.toISOString()}
       ), 0)`,
     })
     .from(recipeVersionItems)

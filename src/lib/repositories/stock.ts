@@ -266,7 +266,7 @@ export async function getSmart86Projections(orgId: string, now: Date = new Date(
         from ${inventoryMovements}
         where ${inventoryMovements.ingredientId} = ${ingredients.id}
           and ${inventoryMovements.type} = 'SALE'
-          and ${inventoryMovements.occurredAt} >= ${since}
+          and ${inventoryMovements.occurredAt} >= ${since.toISOString()}
       ), 0)`,
     })
     .from(ingredients)
