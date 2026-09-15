@@ -3266,3 +3266,54 @@ during the test-coverage pass.
 
 552 tests (unchanged — pure refactor). typecheck, lint, RSC-boundary
 check all clean.
+
+## claude/v2-evolution reconciled — 3 of 5 commits ported, deployed
+
+Full specialist re-review (3 parallel agents, one per commit, strictly
+read-only — git checkout/cherry-pick/merge/reset explicitly forbidden
+after an earlier session in this same repo had a background agent
+violate exactly that boundary) against current HEAD, re-verified with
+`git merge-tree` rather than trusted from the last check.
+
+**Ported, manually reimplemented (not cherry-picked — the `git
+cherry-pick` command itself is blocked by Claude Code's own permission
+classifier as "Modify Shared Resources"):**
+- `fa6e23d` — `.github/workflows/ci.yml`. Clean, zero conflict, zero
+  production risk (no deploy step, no secrets — verified by reading the
+  full YAML, not trusting the commit message).
+- `34dddc6` — the IQ "costs" card said profit was *absent* until costs
+  are recorded; it's actually present and wrong (100% margin implied
+  real). Copy-only, confirmed no calculation changed anywhere in the diff.
+- `1f9c505`, `schema.ts` half — `lineKey`'s unescaped `"|"`-join fixed
+  to `JSON.stringify`. Confirmed non-persisted (recomputed on every
+  read, never written to DB/cookie) before landing, so no data to
+  invalidate.
+- `1f9c505`, `schema.test.ts` half — **not** a straight port. Both
+  branches had independently written a test file at this exact path
+  (an add/add conflict) covering non-overlapping ground. Manually
+  merged: union of both, de-duplicated, the "not fixed here" comment
+  from this session's earlier pass removed now that the fix is applied,
+  the collision regression test added (only valid once the fix exists).
+
+**Rejected as moot:** `2be0e43` (finance.manage) and `83e9b6b` (its own
+cleanup) — both fully superseded by `81df18e` earlier this session,
+which already implements the same idea and additionally resolved the
+ADMIN question `2be0e43` had left open in `PENDING-DECISIONS.md`.
+
+Committed as one commit (`3a84428`, "chore: reconcile safe evolution
+improvements") after explicit approval, diff reviewed in full before
+committing, secret-scanned. Pushed and deployed. Post-deploy
+verification: service active (independently re-checked via
+`systemctl show`, not just the deploy script's own claim), 5-route HTTP
+smoke test including a correctly-behaving edge case (Razorpay webhook
+returns 503 when unconfigured, as designed), BUILD_ID matched exactly
+between the local build (from confirmed HEAD `3a84428`) and the deployed
+one, journal clean since restart (one `NotSignedIn` log line, confirmed
+as expected control flow from the verification's own unauthenticated
+smoke-test request, not an error).
+
+`claude/v2-evolution` itself was not merged, deleted, or force-pushed —
+it still exists on GitHub, now fully superseded, safe to leave alone or
+delete later at the user's call.
+
+559 tests. typecheck, lint, RSC-boundary check all clean.
