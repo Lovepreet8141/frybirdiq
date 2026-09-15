@@ -274,8 +274,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           className="inline-flex min-h-[48px] items-center gap-2 rounded-md border border-border px-5 font-semibold transition-colors hover:bg-surface"
         >
           <FileText className="size-4" aria-hidden="true" />
-          {/* An invoice number only exists once the order is paid. */}
-          {order.invoiceNumber ? "Invoice" : "Receipt"}
+          View receipt
         </Link>
       </div>
     </div>

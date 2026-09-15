@@ -1,12 +1,13 @@
 import "server-only";
 
-/** Everything a tax invoice needs, gathered in one read. */
+/** Everything a tax invoice or a customer receipt needs, gathered in one read. */
 
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { locations, orderItemModifiers, orderItems, orders, organizations } from "@/db/schema";
+import { locations, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
 import { type Paise, paise } from "@/lib/money";
-import type { FulfilmentType } from "@/domain/order-status";
+import type { OrderChannel } from "@/domain/order-channel";
+import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
 
 export interface InvoiceLine {
   readonly name: string;
@@ -24,11 +25,30 @@ export interface InvoiceLine {
 export interface Invoice {
   readonly orderId: string;
   readonly orderNumber: string;
+  readonly orgId: string;
+  /** Null for a guest order — nothing loyalty-related can be read without one. */
+  readonly customerId: string | null;
   /** Null until the order is paid. */
   readonly invoiceNumber: string | null;
   readonly invoicedAt: Date | null;
   readonly placedAt: Date | null;
+  readonly status: OrderStatus;
+  readonly channel: OrderChannel;
   readonly fulfilment: FulfilmentType;
+  /** Set only for a "choose a time" order; null means ASAP. */
+  readonly scheduledFor: Date | null;
+  /** What the customer typed in at checkout, if anything — printed as the discount's label when set. */
+  readonly promotionCode: string | null;
+  /** The FRYBIRD REWARDS free item this order redeemed, if any — separate from `discountTotal`. */
+  readonly stampRewardDiscount: Paise;
+  /** Points this order earned, written once at payment capture. 0 until then, or if the order never qualifies. */
+  readonly pointsEarned: number;
+
+  readonly payment: {
+    readonly method: string;
+    readonly status: string;
+    readonly reference: string | null;
+  } | null;
 
   readonly seller: {
     readonly name: string;
@@ -48,6 +68,9 @@ export interface Invoice {
   };
 
   readonly lines: readonly InvoiceLine[];
+  /** Menu value before any discount, excludes delivery. */
+  readonly subtotal: Paise;
+  readonly discountTotal: Paise;
   readonly deliveryFee: Paise;
   readonly taxable: Paise;
   readonly cgst: Paise;
@@ -68,6 +91,11 @@ export async function getInvoice(orderId: string): Promise<Invoice | null> {
   const [location] = await database.select().from(locations).where(eq(locations.id, order.locationId)).limit(1);
   const items = await database.select().from(orderItems).where(eq(orderItems.orderId, order.id));
   const mods = await database.select().from(orderItemModifiers).where(eq(orderItemModifiers.orgId, order.orgId));
+
+  // Captured beats pending, same rule the order-tracking page reads by —
+  // once money has arrived that is the payment, whatever else was attempted.
+  const paymentRows = await database.select().from(payments).where(eq(payments.orderId, order.id)).orderBy(desc(payments.createdAt));
+  const paymentRow = paymentRows.find((row) => row.status === "CAPTURED") ?? paymentRows[0] ?? null;
 
   // Tax is split evenly per line the same way it was charged; the order-level
   // totals remain the authority, and the lines sum to them.
@@ -100,10 +128,19 @@ export async function getInvoice(orderId: string): Promise<Invoice | null> {
   return {
     orderId: order.id,
     orderNumber: order.orderNumber,
+    orgId: order.orgId,
+    customerId: order.customerId,
     invoiceNumber: order.invoiceNumber,
     invoicedAt: order.invoicedAt,
     placedAt: order.placedAt,
+    status: order.status,
+    channel: order.channel,
     fulfilment: order.fulfilment,
+    scheduledFor: order.scheduledFor,
+    promotionCode: order.promotionCode,
+    stampRewardDiscount: paise(order.stampRewardDiscount),
+    pointsEarned: order.pointsEarned,
+    payment: paymentRow ? { method: paymentRow.method, status: paymentRow.status, reference: paymentRow.providerPaymentId } : null,
     seller: {
       name: org?.name ?? "FRYBIRD",
       legalName: org?.legalName ?? null,
@@ -119,6 +156,8 @@ export async function getInvoice(orderId: string): Promise<Invoice | null> {
       address: deliveryAddress,
     },
     lines,
+    subtotal: paise(order.subtotal),
+    discountTotal: paise(order.discountTotal),
     deliveryFee: paise(order.deliveryFee),
     taxable: paise(order.taxableTotal),
     cgst: paise(order.cgstTotal),

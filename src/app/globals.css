@@ -632,3 +632,13 @@
     inset-inline-start: 0;
   }
 }
+
+/**
+ * The browser-print default for the site — currently only the customer
+ * receipt at /order/[id]/invoice uses window.print(), so this is that
+ * page's A4 margin. Not scoped to a selector: @page cannot be.
+ */
+@page {
+  size: A4;
+  margin: 12mm;
+}
