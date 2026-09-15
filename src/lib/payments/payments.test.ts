@@ -21,6 +21,24 @@ describe("provider registry", () => {
     expect(methods[0]!.method).toBe("CASH");
     expect(methods[0]!.provider).toBe(CASH_PROVIDER);
   });
+
+  it("the business's own toggle (roadmap 5.5) can turn cash off even with no gateway", () => {
+    delete process.env.RAZORPAY_KEY_ID;
+    delete process.env.RAZORPAY_KEY_SECRET;
+    expect(availableMethods({ cash: false })).toHaveLength(0);
+  });
+
+  it("the toggle can turn online off even when Razorpay is configured", () => {
+    process.env.RAZORPAY_KEY_ID = "rzp_test_x";
+    process.env.RAZORPAY_KEY_SECRET = "s";
+    try {
+      expect(availableMethods({ online: false }).map((m) => m.choice)).toEqual(["COD"]);
+      expect(availableMethods().map((m) => m.choice)).toEqual(["ONLINE", "COD"]);
+    } finally {
+      delete process.env.RAZORPAY_KEY_ID;
+      delete process.env.RAZORPAY_KEY_SECRET;
+    }
+  });
 });
 
 describe("cash intent", () => {

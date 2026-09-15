@@ -35,22 +35,34 @@ export interface CheckoutMethod {
 /**
  * What a customer may choose at checkout.
  *
- * Cash (pay on collection, or at the door) is always offered — subject to the
- * COD cap in `./cod` when online payment exists. Online appears only when
- * Razorpay has keys. A list, not a constant, so checkout renders whatever is
- * here without knowing how each one works.
+ * Cash (pay on collection, or at the door) is offered — subject to the COD
+ * cap in `./cod` when online payment exists — unless the business has
+ * switched it off. Online appears only when Razorpay has keys *and* the
+ * business has switched it on: `isRazorpayConfigured()` says the gateway
+ * *can* take a payment, `toggles.online` says the business wants it to right
+ * now (roadmap 5.5's restaurant settings toggle) — two different questions,
+ * both have to say yes. A list, not a constant, so checkout renders whatever
+ * is here without knowing how each one works.
+ *
+ * `toggles` defaults to both on, which is every existing caller's behaviour
+ * before the settings toggle existed — a caller with no org context (a test)
+ * gets exactly what it got before.
  */
-export function availableMethods(): readonly CheckoutMethod[] {
-  const methods: CheckoutMethod[] = [
-    {
+export function availableMethods(toggles?: { cash?: boolean; online?: boolean }): readonly CheckoutMethod[] {
+  const cashEnabled = toggles?.cash ?? true;
+  const onlineEnabled = toggles?.online ?? true;
+
+  const methods: CheckoutMethod[] = [];
+  if (cashEnabled) {
+    methods.push({
       method: "CASH",
       provider: CASH_PROVIDER,
       choice: "COD",
       label: "Pay on collection",
       detail: "Cash, UPI or card at the counter, or at the door.",
-    },
-  ];
-  if (isRazorpayConfigured()) {
+    });
+  }
+  if (onlineEnabled && isRazorpayConfigured()) {
     methods.unshift({
       method: "UPI",
       provider: RAZORPAY_PROVIDER,

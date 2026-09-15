@@ -247,6 +247,18 @@ export function formatINR(amount: Paise, precision: Precision = "auto"): string 
   }).format(toDecimalString(amount, digits) as unknown as number);
 }
 
+/**
+ * Rupees as a plain decimal string — "940000.00", never grouped, never a ₹
+ * sign. For a CSV export or anything else a spreadsheet has to sum: Indian
+ * grouping (`formatAmount`'s "9,40,000") is a comma inside the cell, which
+ * breaks it as a number rather than displaying it as one. This is the only
+ * other place money leaves paise as text, and it goes through the same
+ * rounding as every formatter above.
+ */
+export function toPlainDecimal(amount: Paise, precision: Precision = "unit"): string {
+  return toDecimalString(amount, digitsFor(amount, precision));
+}
+
 /** The number without the ₹, for tables that carry the unit in the header. */
 export function formatAmount(amount: Paise, precision: Precision = "auto"): string {
   const digits = digitsFor(amount, precision);

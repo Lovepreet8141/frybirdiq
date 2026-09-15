@@ -31,6 +31,14 @@ export interface RestaurantSettings {
     readonly kitchenCapacity: number;
     /** YYYY-MM-DD, or null until the owner sets it. */
     readonly openedOn: string | null;
+    /** 24-hour "HH:MM" — what the website's "Kitchen hours" reads. Roadmap 5.5. */
+    readonly openingTime: string;
+    readonly closingTime: string;
+    /** The most a customer can owe cash before checkout insists on online payment. */
+    readonly codCap: Paise;
+    readonly cashEnabled: boolean;
+    /** The business's own switch, on top of whether Razorpay is actually configured. */
+    readonly onlineEnabled: boolean;
   };
   readonly loyalty: {
     readonly earnBps: number;
@@ -81,6 +89,11 @@ export async function getRestaurantSettings(orgId: string): Promise<RestaurantSe
       priceBasis: org.priceBasis,
       kitchenCapacity: org.kitchenCapacity,
       openedOn: org.openedOn,
+      openingTime: org.openingTime,
+      closingTime: org.closingTime,
+      codCap: paise(org.codCap),
+      cashEnabled: org.cashEnabled,
+      onlineEnabled: org.onlineEnabled,
     },
     loyalty: {
       earnBps: org.loyaltyEarnBps,
@@ -122,5 +135,83 @@ export async function updateOperationsSettings(
   await db()
     .update(organizations)
     .set({ kitchenCapacity: input.kitchenCapacity, openedOn: input.openedOn, updatedAt: new Date() })
+    .where(eq(organizations.id, orgId));
+}
+
+/**
+ * Trading name and opening hours. Roadmap 5.5.
+ *
+ * Deliberately not on this form: legal name, GSTIN, menu prices (price
+ * basis) and currency. Those are read-only on the Restaurant page for a
+ * reason CLAUDE.md is explicit about — price basis above all, where
+ * changing it retroactively misstates every past margin. This function only
+ * ever touches `name`, `opening_time` and `closing_time`.
+ */
+export async function updateBusinessProfile(
+  orgId: string,
+  input: { readonly name: string; readonly openingTime: string; readonly closingTime: string },
+): Promise<void> {
+  await db()
+    .update(organizations)
+    .set({ name: input.name, openingTime: input.openingTime, closingTime: input.closingTime, updatedAt: new Date() })
+    .where(eq(organizations.id, orgId));
+}
+
+/**
+ * The outlet's address and phone. Roadmap 5.5.
+ *
+ * Deliberately not on this form: GST state / state code, which decides
+ * CGST+SGST versus IGST on every order billed here — a tax-adjacent fact,
+ * not a profile field, and out of scope for this slice same as GSTIN.
+ *
+ * Updates the org's first location, the same one `getRestaurantSettings`
+ * reads — FRYBIRD is single-location today; a second location would need
+ * its own row and its own screen, not a second field on this one.
+ */
+export async function updateLocationProfile(
+  orgId: string,
+  input: {
+    readonly addressLine1: string;
+    readonly addressLine2: string | null;
+    readonly city: string;
+    readonly pincode: string;
+    readonly phone: string;
+  },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const database = db();
+  const [location] = await database.select({ id: locations.id }).from(locations).where(eq(locations.orgId, orgId)).orderBy(asc(locations.createdAt)).limit(1);
+  if (!location) return { ok: false, error: "No outlet is configured yet." };
+
+  await database
+    .update(locations)
+    .set({
+      addressLine1: input.addressLine1,
+      addressLine2: input.addressLine2,
+      city: input.city,
+      pincode: input.pincode,
+      phone: input.phone,
+      updatedAt: new Date(),
+    })
+    .where(eq(locations.id, location.id));
+
+  return { ok: true };
+}
+
+/**
+ * The COD cap and which payment methods are offered. Roadmap 5.5.
+ *
+ * `cashEnabled` and `onlineEnabled` are the business's own switch, read
+ * alongside `isRazorpayConfigured()` by `availableMethods()` — this can turn
+ * online off even when Razorpay has keys, but cannot turn it on without
+ * them. The caller (`updatePaymentSettingsAction`) refuses to save both
+ * switches off, so checkout is never left with nothing to offer.
+ */
+export async function updatePaymentSettings(
+  orgId: string,
+  input: { readonly codCap: Paise; readonly cashEnabled: boolean; readonly onlineEnabled: boolean },
+): Promise<void> {
+  await db()
+    .update(organizations)
+    .set({ codCap: input.codCap, cashEnabled: input.cashEnabled, onlineEnabled: input.onlineEnabled, updatedAt: new Date() })
     .where(eq(organizations.id, orgId));
 }

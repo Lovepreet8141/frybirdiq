@@ -33,6 +33,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     canSeeInventory,
     canReject,
     canSeeHardware,
+    canSeeExports,
   ] = await Promise.all([
     getStaff(),
     staffCan("orders.view"),
@@ -51,6 +52,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     staffCan("orders.cancel"),
     // Printers: the owner configures, the device at the till tests — either may see the page.
     Promise.all([staffCan("integrations.manage"), staffCan("orders.create")]).then((flags) => flags.some(Boolean)),
+    staffCan("reports.export"),
   ]);
 
   if (!staff) {
@@ -92,6 +94,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           canSeeInventory,
           canReject,
           canSeeHardware,
+          canSeeExports,
         }}
       >
         {children}

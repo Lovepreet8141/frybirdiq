@@ -2,8 +2,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { DataTrust, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { AdminSectionNav } from "@/components/staff/admin-section-nav";
+import { BusinessProfileForm } from "@/components/staff/business-profile-form";
+import { LocationProfileForm } from "@/components/staff/location-profile-form";
 import { OperationsSettingsForm } from "@/components/staff/operations-settings-form";
 import { PageHeader } from "@/components/staff/page-header";
+import { PaymentSettingsForm } from "@/components/staff/payment-settings-form";
 import { SettingRow } from "@/components/staff/setting-row";
 import { EmptyState, PermissionDenied } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
@@ -69,6 +72,16 @@ export default async function RestaurantSettingsPage() {
             <SettingRow label="Menu prices" description={inclusive ? "The board price is what the customer pays; GST is extracted from within it." : "GST is added on top of the board price at checkout."} value={inclusive ? "Include GST" : "Exclude GST"} />
             <SettingRow label="Currency" value={organization.currency} />
             <SettingRow label="Business day" description="Order numbers restart, and 'today' begins, on this clock." value={organization.timezone} />
+            <div className="pt-3">
+              <BusinessProfileForm name={organization.name} openingTime={organization.openingTime} closingTime={organization.closingTime} />
+            </div>
+          </PanelBody>
+        </Panel>
+
+        <Panel>
+          <PanelHeader title="Payment methods" description="What checkout offers, and the cash-on-delivery cap. Online only actually appears once Razorpay is configured, whatever this says." />
+          <PanelBody className="pt-0">
+            <PaymentSettingsForm codCapRupees={Number(organization.codCap / 100n)} cashEnabled={organization.cashEnabled} onlineEnabled={organization.onlineEnabled} />
           </PanelBody>
         </Panel>
 
@@ -128,6 +141,15 @@ export default async function RestaurantSettingsPage() {
                 <SettingRow label="GST state" description="Decides CGST + SGST versus IGST on every order billed here." value={location.state ? `${location.state}${location.stateCode ? ` (${location.stateCode})` : ""}` : <span className="text-muted-foreground">Not set</span>} />
                 <SettingRow label="Phone" value={location.phone ?? <span className="text-muted-foreground">Not set</span>} />
                 <SettingRow label="On the map" description="Delivery cannot be priced until the outlet has a pin." value={delivery?.shop ? <Badge variant="success">Pinned</Badge> : <Badge variant="destructive">No pin</Badge>} />
+                <div className="pt-3">
+                  <LocationProfileForm
+                    addressLine1={location.addressLine1}
+                    addressLine2={location.addressLine2}
+                    city={location.city}
+                    pincode={location.pincode}
+                    phone={location.phone}
+                  />
+                </div>
               </>
             ) : (
               <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground">No outlet configured.</p>

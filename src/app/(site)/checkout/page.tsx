@@ -38,7 +38,7 @@ export default async function CheckoutPage() {
 
   // Minted per render. Resubmitting the same page cannot create a second order.
   const idempotencyKey = randomUUID();
-  const methods = availableMethods();
+  const methods = availableMethods({ cash: org.cashEnabled, online: org.onlineEnabled });
   const delivery = await getDeliverySettings();
   const shop = delivery?.shop ? toLatLng(delivery.shop) : null;
 

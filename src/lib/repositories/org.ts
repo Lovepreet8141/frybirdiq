@@ -20,6 +20,7 @@ import { cache } from "react";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { locations, organizations } from "@/db/schema";
+import { type Paise, paise } from "@/lib/money";
 import { DEFAULT_PRICE_BASIS, type PriceBasis, type PricingContext, pricingContext } from "@/lib/pricing";
 import { isSupabaseConfigured } from "@/lib/env";
 
@@ -30,6 +31,15 @@ export interface Org {
   readonly name: string;
   readonly priceBasis: PriceBasis;
   readonly gstin: string | null;
+  /** The most a customer can owe cash before checkout insists on online payment. Roadmap 5.5. */
+  readonly codCap: Paise;
+  /** Whether cash is offered at checkout. */
+  readonly cashEnabled: boolean;
+  /** The business's own switch for online payment, on top of whether Razorpay is actually configured. */
+  readonly onlineEnabled: boolean;
+  /** 24-hour "HH:MM". What the website's opening hours read. */
+  readonly openingTime: string;
+  readonly closingTime: string;
 }
 
 /**
@@ -48,6 +58,11 @@ export const getOrg = cache(async (): Promise<Org | null> => {
     name: org.name,
     priceBasis: org.priceBasis,
     gstin: org.gstin,
+    codCap: paise(org.codCap),
+    cashEnabled: org.cashEnabled,
+    onlineEnabled: org.onlineEnabled,
+    openingTime: org.openingTime,
+    closingTime: org.closingTime,
   };
 });
 

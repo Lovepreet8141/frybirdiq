@@ -75,7 +75,13 @@ async function staffNames(orgId: string, userIds: readonly string[]): Promise<Ma
   return new Map(rows.map((row) => [row.userId, row.displayName]));
 }
 
-export async function getPaymentsLedger(orgId: string, range: DateRange): Promise<PaymentsLedger> {
+/**
+ * `limit` caps how many payment rows come back — 500 for the Payments
+ * screen's own use, and a much higher figure for the reports.export CSV
+ * download (roadmap 5.4), where truncating a month's payments silently
+ * would make the export wrong rather than merely long.
+ */
+export async function getPaymentsLedger(orgId: string, range: DateRange, limit = 500): Promise<PaymentsLedger> {
   const database = db();
 
   const paymentRows = await database
@@ -97,7 +103,7 @@ export async function getPaymentsLedger(orgId: string, range: DateRange): Promis
     .innerJoin(orders, eq(orders.id, payments.orderId))
     .where(and(eq(payments.orgId, orgId), gte(payments.createdAt, range.from), lt(payments.createdAt, range.to)))
     .orderBy(desc(payments.createdAt))
-    .limit(500);
+    .limit(limit);
 
   // Refunds already booked against the payments in view, whenever they were
   // made — a refund next month still reduces what this month's payment can

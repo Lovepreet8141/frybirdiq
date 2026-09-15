@@ -6,6 +6,7 @@ import {
   BellRing,
   ChefHat,
   ClipboardList,
+  Download,
   History,
   Image as ImageIcon,
   Landmark,
@@ -54,6 +55,8 @@ export interface NavPermissions {
   readonly canSeeStaff: boolean;
   readonly canSeeAudit: boolean;
   readonly canSeeFinance: boolean;
+  /** `reports.export` — OWNER, ADMIN, MANAGER and ANALYST, not the same set as `canSeeFinance` (ANALYST has this but not finance.view). */
+  readonly canSeeExports: boolean;
   readonly canSeeKitchen: boolean;
   readonly canSeeSettings: boolean;
   /** `integrations.manage` or `orders.create` — the printers page is for the owner and for the device at the till. */
@@ -83,6 +86,7 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
     canSeeStaff,
     canSeeAudit,
     canSeeFinance,
+    canSeeExports,
     canSeeKitchen,
     canSeeSettings,
     canSeeHardware,
@@ -163,7 +167,10 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
     {
       id: "finance",
       label: "Finance",
-      items: canSeeFinance ? [{ href: "/app/finance", label: "Payments", icon: Wallet }] : [],
+      items: [
+        ...(canSeeFinance ? [{ href: "/app/finance", label: "Payments", icon: Wallet }] : []),
+        ...(canSeeExports ? [{ href: "/app/reports", label: "Exports", icon: Download }] : []),
+      ],
     },
     {
       id: "people",

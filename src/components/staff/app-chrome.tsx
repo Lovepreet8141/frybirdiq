@@ -37,6 +37,7 @@ interface Permissions {
   readonly canSeeInventory: boolean;
   readonly canReject: boolean;
   readonly canSeeHardware: boolean;
+  readonly canSeeExports: boolean;
 }
 
 /**
@@ -79,6 +80,7 @@ export function AppChrome({
     canSeeInventory,
     canReject,
     canSeeHardware,
+    canSeeExports,
   } = permissions;
 
   // The Driver App prototype is a phone in a frame with its own notes; the
@@ -162,6 +164,7 @@ export function AppChrome({
     canSeePromotions,
     canSeeInventory,
     canSeeHardware,
+    canSeeExports,
   });
 
   return (
@@ -195,6 +198,7 @@ export function AppChrome({
         canSeePromotions={canSeePromotions}
         canSeeInventory={canSeeInventory}
         canSeeHardware={canSeeHardware}
+        canSeeExports={canSeeExports}
       />
       <SidebarInset>
         <SiteHeader groups={navGroups} canSeeOrders={canSeeOrders} staff={staff} />

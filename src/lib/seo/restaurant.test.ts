@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { restaurantSchema } from "./restaurant";
+import { formatHoursRange, restaurantSchema } from "./restaurant";
 
 describe("restaurantSchema", () => {
   const schema = restaurantSchema() as Record<string, unknown>;
@@ -35,5 +35,25 @@ describe("restaurantSchema", () => {
     const json = JSON.stringify(schema);
     expect(() => JSON.parse(json)).not.toThrow();
     expect(json).not.toContain("undefined");
+  });
+
+  it("defaults to the hours it shipped with, and reads a settings change when given one", () => {
+    const spec = (schema.openingHoursSpecification as { opens: string; closes: string }[])[0]!;
+    expect(spec).toMatchObject({ opens: "11:30", closes: "23:00" });
+
+    const changed = restaurantSchema({ opens: "10:00", closes: "22:30" }) as Record<string, unknown>;
+    const changedSpec = (changed.openingHoursSpecification as { opens: string; closes: string }[])[0]!;
+    expect(changedSpec).toMatchObject({ opens: "10:00", closes: "22:30" });
+  });
+});
+
+describe("formatHoursRange", () => {
+  it("renders 24-hour times as a person reads them", () => {
+    expect(formatHoursRange("11:30", "23:00")).toBe("11:30 AM – 11:00 PM");
+    expect(formatHoursRange("09:00", "21:00")).toBe("9:00 AM – 9:00 PM");
+  });
+
+  it("handles midnight and noon", () => {
+    expect(formatHoursRange("00:00", "12:00")).toBe("12:00 AM – 12:00 PM");
   });
 });

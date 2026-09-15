@@ -7,7 +7,8 @@ import { LoyaltySection } from "@/components/loyalty/loyalty-section";
 import { OrderNowBar } from "@/components/site/order-now-bar";
 import { ProductCard } from "@/components/menu/product-card";
 import { getAllProducts } from "@/lib/repositories/menu";
-import { restaurantSchema } from "@/lib/seo/restaurant";
+import { getOrg } from "@/lib/repositories/org";
+import { formatHoursRange, restaurantSchema } from "@/lib/seo/restaurant";
 
 /**
  * Home. BUILD-PLAN.md §10.
@@ -27,27 +28,33 @@ import { restaurantSchema } from "@/lib/seo/restaurant";
 /** The four the menu leads with. A curatorial choice — §33: not called bestsellers. */
 const PICKS = ["nashville-bomb", "chicken-wings", "paneer-champ", "frybird-loaded-fries"];
 
-const HERO_STATS = [
-  { label: "Kitchen hours", value: "11:30 AM – 11 PM" },
+// The last two are fixed facts about how the kitchen runs, not settings —
+// "Kitchen hours" below is the one stat read from the organization, so
+// changing opening hours in Restaurant settings changes what this shows.
+const FIXED_HERO_STATS = [
   { label: "Ready in", value: "~15 minutes" },
   { label: "Heat levels", value: "Classic · Nashville" },
 ] as const;
 
 export default async function HomePage() {
-  const products = await getAllProducts("ONLINE");
+  const [products, org] = await Promise.all([getAllProducts("ONLINE"), getOrg()]);
   const bySlug = new Map(products.map((product) => [product.slug, product]));
 
   const picks = PICKS.map((slug) => bySlug.get(slug)).filter((p) => p !== undefined);
   const hero = bySlug.get("og-smash") ?? bySlug.get("nashville-bomb");
 
+  const opens = org?.openingTime ?? "11:30";
+  const closes = org?.closingTime ?? "23:00";
+  const heroStats = [{ label: "Kitchen hours", value: formatHoursRange(opens, closes) }, ...FIXED_HERO_STATS];
+
   return (
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema()) }}
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema({ opens, closes })) }}
       />
 
-      <PremiumHero productImage={hero?.image ?? null} stats={HERO_STATS} />
+      <PremiumHero productImage={hero?.image ?? null} stats={heroStats} />
 
       {/* ───────────── ticker ───────────── */}
       <div

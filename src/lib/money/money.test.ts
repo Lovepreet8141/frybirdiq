@@ -19,6 +19,7 @@ import {
   ratioBps,
   scale,
   subtract,
+  toPlainDecimal,
   toRupeesFloat,
 } from "./index";
 
@@ -209,5 +210,22 @@ describe("formatBps", () => {
 describe("toRupeesFloat", () => {
   it("converts for charting", () => {
     expect(toRupeesFloat(fromRupees("2840.50"))).toBe(2840.5);
+  });
+});
+
+describe("toPlainDecimal", () => {
+  it("never groups — a CSV cell a spreadsheet can sum, not a display string", () => {
+    expect(toPlainDecimal(fromRupees("940000"))).toBe("940000.00");
+    expect(toPlainDecimal(fromRupees("33.5"))).toBe("33.50");
+  });
+
+  it("renders negatives and zero without a sign quirk", () => {
+    expect(toPlainDecimal(fromRupees("-250.75"))).toBe("-250.75");
+    expect(toPlainDecimal(ZERO)).toBe("0.00");
+  });
+
+  it("stays exact past the float safe-integer range", () => {
+    const huge = paise(10n ** 17n);
+    expect(toPlainDecimal(huge, "whole")).toBe("1000000000000000");
   });
 });

@@ -13,7 +13,28 @@
 
 const SITE = process.env.SITE_URL?.replace(/\/$/, "") ?? "https://frybirdiq.tech";
 
-export function restaurantSchema() {
+/** The default hours this shipped with, before Restaurant settings (roadmap 5.5) could change them. */
+const DEFAULT_HOURS = { opens: "11:30", closes: "23:00" } as const;
+
+/**
+ * A 24-hour "HH:MM" as a person reads it — "11:30 AM", "11:00 PM". Used by
+ * the homepage's "Kitchen hours" stat; `restaurantSchema` below prints the
+ * same source value in the 24-hour form schema.org itself requires, so the
+ * two never say something different from the same setting.
+ */
+export function formatHoursRange(opens: string, closes: string): string {
+  const clock = (hhmm: string): string => {
+    const [hoursPart, minutesPart] = hhmm.split(":");
+    const hours = Number(hoursPart);
+    const minutes = Number(minutesPart);
+    const period = hours >= 12 ? "PM" : "AM";
+    const twelveHour = hours % 12 === 0 ? 12 : hours % 12;
+    return `${twelveHour}:${String(minutes).padStart(2, "0")} ${period}`;
+  };
+  return `${clock(opens)} – ${clock(closes)}`;
+}
+
+export function restaurantSchema(hours: { readonly opens: string; readonly closes: string } = DEFAULT_HOURS) {
   return {
     "@context": "https://schema.org",
     "@type": "Restaurant",
@@ -49,8 +70,8 @@ export function restaurantSchema() {
           "Saturday",
           "Sunday",
         ],
-        opens: "11:30",
-        closes: "23:00",
+        opens: hours.opens,
+        closes: hours.closes,
       },
     ],
     hasMenu: `${SITE}/menu`,

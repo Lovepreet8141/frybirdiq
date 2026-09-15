@@ -88,6 +88,29 @@ export const organizations = pgTable("organizations", {
    * back to the first order it can see and says so.
    */
   openedOn: date("opened_on"),
+
+  /*
+   * Restaurant settings — roadmap 5.5. Written from the Restaurant settings
+   * screen, same division as the operations and rewards fields above:
+   * settings, not constants, so changing any of them is a save, not a
+   * deploy.
+   */
+  /**
+   * The most a customer can owe cash-on-delivery/collection before checkout
+   * insists on an online payment. Previously a constant in
+   * `src/lib/payments/cod.ts`; moved here so the cap is a business decision
+   * rather than a line of code. ₹1,500 = 150000 paise, the figure the app
+   * shipped with.
+   */
+  codCap: money("cod_cap").notNull().default(sql`150000`),
+  /** Whether cash (at the counter or the door) is offered at checkout. */
+  cashEnabled: boolean("cash_enabled").notNull().default(true),
+  /** Whether online payment is offered — subject to Razorpay actually being configured; this is the business's own switch on top of that. */
+  onlineEnabled: boolean("online_enabled").notNull().default(true),
+  /** Opening time, 24-hour "HH:MM". What the website's "Kitchen hours" reads. */
+  openingTime: text("opening_time").notNull().default("11:30"),
+  /** Closing time, 24-hour "HH:MM". */
+  closingTime: text("closing_time").notNull().default("23:00"),
   ...timestamps,
 });
 

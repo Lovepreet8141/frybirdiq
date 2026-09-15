@@ -150,4 +150,9 @@ describe("cash on delivery cap", () => {
     expect(codAllowed(fromRupees("1500.01"), true).ok).toBe(false);
     expect(codAllowed(fromRupees("4000"), false).ok).toBe(true);
   });
+
+  it("reads a cap the caller passes — the org's own `cod_cap`, roadmap 5.5 — instead of the constant", () => {
+    expect(codAllowed(fromRupees("4000"), true, fromRupees("5000")).ok).toBe(true);
+    expect(codAllowed(fromRupees("5000.01"), true, fromRupees("5000")).ok).toBe(false);
+  });
 });

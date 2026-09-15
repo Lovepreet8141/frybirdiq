@@ -266,7 +266,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
    * failure leaves nothing half-written — the receipt is the checkout's own
    * idempotency key, and the pending payment row links it to the order.
    */
-  const methods = availableMethods();
+  const methods = availableMethods({ cash: org.cashEnabled, online: org.onlineEnabled });
   const onlineAvailable = methods.some((method) => method.choice === "ONLINE");
   let payment: { provider: string; method: PaymentMethod; providerOrderId: string | null };
   if (details.payment === "ONLINE") {
@@ -280,7 +280,10 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       return { ok: false, error: `We couldn't start the payment (${error instanceof Error ? error.message : "gateway error"}). Nothing has been charged — try again, or choose pay on collection.` };
     }
   } else {
-    const cod = codAllowed(payable, onlineAvailable);
+    if (!methods.some((method) => method.choice === "COD")) {
+      return { ok: false, error: "Pay on collection isn't available right now. Choose pay online.", fieldErrors: { payment: "Not available right now." } };
+    }
+    const cod = codAllowed(payable, onlineAvailable, paise(org.codCap));
     if (!cod.ok) return { ok: false, error: cod.reason, fieldErrors: { payment: cod.reason } };
     payment = { provider: CASH_PROVIDER, method: "CASH", providerOrderId: null };
   }

@@ -26,12 +26,7 @@ import { writeFileSync } from "node:fs";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { closeDb, db } from "../src/db/connection";
 import { customers, organizations } from "../src/db/schema";
-
-function csvCell(value: string | null): string {
-  const text = value ?? "";
-  // A name with a comma, a quote or a newline must not break the row.
-  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
+import { csvCell } from "../src/lib/exports/csv";
 
 async function main() {
   const database = db();
