@@ -3479,3 +3479,32 @@ smoke-test noise. Visual result still not independently confirmable —
 no browser tooling, no staff session, same limitation as every theme
 change this session. Implemented from source and token math, disclosed
 rather than assumed.
+
+## Multi-lane autonomous build begins — Lane B / Rewards merged first
+
+Approved 4-lane plan (Lane A: Phase 3 inventory, B: Phase 8 design, C:
+Phase 5.4/5.5, D: Phase 6.1/6.2) launched as isolated worktree agents.
+Phase 8's "IQ dark theme" line item dropped per explicit instruction —
+POS/KDS stay light, not reopening that decision. kit-ui-batch confirmed
+to have zero unique commits against kit-radix-nova (strict ancestor,
+`0` ahead) — no keep/drop table needed, nothing to approve.
+
+**Process finding, corrected before it caused damage:** all 5 worktrees
+branched from `main` (`0b35f82`, 17+ commits behind kit-radix-nova),
+not from kit-radix-nova as intended — the isolation tool's default,
+which the dispatch prompts didn't override. Checked every lane's
+assigned files against the full divergence diff (120 files) before
+proceeding: only two real conflicts exist — Lane D's `permissions.ts`
+edit (predates finance.manage/promotions.manage) and Lane B's Expenses
+files (predate the same). Everything else, including Rewards, touches
+files untouched by the divergence and applies cleanly.
+
+**Lane B — Rewards (`3896625`), merged and deployed.** Diff read in
+full by the integrator directly rather than dispatching three more
+subagents for a 2-file presentation-only change — permission check
+confirmed unchanged (denial UX improved: PermissionDenied instead of a
+silent redirect), zero money logic touched, "use client" directive
+confirmed intact. typecheck/lint/559 tests/RSC-boundary/contrast all
+clean. Deployed; service active, routes respond correctly, journal
+clean. Visual result not independently verifiable this session (no
+browser tooling) — implemented from source/tokens, disclosed as such.
