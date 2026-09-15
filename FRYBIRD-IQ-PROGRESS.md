@@ -3401,3 +3401,45 @@ still open — normal after any deploy, unrelated to this change).
 auth; there is no session available to this session to load the real
 page and see it. The fix is deployed and gate-verified but not visually
 confirmed — same as the original finding, this needs a human to look.
+
+## POS reverted to light — the dark fix above was wrong, confirmed by real screenshots
+
+The dark-surface fix was visually confirmed and rejected the same day.
+Not just a preference call: the result was genuinely broken.
+`.surface-dark` doesn't define `--panel` or `--inverse`, both of which
+`order-builder.tsx`'s Dine-in/Takeaway toggle and its own panel wrapper
+read — so the fix produced dark page + white panels + near-black
+buttons, not one coherent theme. That's the "mixed dark/light surfaces"
+and "black-vs-pale inconsistency" in the report.
+
+Checked after the visual evidence, not before this time: the commit
+that actually designed POS ("Design phase 2, wave 3… POS touch polish")
+describes it in explicit light-surface language — "cream row", "ink"
+text throughout. POS was deliberately designed light from a real design
+pass; `.surface-dark`'s "look at this screen for a whole shift" comment
+described an intent that was written but never executed or checked
+against real POS components. The lesson: a plausible code comment plus
+a clean CSS explanation is not a substitute for actually looking —
+this is the second time in one day that exact mistake almost shipped
+uncorrected.
+
+Reverted (`314a9e6`) by deleting `pos/layout.tsx` — POS reads
+`[data-surface="iq"]` directly again. `DarkStaffSurface` and
+`kds/layout.tsx` untouched: KDS is a genuinely separate question (no
+equivalent "designed light on purpose" commit found for it, and its own
+component research found no dependence on `--panel`/`--inverse`, so the
+specific failure mode that broke POS may not apply there) — evaluate it
+independently, on its own visual evidence, not by assuming it should
+match either outcome. Both page specs (`pos.md`, `kds.md`) updated to
+record this rather than keep describing a now-tested-and-wrong theory.
+
+The Dine-in/Takeaway toggle itself was not changed — its ink/inverse
+styling is deliberate and resolves to high-contrast pairs under full,
+consistent light tokens; the reported inconsistency is expected to
+disappear as a consequence of this revert.
+
+typecheck, lint, 559 tests, RSC-boundary check all clean. Deployed,
+service active, both routes respond correctly, journal clean. Visual
+result still not independently confirmable from this session (no
+browser tooling, no staff session) — awaiting the user's look, same
+constraint as before.
