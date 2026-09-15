@@ -31,6 +31,10 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   const menu = await getMenu("ONLINE");
+  // Image URLs from the repository are site-relative — correct for this
+  // app's own same-origin <Image>, but meaningless to an external reader.
+  // Absolute-ify only here, at the boundary this response actually crosses.
+  const siteOrigin = process.env.SITE_URL?.replace(/\/$/, "") ?? "https://frybirdiq.tech";
 
   const categories = menu.map((category) => ({
     slug: category.slug,
@@ -47,7 +51,7 @@ export async function GET() {
       veg: product.veg,
       spice: product.spice,
       categorySlug: product.categorySlug,
-      image: product.image,
+      image: product.image ? { url: `${siteOrigin}${product.image.url}`, alt: product.image.alt } : null,
       badges: product.badges,
       /** The authoritative availability engine's answer, resolved for the website channel today. */
       available: product.availability.available,
