@@ -17,9 +17,11 @@ home  menu  product  cart  checkout  tracking
 pos   kds   inventory  analytics  ai
 ```
 
-None exist yet. They get written as each phase reaches them, not upfront —
-a spec written six phases early is a guess, and a stale spec is worse than no
-spec because someone will follow it.
+Written so far: `pos.md`, `kds.md`, `iq.md` (the last also governs
+`/app/admin/*` — confirmed to share one component system, not two). The rest
+get written as each phase reaches them, not upfront — a spec written six
+phases early is a guess, and a stale spec is worse than no spec because
+someone will follow it.
 
 ## Shape
 

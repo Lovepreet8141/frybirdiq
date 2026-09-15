@@ -3317,3 +3317,40 @@ it still exists on GitHub, now fully superseded, safe to leave alone or
 delete later at the user's call.
 
 559 tests. typecheck, lint, RSC-boundary check all clean.
+
+## First three page specs written: pos.md, kds.md, iq.md
+
+`design-system/pages/` held only a README until now, despite CLAUDE.md
+telling every UI agent to check it before starting. Written from source
+inspection (component files, `FRYBIRD-COMPONENT-MIGRATION.md`, the
+purchased kit's own source where a component was actually adopted or
+considered) — no browser tooling this session, so nothing here claims
+visual verification; anything that needed it is marked explicitly.
+
+Followed the README's own convention (a page spec overrides Master for
+that page only, never restates it) rather than a generic comprehensive
+template — every category the request asked for is addressed, but as
+"no departure, see Master §X" where Master already covers it, not
+padded restatement.
+
+**The one finding worth surfacing on its own:** researching `iq.md`
+found that `[data-surface="iq"]` is applied at the top level in
+`src/app/(app)/app/layout.tsx`, wrapping every `/app/*` route — POS and
+KDS included, not just the IQ dashboard — and fully overrides
+`.surface-dark`'s entire token set at equal CSS specificity, later in
+the cascade. POS and KDS are very likely rendering in the light IQ
+palette instead of their intended dark theme, the same open
+dark/light question flagged earlier this session (recommendation #4 in
+the original audit) but now understood to be scoped far wider than the
+IQ dashboard alone. Not visually confirmed — needs a real browser
+before anyone treats it as settled — but the CSS mechanism itself is
+unambiguous. Documented in full in all three specs' "Needs visual
+verification" sections.
+
+Also found and worth a cheap fix later: three section-nav components
+(`CommandCenterNav`, `AnalyticsSectionNav`, `AdminSectionNav`) share
+byte-identical markup with no shared component behind them — a real,
+low-risk reuse opportunity, not urgent.
+
+No code changed — docs only, no deploy needed. typecheck, lint, 559
+tests all still clean (unaffected, as expected).
