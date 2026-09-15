@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { conversionFor, fromBaseUnits, isBaseUnit, purchaseUnitsFor, toBaseUnits, unitLabel } from "./units";
+import { conversionFor, fromBaseUnits, isBaseUnit, purchaseUnitsFor, toBaseUnits, toBaseUnitsDecimal, unitLabel } from "./units";
 
 describe("conversionFor", () => {
   it("converts the bulk units down to their base", () => {
@@ -73,5 +73,41 @@ describe("unitLabel", () => {
 
   it("falls back to a lowercased unit name for PACK, which has no conversion entry", () => {
     expect(unitLabel("PACK")).toBe("pack");
+  });
+});
+
+describe("toBaseUnitsDecimal", () => {
+  it("converts a fractional scale reading to base units exactly — the roadmap's own count example", () => {
+    // 9.4 kg counted against 10 kg (10,000 g) on hand is a -0.6 kg (-600 g) adjustment.
+    expect(toBaseUnitsDecimal("9.4", "KG")).toBe(9400);
+    expect(toBaseUnitsDecimal("10", "KG")).toBe(10_000);
+  });
+
+  it("converts a whole quantity the same as toBaseUnits", () => {
+    expect(toBaseUnitsDecimal("10", "KG")).toBe(toBaseUnits(10, "KG"));
+    expect(toBaseUnitsDecimal("5", "PIECE")).toBe(5);
+  });
+
+  it("handles litres with fractional input, and a base unit's own trailing zero", () => {
+    expect(toBaseUnitsDecimal("1.5", "L")).toBe(1500);
+    expect(toBaseUnitsDecimal("250.0", "G")).toBe(250);
+  });
+
+  it("supports a signed delta for an adjustment", () => {
+    expect(toBaseUnitsDecimal("-0.6", "KG")).toBe(-600);
+  });
+
+  it("refuses a decimal finer than the base unit resolves — nothing here silently rounds", () => {
+    // A gram is the finest base unit; a thousandth of one has nowhere to go.
+    expect(() => toBaseUnitsDecimal("1.0005", "KG")).toThrow(/doesn't convert to a whole number/);
+  });
+
+  it("refuses garbage input", () => {
+    expect(() => toBaseUnitsDecimal("abc", "KG")).toThrow(/not a quantity/);
+    expect(() => toBaseUnitsDecimal("", "KG")).toThrow(/not a quantity/);
+  });
+
+  it("still refuses PACK, same as toBaseUnits", () => {
+    expect(() => toBaseUnitsDecimal("2", "PACK")).toThrow(/no fixed size/);
   });
 });

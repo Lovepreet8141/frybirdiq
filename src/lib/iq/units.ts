@@ -74,3 +74,39 @@ export function fromBaseUnits(baseQuantity: number, unit: Unit): number {
 export function unitLabel(unit: Unit): string {
   return BY_UNIT.get(unit)?.label ?? unit.toLowerCase();
 }
+
+/**
+ * Converts a decimal quantity to base units, exactly — for a stock count or
+ * an adjustment read off a kitchen scale, where "9.4 kg" is completely
+ * normal, unlike a purchase order line.
+ *
+ * `toBaseUnits` above refuses any fractional quantity on purpose, because a
+ * fractional *purchase* line is almost always a typo (§ the test next to
+ * it). A scale reading is not, so this accepts a decimal string and — using
+ * bigint digit arithmetic, never a float — converts it only when the result
+ * is a whole number of base units. 9.4 kg is exactly 9,400 g, so it passes;
+ * a unit finer than the base one it converts to (e.g. thousandths of a
+ * gram) is refused rather than silently rounded, the same rule `fromRupees`
+ * follows for money finer than a paisa.
+ */
+export function toBaseUnitsDecimal(raw: string, unit: Unit): number {
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(raw.trim());
+  if (!match) {
+    throw new Error(`"${raw}" is not a quantity.`);
+  }
+  const [, sign, wholePart, fractionPart = ""] = match;
+  const conversion = conversionFor(unit);
+
+  const digits = BigInt(`${wholePart}${fractionPart}`);
+  const scale = 10n ** BigInt(fractionPart.length);
+  const numerator = digits * BigInt(conversion.factor);
+  if (numerator % scale !== 0n) {
+    throw new Error(
+      `${raw} ${unitLabel(unit)} doesn't convert to a whole number of ${unitLabel(conversion.baseUnit)} — use fewer decimal places or a smaller unit.`,
+    );
+  }
+
+  const baseQuantity = numerator / scale;
+  const signed = sign === "-" ? -baseQuantity : baseQuantity;
+  return Number(signed);
+}

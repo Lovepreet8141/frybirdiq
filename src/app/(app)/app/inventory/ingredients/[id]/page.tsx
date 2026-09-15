@@ -4,23 +4,34 @@ import { Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { IngredientForm } from "@/components/inventory/ingredient-form";
 import { PriceForm } from "@/components/inventory/price-form";
+import { StockMovementForms } from "@/components/inventory/stock-forms";
 import { MiniStat } from "@/components/staff/mini-stat";
 import { PageHeader } from "@/components/staff/page-header";
-import { PermissionDenied } from "@/components/states";
+import { EmptyState, PermissionDenied } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
 import { unitLabel } from "@/lib/iq/units";
 import { formatBps, formatINR } from "@/lib/money";
 import { getIngredient, listSuppliers } from "@/lib/repositories/inventory";
+import { listMovements, type MovementType } from "@/lib/repositories/stock";
 
 export const metadata: Metadata = { title: "Ingredient", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
 
 const UNIT = { G: "g", ML: "ml", PIECE: "pc" } as const;
 
+const MOVEMENT_TYPE_LABEL: Record<MovementType, string> = {
+  PURCHASE: "Received",
+  SALE: "Sold",
+  WASTE: "Waste",
+  ADJUSTMENT: "Adjusted",
+  TRANSFER: "Transfer",
+  RETURN: "Return",
+};
+
 export default async function IngredientPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ created?: string }> }) {
   const [{ id }, { created }] = await Promise.all([params, searchParams]);
   const staff = await requireStaff();
-  const [canView, canManage] = await Promise.all([staffCan("inventory.view"), staffCan("purchasing.manage")]);
+  const [canView, canManage, canAdjustStock] = await Promise.all([staffCan("inventory.view"), staffCan("purchasing.manage"), staffCan("inventory.adjust")]);
   if (!canView) {
     return (
       <div className="mx-auto w-full max-w-lg px-[var(--gutter)] py-16">
@@ -32,8 +43,11 @@ export default async function IngredientPage({ params, searchParams }: { params:
   const [ingredient, suppliers] = await Promise.all([getIngredient(staff.orgId, id), listSuppliers(staff.orgId)]);
   if (!ingredient) notFound();
 
+  const movements = await listMovements(staff.orgId, ingredient.id);
+
   const unit = UNIT[ingredient.baseUnit];
   const supplierOptions = suppliers.filter((row) => row.isActive).map((row) => ({ id: row.id, name: row.name }));
+  const onHandLabel = new Intl.NumberFormat("en-IN").format(ingredient.onHand);
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-[var(--gutter)] py-8">
@@ -55,8 +69,23 @@ export default async function IngredientPage({ params, searchParams }: { params:
         />
         <MiniStat label="Yield" value={formatBps(ingredient.yieldBps, 0)} hint="Survives trimming" />
         <MiniStat label="Waste" value={formatBps(ingredient.wasteBps, 1)} hint="Lost after prep" />
-        <MiniStat label="On hand" value="Not tracked" hint="Needs stock movements (roadmap 3.2) — no quantity is real yet" />
+        <MiniStat
+          label="On hand"
+          value={`${onHandLabel} ${unit}`}
+          hint={ingredient.onHand === 0 ? "No stock recorded yet" : "From received, adjusted and counted movements"}
+        />
       </div>
+
+      <Panel id="stock" className="scroll-mt-24">
+        <PanelHeader title="Stock" description="Receive a delivery, correct a count, or record what's actually on the shelf." />
+        <PanelBody>
+          {canAdjustStock ? (
+            <StockMovementForms ingredientId={ingredient.id} baseUnit={ingredient.baseUnit} suppliers={supplierOptions} defaultSupplierId={ingredient.supplierId} />
+          ) : (
+            <p className="text-sm text-muted-foreground">Recording stock needs the inventory adjustment permission.</p>
+          )}
+        </PanelBody>
+      </Panel>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Panel id="price" className="scroll-mt-24">
@@ -129,6 +158,47 @@ export default async function IngredientPage({ params, searchParams }: { params:
                       {formatINR(price.costPerBaseUnit)} / {unit}
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground sm:table-cell">{price.supplierName ?? "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </PanelBody>
+        )}
+      </Panel>
+
+      <Panel>
+        <PanelHeader title="Movement history" meta={movements.length === 0 ? undefined : `${movements.length} recent`} />
+        {movements.length === 0 ? (
+          <PanelBody>
+            <EmptyState title="No movements yet" detail="Receive stock, record an adjustment, or count what's on the shelf to start this ingredient's ledger." />
+          </PanelBody>
+        ) : (
+          <PanelBody flush className="border-t border-border pb-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>When</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead className="text-right">Quantity</TableHead>
+                  <TableHead className="text-right">Value</TableHead>
+                  <TableHead className="hidden md:table-cell">Notes</TableHead>
+                  <TableHead className="hidden sm:table-cell">By</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {movements.map((movement) => (
+                  <TableRow key={movement.id}>
+                    <TableCell className="tabular text-muted-foreground">
+                      {movement.occurredAt.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
+                    </TableCell>
+                    <TableCell>{MOVEMENT_TYPE_LABEL[movement.type]}</TableCell>
+                    <TableCell className={`tabular text-right font-semibold ${movement.quantityBase < 0 ? "text-loss" : "text-gain"}`}>
+                      {movement.quantityBase > 0 ? "+" : ""}
+                      {new Intl.NumberFormat("en-IN").format(movement.quantityBase)} {unit}
+                    </TableCell>
+                    <TableCell className="tabular text-right">{movement.totalCost === 0n ? "—" : formatINR(movement.totalCost)}</TableCell>
+                    <TableCell className="hidden max-w-[280px] truncate text-muted-foreground md:table-cell">{movement.notes ?? "—"}</TableCell>
+                    <TableCell className="hidden text-muted-foreground sm:table-cell">{movement.actorName ?? "—"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

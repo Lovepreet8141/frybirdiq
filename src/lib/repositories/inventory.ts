@@ -18,6 +18,17 @@ import { type MilliPaise, rateToPaise, usableCostPerBaseUnit } from "@/lib/iq/co
 import { type BaseUnit, conversionFor, isBaseUnit, toBaseUnits } from "@/lib/iq/units";
 import { type Bps, type Paise, paise } from "@/lib/money";
 
+/**
+ * The transaction handle `db().transaction(async (tx) => ...)` hands its
+ * callback — exported so a write path elsewhere (stock movements) can run
+ * `recordIngredientPriceInTx` inside its *own* transaction instead of
+ * opening a second, independent one. Two separate transactions cannot be
+ * atomic with each other: if the movement insert failed after a bare
+ * `recordIngredientPrice` call had already committed, the price would be
+ * recorded for stock that was never actually received.
+ */
+export type DbTx = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
+
 /* ------------------------------------------------------------------ */
 /* Suppliers                                                           */
 /* ------------------------------------------------------------------ */
@@ -271,70 +282,78 @@ export type RecordPriceResult = { ok: true; rate: Paise } | { ok: false; error: 
  * what actually survives yield and waste (`usableCostPerBaseUnit`).
  */
 export async function recordIngredientPrice(orgId: string, actorUserId: string, input: PriceInput): Promise<RecordPriceResult> {
-  return db().transaction(async (tx) => {
-    const [ingredient] = await tx.select().from(ingredients).where(and(eq(ingredients.orgId, orgId), eq(ingredients.id, input.ingredientId))).limit(1);
-    if (!ingredient) return { ok: false, error: "That ingredient no longer exists." };
+  return db().transaction((tx) => recordIngredientPriceInTx(tx, orgId, actorUserId, input));
+}
 
-    let purchaseQuantityBase: number;
-    try {
-      const conversion = conversionFor(input.purchaseUnit);
-      if (conversion.baseUnit !== ingredient.baseUnit) {
-        return { ok: false, error: `This ingredient is measured in ${ingredient.baseUnit.toLowerCase()}; a purchase in ${input.purchaseUnit.toLowerCase()} can't be converted to it.` };
-      }
-      purchaseQuantityBase = toBaseUnits(input.purchaseQuantity, input.purchaseUnit);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "That quantity can't be converted." };
+/**
+ * The body of `recordIngredientPrice`, taking an existing transaction rather
+ * than opening its own — see `DbTx` above. Receiving stock (roadmap 3.2)
+ * calls this directly so the price record and the PURCHASE movement commit
+ * or fail together.
+ */
+export async function recordIngredientPriceInTx(tx: DbTx, orgId: string, actorUserId: string, input: PriceInput): Promise<RecordPriceResult> {
+  const [ingredient] = await tx.select().from(ingredients).where(and(eq(ingredients.orgId, orgId), eq(ingredients.id, input.ingredientId))).limit(1);
+  if (!ingredient) return { ok: false, error: "That ingredient no longer exists." };
+
+  let purchaseQuantityBase: number;
+  try {
+    const conversion = conversionFor(input.purchaseUnit);
+    if (conversion.baseUnit !== ingredient.baseUnit) {
+      return { ok: false, error: `This ingredient is measured in ${ingredient.baseUnit.toLowerCase()}; a purchase in ${input.purchaseUnit.toLowerCase()} can't be converted to it.` };
     }
+    purchaseQuantityBase = toBaseUnits(input.purchaseQuantity, input.purchaseUnit);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "That quantity can't be converted." };
+  }
 
-    let rate: MilliPaise;
-    try {
-      rate = usableCostPerBaseUnit({
-        purchaseCost: input.purchaseCost,
-        purchaseQuantityBase,
-        yieldBps: ingredient.yieldBps as Bps,
-        wasteBps: ingredient.wasteBps as Bps,
-      });
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "That price can't be costed." };
-    }
-    const ratePaise = rateToPaise(rate);
+  let rate: MilliPaise;
+  try {
+    rate = usableCostPerBaseUnit({
+      purchaseCost: input.purchaseCost,
+      purchaseQuantityBase,
+      yieldBps: ingredient.yieldBps as Bps,
+      wasteBps: ingredient.wasteBps as Bps,
+    });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "That price can't be costed." };
+  }
+  const ratePaise = rateToPaise(rate);
 
-    if (input.supplierId) {
-      const [supplier] = await tx.select({ id: suppliers.id }).from(suppliers).where(and(eq(suppliers.orgId, orgId), eq(suppliers.id, input.supplierId))).limit(1);
-      if (!supplier) return { ok: false, error: "That supplier no longer exists." };
-    }
+  if (input.supplierId) {
+    const [supplier] = await tx.select({ id: suppliers.id }).from(suppliers).where(and(eq(suppliers.orgId, orgId), eq(suppliers.id, input.supplierId))).limit(1);
+    if (!supplier) return { ok: false, error: "That supplier no longer exists." };
+  }
 
-    await tx.insert(ingredientPrices).values({
-      orgId,
-      ingredientId: ingredient.id,
+  await tx.insert(ingredientPrices).values({
+    orgId,
+    ingredientId: ingredient.id,
+    purchaseQuantity: input.purchaseQuantity,
+    purchaseUnit: input.purchaseUnit,
+    purchaseCost: input.purchaseCost,
+    costPerBaseUnit: ratePaise,
+    costPerBaseUnitMilli: rate,
+    supplierId: input.supplierId,
+  });
+  await tx
+    .update(ingredients)
+    .set({ costPerBaseUnit: ratePaise, costPerBaseUnitMilli: rate, updatedAt: new Date() })
+    .where(eq(ingredients.id, ingredient.id));
+  await tx.insert(auditLogs).values({
+    orgId,
+    actorUserId,
+    action: "ingredient_price_recorded",
+    entity: "ingredients",
+    entityId: ingredient.id,
+    before: { costPerBaseUnitMilli: ingredient.costPerBaseUnitMilli.toString() },
+    after: {
+      costPerBaseUnitMilli: rate.toString(),
       purchaseQuantity: input.purchaseQuantity,
       purchaseUnit: input.purchaseUnit,
-      purchaseCost: input.purchaseCost,
-      costPerBaseUnit: ratePaise,
-      costPerBaseUnitMilli: rate,
+      purchaseCost: input.purchaseCost.toString(),
       supplierId: input.supplierId,
-    });
-    await tx
-      .update(ingredients)
-      .set({ costPerBaseUnit: ratePaise, costPerBaseUnitMilli: rate, updatedAt: new Date() })
-      .where(eq(ingredients.id, ingredient.id));
-    await tx.insert(auditLogs).values({
-      orgId,
-      actorUserId,
-      action: "ingredient_price_recorded",
-      entity: "ingredients",
-      entityId: ingredient.id,
-      before: { costPerBaseUnitMilli: ingredient.costPerBaseUnitMilli.toString() },
-      after: {
-        costPerBaseUnitMilli: rate.toString(),
-        purchaseQuantity: input.purchaseQuantity,
-        purchaseUnit: input.purchaseUnit,
-        purchaseCost: input.purchaseCost.toString(),
-        supplierId: input.supplierId,
-      },
-    });
-    return { ok: true, rate: ratePaise };
+    },
   });
+  return { ok: true, rate: ratePaise };
 }
 
 /** Base units an ingredient may be measured in — the only three `units.ts` can convert to. */

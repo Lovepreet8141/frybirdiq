@@ -17,8 +17,8 @@ import {
 
 export type InventoryFormState = { status: "idle" } | { status: "error"; message: string } | { status: "success"; message: string };
 
-/** Auth failures become a sentence, not a stack trace (§57). Anything else is a real bug and is rethrown. */
-function explain(error: unknown): InventoryFormState {
+/** Auth failures become a sentence, not a stack trace (§57). Anything else is a real bug and is rethrown. Shared with `stock-actions.ts`. */
+export function explain(error: unknown): InventoryFormState {
   if (error instanceof NotSignedIn) return { status: "error", message: "You've been signed out. Sign in again." };
   if (error instanceof NotPermitted) return { status: "error", message: "You don't have permission to change inventory." };
   throw error;
