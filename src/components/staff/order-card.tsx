@@ -9,11 +9,46 @@ import { advanceOrderAction, markPaidAction } from "@/lib/auth/staff-actions";
 import type { OrderStatus } from "@/domain/order-status";
 // Pure, so the Command Center's Server Component can call it too — a
 // function exported from this "use client" file is a client reference there.
-import { statusLabel, statusTone } from "@/domain/order-status-labels";
+import { statusLabel } from "@/domain/order-status-labels";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { DeliveryPanel } from "./delivery-panel";
 import { openKotWindow } from "./print-kot";
 import { WhatsAppButton } from "@/components/order/whatsapp-button";
+
+/**
+ * The five order-status tints (MASTER.md §5 "Order tints"). Mirrors
+ * `orders-board.tsx`'s own local `statusKey`/`STATUS` map rather than
+ * importing it — this card is what that board's row opens into a detail
+ * sheet, and `orders-board.tsx` already imports `OrderCard` from here, so
+ * the reverse import would cycle. Literal class strings, so Tailwind can
+ * see them.
+ */
+type OrderStatusKey = "new" | "accepted" | "cooking" | "ready" | "outForDelivery";
+
+function orderStatusKey(status: OrderStatus): OrderStatusKey {
+  switch (status) {
+    case "ACCEPTED":
+      return "accepted";
+    case "PREPARING":
+      return "cooking";
+    case "READY":
+      return "ready";
+    case "OUT_FOR_DELIVERY":
+      return "outForDelivery";
+    default:
+      return "new";
+  }
+}
+
+const ORDER_STATUS_TINT: Record<OrderStatusKey, { pill: string; dot: string }> = {
+  new: { pill: "bg-status-new text-status-new-fg", dot: "bg-status-new-dot" },
+  accepted: { pill: "bg-status-accepted text-status-accepted-fg", dot: "bg-status-accepted-dot" },
+  cooking: { pill: "bg-status-cooking text-status-cooking-fg", dot: "bg-status-cooking-dot" },
+  ready: { pill: "bg-status-ready text-status-ready-fg", dot: "bg-status-ready-dot" },
+  outForDelivery: { pill: "bg-status-out-for-delivery text-status-out-for-delivery-fg", dot: "bg-status-out-for-delivery-dot" },
+};
 
 export interface StaffOrder {
   id: string;
@@ -127,27 +162,21 @@ export function OrderCard({
     });
   };
 
+  const statusTint = ORDER_STATUS_TINT[orderStatusKey(order.status)];
+
   return (
-    <li className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-5">
+    <li className="flex flex-col gap-4 rounded-xl border border-border bg-panel p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-3">
             <span className="tabular font-heading text-2xl font-bold">#{order.orderNumber}</span>
-            <span className="rounded-full border border-border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            <Badge variant="outline" className="uppercase tracking-[0.08em] text-muted-foreground">
               {isDelivery ? "Delivery" : "Collection"}
-            </span>
-            <span
-              className={cn(
-                "rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em]",
-                statusTone(order.status) === "success"
-                  ? "bg-[#3F9D52]/20 text-foreground"
-                  : statusTone(order.status) === "warning"
-                    ? "bg-warning/20 text-foreground"
-                    : "bg-surface-muted text-muted-foreground",
-              )}
-            >
+            </Badge>
+            <Badge className={cn("h-7 gap-[7px] px-[11px] text-xs font-semibold", statusTint.pill)}>
+              <span className={cn("size-[7px] rounded-full", statusTint.dot)} aria-hidden="true" />
               {statusLabel(order.status, order.fulfilment)}
-            </span>
+            </Badge>
           </div>
           <p className="text-sm text-muted-foreground">
             {canSeeCustomers && order.customerId ? (
@@ -164,7 +193,7 @@ export function OrderCard({
         <div className="flex flex-col items-end gap-1">
           <span className="tabular text-xl font-bold">{formatINR(order.grandTotal)}</span>
           {/* Paid state is a word, not only a colour. §55. */}
-          <span className={cn("text-xs font-semibold", order.isPaid ? "text-[#3F9D52]" : "text-muted-foreground")}>
+          <span className={cn("text-xs font-semibold", order.isPaid ? "text-gain" : "text-flag")}>
             {order.isPaid ? "Paid" : "Unpaid"}
           </span>
         </div>
@@ -196,7 +225,7 @@ export function OrderCard({
       {order.notes && <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">{order.notes}</p>}
 
       {error && (
-        <p role="alert" className="text-sm">
+        <p role="alert" className="rounded-md border-l-2 border-loss bg-loss-soft/60 px-4 py-3 text-sm">
           {error}
         </p>
       )}
@@ -205,7 +234,7 @@ export function OrderCard({
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap gap-2">
           {next && canAdvance && (
-            <button
+            <Button
               type="button"
               /*
                * Blocked rather than refused. Completing an unpaid order is the
@@ -220,23 +249,24 @@ export function OrderCard({
                   ? acceptAndPrint
                   : () => run(() => advanceOrderAction({ orderId: order.id, to: next.to }))
               }
-              className="flex min-h-[56px] flex-1 items-center justify-center gap-2 rounded-md bg-primary px-5 font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              size="lg"
+              className="min-h-14 flex-1 gap-2 text-base"
             >
               {pending ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : next.label}
-            </button>
+            </Button>
           )}
 
           {!order.isPaid && canSettle && (
-            <button
+            <Button
               type="button"
+              variant={next ? "outline" : "default"}
               disabled={pending}
               onClick={() => run(() => markPaidAction({ orderId: order.id }))}
-              className={cn(
-                "flex min-h-[56px] items-center justify-center gap-2 rounded-md px-5 font-semibold transition-colors disabled:opacity-50",
-                next
-                  ? "border border-border-strong hover:bg-surface-muted"
-                  : "flex-1 bg-primary text-primary-foreground hover:opacity-90",
-              )}
+              size="lg"
+              // The outline case keeps the stronger border the raw button used to
+              // pair with, since this is uncollected cash: never a match for the
+              // default outline's quieter hairline.
+              className={cn("min-h-14 gap-2 text-base", next ? "border-border-strong" : "flex-1")}
             >
               {pending ? (
                 <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -249,28 +279,28 @@ export function OrderCard({
                 it cannot do; the rider hands the money over on their return.
               */}
               {isDelivery ? `Cash in ${formatINR(order.grandTotal)}` : `Take ${formatINR(order.grandTotal)}`}
-            </button>
+            </Button>
           )}
         </div>
 
         <div className="flex flex-wrap gap-2">
           <WhatsAppButton orderId={order.id} phone={order.customerPhone} />
-          <Link
-            href={`/order/${order.id}/invoice`}
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition-colors hover:bg-surface-muted"
-          >
-            <FileText className="size-4" aria-hidden="true" />
-            {order.invoiceNumber ?? "Receipt"}
-          </Link>
+          <Button asChild variant="outline" className="min-h-11 gap-2 text-sm">
+            <Link href={`/order/${order.id}/invoice`}>
+              <FileText className="size-4" aria-hidden="true" />
+              {order.invoiceNumber ?? "Receipt"}
+            </Link>
+          </Button>
           {canPrintKot && (
-            <button
+            <Button
               type="button"
+              variant="outline"
               onClick={() => openKotWindow().commit(order.id)}
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition-colors hover:bg-surface-muted"
+              className="min-h-11 gap-2 text-sm"
             >
               <Printer className="size-4" aria-hidden="true" />
               Print KOT
-            </button>
+            </Button>
           )}
         </div>
 
