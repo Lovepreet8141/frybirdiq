@@ -3230,3 +3230,39 @@ domain tests, the server action's error string, and the workspace UI's
 own "Only an owner can change promotions" copy.
 
 552 tests. typecheck, lint, RSC-boundary check all clean.
+
+## iq/pnl vs finance — not duplicate pages, but a duplicated revenue query
+
+Checked the open question from the audit: are `/app/iq/pnl` and
+`/app/finance` the same domain twice? No — confirmed by reading both.
+Finance is the payments ledger (captured money, by method, refunds,
+provider fees); its own copy says so plainly: "Captured means the money
+arrived; it is not the revenue figure on Overview." P&L is the margin
+statement (revenue minus recorded costs). Different questions, and the
+two pages cross-link to each other rather than compete.
+
+What *was* duplicated, underneath both: `src/lib/repositories/
+expenses.ts` had its own `paidRevenue`/`paidOrderCount`, and a third copy
+inside `foodCostWeeklySeries` — three separate hand-written SQL joins all
+encoding the same "captured payment, not cancelled/failed/refunded" rule
+that `analytics.ts`'s private `paidOrders()` already defines for every
+other revenue figure in the app (Overview, Channels, etc.). Currently
+identical output by construction, but the P&L page's own comment
+("nothing here is typed in twice") wasn't actually true — three
+independent copies of the same business rule is exactly the drift risk
+the comment claims doesn't exist.
+
+Fixed by exporting `paidOrders` from `analytics.ts` and having all three
+call sites in `expenses.ts` use it instead of their own SQL — `orders`,
+`payments`, `lt` are no longer imported in that file at all.
+`getProfitAndLoss` went from two separate queries (`paidRevenue` +
+`paidOrderCount`, run in parallel) to one, deriving both from the same
+rows — a real (if small) performance win alongside the correctness one.
+No behavior change: same join, same filter, same numbers, verified by
+the full gate suite. No new test needed — `getProfitAndLoss` and
+`foodCostWeeklySeries` are DB-backed repository functions, the same
+"not pure, no vi.mock precedent" category `pos/pricing.ts` was left in
+during the test-coverage pass.
+
+552 tests (unchanged — pure refactor). typecheck, lint, RSC-boundary
+check all clean.

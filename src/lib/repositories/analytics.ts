@@ -79,8 +79,14 @@ export function changeBps(current: bigint | number, previous: bigint | number): 
   return ratioBps((now - before) as Paise, before as Paise);
 }
 
-/** Orders in a window that have been paid for. */
-async function paidOrders(orgId: string, range: DateRange) {
+/**
+ * Orders in a window that have been paid for — captured payment, not
+ * cancelled/failed/refunded. The one definition of "paid" every revenue
+ * figure in FRYBIRD IQ reads through, exported so `src/lib/repositories/
+ * expenses.ts`'s P&L computes revenue from the same rows as this dashboard
+ * rather than a second copy of the same join and filter.
+ */
+export async function paidOrders(orgId: string, range: DateRange) {
   return db()
     .select({
       id: orders.id,

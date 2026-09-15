@@ -3,19 +3,21 @@ import "server-only";
 /**
  * Money out, and the profit-and-loss that becomes possible once it is recorded.
  *
- * Revenue is not stored here. It comes from `orders`, the same source the
- * dashboard reads, on the same "a captured payment or it is not revenue" rule.
- * Keeping a second revenue figure in an expenses table would let the P&L and
- * the dashboard disagree, and the first refund would make them.
+ * Revenue is not stored here. It comes from `paidOrders` in
+ * `src/lib/repositories/analytics.ts` — the same query the dashboard reads,
+ * not a second copy of it. Keeping a second revenue definition in an
+ * expenses module would let the P&L and the dashboard disagree, and the
+ * first refund would make them.
  */
 
-import { and, asc, desc, eq, gte, lt, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { accounts, expenseCategories, expenses, orders, payments, targets } from "@/db/schema";
+import { accounts, expenseCategories, expenses, targets } from "@/db/schema";
 import { type DateRange, addDays, businessDate, daysInRange, endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
 import { type Bps, type Paise, ZERO, add, paise, ratioBps } from "@/lib/money";
 import { profit, type ProfitResult } from "@/lib/iq/profit";
+import { paidOrders } from "@/lib/repositories/analytics";
 
 export interface ExpenseRow {
   readonly id: string;
@@ -33,40 +35,6 @@ export interface CategoryTotal {
   readonly behaviour: "DIRECT" | "FIXED";
   readonly isNonOperating: boolean;
   readonly amount: Paise;
-}
-
-/** Revenue that actually arrived in a period, on the dashboard's own rule. */
-export async function paidRevenue(orgId: string, range: DateRange): Promise<Paise> {
-  const rows = await db()
-    .select({ total: sql<string>`coalesce(sum(${orders.grandTotal}), 0)` })
-    .from(orders)
-    .innerJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, "CAPTURED")))
-    .where(
-      and(
-        eq(orders.orgId, orgId),
-        gte(orders.createdAt, range.from),
-        lt(orders.createdAt, range.to),
-        sql`${orders.status} NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')`,
-      ),
-    );
-  return paise(BigInt(rows[0]?.total ?? "0"));
-}
-
-/** Paid orders in a period — the denominator for an average, and for units. */
-export async function paidOrderCount(orgId: string, range: DateRange): Promise<number> {
-  const rows = await db()
-    .select({ n: sql<number>`count(*)::int` })
-    .from(orders)
-    .innerJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, "CAPTURED")))
-    .where(
-      and(
-        eq(orders.orgId, orgId),
-        gte(orders.createdAt, range.from),
-        lt(orders.createdAt, range.to),
-        sql`${orders.status} NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')`,
-      ),
-    );
-  return rows[0]?.n ?? 0;
 }
 
 /**
@@ -125,12 +93,9 @@ export interface ProfitAndLoss {
 }
 
 export async function getProfitAndLoss(orgId: string, range: DateRange): Promise<ProfitAndLoss> {
-  const [revenue, orderCount, totals, target] = await Promise.all([
-    paidRevenue(orgId, range),
-    paidOrderCount(orgId, range),
-    expenseTotals(orgId, range),
-    monthTarget(orgId, range),
-  ]);
+  const [paid, totals, target] = await Promise.all([paidOrders(orgId, range), expenseTotals(orgId, range), monthTarget(orgId, range)]);
+  const revenue = add(...paid.map((order) => paise(order.grandTotal)));
+  const orderCount = paid.length;
 
   const operating = totals.filter((t) => !t.isNonOperating);
   const direct = operating.filter((t) => t.behaviour === "DIRECT");
@@ -226,18 +191,7 @@ export async function foodCostWeeklySeries(orgId: string, weeks = 8): Promise<re
   const days = daysInRange(range);
 
   const [revenueRows, expenseRows] = await Promise.all([
-    db()
-      .select({ grandTotal: orders.grandTotal, createdAt: orders.createdAt })
-      .from(orders)
-      .innerJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, "CAPTURED")))
-      .where(
-        and(
-          eq(orders.orgId, orgId),
-          gte(orders.createdAt, range.from),
-          lt(orders.createdAt, range.to),
-          sql`${orders.status} NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')`,
-        ),
-      ),
+    paidOrders(orgId, range),
     db()
       .select({ amount: expenses.amount, paidOn: expenses.paidOn, behaviour: expenseCategories.behaviour, isNonOperating: expenseCategories.isNonOperating })
       .from(expenses)
