@@ -1,7 +1,7 @@
 import "server-only";
 
 /**
- * Stock movements — receive, adjust, count. Roadmap 3.2.
+ * Stock movements — receive, adjust, count, waste. Roadmap 3.2 and 3.3.
  *
  * docs/INVENTORY-ARCHITECTURE.md §4, write paths 6 and 8. `inventory_items`
  * is a cache of `inventory_movements`: "a running total of movements, never
@@ -15,14 +15,15 @@ import "server-only";
  * comment says stock movements are "later slices with their own review."
  */
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLogs, ingredients, inventoryItems, inventoryMovements, memberships } from "@/db/schema";
+import { auditLogs, ingredients, inventoryItems, inventoryMovements, memberships, wasteEntries } from "@/db/schema";
 import { movementTypeEnum, type Unit } from "@/db/schema/inventory";
 import { getStoreLocationId } from "@/lib/repositories/hardware";
 import { type DbTx, recordIngredientPriceInTx } from "@/lib/repositories/inventory";
 import { costFromRate, type MilliPaise, purchaseRatePerBaseUnit, rateToPaise } from "@/lib/iq/costing";
-import { conversionFor, toBaseUnits, toBaseUnitsDecimal, unitLabel } from "@/lib/iq/units";
+import { type BaseUnit, conversionFor, toBaseUnits, toBaseUnitsDecimal, unitLabel } from "@/lib/iq/units";
+import { WASTE_REASON_LABEL, type WasteReasonOption } from "@/lib/inventory/waste-reasons";
 import { paise, type Paise } from "@/lib/money";
 
 /** No separate type export exists on the schema for this — derived here rather than added there, since the task is additive-only against `db/schema/inventory.ts`. */
@@ -83,6 +84,56 @@ export async function listMovements(orgId: string, ingredientId: string, limit =
     actorName: row.actorUserId ? (nameByUser.get(row.actorUserId) ?? "Former staff member") : "System",
     occurredAt: row.occurredAt,
   }));
+}
+
+export interface IngredientOption {
+  readonly id: string;
+  readonly name: string;
+  readonly baseUnit: BaseUnit;
+}
+
+/**
+ * The minimal ingredient list for the waste-recording picker — id, name and
+ * base unit only, no cost. Roadmap 3.3.
+ *
+ * KITCHEN holds `inventory.waste` but not `inventory.view`
+ * (docs/INVENTORY-ARCHITECTURE.md §3, `domain/permissions.ts`), so the
+ * waste-recording page cannot reuse `listIngredients` in
+ * `repositories/inventory.ts` — that function's `IngredientRow` carries
+ * `costPerBaseUnit`, which would hand pricing to a role that was never
+ * granted `inventory.view`. This is deliberately its own, narrower query.
+ */
+export async function listIngredientOptions(orgId: string): Promise<readonly IngredientOption[]> {
+  const rows = await db()
+    .select({ id: ingredients.id, name: ingredients.name, baseUnit: ingredients.baseUnit })
+    .from(ingredients)
+    .where(and(eq(ingredients.orgId, orgId), eq(ingredients.isActive, true)))
+    .orderBy(asc(ingredients.name));
+  // Only G, ML and PIECE are ever written (validated at the boundary); the column type is the wider enum.
+  return rows.map((row) => ({ ...row, baseUnit: row.baseUnit as BaseUnit }));
+}
+
+export interface WasteWeekTotal {
+  readonly totalCost: Paise;
+  readonly entryCount: number;
+}
+
+/**
+ * The rolling 7-day waste total, org-wide — the roadmap's own "done when"
+ * criterion: "a waste entry appears ... in the week's waste total." A
+ * rolling window rather than a calendar week, the same convention Smart 86
+ * (roadmap 3.6) uses for its 7-day velocity.
+ */
+export async function getWasteWeekTotal(orgId: string): Promise<WasteWeekTotal> {
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const [row] = await db()
+    .select({
+      totalCost: sql<string>`coalesce(sum(${wasteEntries.cost}), 0)`,
+      entryCount: sql<number>`count(*)::int`,
+    })
+    .from(wasteEntries)
+    .where(and(eq(wasteEntries.orgId, orgId), gte(wasteEntries.occurredAt, since)));
+  return { totalCost: paise(BigInt(row?.totalCost ?? "0")), entryCount: row?.entryCount ?? 0 };
 }
 
 /* ------------------------------------------------------------------ */
@@ -363,3 +414,102 @@ export async function countStock(orgId: string, actorUserId: string, input: Coun
   });
 }
 
+export interface RecordWasteInput {
+  readonly ingredientId: string;
+  /** A positive decimal, in `unit` — a kitchen-scale reading, same convention as `adjustStock`. */
+  readonly quantity: string;
+  readonly unit: Unit;
+  readonly reason: WasteReasonOption;
+  readonly notes: string | null;
+}
+
+/**
+ * Records waste. Roadmap 3.3, docs/INVENTORY-ARCHITECTURE.md §4 write path 7.
+ *
+ * Writes a WASTE movement (negative, valued at the ingredient's *current
+ * usable* rate — the same convention `adjustStock` uses, not the raw
+ * purchase rate `receiveStock` uses: waste is a recipe-costing loss, not a
+ * receiving event) and a `waste_entries` row linked to it via `movementId`,
+ * in the same transaction as the on-hand decrement — so a waste entry can
+ * never exist without the movement that actually took the stock out, or
+ * vice versa. This is also what makes the roadmap's own "done when" true:
+ * the movement is what the ingredient's movement history reads.
+ */
+export async function recordWaste(orgId: string, actorUserId: string, input: RecordWasteInput): Promise<StockWriteResult> {
+  const locationId = await getStoreLocationId(orgId);
+  if (!locationId) return { ok: false, error: "No location is set up for this organization yet." };
+
+  return db().transaction(async (tx) => {
+    const ingredient = await loadIngredientForWrite(tx, orgId, input.ingredientId);
+    if (!ingredient) return { ok: false, error: "That ingredient no longer exists." };
+
+    let magnitude: number;
+    try {
+      const conversion = conversionFor(input.unit);
+      if (conversion.baseUnit !== ingredient.baseUnit) {
+        return { ok: false, error: unitMismatchError(ingredient.baseUnit, input.unit) };
+      }
+      magnitude = toBaseUnitsDecimal(input.quantity, input.unit);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "That quantity can't be converted." };
+    }
+    if (magnitude <= 0) return { ok: false, error: "Enter a quantity greater than zero." };
+
+    const rate = ingredient.costPerBaseUnitMilli as MilliPaise;
+    const costPerBaseUnit = rateToPaise(rate);
+    // costFromRate(0, …) is already zero when nothing has ever been priced.
+    const totalCost = costFromRate(rate, magnitude);
+
+    const reasonLabel = WASTE_REASON_LABEL[input.reason];
+    const movementNotes = input.notes ? `${reasonLabel} — ${input.notes}` : reasonLabel;
+
+    const [movement] = await tx
+      .insert(inventoryMovements)
+      .values({
+        orgId,
+        ingredientId: input.ingredientId,
+        locationId,
+        type: "WASTE",
+        quantity: -magnitude,
+        costPerBaseUnit,
+        totalCost,
+        actorUserId,
+        notes: movementNotes,
+      })
+      .returning({ id: inventoryMovements.id });
+    if (!movement) throw new Error("stock: waste movement insert returned no row");
+
+    const [entry] = await tx
+      .insert(wasteEntries)
+      .values({
+        orgId,
+        ingredientId: input.ingredientId,
+        locationId,
+        movementId: movement.id,
+        // A manual entry, not one caused by an order's cancellation — that
+        // link is 3.4's concern (docs/INVENTORY-ARCHITECTURE.md §D2/§7).
+        orderId: null,
+        quantity: magnitude,
+        unit: ingredient.baseUnit,
+        reason: input.reason,
+        cost: totalCost,
+        actorUserId,
+        notes: input.notes,
+      })
+      .returning({ id: wasteEntries.id });
+    if (!entry) throw new Error("stock: waste entry insert returned no row");
+
+    const onHand = await applyMovementDelta(tx, orgId, input.ingredientId, locationId, -magnitude);
+
+    await tx.insert(auditLogs).values({
+      orgId,
+      actorUserId,
+      action: "waste_recorded",
+      entity: "waste_entries",
+      entityId: entry.id,
+      after: { ingredientId: input.ingredientId, magnitude, unit: ingredient.baseUnit, reason: input.reason, totalCost: totalCost.toString(), onHand },
+    });
+
+    return { ok: true, onHand, delta: -magnitude };
+  });
+}

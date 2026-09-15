@@ -8,7 +8,9 @@ import { PermissionDenied } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { requireStaff, staffCan } from "@/lib/auth";
 import { STALE_PRICE_DAYS, inventoryAttention } from "@/lib/inventory/attention";
+import { formatINR } from "@/lib/money";
 import { listIngredients, listSuppliers } from "@/lib/repositories/inventory";
+import { getWasteWeekTotal } from "@/lib/repositories/stock";
 
 export const metadata: Metadata = { title: "Inventory", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -20,7 +22,7 @@ const CAPABILITIES: readonly Capability[] = [
   { name: "Ingredients and suppliers", connected: true, note: "Master data, editable under purchasing" },
   { name: "Price records and usable cost", connected: true, note: "Every price recorded moves the ingredient's cost" },
   { name: "Stock on hand and movements", connected: false, note: "Needs receive, adjust and count — roadmap 3.2" },
-  { name: "Waste log", connected: false, note: "Roadmap 3.3" },
+  { name: "Waste log", connected: true, note: "Record from /app/inventory/waste — KITCHEN can use it" },
   { name: "Consumption on order", connected: false, note: "Roadmap 3.4, after recipes" },
   { name: "Purchase orders and receiving", connected: false, note: "Roadmap 3.7" },
 ];
@@ -43,7 +45,7 @@ export default async function InventoryPage() {
     );
   }
 
-  const [ingredients, suppliers] = await Promise.all([listIngredients(staff.orgId), listSuppliers(staff.orgId)]);
+  const [ingredients, suppliers, wasteWeek] = await Promise.all([listIngredients(staff.orgId), listSuppliers(staff.orgId), getWasteWeekTotal(staff.orgId)]);
   const now = new Date();
 
   const active = ingredients.filter((row) => row.isActive);
@@ -87,11 +89,11 @@ export default async function InventoryPage() {
       <DataTrust
         items={[
           { tone: "gain", text: `Master data live · ${ingredients.length} ${ingredients.length === 1 ? "ingredient" : "ingredients"}, ${activeSuppliers.length} active ${activeSuppliers.length === 1 ? "supplier" : "suppliers"}` },
-          { tone: "flag", text: "Stock, waste and purchasing not connected" },
+          { tone: "flag", text: "Stock on hand and purchasing not connected" },
         ]}
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <KpiTile label="Ingredients" value={String(ingredients.length)} note={ingredients.length === 0 ? "None yet" : `${active.length} active · ${packaging} packaging`} link={{ label: "See the list", href: "#ingredients" }} />
         <KpiTile
           label="Priced"
@@ -107,6 +109,13 @@ export default async function InventoryPage() {
           link={{ label: "Suppliers", href: "/app/inventory/suppliers" }}
         />
         <KpiTile label="Stock on hand" value="—" missing note="Needs stock movements — receive, adjust and count (roadmap 3.2). Nothing here is a real quantity yet." />
+        <KpiTile
+          label="This week's waste"
+          value={wasteWeek.entryCount === 0 ? "—" : formatINR(wasteWeek.totalCost)}
+          missing={wasteWeek.entryCount === 0}
+          note={wasteWeek.entryCount === 0 ? "Nothing recorded in the last 7 days" : `${wasteWeek.entryCount} ${wasteWeek.entryCount === 1 ? "entry" : "entries"} in the last 7 days`}
+          link={{ label: "Record waste", href: "/app/inventory/waste" }}
+        />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
