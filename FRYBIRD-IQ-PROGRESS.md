@@ -3844,3 +3844,78 @@ actual criterion is still open (same caveat as 3.1).
 All 6 pieces of this wave are now closed: Lane A 3.2, and Phase 8's
 Categories+Combos, Modifiers, Media+Review+Product-new. Worktrees for
 this wave fully cleaned up.
+
+## Lane A 3.3 (waste log) + order-card/new-order-alert merged (`b942374`, `5b44c64`)
+
+Continuing automatically. Dispatched two more agents: Lane A 3.3
+(waste log, next in the dependency chain) and Phase 8's order-card +
+new-order-alert modernization — the last two real items on Phase 8's
+list. **Phase 8's "old `overview-kpis`" item is stale and needs no
+work**: that file (`iq/overview-kpis.tsx`) was already removed as
+dead code during an earlier "Command Center" redesign this session,
+confirmed via this log's own entry for that slice. ROADMAP.md's Phase
+8 line still names it; worth trimming next time that file is touched,
+not urgent enough to interrupt this wave for.
+
+**Worktree-base bug recurred a third time, on both agents — same
+pattern as the prior wave**, self-caught and self-corrected in both
+cases with zero data loss. One real new wrinkle: the order-card agent
+found its worktree auto-cleaned by the harness (documented behavior
+for a worktree with no changes) and, rather than force-reset the
+primary checkout it had been dropped into — which for once was *not*
+idle, another lane's live uncommitted work was sitting there — created
+a brand new isolated worktree of its own off `kit-radix-nova` and did
+the work there instead. Good judgment: the primary checkout was never
+touched. Sent feedback about the recurring root cause (the Agent
+tool's worktree isolation has no way to pin a base branch, always
+defaults to stale `main`) rather than continuing to patch it lane by
+lane.
+
+**Lane A 3.3 — waste log** (`b942374`): `recordWaste` added to
+`stock.ts` alongside 3.2's three functions, same transaction
+discipline (WASTE movement + `waste_entries` row linked via
+`movementId` + the atomic on-hand decrement, one transaction). Valued
+at the ingredient's current usable rate, same convention as
+`adjustStock`. A real permission-boundary problem correctly caught and
+solved: KITCHEN holds `inventory.waste` but not `inventory.view`, so
+the existing ingredient detail page (which gates its entire render on
+`inventory.view`) could never be where KITCHEN records waste — built a
+dedicated `/app/inventory/waste` page instead, gated only on
+`inventory.waste`, with its own minimal ingredient picker
+(`listIngredientOptions`, deliberately not reusing the costed
+`listIngredients`, so KITCHEN never sees a price anywhere in the
+flow). Flagged and left undone on purpose: no link into this page from
+KDS chrome — that's protected territory this session, left for a
+separate, explicit decision. `explain()` correctly kept as a small
+private per-file helper this time, not exported — the exact bug class
+`98f19b0` fixed one commit up the history, avoided here from the
+start.
+
+**order-card + new-order-alert** (`5b44c64`): brought both onto the
+current design vocabulary. `order-card.tsx` now uses the same 5-way
+order-status tint system (dot + tinted pill) `orders-board.tsx` already
+uses for the same order's row — for the first time, a row's status
+color and its detail-sheet color are the same system, not two
+different approximations of it. Every raw button became the shared
+`Button` component. Deliberately much more conservative on
+`new-order-alert.tsx` — this is the live, real-money order interrupt —
+limited to token corrections only (`bg-[var(--destructive)]` →
+`bg-destructive`, etc., verified zero visual difference by checking
+the actual token values) with the poll/realtime logic, sound-cadence
+timers, focus management, and every `aria-*`/`role` attribute
+untouched.
+
+typecheck, lint, 592 tests (unchanged — both passes were layout-only),
+RSC-boundary, contrast, and `next build` all clean on both merges (one
+lint run was briefly polluted by a stray `.next` directory left behind
+in a sibling worktree by an agent's own verification build —
+identified, the directory removed, re-verified clean; not a code
+problem). Both deployed; service active. Verified live:
+`/app/inventory/waste` → 307, `/app/orders` → 307. journalctl clean of
+anything but the known deploy-transition artifact.
+
+This closes out both dispatched lanes for Phase 3 slice 3.3 and the
+last real Phase 8 item. Remaining Phase 8 work (POS payment sheet and
+rewards keypad) stays deliberately untouched — it's inside POS, off
+limits without explicit authorization. Worktrees for this round fully
+cleaned up.
