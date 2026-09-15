@@ -238,12 +238,23 @@ export function attentionCards(input: AttentionInput): readonly AlertCard[] {
     cards.push({
       id: "costs",
       level: "SETUP",
-      title: "Profit cannot be calculated yet",
+      title: "Profit is overstated — no direct costs recorded",
       evidence: `Food, packaging and labour costs are not recorded · ${input.costs.costLinesRecorded} of ${input.costs.costLinesTotal} cost lines present`,
       causeLabel: "Impact",
+      // What the P&L actually does with no direct costs, stated exactly:
+      // `profit()` computes grossProfit = revenue - directCosts, so with
+      // nothing recorded gross profit *equals revenue*, grossMarginBps is
+      // 10000 (100%) and foodCostBps is 0. Net profit is revenue less
+      // operating expenses only, so it is overstated by whatever food,
+      // packaging and labour really cost.
+      //
+      // The previous copy read "all show — until these are entered", which was
+      // missing a word and, worse, implied the figures were absent. They are
+      // not absent. They are present and flattering, which is the more
+      // dangerous of the two.
       cause: input.costs.operatingRecorded
-        ? `Gross profit, food cost %, labour %, prime cost and net profit all show — until these are entered. Revenue and operating expenses (${formatINR(input.costs.operatingThisMonth, "whole")} this month) are already recorded.`
-        : "Gross profit, food cost %, labour %, prime cost and net profit all show — until these are entered. Revenue is already accurate.",
+        ? `Gross profit currently equals your full revenue and food cost shows 0%, because there is nothing recorded to subtract. Net profit is overstated by whatever food, packaging and labour actually cost. Revenue and operating expenses (${formatINR(input.costs.operatingThisMonth, "whole")} this month) are already recorded.`
+        : "Gross profit currently equals your full revenue and food cost shows 0%, because there is nothing recorded to subtract. Net profit is overstated by whatever food, packaging and labour actually cost. Revenue itself is accurate.",
       action: "Start by recording what you buy for food and packaging — that alone unlocks food cost %. Recipe costs unlock item margins.",
       primary: { label: "Record an expense", href: "/app/iq/expenses/new" },
       secondary: { label: "Ingredients", href: "/app/inventory" },
