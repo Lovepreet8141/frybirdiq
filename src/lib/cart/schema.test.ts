@@ -1,3 +1,10 @@
+/**
+ * The cart is a cookie the browser can edit at will, so this schema is a
+ * trust boundary rather than a convenience type. These tests cover what that
+ * boundary is responsible for: what a hostile cart cannot smuggle in or
+ * overload the server with, and what counts as "the same line".
+ */
+
 import { describe, expect, it } from "vitest";
 
 import { EMPTY_CART, cartLineSchema, cartSchema, lineKey } from "./schema";
@@ -38,7 +45,24 @@ describe("cartLineSchema — the trust boundary on a cookie the browser can edit
   });
 });
 
-describe("cartSchema", () => {
+describe("cartSchema — what a forged cookie cannot do", () => {
+  it("drops a price the client tried to put in the cart", () => {
+    // The module's own rule: "If a price ever appears in this schema, the cart
+    // has become forgeable." Zod strips unknown keys, so the guarantee holds —
+    // this pins it, because switching to .passthrough() somewhere would quietly
+    // end it.
+    const parsed = cartSchema.parse({
+      lines: [{ slug: "crispy-burger", quantity: 1, modifiers: [], price: 1, total: 1 }],
+      subtotal: 0,
+      discount: 999_999,
+    });
+
+    expect(parsed).not.toHaveProperty("subtotal");
+    expect(parsed).not.toHaveProperty("discount");
+    expect(parsed.lines[0]).not.toHaveProperty("price");
+    expect(parsed.lines[0]).not.toHaveProperty("total");
+  });
+
   it("defaults to an empty line list", () => {
     expect(cartSchema.parse({})).toEqual(EMPTY_CART);
   });
@@ -54,6 +78,11 @@ describe("cartSchema", () => {
     expect(cartSchema.safeParse({ points: 1_000_001 }).success).toBe(false);
     expect(cartSchema.safeParse({ points: -1 }).success).toBe(false);
     expect(cartSchema.safeParse({ points: 12.5 }).success).toBe(false);
+  });
+
+  it("caps the promo code length", () => {
+    expect(cartSchema.safeParse({ lines: [], promoCode: "x".repeat(40) }).success).toBe(true);
+    expect(cartSchema.safeParse({ lines: [], promoCode: "x".repeat(41) }).success).toBe(false);
   });
 });
 
@@ -74,9 +103,32 @@ describe("lineKey — identity for merging, not pricing", () => {
     );
   });
 
-  // Not asserted here: lineKey joins slug and modifiers with "|", which has no
-  // escape, so a modifier slug that itself contained "|" could collide with a
-  // different line. menu-admin constrains real slugs to [a-z0-9-]+, so this
-  // needs a hand-edited cookie to reach and only affects the sender's own
-  // cart — a known, open, low-severity gap, not fixed here.
+  it("does not sort the original array in place", () => {
+    // A key function that mutates its input would reorder the customer's cart
+    // as a side effect of rendering it.
+    const modifiers = ["large", "hot"];
+    lineKey({ slug: "wings", modifiers });
+    expect(modifiers).toEqual(["large", "hot"]);
+  });
+
+  it("cannot be made to collide by a separator in a modifier", () => {
+    // The regression this was written for. A `|` join has no escape, so
+    // ["a|b"] and ["a","b"] produced one key — and this key decides which
+    // line setQuantity sets and which removeLine removes, so a collision
+    // edits the wrong line or two at once.
+    //
+    // Real slugs are [a-z0-9-]+ and cannot contain a separator, so this needed
+    // a hand-edited cookie and only damaged the sender's own cart — but the
+    // ambiguity cost nothing to remove, so it's removed rather than merely
+    // documented.
+    expect(lineKey({ slug: "burger", modifiers: ["a|b"] })).not.toBe(lineKey({ slug: "burger", modifiers: ["a", "b"] }));
+    expect(lineKey({ slug: "a", modifiers: ["b"] })).not.toBe(lineKey({ slug: "a|b", modifiers: [] }));
+    // Quotes and brackets are escaped rather than ending the encoding.
+    expect(lineKey({ slug: '"', modifiers: [] })).not.toBe(lineKey({ slug: "", modifiers: ['"'] }));
+  });
+
+  it("is stable for the same input", () => {
+    const line = { slug: "burger", modifiers: ["cheese", "bacon"] };
+    expect(lineKey(line)).toBe(lineKey(line));
+  });
 });

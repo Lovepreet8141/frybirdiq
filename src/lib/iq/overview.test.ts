@@ -155,6 +155,37 @@ describe("attention rules", () => {
     expect(cards[1]?.cause).toContain("₹15,000");
     expect(alertSummary(cards)).toBe("1 needs action now · 1 this week");
   });
+
+  it("says profit is overstated, not that it is missing", () => {
+    // profit() computes grossProfit = revenue - directCosts. With nothing
+    // recorded, gross profit equals revenue, grossMarginBps is 100% and
+    // foodCostBps is 0 — the figures are present and flattering, which is more
+    // dangerous than their being absent.
+    //
+    // The copy this replaced read "all show — until these are entered": a word
+    // short, and implying the numbers were not there. Nothing pinned it, so
+    // nothing caught it.
+    const [card] = attentionCards({
+      ...quiet,
+      costs: { directRecorded: false, operatingRecorded: false, operatingThisMonth: paise(0), costLinesRecorded: 0, costLinesTotal: 4 },
+    });
+
+    expect(card?.id).toBe("costs");
+    expect(card?.title).toContain("overstated");
+    expect(card?.cause).toContain("equals your full revenue");
+    expect(card?.cause).toContain("food cost shows 0%");
+    // The sentence must not be the truncated one, in either branch.
+    expect(card?.cause).not.toContain("all show —");
+  });
+
+  it("names the recorded operating spend when there is some", () => {
+    const [card] = attentionCards({
+      ...quiet,
+      costs: { directRecorded: false, operatingRecorded: true, operatingThisMonth: paise(1500000), costLinesRecorded: 1, costLinesTotal: 4 },
+    });
+    expect(card?.cause).toContain("₹15,000");
+    expect(card?.cause).not.toContain("all show —");
+  });
 });
 
 describe("KPI row notes", () => {
