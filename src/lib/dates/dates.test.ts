@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addDays, businessDate, daysInRange, endOfBusinessDay, previousPeriod, resolveRange, startOfBusinessDay } from "./index";
+import { addDays, businessDate, daysInRange, endOfBusinessDay, openHoursSpan, previousPeriod, resolveRange, startOfBusinessDay, timeOnBusinessDate } from "./index";
 
 describe("business date", () => {
   it("uses Ambala's calendar, not the server's", () => {
@@ -94,5 +94,27 @@ describe("calendar month ranges", () => {
     const range = resolveRange("lastMonth", new Date("2026-02-03T10:00:00+05:30"));
     expect(businessDate(range.from)).toBe("2026-01-01");
     expect(businessDate(new Date(range.to.getTime() - 1))).toBe("2026-01-31");
+  });
+});
+
+describe("closing time on a business day", () => {
+  it("places an HH:MM time on the given business date in Ambala", () => {
+    // 20:45 IST is 15:15 UTC the same day.
+    expect(timeOnBusinessDate("2026-09-10", "20:45").toISOString()).toBe("2026-09-10T15:15:00.000Z");
+    // Midnight is startOfBusinessDay itself.
+    expect(timeOnBusinessDate("2026-09-10", "00:00").getTime()).toBe(startOfBusinessDay("2026-09-10").getTime());
+  });
+
+  it("spans same-day hours normally", () => {
+    expect(openHoursSpan("11:00", "23:00")).toBe(12);
+  });
+
+  it("wraps a span that crosses midnight", () => {
+    // Opens 18:00, closes 02:00 the next morning — 8 hours, not -16.
+    expect(openHoursSpan("18:00", "02:00")).toBe(8);
+  });
+
+  it("treats an equal opening and closing time as a full day rather than zero", () => {
+    expect(openHoursSpan("09:00", "09:00")).toBe(24);
   });
 });

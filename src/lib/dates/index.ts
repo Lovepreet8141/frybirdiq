@@ -126,6 +126,31 @@ export function previousPeriod(range: DateRange): DateRange {
   return { from: new Date(range.from.getTime() - span), to: range.from, label: "the period before" };
 }
 
+function parseHHMM(time: string): { hours: number; minutes: number } {
+  const [hours, minutes] = time.split(":").map(Number);
+  return { hours: hours ?? 0, minutes: minutes ?? 0 };
+}
+
+/** A "HH:MM" time on a given business date, as a UTC instant. Same fixed-offset arithmetic as `startOfBusinessDay`. */
+export function timeOnBusinessDate(date: string, time: string): Date {
+  const start = startOfBusinessDay(date);
+  const { hours, minutes } = parseHHMM(time);
+  return new Date(start.getTime() + (hours * 60 + minutes) * 60_000);
+}
+
+/**
+ * Hours open in one business day, from `openingTime` to `closingTime`
+ * (both "HH:MM"). Wraps past midnight when closing is not after opening —
+ * an 18:00–02:00 shift is 8 hours, not a negative one.
+ */
+export function openHoursSpan(openingTime: string, closingTime: string): number {
+  const open = parseHHMM(openingTime);
+  const close = parseHHMM(closingTime);
+  let minutes = close.hours * 60 + close.minutes - (open.hours * 60 + open.minutes);
+  if (minutes <= 0) minutes += 24 * 60;
+  return minutes / 60;
+}
+
 /** Every business date in a range, oldest first. For charting. */
 export function daysInRange(range: DateRange): string[] {
   const days: string[] = [];

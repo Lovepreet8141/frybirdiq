@@ -17,12 +17,13 @@ import "server-only";
 
 import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLogs, ingredients, inventoryItems, inventoryMovements, memberships, recipeVersionItems, recipes, wasteEntries } from "@/db/schema";
+import { auditLogs, ingredients, inventoryItems, inventoryMovements, memberships, organizations, products, recipeVersionItems, recipeVersions, recipes, wasteEntries } from "@/db/schema";
 import { movementTypeEnum, type Unit } from "@/db/schema/inventory";
-import type { DateRange } from "@/lib/dates";
+import { businessDate, openHoursSpan, type DateRange, timeOnBusinessDate } from "@/lib/dates";
 import { getStoreLocationId } from "@/lib/repositories/hardware";
 import { type DbTx, recordIngredientPriceInTx } from "@/lib/repositories/inventory";
 import { consumptionQuantity, costFromRate, type MilliPaise, purchaseRatePerBaseUnit, rateToPaise } from "@/lib/iq/costing";
+import { assessIngredientStock, type StockRisk } from "@/lib/iq/stockout";
 import { type BaseUnit, conversionFor, toBaseUnits, toBaseUnitsDecimal, unitLabel } from "@/lib/iq/units";
 import { WASTE_REASON_LABEL, type WasteReasonOption } from "@/lib/inventory/waste-reasons";
 import { paise, type Paise } from "@/lib/money";
@@ -198,6 +199,144 @@ export async function getFoodCostComparison(orgId: string, range: Pick<DateRange
     varianceCost: (actualCost - theoreticalCost) as Paise,
     saleMovementCount: row?.saleMovementCount ?? 0,
   };
+}
+
+/**
+ * The trailing window Smart 86 reads velocity from — the same rolling 7
+ * days `getWasteWeekTotal` uses, not a calendar week. Exported so
+ * `inventoryAvailability` in `menu-admin.ts` (the per-product graduation of
+ * this same risk, docs/INVENTORY-ARCHITECTURE.md §10) measures velocity
+ * over the identical window — one definition of "recent", not two.
+ */
+export const SMART86_VELOCITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const VELOCITY_WINDOW_MS = SMART86_VELOCITY_WINDOW_MS;
+
+export interface Smart86Product {
+  readonly id: string;
+  readonly name: string;
+}
+
+export interface Smart86Row {
+  readonly ingredientId: string;
+  readonly ingredientName: string;
+  readonly baseUnit: BaseUnit;
+  readonly onHandBase: number;
+  /** Base units consumed per hour, from the last 7 days' SALE movements over the hours the business was actually open. */
+  readonly ratePerHour: number;
+  readonly daysOfCover: number | null;
+  readonly reorderThresholdBase: number | null;
+  readonly belowReorderThreshold: boolean;
+  readonly risk: Exclude<StockRisk, "ok">;
+  readonly alreadyOut: boolean;
+  /** The clock time today it would run out, if that happens before close. Null when already out (no future instant to give) or when the risk is the coarser days-of-cover flag rather than a today projection. */
+  readonly stockoutInstant: Date | null;
+  /** Products whose *current* recipe version uses this ingredient — a superseded version does not count. */
+  readonly affectedProducts: readonly Smart86Product[];
+}
+
+/**
+ * Smart 86 — read-only, advisory. Roadmap 3.6, docs/INVENTORY-ARCHITECTURE.md
+ * §10. Every active ingredient whose combined risk (§ `assessIngredientStock`)
+ * is not "ok", newest-to-run-out first, each with which live products its
+ * current recipe version affects — so staff know what a stockout actually
+ * costs the menu. Never writes anything: no availability toggle, no 86, only
+ * a recommendation. The existing manual `productAvailability` workflow stays
+ * the only write path (docs/INVENTORY-ARCHITECTURE.md §10, verbatim).
+ */
+export async function getSmart86Projections(orgId: string, now: Date = new Date()): Promise<readonly Smart86Row[]> {
+  const locationId = await getStoreLocationId(orgId);
+  if (!locationId) return [];
+
+  const [org] = await db().select({ openingTime: organizations.openingTime, closingTime: organizations.closingTime }).from(organizations).where(eq(organizations.id, orgId)).limit(1);
+  if (!org) return [];
+
+  const since = new Date(now.getTime() - VELOCITY_WINDOW_MS);
+  const openHoursInWindow = openHoursSpan(org.openingTime, org.closingTime) * 7;
+  const closingInstant = timeOnBusinessDate(businessDate(now), org.closingTime);
+
+  const rows = await db()
+    .select({
+      ingredientId: ingredients.id,
+      ingredientName: ingredients.name,
+      baseUnit: ingredients.baseUnit,
+      onHandBase: sql<number>`coalesce(${inventoryItems.quantityOnHand}, 0)::int`,
+      reorderThresholdBase: inventoryItems.reorderThreshold,
+      consumedBase: sql<number>`coalesce((
+        select sum(-${inventoryMovements.quantity})::int
+        from ${inventoryMovements}
+        where ${inventoryMovements.ingredientId} = ${ingredients.id}
+          and ${inventoryMovements.type} = 'SALE'
+          and ${inventoryMovements.occurredAt} >= ${since}
+      ), 0)`,
+    })
+    .from(ingredients)
+    .leftJoin(inventoryItems, and(eq(inventoryItems.ingredientId, ingredients.id), eq(inventoryItems.locationId, locationId)))
+    .where(and(eq(ingredients.orgId, orgId), eq(ingredients.isActive, true)));
+
+  if (rows.length === 0) return [];
+
+  const assessed = rows.map((row) => {
+    const assessment = assessIngredientStock({
+      onHandBase: row.onHandBase,
+      consumedBase: row.consumedBase,
+      openHoursInWindow,
+      reorderThresholdBase: row.reorderThresholdBase,
+      now,
+      closingInstant,
+    });
+    return {
+      ingredientId: row.ingredientId,
+      ingredientName: row.ingredientName,
+      baseUnit: row.baseUnit as BaseUnit,
+      onHandBase: row.onHandBase,
+      reorderThresholdBase: row.reorderThresholdBase,
+      ...assessment,
+    };
+  });
+
+  const flagged = assessed.filter((row): row is typeof row & { risk: Exclude<StockRisk, "ok"> } => row.risk !== "ok");
+  if (flagged.length === 0) return [];
+
+  // Reverse lookup: recipe_version_items -> recipe_versions -> recipes
+  // (matching recipes.currentVersionId — a superseded version does not
+  // count) -> products, for the flagged ingredients only.
+  const ingredientIds = flagged.map((row) => row.ingredientId);
+  const productRows = await db()
+    .select({ ingredientId: recipeVersionItems.ingredientId, productId: products.id, productName: products.name })
+    .from(recipeVersionItems)
+    .innerJoin(recipeVersions, eq(recipeVersions.id, recipeVersionItems.versionId))
+    .innerJoin(recipes, and(eq(recipes.id, recipeVersions.recipeId), eq(recipes.currentVersionId, recipeVersions.id)))
+    .innerJoin(products, eq(products.id, recipes.productId))
+    .where(and(eq(recipeVersionItems.orgId, orgId), inArray(recipeVersionItems.ingredientId, ingredientIds), eq(products.isActive, true)));
+
+  const productsByIngredient = new Map<string, Smart86Product[]>();
+  for (const row of productRows) {
+    const list = productsByIngredient.get(row.ingredientId) ?? [];
+    list.push({ id: row.productId, name: row.productName });
+    productsByIngredient.set(row.ingredientId, list);
+  }
+
+  return [...flagged]
+    .sort((a, b) => {
+      if (a.risk !== b.risk) return a.risk === "stockout_today" ? -1 : 1;
+      if (a.alreadyOut !== b.alreadyOut) return a.alreadyOut ? -1 : 1;
+      if (a.stockoutInstant && b.stockoutInstant) return a.stockoutInstant.getTime() - b.stockoutInstant.getTime();
+      return (a.daysOfCover ?? Infinity) - (b.daysOfCover ?? Infinity);
+    })
+    .map((row) => ({
+      ingredientId: row.ingredientId,
+      ingredientName: row.ingredientName,
+      baseUnit: row.baseUnit,
+      onHandBase: row.onHandBase,
+      ratePerHour: row.ratePerHour,
+      daysOfCover: row.daysOfCover,
+      reorderThresholdBase: row.reorderThresholdBase,
+      belowReorderThreshold: row.belowReorderThreshold,
+      risk: row.risk,
+      alreadyOut: row.alreadyOut,
+      stockoutInstant: row.stockoutInstant,
+      affectedProducts: (productsByIngredient.get(row.ingredientId) ?? []).sort((a, b) => a.name.localeCompare(b.name)),
+    }));
 }
 
 /* ------------------------------------------------------------------ */

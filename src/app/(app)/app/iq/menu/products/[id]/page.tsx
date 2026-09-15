@@ -6,6 +6,7 @@ import { formatINR, paise } from "@/lib/money";
 import {
   getProductAdmin,
   getRecipeDetail,
+  inventoryAvailability,
   listAvailabilityRules,
   listCategoriesAdmin,
   listComboItems,
@@ -67,9 +68,9 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
 
   // Not fetched at all for someone without recipes.view — no data to leak, and
   // no query to run for a screen that would only tell them "no permission".
-  const [recipeDetail, ingredientOptions] = canViewRecipe
-    ? await Promise.all([getRecipeDetail(staff.orgId, id), listIngredientOptions(staff.orgId)])
-    : [null, []];
+  const [recipeDetail, ingredientOptions, stockRisk] = canViewRecipe
+    ? await Promise.all([getRecipeDetail(staff.orgId, id), listIngredientOptions(staff.orgId), inventoryAvailability(staff.orgId, id)])
+    : [null, [], null];
 
   const category = categories.find((c) => c.id === product.categoryId);
   const taxRate = taxRates.find((r) => r.id === product.taxRateId);
@@ -226,7 +227,18 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
           />
         </Section>
 
-        <Section title="Recipe" hint="What this product is made of, and what it costs to make — stock-aware availability is later.">
+        <Section title="Recipe" hint="What this product is made of, and what it costs to make.">
+          {stockRisk && (stockRisk.status === "at_risk" || stockRisk.status === "stockout_today") && (
+            <p role="status" className={`mb-4 rounded-md border-l-2 px-4 py-3 text-sm ${stockRisk.status === "stockout_today" ? "border-loss bg-loss-soft/60" : "border-flag bg-flag-soft/60"}`}>
+              <strong className="font-semibold">Smart 86 (advisory):</strong>{" "}
+              {stockRisk.status === "stockout_today"
+                ? stockRisk.alreadyOut
+                  ? `${stockRisk.limitingIngredientName} is out now — this product can't be made until it's restocked.`
+                  : `${stockRisk.limitingIngredientName} is projected short around ${stockRisk.stockoutInstant?.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false })} today at the current pace.`
+                : `${stockRisk.limitingIngredientName} is trending low${stockRisk.daysOfCover !== null ? ` — about ${stockRisk.daysOfCover.toFixed(1)} days of cover left` : ""}.`}
+              {stockRisk.portionsPossible !== null && ` ~${stockRisk.portionsPossible} portions possible from it right now.`} This is a recommendation, not a change — availability below is still set by hand.
+            </p>
+          )}
           <ProductRecipeSection
             productId={id}
             access={!canViewRecipe ? "none" : canEditRecipe ? "edit" : "view"}

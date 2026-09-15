@@ -20,9 +20,12 @@ import {
   categoryAvailability,
   comboItems,
   ingredients,
+  inventoryItems,
+  inventoryMovements,
   menuAuditLog,
   modifierGroups,
   modifiers,
+  organizations,
   priceHistory,
   productAvailability,
   productModifierGroups,
@@ -33,11 +36,14 @@ import {
   taxRates,
 } from "@/db/schema";
 import { type AvailabilityStatus, resolveAvailability } from "@/domain/menu-availability";
-import { businessDate } from "@/lib/dates";
-import { type MilliPaise, theoreticalRecipeCost } from "@/lib/iq/costing";
+import { businessDate, openHoursSpan, timeOnBusinessDate } from "@/lib/dates";
+import { consumptionQuantity, type MilliPaise, theoreticalRecipeCost } from "@/lib/iq/costing";
+import { assessIngredientStock, STOCK_RISK_RANK, type StockRisk } from "@/lib/iq/stockout";
 import { type BaseUnit } from "@/lib/iq/units";
 import { type Paise, paise, scale } from "@/lib/money";
 import { planSwap } from "@/lib/menu-admin/reorder";
+import { getStoreLocationId } from "@/lib/repositories/hardware";
+import { SMART86_VELOCITY_WINDOW_MS } from "@/lib/repositories/stock";
 
 /**
  * Thrown when an edit's `expectedUpdatedAt` no longer matches the row —
@@ -1529,18 +1535,126 @@ export async function saveRecipeVersion(orgId: string, productId: string, lines:
   });
 }
 
+export interface ProductStockRisk {
+  /** "unknown" when the product has no recipe, no saved version, or no location to read stock from — the same honest non-answer the stub always gave, never upgraded to "ok" by omission. */
+  readonly status: "unknown" | StockRisk;
+  readonly limitingIngredientName: string | null;
+  /** floor(on-hand ÷ quantity per portion) for the limiting ingredient. Null when that ingredient's recipe line rounds to zero usage per portion — not a real constraint to divide by. */
+  readonly portionsPossible: number | null;
+  readonly daysOfCover: number | null;
+  readonly alreadyOut: boolean;
+  /** The clock time today the limiting ingredient would run out, if that happens before close. */
+  readonly stockoutInstant: Date | null;
+}
+
+const UNKNOWN_STOCK_RISK: ProductStockRisk = {
+  status: "unknown",
+  limitingIngredientName: null,
+  portionsPossible: null,
+  daysOfCover: null,
+  alreadyOut: false,
+  stockoutInstant: null,
+};
+
 /**
  * What inventory says about whether this product can still be sold.
+ * Roadmap 3.6, docs/INVENTORY-ARCHITECTURE.md §10 — the documented
+ * graduation point: "`inventoryAvailability(productId)` graduates from
+ * `"unknown"` to a computed risk: for the current version's lines,
+ * `quantityOnHand ÷ quantity per portion` = portions possible; below a
+ * threshold → 'at risk', with the limiting ingredient named."
  *
- * Always "unknown" today — there is no code anywhere that derives
- * sellability from stock counts yet, and BUILD-PLAN.md is explicit: never
- * invent an inventory number. This is the integration point a future
- * inventory-aware availability feature replaces, not a placeholder result
- * dressed up as a real one — callers must not treat "unknown" as "in stock".
+ * The "threshold" is deliberately the same days-of-cover risk
+ * `getSmart86Projections` (roadmap 3.6, `stock.ts`) computes per ingredient,
+ * not a second, portions-shaped threshold invented here — a product's
+ * limiting ingredient is whichever recipe line has the worst ingredient-level
+ * risk (`assessIngredientStock`), and `portionsPossible` is that line's
+ * quantity-possible figure shown alongside it, not what decides `status`.
+ * One risk definition read two ways (per-ingredient, per-product) can never
+ * disagree about what "at risk" means; a second threshold measured in
+ * portions would need its own velocity signal (how fast this *product*
+ * sells) that nothing here computes.
+ *
+ * **Read-only.** This never writes `productAvailability` or any other
+ * table — the existing manual availability workflow (`setAvailabilityRule`
+ * and friends) stays the only write path. A caller that wants to *act* on
+ * this must go through that workflow itself, with a human tap; nothing here
+ * does it automatically.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for the shape callers will need once this is real
-export function inventoryAvailability(productId: string): "unknown" {
-  return "unknown";
+export async function inventoryAvailability(orgId: string, productId: string, now: Date = new Date()): Promise<ProductStockRisk> {
+  const [recipe] = await db()
+    .select({ currentVersionId: recipes.currentVersionId, yieldQuantity: recipes.yieldQuantity })
+    .from(recipes)
+    .where(and(eq(recipes.orgId, orgId), eq(recipes.productId, productId)))
+    .limit(1);
+  if (!recipe || !recipe.currentVersionId) return UNKNOWN_STOCK_RISK;
+
+  const locationId = await getStoreLocationId(orgId);
+  if (!locationId) return UNKNOWN_STOCK_RISK;
+
+  const [org] = await db().select({ openingTime: organizations.openingTime, closingTime: organizations.closingTime }).from(organizations).where(eq(organizations.id, orgId)).limit(1);
+  if (!org) return UNKNOWN_STOCK_RISK;
+
+  const since = new Date(now.getTime() - SMART86_VELOCITY_WINDOW_MS);
+  const openHoursInWindow = openHoursSpan(org.openingTime, org.closingTime) * 7;
+  const closingInstant = timeOnBusinessDate(businessDate(now), org.closingTime);
+
+  const lines = await db()
+    .select({
+      ingredientId: recipeVersionItems.ingredientId,
+      ingredientName: ingredients.name,
+      quantityBase: recipeVersionItems.quantity,
+      onHandBase: sql<number>`coalesce(${inventoryItems.quantityOnHand}, 0)::int`,
+      reorderThresholdBase: inventoryItems.reorderThreshold,
+      consumedBase: sql<number>`coalesce((
+        select sum(-${inventoryMovements.quantity})::int
+        from ${inventoryMovements}
+        where ${inventoryMovements.ingredientId} = ${recipeVersionItems.ingredientId}
+          and ${inventoryMovements.type} = 'SALE'
+          and ${inventoryMovements.occurredAt} >= ${since}
+      ), 0)`,
+    })
+    .from(recipeVersionItems)
+    .innerJoin(ingredients, eq(ingredients.id, recipeVersionItems.ingredientId))
+    .leftJoin(inventoryItems, and(eq(inventoryItems.ingredientId, recipeVersionItems.ingredientId), eq(inventoryItems.locationId, locationId)))
+    .where(eq(recipeVersionItems.versionId, recipe.currentVersionId));
+
+  if (lines.length === 0) return UNKNOWN_STOCK_RISK;
+
+  let limiting: { name: string; portions: number | null; daysOfCover: number | null; alreadyOut: boolean; stockoutInstant: Date | null; risk: StockRisk } | null = null;
+
+  for (const line of lines) {
+    const perPortion = consumptionQuantity(line.quantityBase, 1, recipe.yieldQuantity);
+    const portions = perPortion > 0 ? Math.floor(line.onHandBase / perPortion) : null;
+    const assessment = assessIngredientStock({
+      onHandBase: line.onHandBase,
+      consumedBase: line.consumedBase,
+      openHoursInWindow,
+      reorderThresholdBase: line.reorderThresholdBase,
+      now,
+      closingInstant,
+    });
+
+    const isWorse =
+      limiting === null ||
+      STOCK_RISK_RANK[assessment.risk] > STOCK_RISK_RANK[limiting.risk] ||
+      (STOCK_RISK_RANK[assessment.risk] === STOCK_RISK_RANK[limiting.risk] && portions !== null && (limiting.portions === null || portions < limiting.portions));
+
+    if (isWorse) {
+      limiting = { name: line.ingredientName, portions, daysOfCover: assessment.daysOfCover, alreadyOut: assessment.alreadyOut, stockoutInstant: assessment.stockoutInstant, risk: assessment.risk };
+    }
+  }
+
+  if (!limiting) return UNKNOWN_STOCK_RISK;
+
+  return {
+    status: limiting.risk,
+    limitingIngredientName: limiting.name,
+    portionsPossible: limiting.portions,
+    daysOfCover: limiting.daysOfCover,
+    alreadyOut: limiting.alreadyOut,
+    stockoutInstant: limiting.stockoutInstant,
+  };
 }
 
 /* ------------------------------------------------------------------ */

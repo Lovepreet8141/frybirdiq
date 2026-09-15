@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { AttentionCards } from "@/components/iq/attention-cards";
 import { CommandCenterNav } from "@/components/iq/command-center-nav";
 import { RightNow } from "@/components/iq/right-now";
-import { type Capability, CapabilityPanel, DataTrust, KpiTile, SectionHeading } from "@/components/iq/ui";
+import { type Capability, CapabilityPanel, DataTrust, KpiTile, Panel, PanelBody, PanelHeader, SectionHeading, StatusWord } from "@/components/iq/ui";
 import { LiveRefresh } from "@/components/staff/live-refresh";
 import { PageHeader } from "@/components/staff/page-header";
 import { PermissionDenied } from "@/components/states";
@@ -13,6 +14,10 @@ import { alertSummary, attentionCards } from "@/lib/iq/overview";
 import { type Paise, formatINR } from "@/lib/money";
 import { foodCostWeeklySeries, getProfitAndLoss } from "@/lib/repositories/expenses";
 import { getOverviewSettings, getRightNow, productLastSales } from "@/lib/repositories/overview";
+import { getSmart86Projections } from "@/lib/repositories/stock";
+
+/** Same base-unit labels the ingredient page and movement history use — Smart 86 never converts to kg/L for display. */
+const UNIT_LABEL: Record<string, string> = { G: "g", ML: "ml", PIECE: "pc" };
 
 export const metadata: Metadata = { title: "Alerts", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -27,7 +32,7 @@ const SIGNALS: readonly Capability[] = [
   { name: "Menu items not selling", connected: true, note: "Days since each live product last sold, once the shop has 7 days of history" },
   { name: "Cost inputs missing", connected: true, note: "Which of food, packaging, labour and operating costs have been recorded" },
   { name: "Rush mode", connected: false, note: "No hold switch or promise-time override exists; today the counter turns orders down one at a time" },
-  { name: "Projected stockouts (Smart 86)", connected: false, note: "Needs stock on hand and consumption — roadmap 3.2 to 3.6" },
+  { name: "Projected stockouts (Smart 86)", connected: true, note: "From the last 7 days' consumption and stock on hand — recommends, never changes availability itself" },
   { name: "Alerts to your phone", connected: false, note: "No automatic channel is wired yet — see Admin › Notifications" },
 ];
 
@@ -50,7 +55,13 @@ export default async function AlertsPage() {
   const now = new Date();
   const today = businessDate(now);
   const settings = await getOverviewSettings(staff.orgId);
-  const [rightNow, lastSales, pnl, foodCost] = await Promise.all([getRightNow(staff.orgId, settings.kitchenCapacity, now.getTime()), productLastSales(staff.orgId, now), getProfitAndLoss(staff.orgId, resolveRange("mtd")), foodCostWeeklySeries(staff.orgId)]);
+  const [rightNow, lastSales, pnl, foodCost, smart86] = await Promise.all([
+    getRightNow(staff.orgId, settings.kitchenCapacity, now.getTime()),
+    productLastSales(staff.orgId, now),
+    getProfitAndLoss(staff.orgId, resolveRange("mtd")),
+    foodCostWeeklySeries(staff.orgId),
+    getSmart86Projections(staff.orgId, now),
+  ]);
 
   const cards = attentionCards(
     attentionInput({
@@ -88,6 +99,61 @@ export default async function AlertsPage() {
         <KpiTile label="Late orders" value={String(rightNow.late.count)} note={rightNow.late.count === 0 ? "Nothing past its promised time" : `Oldest ${rightNow.late.oldestLateMinutes} min over`} className={rightNow.late.count > 0 ? "[&_.font-money]:text-loss" : undefined} />
         <KpiTile label="Cash unsettled" value={rightNow.pendingCash.count === 0 ? "—" : formatINR(rightNow.pendingCash.total, "whole")} missing={rightNow.pendingCash.count === 0} note={rightNow.pendingCash.count === 0 ? "Every cash order is settled" : `${rightNow.pendingCash.count} ${rightNow.pendingCash.count === 1 ? "order" : "orders"} · oldest ${rightNow.pendingCash.oldestMinutes} min`} />
       </div>
+
+      <Panel>
+        <PanelHeader
+          title="Smart 86 — projected stockouts"
+          description="From the last 7 days' velocity and today's stock on hand. Recommends only — nothing here changes a product's availability; that stays a manual call below on each product's own page."
+          meta={smart86.length > 0 ? `${smart86.length} ${smart86.length === 1 ? "ingredient" : "ingredients"}` : undefined}
+        />
+        <PanelBody className="pt-0">
+          {smart86.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground">
+              Nothing projected to run short today, and nothing under about 2 days of cover.
+            </p>
+          ) : (
+            <ul className="flex flex-col divide-y divide-border">
+              {smart86.map((row) => {
+                const unit = UNIT_LABEL[row.baseUnit] ?? row.baseUnit.toLowerCase();
+                const onHandLabel = `${new Intl.NumberFormat("en-IN").format(row.onHandBase)} ${unit}`;
+                const detail =
+                  row.risk === "stockout_today"
+                    ? row.alreadyOut
+                      ? `Out now — ${onHandLabel} on hand`
+                      : `Short around ${row.stockoutInstant?.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false })} · ${onHandLabel} on hand`
+                    : row.belowReorderThreshold
+                      ? `Below its reorder point · ${onHandLabel} on hand`
+                      : `${row.daysOfCover !== null ? `${row.daysOfCover.toFixed(1)} days of cover` : "Trending low"} · ${onHandLabel} on hand`;
+                return (
+                  <li key={row.ingredientId} className="flex flex-col gap-1 py-3 first:pt-0 last:pb-0">
+                    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+                      <StatusWord tone={row.risk === "stockout_today" ? "loss" : "flag"} className="text-foreground">
+                        <Link href={`/app/inventory/ingredients/${row.ingredientId}`} className="font-medium hover:underline">
+                          {row.ingredientName}
+                        </Link>
+                      </StatusWord>
+                      <span className="pl-[15px] text-[13px] text-muted-foreground sm:pl-0">{detail}</span>
+                    </div>
+                    {row.affectedProducts.length > 0 && (
+                      <p className="pl-[15px] text-[12.5px] text-muted-foreground">
+                        Affects{" "}
+                        {row.affectedProducts.map((product, index) => (
+                          <span key={product.id}>
+                            {index > 0 && ", "}
+                            <Link href={`/app/iq/menu/products/${product.id}`} className="underline underline-offset-2">
+                              {product.name}
+                            </Link>
+                          </span>
+                        ))}
+                      </p>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </PanelBody>
+      </Panel>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="flex flex-col gap-6 lg:col-span-2">
