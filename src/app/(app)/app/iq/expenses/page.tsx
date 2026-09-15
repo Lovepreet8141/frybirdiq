@@ -29,7 +29,7 @@ export default async function ExpensesPage({
   if (!staff) redirect("/sign-in");
   if (!(await staffCan("analytics.view"))) redirect("/app/orders");
   // Seeing the ledger is analytics; recording into it is finance.
-  const canRecord = await staffCan("finance.view");
+  const canRecord = await staffCan("finance.manage");
 
   const { range: requested, saved } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "mtd") as RangeKey;

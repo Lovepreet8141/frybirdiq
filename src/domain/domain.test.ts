@@ -15,7 +15,7 @@ import {
   fulfilmentsFor,
   isFulfilmentValid,
 } from "./order-channel";
-import { ROLES, authorize, can, permissionsFor } from "./permissions";
+import { ROLES, authorize, can, permissionsFor, type Role } from "./permissions";
 import { REJECTION_LABELS, REJECTION_MESSAGE, REJECTION_REASONS, isRejectionReason } from "./rejection";
 
 describe("order lifecycle", () => {
@@ -245,11 +245,48 @@ describe("permissions", () => {
   });
 
   it("recording money is a finance write, not an analytics read (roadmap 0.5)", () => {
-    // The expense and target actions gate on finance.view. An analyst reads
+    // The expense and target actions gate on finance.manage. An analyst reads
     // the P&L; they never write into it. Promotion writes sit on settings.manage.
-    expect(can(["ANALYST"], "finance.view")).toBe(false);
+    expect(can(["ANALYST"], "finance.manage")).toBe(false);
     expect(can(["CASHIER"], "settings.manage")).toBe(false);
-    expect(can(["MANAGER"], "finance.view")).toBe(true);
+    expect(can(["MANAGER"], "finance.manage")).toBe(true);
+  });
+
+  it("separates reading the till ledger from writing the books", () => {
+    // These were one permission. Reading what was taken today and changing what
+    // the P&L says are different questions, and holding one must not imply the
+    // other — so that widening the ledger read can never silently widen who can
+    // write an expense.
+    expect(can(["OWNER"], "finance.manage")).toBe(true);
+    expect(can(["MANAGER"], "finance.manage")).toBe(true);
+    expect(can(["CASHIER"], "finance.manage")).toBe(false);
+    expect(can(["KITCHEN"], "finance.manage")).toBe(false);
+    expect(can(["RIDER"], "finance.manage")).toBe(false);
+    expect(can(["INVENTORY"], "finance.manage")).toBe(false);
+  });
+
+  it("changed nobody's effective access when finance.manage was introduced", () => {
+    // The separation is a refactor, not a grant. Exactly the roles that could
+    // write before can write now — every role's answer for finance.manage
+    // matches what its answer for finance.view was when the split was made.
+    const wroteBefore: readonly Role[] = ["OWNER", "MANAGER"];
+    for (const role of ROLES) {
+      expect(can([role], "finance.manage"), role).toBe(wroteBefore.includes(role));
+    }
+  });
+
+  it("does not let admin acquire a finance write through a filter default", () => {
+    // ADMIN is PERMISSIONS minus a short exclusion list, so a new permission is
+    // granted to ADMIN by default. finance.manage is excluded explicitly to
+    // hold ADMIN where it was. That ADMIN cannot record an expense while a
+    // MANAGER can is a real oddity — recorded in PENDING-DECISIONS.md — but it
+    // is the owner's call to make, not a side effect of adding a permission.
+    expect(can(["ADMIN"], "finance.manage")).toBe(false);
+    expect(can(["ADMIN"], "finance.view")).toBe(false);
+    // And the exclusion is narrow: ADMIN keeps everything else it had.
+    for (const permission of ["audit.view", "staff.manage", "orders.refund", "menu.price"] as const) {
+      expect(can(["ADMIN"], permission), permission).toBe(true);
+    }
   });
 
   it("adding finance.view took nothing away from admin", () => {

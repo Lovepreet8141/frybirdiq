@@ -69,7 +69,7 @@ export default async function PnlPage({
   const staff = await getStaff();
   if (!staff) redirect("/sign-in");
   if (!(await staffCan("analytics.view"))) redirect("/app/orders");
-  const canRecord = await staffCan("finance.view");
+  const canRecord = await staffCan("finance.manage");
 
   const { range: requested } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "mtd") as RangeKey;

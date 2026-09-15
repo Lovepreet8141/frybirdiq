@@ -48,6 +48,24 @@ export const PERMISSIONS = [
   "reports.export",
   /** The payments ledger — every capture, by whom, by method. Read only. */
   "finance.view",
+  /**
+   * Writing money into the books: recording an expense, setting a food cost
+   * target.
+   *
+   * Separate from `finance.view` because they are different questions. Reading
+   * the till ledger is "may this person see what was taken today"; writing an
+   * expense is "may this person change what the P&L says". Those were the same
+   * check until now, and the conflation had a visible consequence: ADMIN is
+   * deliberately excluded from `finance.view` (see the note below), so an ADMIN
+   * — the second most trusted role, holding orders.refund, menu.price and
+   * staff.manage — could not record an expense while a MANAGER could.
+   *
+   * Granted here to exactly the roles that could already write, so this
+   * separation changes nobody's access. Whether ADMIN should now be able to
+   * record an expense is a real decision and is left open rather than made by
+   * a filter default — see PENDING-DECISIONS.md.
+   */
+  "finance.manage",
   "staff.manage",
   "settings.manage",
   "integrations.manage",
@@ -76,7 +94,19 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
   // finance.view is deliberately OWNER and MANAGER only — the people who run
   // the till day to day — and was added as an explicit decision, not by
   // letting it fall through this "everything but settings" rule.
-  ADMIN: PERMISSIONS.filter((permission) => permission !== "settings.manage" && permission !== "finance.view"),
+  //
+  // finance.manage is excluded on purpose too, and for a weaker reason: to hold
+  // ADMIN's access exactly where it was when the permission was introduced.
+  // Letting it fall through the filter would have handed ADMIN a capability it
+  // has never had, as a side effect of a refactor. That is the wrong way for
+  // anyone to gain the ability to write into the P&L. PENDING-DECISIONS.md
+  // carries the question.
+  ADMIN: PERMISSIONS.filter(
+    (permission) =>
+      permission !== "settings.manage" &&
+      permission !== "finance.view" &&
+      permission !== "finance.manage",
+  ),
 
   MANAGER: [
     "orders.view",
@@ -101,6 +131,7 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     "analytics.view",
     "reports.export",
     "finance.view",
+    "finance.manage",
   ],
 
   CASHIER: [
