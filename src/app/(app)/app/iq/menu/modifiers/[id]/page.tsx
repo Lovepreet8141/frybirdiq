@@ -5,6 +5,8 @@ import { getStaff, staffCan } from "@/lib/auth";
 import { listModifierGroupsAdmin } from "@/lib/repositories/menu-admin";
 import { ModifierGroupForm } from "@/components/iq/menu/modifier-group-form";
 import { ModifierList } from "@/components/iq/menu/modifier-list";
+import { Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
+import { Badge } from "@/components/ui/badge";
 
 export const metadata: Metadata = { title: "Edit modifier group — FRYBIRD IQ", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -20,22 +22,33 @@ export default async function EditModifierGroupPage({ params }: { params: Promis
   if (!group) notFound();
 
   return (
-    <div className="mx-auto w-full max-w-lg px-[var(--gutter)] py-8">
+    <div className="mx-auto w-full max-w-3xl px-[var(--gutter)] py-8">
       <Link href="/app/iq/menu/modifiers" className="text-sm text-muted-foreground underline underline-offset-2">
         ← Modifier groups
       </Link>
-      <h1 className="mt-3 font-heading text-2xl font-bold tracking-tight">{group.name}</h1>
-      <p className="mt-1 text-sm text-muted-foreground">{group.status === "DRAFT" ? "Draft — not visible yet." : "Live."}</p>
 
-      <div className="mt-6 flex flex-col gap-6">
-        <ModifierGroupForm id={id} initial={group} />
+      <div className="mt-3">
+        <h1 className="font-heading text-3xl font-bold tracking-tight">{group.name}</h1>
+        <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+          <Badge variant={group.status === "DRAFT" ? "warning" : "success"}>{group.status === "DRAFT" ? "Draft" : "Live"}</Badge>
+          {group.status === "DRAFT" ? "Not visible until published." : "Visible to the website and the counter."}
+        </p>
+      </div>
 
-        <div className="border-t border-border pt-6">
-          <h2 className="font-heading text-lg font-bold">Options</h2>
-          <div className="mt-3">
+      <div className="mt-6 flex flex-col gap-4">
+        <Panel>
+          <PanelHeader title="Group settings" description="Name, identity and how many options a customer must pick." />
+          <PanelBody className="pt-0">
+            <ModifierGroupForm id={id} initial={group} />
+          </PanelBody>
+        </Panel>
+
+        <Panel>
+          <PanelHeader title="Options" description="What this group offers, and the order they show in. Drag to reorder." meta={String(group.modifiers.length)} />
+          <PanelBody className="pt-0">
             <ModifierList groupId={id} modifiers={group.modifiers} />
-          </div>
-        </div>
+          </PanelBody>
+        </Panel>
       </div>
     </div>
   );

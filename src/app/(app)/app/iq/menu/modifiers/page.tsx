@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { Plus } from "lucide-react";
 import { ActionButton } from "@/components/iq/menu/action-button";
 import { MenuSectionNav } from "@/components/iq/menu/menu-section-nav";
-import { DataTrust } from "@/components/iq/ui";
+import { DataTrust, Panel, PanelBody } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
 import { EmptyState, PermissionDenied } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
@@ -87,62 +87,64 @@ export default async function ModifiersPage() {
           }
         />
       ) : (
-        <div className="overflow-hidden rounded-xl border border-border bg-panel">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Group</TableHead>
-                <TableHead className="hidden md:table-cell">Options</TableHead>
-                <TableHead className="hidden sm:table-cell">Rule</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">
-                  <span className="sr-only">Actions</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {groups.map((group) => {
-                const priced = group.modifiers.filter((modifier) => modifier.priceDelta !== 0n);
-                const preview = group.modifiers
-                  .slice(0, 3)
-                  .map((modifier) => modifier.name)
-                  .join(", ");
-                return (
-                  <TableRow key={group.id}>
-                    <TableCell>
-                      <Link href={`/app/iq/menu/modifiers/${group.id}`} className="flex flex-col gap-0.5 hover:underline">
-                        <span className="font-semibold">{group.name}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {group.modifiers.length} {group.modifiers.length === 1 ? "option" : "options"}
-                          {priced.length > 0 && ` · ${priced.length} with a price`}
-                        </span>
-                      </Link>
-                    </TableCell>
-                    <TableCell className="hidden max-w-[320px] truncate text-muted-foreground md:table-cell">
-                      {preview}
-                      {group.modifiers.length > 3 && ` +${group.modifiers.length - 3}`}
-                      {group.modifiers.length === 0 && "No options yet"}
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground sm:table-cell">{rules(group.minSelections, group.maxSelections)}</TableCell>
-                    <TableCell>
-                      <Badge variant={group.status === "DRAFT" ? "warning" : "success"}>{group.status === "DRAFT" ? "Draft" : "Live"}</Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        {group.status === "DRAFT" && canPublish && <ActionButton action={publishModifierGroupAction.bind(null, group.id)}>Publish</ActionButton>}
-                        {canEdit && (
-                          <ActionButton action={deleteModifierGroupAction.bind(null, group.id)} variant="destructive" confirmMessage={`Delete "${group.name}"? Products using it lose the option set.`}>
-                            Delete
-                          </ActionButton>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
+        <Panel>
+          <PanelBody flush className="pb-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Group</TableHead>
+                  <TableHead className="hidden md:table-cell">Options</TableHead>
+                  <TableHead className="hidden sm:table-cell">Rule</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {groups.map((group) => {
+                  const priced = group.modifiers.filter((modifier) => modifier.priceDelta !== 0n);
+                  const preview = group.modifiers
+                    .slice(0, 3)
+                    .map((modifier) => modifier.name)
+                    .join(", ");
+                  return (
+                    <TableRow key={group.id}>
+                      <TableCell>
+                        <Link href={`/app/iq/menu/modifiers/${group.id}`} className="flex flex-col gap-0.5 hover:underline">
+                          <span className="font-semibold">{group.name}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {group.modifiers.length} {group.modifiers.length === 1 ? "option" : "options"}
+                            {priced.length > 0 && ` · ${priced.length} with a price`}
+                          </span>
+                        </Link>
+                      </TableCell>
+                      <TableCell className="hidden max-w-[320px] truncate text-muted-foreground md:table-cell">
+                        {preview}
+                        {group.modifiers.length > 3 && ` +${group.modifiers.length - 3}`}
+                        {group.modifiers.length === 0 && "No options yet"}
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground sm:table-cell">{rules(group.minSelections, group.maxSelections)}</TableCell>
+                      <TableCell>
+                        <Badge variant={group.status === "DRAFT" ? "warning" : "success"}>{group.status === "DRAFT" ? "Draft" : "Live"}</Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {group.status === "DRAFT" && canPublish && <ActionButton action={publishModifierGroupAction.bind(null, group.id)}>Publish</ActionButton>}
+                          {canEdit && (
+                            <ActionButton action={deleteModifierGroupAction.bind(null, group.id)} variant="destructive" confirmMessage={`Delete "${group.name}"? Products using it lose the option set.`}>
+                              Delete
+                            </ActionButton>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </PanelBody>
+        </Panel>
       )}
 
       {groups.some((group) => group.modifiers.some((modifier) => modifier.priceDelta !== 0n)) && (

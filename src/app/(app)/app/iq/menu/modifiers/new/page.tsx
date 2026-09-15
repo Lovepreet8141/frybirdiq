@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getStaff, staffCan } from "@/lib/auth";
 import { ModifierGroupForm } from "@/components/iq/menu/modifier-group-form";
+import { Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 
 export const metadata: Metadata = { title: "New modifier group — FRYBIRD IQ", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -19,8 +20,14 @@ export default async function NewModifierGroupPage() {
       </Link>
       <h1 className="mt-3 font-heading text-2xl font-bold tracking-tight">New modifier group</h1>
       <p className="mt-1 text-sm text-muted-foreground">Add its options after creating it. Saves as a draft until published.</p>
+
       <div className="mt-6">
-        <ModifierGroupForm />
+        <Panel>
+          <PanelHeader title="Group settings" description="Name, identity and how many options a customer must pick." />
+          <PanelBody className="pt-0">
+            <ModifierGroupForm />
+          </PanelBody>
+        </Panel>
       </div>
     </div>
   );
