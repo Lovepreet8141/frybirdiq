@@ -3099,6 +3099,41 @@ table is never written), cash-register/reconciliation schema. *Why:*
 payment/financial stop conditions. *Recommend:* approve `finance.manage`
 now (pure tightening, zero schema); design refunds and registers together.
 
+*Decided 2026-09-15 — `finance.manage` half only.* Approved and shipped
+(`81df18e`): `recordExpense`/`setFoodCostTarget` and the three UI gates now
+check `finance.manage`, separate from `finance.view` (the ledger read).
+Granted to OWNER, MANAGER, **and ADMIN** — asked directly, since ADMIN
+already held `orders.refund` (the highest-trust money action in the
+table) but couldn't log that money was spent; that asymmetry read as an
+accident of `finance.manage` not existing yet, not a boundary anyone
+intended. Checked production first: zero ADMIN memberships exist today
+(only OWNER and RIDER are assigned, at all), so the change had zero live
+blast radius when it shipped. `finance.view` itself is untouched. The
+refund write path and cash-register/reconciliation schema are still
+undesigned — that half of this item stays open.
+
+**10. `getInvoice`'s missing org filter — needs a policy decision, not a
+repository fix.** *Found 2026-09-15, alongside `listSavedAddresses`
+(same audit).* Both queried without scoping by `org_id`, which
+`org.ts`'s own doc-comment and CLAUDE.md call a non-negotiable — Drizzle
+over `DATABASE_URL` bypasses RLS, so the repository layer is the only
+guard. `listSavedAddresses` was fixed (`fb37bec`): its one caller
+(`checkout`) already resolves an authenticated, org-scoped customer, so
+threading `orgId` through was a real second check, not a formality.
+`getInvoice` is different and was deliberately left alone: its only
+caller is the fully unauthenticated public receipt page
+(`/order/[id]/invoice`) — no session, no staff, no org context of any
+kind, just the order's UUID acting as the page's entire access control.
+Adding an `orgId` requirement there isn't mechanically possible without
+first deciding whether that customer-facing receipt page should require
+login — an authorization/UX policy call with real customer-experience
+impact, not something to guess at. *Recommend:* decide whether the
+UUID-as-bearer-token pattern is the intended design (common for
+guest-checkout order confirmation, and low-risk at one org today) or
+whether the invoice page should require a signed-in, verified customer
+session before it's shown — then the repository fix, if any, follows
+directly from that answer.
+
 **7. Settings edit forms.** *Requirement:* forms for what
 `/app/admin/restaurant` now shows. *Why:* `price_basis` in particular
 misstates revenue retroactively if flipped. *Recommend:* approve forms for
