@@ -3508,3 +3508,34 @@ confirmed intact. typecheck/lint/559 tests/RSC-boundary/contrast all
 clean. Deployed; service active, routes respond correctly, journal
 clean. Visual result not independently verifiable this session (no
 browser tooling) — implemented from source/tokens, disclosed as such.
+
+## Lane B — Deliveries + Expenses (`adf9f5f`), with one real catch
+
+Same stale-base reconciliation as Rewards, but this one had a genuine
+find: the lane's `iq/expenses/page.tsx` rewrite would have been a
+**regression**, not an improvement — its stale base predated the
+"Batch slice 2/4" work that already gave this exact page
+AnalyticsSectionNav, PeriodSwitch, four KpiTiles, a DataTrust line, a
+by-category BarList, and the shared Table component, none of which
+exist in the lane's version, which also still checked the pre-fix
+`finance.view`. Caught by diffing file-by-file against current
+kit-radix-nova before applying anything, not by trusting the lane's
+own "old style" framing (confirmed via ROADMAP.md's own marker, a
+hand-rolled `text-3xl` h1 — this file no longer has one, the lane's
+research target was already stale for this one specific file even
+though it was still accurate for the other five).
+
+**Merged:** deliveries/page.tsx, expenses/new/page.tsx (finance.manage
+preserved, confirmed), expense-form.tsx, delivery-card.tsx,
+delivery-panel.tsx — reviewed directly, all five genuine improvements,
+no functionality removed, amount-field submission behaviour (name,
+inputMode, required) confirmed unchanged.
+
+**Rejected, not merged:** iq/expenses/page.tsx — left exactly as it
+was; the smallest correct change here was no change.
+
+typecheck, lint (0 errors — 3 warnings observed were from Lane D's
+in-progress worktree bleeding into the scan, since `.claude/worktrees/`
+sits inside the repo tree; not part of this change), 559 tests
+(unchanged), RSC-boundary, contrast all clean. Deployed; service
+active, all three touched routes respond correctly, journal clean.
