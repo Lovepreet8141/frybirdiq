@@ -3919,3 +3919,79 @@ last real Phase 8 item. Remaining Phase 8 work (POS payment sheet and
 rewards keypad) stays deliberately untouched — it's inside POS, off
 limits without explicit authorization. Worktrees for this round fully
 cleaned up.
+
+## Lane A 3.4 — consumption on order (`e40a760`, `37b3f49`)
+
+The most consequential slice in this build-out so far: every completed
+order now actually moves stock. Reviewed in full before merging, not
+just gated on green checks — this touches money-adjacent correctness
+(stock, not cash directly, but the same discipline applies).
+
+`recordConsumption`/`reverseConsumption` added to `stock.ts`, wired
+into `advanceOrder`'s `to === "ACCEPTED"` and `to === "CANCELLED"`
+branches and into `rejectOrder` (which writes CANCELLED directly,
+bypassing `advanceOrder` entirely — confirmed the only other place in
+`orders.ts` that does). Both pre-approved decisions from the start of
+this session's mission implemented exactly as decided: trigger at
+ACCEPTED ("the moment the kitchen commits to cooking something is the
+moment the ingredients are actually used"), reversed on
+REJECTED/CANCELLED only — never REFUNDED, since a refund happens after
+the food may already be cooked and handed over, while a
+rejection/cancellation means it never was.
+
+D7 ("never double-count") verified as a real database guarantee, not
+application-level trust: `recordConsumption` targets the existing
+partial unique index (`inventory_movements_sale_line_unique`, SALE
+only, on `orderItemId`+`ingredientId`) with `onConflictDoNothing` — a
+retried or racing call is a silent no-op. `reverseConsumption` has no
+equivalent index (none exists for RETURN), so it locks the order's
+SALE rows with `SELECT ... FOR UPDATE` first and checks which already
+have a RETURN pointing at them via `reversalOfMovementId` — closing
+the same race a different way. Never mutates or deletes an original
+SALE row; a reversal is always a new RETURN movement, same
+immutability discipline as an order line or a recipe version.
+
+New pure function `consumptionQuantity` in `costing.ts`
+(`perBatchQuantityBase × lineQuantity ÷ yieldQuantity`, rounded
+half-up) — correctly divides by the recipe's yield rather than
+assuming 1:1, so a future batch recipe won't silently over-consume; 7
+new tests including the roadmap's own "2× Nashville Burger" example.
+
+Real judgment call, made correctly: consumption/reversal run *after*
+the order status write, not inside the same transaction as it, and
+their own failure is caught and logged, never propagated as
+`{ ok: false }`. An order being accepted or cancelled is operationally
+urgent; a broken recipe reference is a data-quality problem to surface
+separately (via `console.error`/`console.warn` for now — a real
+alerting surface for these warnings is future work, not scoped here).
+A line with no product, no recipe, or no saved recipe version consumes
+nothing and is reported as a warning, not an error — completely normal
+for a product without a recipe yet.
+
+**Real recurring friction fixed, not worked around again:** hit the
+same sibling-worktree `.next` lint pollution a third time this
+session. Fixed the actual cause instead of deleting the stray
+directory a fourth time — `eslint.config.mjs`'s `.next/**` ignore only
+ever matched the repo-root build output, never one nested inside
+`.claude/worktrees/<name>/.next`. Added `.claude/worktrees/**` to the
+ignore list (`37b3f49`) — each worktree gets its own lint run before
+merge anyway, so its build output was never actually in scope here.
+
+typecheck, lint, 599 tests (592 + 7 new), RSC-boundary, and `next
+build` all clean. No schema changes — every table this slice needs
+(`inventoryMovements`'s `orderId`/`orderItemId`/`recipeVersionId`/
+`reversalOfMovementId`, and the SALE-only unique index) was already in
+place, built ahead of time for exactly this slice. Deployed; service
+active. Verified live: `/app/orders` → 307, `/app/inventory` → 307.
+journalctl clean of anything but the known deploy-transition artifact
+and this integrator's own unauthenticated smoke checks.
+**Roadmap 3.4's own "done when" criterion is not yet verified with a
+real order** — accepting a real 2× Nashville Burger order and reading
+the resulting movement needs a human with a staff session and a live
+order to accept; route health is confirmed, the functional criterion
+is still open, same caveat as every other Phase 3 slice so far.
+
+Phase 3 status: 3.1 (recipe editor), 3.2 (stock movements), 3.3 (waste
+log), 3.4 (consumption on order) all merged and deployed. Remaining:
+3.5 (actual vs theoretical food cost — now unblocked, since it needs
+3.4's real movement data), 3.6 (Smart 86), 3.7 (purchase orders).
