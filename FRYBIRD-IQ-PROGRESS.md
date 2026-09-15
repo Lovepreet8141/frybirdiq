@@ -4087,3 +4087,74 @@ deploy-transition artifact.
 
 Phase 3 status: 3.1–3.6 all merged and deployed. Remaining: 3.7
 (purchase orders) — the last slice in this phase.
+
+## Lane A 3.7 — purchase orders (`26ea31a`) — Phase 3 complete
+
+The last slice in Phase 3. `src/lib/repositories/purchase-orders.ts`
+(new): `createPurchaseOrder` (DRAFT), `sendPurchaseOrder` (DRAFT→
+ORDERED — the roadmap's own colloquial "sent"; the real schema value
+is ORDERED, not SENT), `cancelPurchaseOrder`, `receivePurchaseOrder`
+(ORDERED→RECEIVED). UI at `/app/inventory/purchase-orders` (list, new,
+detail with status-gated send/receive/cancel).
+
+Receiving reuses, rather than duplicates, slice 3.2's stock-landing
+logic: split `receiveStock` into a thin wrapper plus a new
+`receiveStockInTx(tx, orgId, actorUserId, locationId, input)` — a
+purely mechanical extraction (confirmed line-for-line identical body),
+so the existing `receiveStockAction` call site is provably unaffected.
+`receivePurchaseOrder` calls `receiveStockInTx` once per line inside
+one transaction together with the PO's own status flip to RECEIVED,
+so a failure on any single line rolls back the whole receipt — every
+line is pre-validated before any write happens, so this only fires on
+a genuine concurrent-change race, not an ordinary bad input. Idempotent
+on `po:<id>:receive` via the same `withIdempotency` machinery cash
+settlement already uses — a double-tap on "Receive" returns the first
+result rather than landing stock twice.
+
+**Real scope addition beyond the literal brief, verified before
+accepting it**: also writes the receipt's `expenses` row(s) (Food
+supplies / Packaging, split by ingredient), the one door a purchase
+takes into the P&L per docs/INVENTORY-ARCHITECTURE.md D7. Checked the
+justification held before merging, not just the claim: `expenses.
+purchase_order_id` and its unique `(purchase_order_id, category_id)`
+constraint were confirmed to already exist in the schema, migrated in
+ahead of this slice for exactly this purpose — the same "component
+built ahead of time, waiting for its slice" pattern that's been true
+for nearly every piece of this Phase 3 build-out. Best-effort by
+design: a missing expense category is skipped rather than failing the
+receipt, since stock landing and the price updating — the actual
+roadmap "done when" — must never depend on category-naming being
+exact. Also caught, correctly: a purchase order carries no GST —
+`src/lib/tax/gst` prices what FRYBIRD charges a customer, and nothing
+in this build models input tax credit on a supplier bill, so
+`taxTotal` stays zero and `total` is exactly `subtotal`, matching the
+schema's own default rather than inventing a tax line that doesn't
+apply here.
+
+Partial receiving lightly supported via the pre-existing (but until
+now unused) `receivedQuantity` column — omitting an override means
+"received in full" (the roadmap's actual "done when" case and the
+one-click UI default); a lower override is accepted per line, but the
+PO still closes as RECEIVED either way, since the status check
+constraint has no partial state to move it to instead. Documented as a
+deliberate scope boundary, not a gap.
+
+typecheck, lint, 624 tests (unchanged — no new pure logic; the
+`receiveStock` split is behavior-preserving, confirmed by direct diff
+inspection, not just trusted), RSC-boundary, and `next build` all
+clean (including all 3 new purchase-order routes appearing in the
+build output, checked directly). No schema changes — `purchase_orders`/
+`purchase_order_items` were already complete. Deployed; service
+active. Verified live: `/app/inventory/purchase-orders` → 307,
+`/app/inventory/purchase-orders/new` → 307. journalctl clean of
+anything but the known deploy-transition artifact.
+
+**Phase 3 (Inventory core) is now complete: 3.1 through 3.7, all seven
+slices merged, gated, and deployed** — recipe editor, stock movements,
+waste log, consumption on order, actual-vs-theoretical food cost,
+Smart 86, and purchase orders. None of the "done when" criteria that
+require a real staff session and real data (accepting a real order,
+receiving a real delivery) have been exercised end-to-end by a human
+yet — every slice's route health and write-path correctness is
+verified, but the actual worked examples from the roadmap table are
+still owed a real walkthrough on frybirdiq.tech.
