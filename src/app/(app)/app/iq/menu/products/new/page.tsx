@@ -22,7 +22,6 @@ export default async function NewProductPage({ searchParams }: { searchParams: P
         ← Menu Control Center
       </Link>
       <h1 className="mt-3 font-heading text-2xl font-bold tracking-tight">New product</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Starts as a draft. Everything else — price, photos, modifiers — is set on the next screen.</p>
       <div className="mt-6">
         <ProductCreateForm categories={categories.map((c) => ({ id: c.id, name: c.name }))} initialCategoryId={initialCategoryId} />
       </div>
