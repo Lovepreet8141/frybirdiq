@@ -3539,3 +3539,41 @@ in-progress worktree bleeding into the scan, since `.claude/worktrees/`
 sits inside the repo tree; not part of this change), 559 tests
 (unchanged), RSC-boundary, contrast all clean. Deployed; service
 active, all three touched routes respond correctly, journal clean.
+
+## Lane A — Roadmap 3.1, recipe line editor (`72ad089`)
+
+Clean base (none of its 6 files touched by the divergence), applied
+without conflict. Extends `product-recipe-section.tsx`, which was
+already waiting for exactly this per its own prior comment. A save
+always writes a new `recipe_versions` row, never patches an existing
+one's items — the same immutable-snapshot discipline §51 requires for
+order lines, for the same reason (a later sale's consumption movement
+must never have its cost rewritten by a subsequent recipe edit).
+
+Reviewed directly, not delegated to three more subagents given the
+depth already required to understand it: org-scoping verified on both
+the product and every ingredient id (`CrossOrgReference` otherwise),
+atomic transaction, `recipes.edit` re-checked server-side independent
+of the client's `access` prop, recipe data only fetched at all when
+the viewer holds `recipes.view` (no query, nothing to leak, for a role
+that can't see it). Cost math is entirely the existing
+`costFromRate`/`productCost`/`scale` plus one new pure, tested function
+(`theoreticalRecipeCost`) — no reimplementation. Client-side live cost
+preview uses the same pure function, labelled "estimated, unsaved";
+what's persisted and later shown always comes from a fresh server read.
+Checked the one real precedent question before trusting it: bigint
+`Paise`/`MilliPaise` crossing the Server→Client boundary already
+matches `ProductPriceForm`'s existing, live `basePrice: Paise` prop —
+confirmed, not a new pattern. `getRecipeStatus` removed as dead code,
+confirmed via grep to have zero remaining callers after this change,
+not assumed.
+
+typecheck, lint, 563 tests (559 + 4 new), RSC-boundary all clean.
+Deployed; service active, route responds correctly, journal clean of
+anything but the known deploy-transition "Server Action not found"
+artifact. **Roadmap 3.1's own "Done when" criterion — Nashville Burger
+has a recipe with 6+ lines and a theoretical cost — is not yet
+verified**: the UI to do this now exists at `/app/iq/menu/products/
+<id>`, but populating a real recipe needs a human with a staff session,
+which this integrator doesn't have. Route health confirmed; the actual
+criterion is still open.
