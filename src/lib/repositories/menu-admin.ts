@@ -19,6 +19,7 @@ import {
   categories,
   categoryAvailability,
   comboItems,
+  ingredients,
   menuAuditLog,
   modifierGroups,
   modifiers,
@@ -26,13 +27,16 @@ import {
   productAvailability,
   productModifierGroups,
   products,
-  recipeItems,
+  recipeVersionItems,
+  recipeVersions,
   recipes,
   taxRates,
 } from "@/db/schema";
 import { type AvailabilityStatus, resolveAvailability } from "@/domain/menu-availability";
 import { businessDate } from "@/lib/dates";
-import { type Paise } from "@/lib/money";
+import { type MilliPaise, theoreticalRecipeCost } from "@/lib/iq/costing";
+import { type BaseUnit } from "@/lib/iq/units";
+import { type Paise, paise, scale } from "@/lib/money";
 import { planSwap } from "@/lib/menu-admin/reorder";
 
 /**
@@ -137,7 +141,7 @@ function stringifyLoggable(value: LoggableValue): string | null {
  * candidate field and this filters silently rather than making every call
  * site repeat the `oldValue !== newValue` check.
  */
-export type AuditEntityType = "category" | "product" | "modifierGroup" | "modifier" | "combo" | "availability";
+export type AuditEntityType = "category" | "product" | "modifierGroup" | "modifier" | "combo" | "availability" | "recipe";
 
 interface AuditIdentity {
   readonly orgId: string;
@@ -1325,25 +1329,204 @@ export async function getMenuHealth(orgId: string): Promise<MenuHealth> {
 }
 
 /* ------------------------------------------------------------------ */
-/* Recipe status — no quantities invented. See src/db/schema/menu.ts.  */
+/* Recipe — a product's ingredient lines, versioned on every save.     */
+/*                                                                     */
+/* `recipe_items` (see src/db/schema/inventory.ts) is the pre-         */
+/* versioning table its own schema comment describes as "left in       */
+/* place, empty, for a later, separately approved cleanup" — nothing   */
+/* here reads or writes it. Status, detail and cost all come from      */
+/* `recipeVersions` + `recipeVersionItems`, the same pair a SALE       */
+/* movement will name once Phase 3.4 consumes stock, so a recipe's     */
+/* cost today is provably the same recipe a later sale would have      */
+/* charged against.                                                    */
 /* ------------------------------------------------------------------ */
-
-export interface RecipeStatus {
-  readonly linked: boolean;
-  readonly ingredientCount: number;
-}
-
-export async function getRecipeStatus(orgId: string, productId: string): Promise<RecipeStatus> {
-  const [recipe] = await db().select({ id: recipes.id }).from(recipes).where(and(eq(recipes.orgId, orgId), eq(recipes.productId, productId))).limit(1);
-  if (!recipe) return { linked: false, ingredientCount: 0 };
-
-  const [count] = await db().select({ n: sql<number>`count(*)::int` }).from(recipeItems).where(eq(recipeItems.recipeId, recipe.id));
-  return { linked: true, ingredientCount: count?.n ?? 0 };
-}
 
 export async function createBareRecipe(orgId: string, productId: string, yieldQuantity: number): Promise<void> {
   await assertProductOwned(orgId, productId);
   await db().insert(recipes).values({ orgId, productId, yieldQuantity }).onConflictDoNothing({ target: recipes.productId });
+}
+
+/**
+ * Every ingredient a recipe line editor might need to show or offer.
+ *
+ * Includes inactive ingredients rather than filtering them out here: a
+ * retired ingredient can still be a line on an existing recipe, and the
+ * editor needs its name, unit and rate to render that line even though it
+ * should not appear as a choice for a *new* line. `isActive` lets the
+ * client draw that distinction instead of the repository silently deciding
+ * it by omission.
+ */
+export interface RecipeIngredientOption {
+  readonly id: string;
+  readonly name: string;
+  readonly baseUnit: BaseUnit;
+  readonly costPerBaseUnitMilli: MilliPaise;
+  readonly isPackaging: boolean;
+  readonly isActive: boolean;
+}
+
+export async function listIngredientOptions(orgId: string): Promise<readonly RecipeIngredientOption[]> {
+  const rows = await db()
+    .select({
+      id: ingredients.id,
+      name: ingredients.name,
+      baseUnit: ingredients.baseUnit,
+      costPerBaseUnitMilli: ingredients.costPerBaseUnitMilli,
+      isPackaging: ingredients.isPackaging,
+      isActive: ingredients.isActive,
+    })
+    .from(ingredients)
+    .where(eq(ingredients.orgId, orgId))
+    .orderBy(asc(ingredients.name));
+
+  // Only G, ML and PIECE are ever written to this column (validated at the
+  // boundary); the column type is the wider enum used across all of `units`.
+  return rows.map((row) => ({ ...row, baseUnit: row.baseUnit as BaseUnit, costPerBaseUnitMilli: row.costPerBaseUnitMilli as MilliPaise }));
+}
+
+export interface RecipeLineView {
+  readonly ingredientId: string;
+  readonly ingredientName: string;
+  readonly baseUnit: BaseUnit;
+  /** In the ingredient's base unit — recipe_version_items.quantity, unconverted. */
+  readonly quantityBase: number;
+  readonly cost: Paise;
+  /** False when the ingredient behind this line has never had a price recorded — the cost shown is not really zero, it is unknown. */
+  readonly priced: boolean;
+}
+
+export interface RecipeDetail {
+  readonly recipeId: string;
+  readonly linked: boolean;
+  readonly yieldQuantity: number;
+  /** Null until the first version is saved — a bare header consumes and costs nothing. */
+  readonly version: number | null;
+  readonly lines: readonly RecipeLineView[];
+  /** Cost of one full batch. Null, not zero, when there are no lines yet. */
+  readonly theoreticalCost: Paise | null;
+  /** `theoreticalCost` divided across the batch's yield — what one portion is estimated to cost. */
+  readonly costPerPortion: Paise | null;
+}
+
+export async function getRecipeDetail(orgId: string, productId: string): Promise<RecipeDetail | null> {
+  const [recipe] = await db().select().from(recipes).where(and(eq(recipes.orgId, orgId), eq(recipes.productId, productId))).limit(1);
+  if (!recipe) return null;
+
+  if (!recipe.currentVersionId) {
+    return { recipeId: recipe.id, linked: true, yieldQuantity: recipe.yieldQuantity, version: null, lines: [], theoreticalCost: null, costPerPortion: null };
+  }
+
+  const [[versionRow], rows] = await Promise.all([
+    db().select({ version: recipeVersions.version }).from(recipeVersions).where(eq(recipeVersions.id, recipe.currentVersionId)).limit(1),
+    db()
+      .select({
+        ingredientId: recipeVersionItems.ingredientId,
+        ingredientName: ingredients.name,
+        baseUnit: ingredients.baseUnit,
+        quantityBase: recipeVersionItems.quantity,
+        costPerBaseUnitMilli: ingredients.costPerBaseUnitMilli,
+      })
+      .from(recipeVersionItems)
+      .innerJoin(ingredients, eq(ingredients.id, recipeVersionItems.ingredientId))
+      .where(eq(recipeVersionItems.versionId, recipe.currentVersionId))
+      .orderBy(asc(ingredients.name)),
+  ]);
+
+  const costed = theoreticalRecipeCost(
+    rows.map((row) => ({ ingredientId: row.ingredientId, quantityBase: row.quantityBase, costPerBaseUnitMilli: row.costPerBaseUnitMilli as MilliPaise })),
+  );
+  const costByIngredient = new Map(costed.lines.map((line) => [line.ingredientId, line]));
+
+  return {
+    recipeId: recipe.id,
+    linked: true,
+    yieldQuantity: recipe.yieldQuantity,
+    version: versionRow?.version ?? null,
+    lines: rows.map((row) => {
+      const costedLine = costByIngredient.get(row.ingredientId);
+      return {
+        ingredientId: row.ingredientId,
+        ingredientName: row.ingredientName,
+        baseUnit: row.baseUnit as BaseUnit,
+        quantityBase: row.quantityBase,
+        cost: costedLine?.cost ?? paise(0),
+        priced: costedLine?.priced ?? false,
+      };
+    }),
+    theoreticalCost: costed.total,
+    costPerPortion: costed.total === null ? null : scale(costed.total, 1, Math.max(recipe.yieldQuantity, 1)),
+  };
+}
+
+export interface RecipeLineDraft {
+  readonly ingredientId: string;
+  /** In the ingredient's base unit — an integer greater than zero. */
+  readonly quantityBase: number;
+}
+
+export type SaveRecipeVersionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Records a new state of a recipe. Never edits `recipeVersionItems` for an
+ * existing version — a save always writes a fresh `recipeVersions` row,
+ * points `recipes.currentVersionId` at it, and marks the previous version
+ * superseded. §51's rule for order lines applies here for the same reason:
+ * a SALE movement that names a recipe version must never have its cost
+ * rewritten by a later recipe change.
+ */
+export async function saveRecipeVersion(orgId: string, productId: string, lines: readonly RecipeLineDraft[], actorUserId: string | null): Promise<SaveRecipeVersionResult> {
+  const ids = lines.map((line) => line.ingredientId);
+  if (new Set(ids).size !== ids.length) {
+    return { ok: false, error: "Each ingredient can only appear once in a recipe." };
+  }
+  for (const line of lines) {
+    if (!Number.isInteger(line.quantityBase) || line.quantityBase <= 0) {
+      return { ok: false, error: "Every line needs a whole-number quantity greater than zero." };
+    }
+  }
+
+  return db().transaction(async (tx) => {
+    const [product] = await tx.select({ id: products.id, name: products.name }).from(products).where(and(eq(products.id, productId), eq(products.orgId, orgId))).limit(1);
+    if (!product) throw new CrossOrgReference("product");
+
+    const [recipe] = await tx.select().from(recipes).where(and(eq(recipes.orgId, orgId), eq(recipes.productId, productId))).limit(1);
+    if (!recipe) return { ok: false, error: "Create the recipe before adding ingredients to it." };
+
+    if (ids.length > 0) {
+      const owned = await tx.select({ id: ingredients.id }).from(ingredients).where(and(eq(ingredients.orgId, orgId), inArray(ingredients.id, ids)));
+      if (owned.length !== new Set(ids).size) throw new CrossOrgReference("ingredient");
+    }
+
+    const [existing] = await tx.select({ n: sql<number>`count(*)::int` }).from(recipeVersions).where(eq(recipeVersions.recipeId, recipe.id));
+    const nextVersion = (existing?.n ?? 0) + 1;
+
+    if (recipe.currentVersionId) {
+      await tx.update(recipeVersions).set({ supersededAt: new Date() }).where(eq(recipeVersions.id, recipe.currentVersionId));
+    }
+
+    const [versionRow] = await tx
+      .insert(recipeVersions)
+      .values({ orgId, recipeId: recipe.id, version: nextVersion, yieldQuantity: recipe.yieldQuantity, createdBy: actorUserId })
+      .returning({ id: recipeVersions.id });
+    if (!versionRow) throw new Error("recipe: version insert returned no row");
+
+    if (lines.length > 0) {
+      await tx.insert(recipeVersionItems).values(lines.map((line) => ({ orgId, versionId: versionRow.id, ingredientId: line.ingredientId, quantity: line.quantityBase })));
+    }
+
+    await tx.update(recipes).set({ currentVersionId: versionRow.id, updatedAt: new Date() }).where(eq(recipes.id, recipe.id));
+
+    await logChanges({
+      orgId,
+      entityType: "recipe",
+      entityId: recipe.id,
+      entityName: product.name,
+      actorUserId,
+      changes: [{ field: "version", oldValue: nextVersion === 1 ? null : nextVersion - 1, newValue: nextVersion }],
+    });
+
+    return { ok: true };
+  });
 }
 
 /**

@@ -39,6 +39,7 @@ import {
   publishModifierGroup,
   publishProduct,
   removeComboItem,
+  saveRecipeVersion,
   setAvailabilityRule,
   setCategoryActive,
   setCategoryAvailabilityRule,
@@ -866,6 +867,46 @@ export async function createBareRecipeAction(productId: string, yieldQuantity: n
   try {
     const staff = await requirePermission("recipes.edit");
     await createBareRecipe(staff.orgId, productId, yieldQuantity);
+    revalidateMenuSurfaces();
+    return { ok: true };
+  } catch (error) {
+    return explain(error);
+  }
+}
+
+const recipeLineSchema = z.object({
+  ingredientId: z.string().trim().uuid(),
+  /** In the ingredient's base unit (g / ml / piece) — recipe_version_items.quantity, unconverted. */
+  quantity: z.number().int().positive().max(1_000_000, "That quantity looks too large — check the unit."),
+});
+
+const recipeLinesSchema = z.array(recipeLineSchema).min(1, "Add at least one ingredient before saving.").max(100);
+
+export interface RecipeLineActionInput {
+  readonly ingredientId: string;
+  readonly quantity: number;
+}
+
+/**
+ * Saves the product's recipe as a new version — never a patch to the last
+ * one. The client sends the whole line set it wants recorded; this is the
+ * only server-side check that quantities and ingredients are sane, the same
+ * division of trust every other write here draws (the client sends items,
+ * the server decides what they cost and whether they're allowed).
+ */
+export async function saveRecipeVersionAction(productId: string, lines: readonly RecipeLineActionInput[]): Promise<ActionResult> {
+  const parsed = recipeLinesSchema.safeParse(lines);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the recipe lines." };
+
+  try {
+    const staff = await requirePermission("recipes.edit");
+    const result = await saveRecipeVersion(
+      staff.orgId,
+      productId,
+      parsed.data.map((line) => ({ ingredientId: line.ingredientId, quantityBase: line.quantity })),
+      staff.userId,
+    );
+    if (!result.ok) return result;
     revalidateMenuSurfaces();
     return { ok: true };
   } catch (error) {

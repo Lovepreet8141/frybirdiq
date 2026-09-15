@@ -5,10 +5,11 @@ import { getStaff, staffCan } from "@/lib/auth";
 import { formatINR, paise } from "@/lib/money";
 import {
   getProductAdmin,
-  getRecipeStatus,
+  getRecipeDetail,
   listAvailabilityRules,
   listCategoriesAdmin,
   listComboItems,
+  listIngredientOptions,
   listModifierGroupsAdmin,
   listProductsAdmin,
   listTaxRates,
@@ -48,20 +49,27 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
 
   const canPrice = await staffCan("menu.price");
   const canPublish = await staffCan("menu.publish");
+  const canViewRecipe = await staffCan("recipes.view");
+  const canEditRecipe = await staffCan("recipes.edit");
 
   const { id } = await params;
   const product = await getProductAdmin(staff.orgId, id);
   if (!product) notFound();
 
-  const [categories, taxRates, groups, rules, library, recipeStatus, comboContents] = await Promise.all([
+  const [categories, taxRates, groups, rules, library, comboContents] = await Promise.all([
     listCategoriesAdmin(staff.orgId),
     listTaxRates(staff.orgId),
     listModifierGroupsAdmin(staff.orgId),
     listAvailabilityRules(staff.orgId, id),
     listMedia(staff.orgId),
-    getRecipeStatus(staff.orgId, id),
     product.isCombo ? listComboItems(staff.orgId, id) : Promise.resolve([]),
   ]);
+
+  // Not fetched at all for someone without recipes.view — no data to leak, and
+  // no query to run for a screen that would only tell them "no permission".
+  const [recipeDetail, ingredientOptions] = canViewRecipe
+    ? await Promise.all([getRecipeDetail(staff.orgId, id), listIngredientOptions(staff.orgId)])
+    : [null, []];
 
   const category = categories.find((c) => c.id === product.categoryId);
   const taxRate = taxRates.find((r) => r.id === product.taxRateId);
@@ -218,8 +226,29 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
           />
         </Section>
 
-        <Section title="Recipe" hint="Links this product to its ingredients, for costing and — later — stock-aware availability.">
-          <ProductRecipeSection productId={id} status={recipeStatus} />
+        <Section title="Recipe" hint="What this product is made of, and what it costs to make — stock-aware availability is later.">
+          <ProductRecipeSection
+            productId={id}
+            access={!canViewRecipe ? "none" : canEditRecipe ? "edit" : "view"}
+            recipe={
+              recipeDetail ?? {
+                linked: false,
+                yieldQuantity: 1,
+                version: null,
+                lines: [],
+                theoreticalCost: null,
+                costPerPortion: null,
+              }
+            }
+            ingredientOptions={ingredientOptions.map((option) => ({
+              id: option.id,
+              name: option.name,
+              baseUnit: option.baseUnit,
+              costPerBaseUnitMilli: option.costPerBaseUnitMilli,
+              isPackaging: option.isPackaging,
+              isActive: option.isActive,
+            }))}
+          />
         </Section>
       </div>
     </div>

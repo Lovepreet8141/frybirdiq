@@ -112,6 +112,51 @@ export function productCost(lineCosts: readonly Paise[]): Paise {
   return lineCosts.reduce<Paise>((total, line) => paise(total + line), ZERO);
 }
 
+export interface RecipeCostLineInput {
+  readonly ingredientId: string;
+  /** Usage in the ingredient's base unit — what a recipe line stores. */
+  readonly quantityBase: number;
+  /** The ingredient's stored usable rate. Zero means no price has ever been recorded. */
+  readonly costPerBaseUnitMilli: MilliPaise;
+}
+
+export interface RecipeCostLine {
+  readonly ingredientId: string;
+  readonly cost: Paise;
+  /** False when the rate behind this line's cost is zero because the ingredient has never been priced — the cost is not really nothing, it is unknown. */
+  readonly priced: boolean;
+}
+
+export interface RecipeCostResult {
+  readonly lines: readonly RecipeCostLine[];
+  /**
+   * Null when there are no lines to cost.
+   *
+   * A recipe with nothing in it is not a ₹0 recipe — it is one nobody has
+   * costed yet, and showing zero would read as "this product is free to
+   * make" instead of "nothing has been entered."
+   */
+  readonly total: Paise | null;
+}
+
+/**
+ * A recipe's theoretical cost: each line costed at the ingredient's current
+ * usable rate (`costFromRate`), summed with `productCost`. The one place
+ * that turns a set of recipe lines into a single cost figure, so the product
+ * page and anything else that shows this number computes it the same way.
+ */
+export function theoreticalRecipeCost(lines: readonly RecipeCostLineInput[]): RecipeCostResult {
+  if (lines.length === 0) {
+    return { lines: [], total: null };
+  }
+  const costed = lines.map((line) => ({
+    ingredientId: line.ingredientId,
+    cost: costFromRate(line.costPerBaseUnitMilli, line.quantityBase),
+    priced: line.costPerBaseUnitMilli !== 0n,
+  }));
+  return { lines: costed, total: productCost(costed.map((line) => line.cost)) };
+}
+
 /**
  * Movement between two purchase rates, in basis points.
  *

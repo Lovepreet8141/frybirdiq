@@ -9,6 +9,7 @@ import {
   purchaseRatePerBaseUnit,
   rateToPaise,
   recipeLineCost,
+  theoreticalRecipeCost,
   usableCostPerBaseUnit,
 } from "./costing";
 
@@ -149,6 +150,42 @@ describe("productCost", () => {
 
   it("is zero for a product with no recipe yet", () => {
     expect(productCost([])).toBe(0n);
+  });
+});
+
+describe("theoreticalRecipeCost", () => {
+  it("is null, not zero, for a recipe with no lines yet", () => {
+    // A recipe nobody has entered ingredients for is unknown, not free.
+    const result = theoreticalRecipeCost([]);
+    expect(result.total).toBeNull();
+    expect(result.lines).toEqual([]);
+  });
+
+  it("costs each line at the ingredient's stored rate and sums them", () => {
+    const chickenRate = purchaseRatePerBaseUnit(fromRupees("280"), 1000); // ignoring yield/waste for this fixture
+    const result = theoreticalRecipeCost([
+      { ingredientId: "chicken", quantityBase: 150, costPerBaseUnitMilli: chickenRate },
+      { ingredientId: "bun", quantityBase: 1, costPerBaseUnitMilli: 1_200_000n as never },
+    ]);
+    expect(result.lines).toHaveLength(2);
+    expect(result.total).toBe(costFromRate(chickenRate, 150) + costFromRate(1_200_000n as never, 1));
+    expect(formatINR(result.total ?? paise(0))).not.toBe("₹0");
+  });
+
+  it("flags a line as unpriced when the ingredient has never had a price recorded", () => {
+    const result = theoreticalRecipeCost([{ ingredientId: "new-ingredient", quantityBase: 50, costPerBaseUnitMilli: 0n as never }]);
+    expect(result.lines[0]?.priced).toBe(false);
+    expect(result.lines[0]?.cost).toBe(0n);
+    // The line still reports ₹0 honestly — it really has cost nothing to date —
+    // but `priced: false` is what lets a screen tell "nothing" from "unknown".
+    expect(result.total).toBe(0n);
+  });
+
+  it("treats packaging like any other line — it adds to the total", () => {
+    const boxRate = purchaseRatePerBaseUnit(fromRupees("35"), 100); // ₹35 for 100 boxes
+    const result = theoreticalRecipeCost([{ ingredientId: "box", quantityBase: 1, costPerBaseUnitMilli: boxRate }]);
+    expect(result.lines[0]?.priced).toBe(true);
+    expect(result.total).toBe(costFromRate(boxRate, 1));
   });
 });
 
