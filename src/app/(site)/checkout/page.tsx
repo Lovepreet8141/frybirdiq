@@ -10,6 +10,7 @@ import type { SavedAddressOption } from "@/components/delivery/delivery-fields";
 import { getPricedCart } from "@/lib/cart";
 import { readRememberedAddress } from "@/lib/cart/remembered-address";
 import { readRememberedContact } from "@/lib/cart/remembered-contact";
+import { scheduleDays } from "@/lib/cart/scheduled-time";
 import { getCustomer } from "@/lib/customer";
 import { toLatLng } from "@/lib/delivery";
 import { isLoyaltyEnabled, maxRedeemable } from "@/lib/loyalty";
@@ -38,6 +39,15 @@ export default async function CheckoutPage() {
 
   // Minted per render. Resubmitting the same page cannot create a second order.
   const idempotencyKey = randomUUID();
+  // Computed here, not in the client, so "now" is the server's clock and
+  // there is nothing for the browser to compute (or mis-hydrate) itself —
+  // the picker just renders what it is given, and `placeOrder` re-derives
+  // the same window server-side from its own clock at submit time regardless.
+  const scheduleOptions = scheduleDays(new Date(), org.openingTime, org.closingTime).map((day) => ({
+    date: day.date,
+    label: day.label,
+    slots: day.slots.map((slot) => ({ iso: slot.at.toISOString(), label: slot.label })),
+  }));
   const methods = availableMethods({ cash: org.cashEnabled, online: org.onlineEnabled });
   const delivery = await getDeliverySettings();
   const shop = delivery?.shop ? toLatLng(delivery.shop) : null;
@@ -95,6 +105,7 @@ export default async function CheckoutPage() {
           contact={contact}
           fromAccount={Boolean(customer)}
           methods={methods}
+          scheduleOptions={scheduleOptions}
           extras={
             <CheckoutExtras
               promotion={cart.promotion ? { code: cart.promotion.code, name: cart.promotion.name } : null}

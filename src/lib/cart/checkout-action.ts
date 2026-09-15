@@ -32,6 +32,10 @@ export async function submitCheckout(_previous: CheckoutState, formData: FormDat
     // Minted when the page rendered. A double-tap sends the same key twice and
     // the second returns the first order rather than creating another. §17.
     idempotencyKey: String(formData.get("idempotencyKey") ?? ""),
+    // "ASAP" or "SCHEDULED"; scheduledFor is only read when the latter, and
+    // re-validated on the server regardless of what the client sent.
+    when: String(formData.get("when") ?? "ASAP"),
+    scheduledFor: String(formData.get("scheduledFor") ?? "") || undefined,
     // "COD" or "ONLINE". The server checks it against what is actually offered.
     payment: String(formData.get("payment") ?? "COD"),
   });

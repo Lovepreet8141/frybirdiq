@@ -64,6 +64,8 @@ export interface StaffOrder {
   tableName: string | null;
   placedBy: string | null;
   placedAt: string | null;
+  /** The customer's own requested time — distinct from `estimatedReadyAt`, the kitchen's promise. Null on an ASAP order. */
+  scheduledFor: string | null;
   notes: string | null;
   items: { name: string; quantity: number; modifiers: string[] }[];
   invoiceNumber: string | null;
@@ -198,6 +200,18 @@ export function OrderCard({
           </span>
         </div>
       </div>
+
+      {order.scheduledFor && order.status !== "COMPLETED" && (
+        <p className="tabular flex items-center gap-1.5 text-sm font-semibold text-flag">
+          <Clock className="size-4" aria-hidden="true" />
+          Requested for{" "}
+          {new Date(order.scheduledFor).toLocaleTimeString("en-IN", {
+            timeZone: "Asia/Kolkata",
+            hour: "numeric",
+            minute: "2-digit",
+          })}
+        </p>
+      )}
 
       {order.estimatedReadyAt && order.status !== "COMPLETED" && (
         <p className="tabular flex items-center gap-1.5 text-sm font-semibold">

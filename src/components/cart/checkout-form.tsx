@@ -2,12 +2,26 @@
 
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
-import { Bike, CreditCard, Loader2, Store, Wallet } from "lucide-react";
+import { Bike, Clock, CreditCard, Loader2, Store, Wallet } from "lucide-react";
 import { type CheckoutState, submitCheckout } from "@/lib/cart/checkout-action";
 import { DeliveryFields, type SavedAddressOption } from "@/components/delivery/delivery-fields";
 import type { Point } from "@/components/delivery/map";
 import type { CheckoutMethod } from "@/lib/payments";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+
+export interface ScheduleSlotOption {
+  /** ISO instant — what actually gets submitted. */
+  readonly iso: string;
+  /** "7:30 pm", the server's own formatting — the client never reformats a time it didn't compute. */
+  readonly label: string;
+}
+
+export interface ScheduleDayOption {
+  readonly date: string;
+  readonly label: string;
+  readonly slots: readonly ScheduleSlotOption[];
+}
 
 function SubmitButton({ label }: { label: string }) {
   const { pending } = useFormStatus();
@@ -48,6 +62,7 @@ export function CheckoutForm({
   fromAccount,
   extras,
   methods,
+  scheduleOptions,
 }: {
   idempotencyKey: string;
   /** Where the outlet is. Null when it has not been placed on the map. */
@@ -63,9 +78,28 @@ export function CheckoutForm({
   extras: React.ReactNode;
   /** What the server offers, online first when a gateway is set up. */
   methods: readonly CheckoutMethod[];
+  /**
+   * The days and time slots a customer may schedule for — computed on the
+   * server (`scheduleDays`, from the org's real hours and the server's own
+   * clock) and handed down ready to render. Nothing here is computed in the
+   * browser: no client clock to mis-hydrate, and `placeOrder` re-derives the
+   * same window itself at submit time regardless of what this list said.
+   */
+  scheduleOptions: readonly ScheduleDayOption[];
 }) {
   const [payment, setPayment] = useState<"COD" | "ONLINE">(methods[0]?.choice ?? "COD");
   const [fulfilment, setFulfilment] = useState<"TAKEAWAY" | "DELIVERY">("TAKEAWAY");
+
+  // ASAP (unchanged default) or a chosen time.
+  const [when, setWhen] = useState<"ASAP" | "SCHEDULED">("ASAP");
+  // Defaults to the first day that actually has a slot left — "today" can be
+  // empty this close to closing, and defaulting to an empty day would make
+  // "Choose a time" look broken the moment it opens.
+  const firstUsableDay = scheduleOptions.find((day) => day.slots.length > 0) ?? scheduleOptions[0] ?? null;
+  const [selectedDate, setSelectedDate] = useState<string | null>(firstUsableDay?.date ?? null);
+  const [selectedSlot, setSelectedSlot] = useState<string | null>(firstUsableDay?.slots[0]?.iso ?? null);
+
+  const selectedDay = scheduleOptions.find((day) => day.date === selectedDate) ?? null;
   /*
    * Someone we already know is not asked again.
    *
@@ -82,6 +116,8 @@ export function CheckoutForm({
       <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
       <input type="hidden" name="fulfilment" value={fulfilment} />
       <input type="hidden" name="payment" value={payment} />
+      <input type="hidden" name="when" value={when} />
+      {when === "SCHEDULED" && selectedSlot && <input type="hidden" name="scheduledFor" value={selectedSlot} />}
 
       {/*
         Collection or delivery. Rendered as a choice only when delivery is
@@ -123,6 +159,99 @@ export function CheckoutForm({
           </div>
         </fieldset>
       )}
+
+      {/*
+        ASAP (unchanged default) or a chosen time. The same radio-card shape
+        as "How would you like it?" above, so this reads as one more choice
+        in the same list rather than a different kind of control.
+      */}
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-sm font-semibold">When?</legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {(
+            [
+              { value: "ASAP" as const, icon: Clock, label: "As soon as possible", detail: "The usual" },
+              { value: "SCHEDULED" as const, icon: Clock, label: "Choose a time", detail: "Pick today or tomorrow" },
+            ] satisfies { value: "ASAP" | "SCHEDULED"; icon: typeof Clock; label: string; detail: string }[]
+          ).map((option) => (
+            <label
+              key={option.value}
+              className={cn(
+                "flex min-h-[56px] cursor-pointer items-center gap-3 rounded-md border px-4 py-3 transition-colors duration-[var(--duration-micro)]",
+                when === option.value ? "border-primary bg-primary/10" : "border-border bg-surface hover:border-border-strong",
+              )}
+            >
+              <input
+                type="radio"
+                name="whenChoice"
+                value={option.value}
+                checked={when === option.value}
+                onChange={() => setWhen(option.value)}
+                className="size-4 accent-[var(--primary)]"
+              />
+              <option.icon className="size-4 shrink-0 text-primary" aria-hidden="true" />
+              <span className="flex flex-col">
+                <span className="font-semibold">{option.label}</span>
+                <span className="text-sm text-muted-foreground">{option.detail}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+
+        {when === "SCHEDULED" && (
+          <div className="grid gap-2 pt-1 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="schedule-date" className="text-sm font-semibold">
+                Date
+              </label>
+              <Select
+                value={selectedDate ?? undefined}
+                onValueChange={(date) => {
+                  setSelectedDate(date);
+                  const day = scheduleOptions.find((d) => d.date === date);
+                  setSelectedSlot(day?.slots[0]?.iso ?? null);
+                }}
+              >
+                <SelectTrigger id="schedule-date" className="h-[52px] w-full text-base">
+                  <SelectValue placeholder="Choose a date" />
+                </SelectTrigger>
+                <SelectContent>
+                  {scheduleOptions.map((day) => (
+                    <SelectItem key={day.date} value={day.date} disabled={day.slots.length === 0}>
+                      {day.label}
+                      {day.slots.length === 0 ? " — no times left" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="schedule-time" className="text-sm font-semibold">
+                Time
+              </label>
+              <Select value={selectedSlot ?? undefined} onValueChange={setSelectedSlot} disabled={!selectedDay || selectedDay.slots.length === 0}>
+                <SelectTrigger id="schedule-time" className="h-[52px] w-full text-base">
+                  <SelectValue placeholder="Choose a time" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedDay?.slots.map((slot) => (
+                    <SelectItem key={slot.iso} value={slot.iso}>
+                      {slot.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        )}
+
+        {fieldErrors.scheduledFor && (
+          <p role="alert" className="text-sm text-foreground">
+            {fieldErrors.scheduledFor}
+          </p>
+        )}
+      </fieldset>
 
       {fulfilment === "DELIVERY" && shop && <DeliveryFields shop={shop} saved={savedAddresses} />}
       {state.status === "error" && !state.fieldErrors && (

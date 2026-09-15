@@ -38,6 +38,7 @@ export default async function StaffOrdersPage({ searchParams }: { searchParams: 
               fulfilment: order.fulfilment,
               invoiceNumber: order.invoiceNumber,
               estimatedReadyAt: order.estimatedReadyAt?.toISOString() ?? null,
+              scheduledFor: order.scheduledFor?.toISOString() ?? null,
               delivery: order.delivery ? { ...order.delivery } : null,
               items: [...order.items].map((item) => ({ ...item, modifiers: [...item.modifiers] })),
             }) as StaffOrder,

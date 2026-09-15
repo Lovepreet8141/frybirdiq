@@ -95,6 +95,9 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           minute: "2-digit",
         })}`
     : null;
+  const scheduledLabel = order.scheduledFor
+    ? `You asked for ${order.scheduledFor.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" })}`
+    : null;
   const cancelled = status === "CANCELLED" || status === "FAILED" || status === "REFUNDED";
   const currentIndex = STEPS.findIndex((step) => !(step.reached as readonly string[]).includes(status));
   const activeIndex = currentIndex === -1 ? STEPS.length - 1 : Math.max(0, currentIndex - 1);
@@ -140,6 +143,13 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
         refresh itself, so a relative figure would quietly become a lie while
         somebody sat looking at it.
       */}
+      {!cancelled && scheduledLabel && status !== "COMPLETED" && (
+        <p className="mt-4 flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+          <Clock className="size-4 shrink-0" aria-hidden="true" />
+          {scheduledLabel}
+        </p>
+      )}
+
       {!cancelled && readyLabel && status !== "COMPLETED" && (
         <p className="mt-4 flex items-center gap-2 rounded-lg border border-border bg-surface px-4 py-3 font-semibold">
           <Clock className="size-4 shrink-0 text-primary" aria-hidden="true" />

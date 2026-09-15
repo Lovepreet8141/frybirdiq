@@ -21,6 +21,7 @@ import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransit
 import type { Role } from "@/domain/permissions";
 import { REJECTION_LABELS, type RejectionReason } from "@/domain/rejection";
 import { businessDate } from "@/lib/dates";
+import { isValidScheduledTime } from "@/lib/cart/scheduled-time";
 import { isSupabaseConfigured } from "@/lib/env";
 import { type Paise, ZERO, formatINR, paise, subtract } from "@/lib/money";
 import { type PricedOrder, priceOrder } from "@/lib/pricing";
@@ -84,6 +85,18 @@ export const checkoutSchema = z.object({
   idempotencyKey: z.string().uuid(),
   /** How the customer pays: online now (Razorpay) or on collection / at the door. Roadmap 1.2. */
   payment: z.enum(["COD", "ONLINE"]).default("COD"),
+
+  /**
+   * ASAP (the only choice before this) or a customer-picked time —
+   * `orders.scheduledFor`, the requested/manual time distinct from
+   * `estimatedReadyAt` (the kitchen's own promise, set at accept) and
+   * `completedAt` (when it actually left). `scheduledFor` is a plain ISO
+   * string here; the actual "is this a real, honourable slot" check happens
+   * server-side against the org's real hours and the server's own clock, in
+   * `placeOrder` below — never trusted from what the client computed.
+   */
+  when: z.enum(["ASAP", "SCHEDULED"]).default("ASAP"),
+  scheduledFor: z.string().optional(),
 });
 
 export type CheckoutInput = z.infer<typeof checkoutSchema>;
@@ -206,6 +219,25 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   const channel = "ONLINE" as const;
   const fulfilment = details.fulfilment;
   assertChannelFulfilment(channel, fulfilment);
+
+  /*
+   * A manual requested time, re-validated here against the server's own
+   * clock and the org's real hours — never trusted from what the client's
+   * picker computed. ASAP (the default) leaves `scheduledFor` unset,
+   * exactly the existing behaviour, unchanged.
+   */
+  let scheduledFor: Date | null = null;
+  if (details.when === "SCHEDULED") {
+    const candidate = details.scheduledFor ? new Date(details.scheduledFor) : null;
+    if (!candidate || !isValidScheduledTime(candidate, new Date(), org.openingTime, org.closingTime)) {
+      return {
+        ok: false,
+        error: "That time isn't available anymore. Pick another.",
+        fieldErrors: { scheduledFor: "Choose a time within opening hours, at least 20 minutes from now." },
+      };
+    }
+    scheduledFor = candidate;
+  }
 
   /*
    * The delivery fee is recomputed from the pin, right now, on the server.
@@ -378,6 +410,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     actorUserId: null,
     eventReason: `Placed on the website for ${fulfilment === "DELIVERY" ? "delivery" : "collection"}`,
     extra: {
+      scheduledFor,
       deliveryAddress:
         fulfilment === "DELIVERY"
           ? { line1: details.addressLine1 ?? "", landmark: details.landmark ?? "" }
@@ -754,6 +787,8 @@ export interface OrderView {
    * give two different answers in one pass.
    */
   readonly readyEta: { at: Date; passed: boolean } | null;
+  /** What the customer asked for at checkout, when they chose a time instead of ASAP. */
+  readonly scheduledFor: Date | null;
   readonly grandTotal: bigint;
   readonly placedAt: Date | null;
   readonly items: readonly { name: string; quantity: number; total: bigint; modifiers: string[] }[];
@@ -827,6 +862,7 @@ export async function getOrder(id: string): Promise<OrderView | null> {
     readyEta: order.estimatedReadyAt
       ? { at: order.estimatedReadyAt, passed: order.estimatedReadyAt.getTime() <= Date.now() }
       : null,
+    scheduledFor: order.scheduledFor,
     grandTotal: order.grandTotal,
     placedAt: order.placedAt,
     items: items.map((item) => ({
@@ -859,6 +895,8 @@ export interface StaffOrderView {
   readonly isPaid: boolean;
   readonly invoiceNumber: string | null;
   readonly estimatedReadyAt: Date | null;
+  /** The customer's own requested time, when they chose one instead of ASAP — distinct from `estimatedReadyAt` (the kitchen's promise). */
+  readonly scheduledFor: Date | null;
   readonly placedAt: Date | null;
   readonly notes: string | null;
   /** Where it came from — the website, or the counter as dine-in/takeaway. */
@@ -944,6 +982,7 @@ export async function listActiveOrders(orgId: string): Promise<readonly StaffOrd
     isPaid: paidOrderIds.has(row.id),
     invoiceNumber: row.invoiceNumber,
     estimatedReadyAt: row.estimatedReadyAt,
+    scheduledFor: row.scheduledFor,
     placedAt: row.placedAt,
     notes: row.notes,
     delivery:
