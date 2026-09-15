@@ -51,3 +51,6 @@ frybird-iq/
 # reference (its blocks are re-composed over our own primitives, never copied
 # in). Licensed, and carries its own node_modules — never committed.
 shadcn-ui-kit-dashboard/
+
+# Scratch commit-message files written by tooling. Never part of a change.
+.commitmsg
