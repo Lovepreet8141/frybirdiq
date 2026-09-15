@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Truck } from "lucide-react";
+import { ClipboardList, Truck } from "lucide-react";
 import { IngredientsTable } from "@/components/inventory/ingredients-table";
 import { BarList, type BarRow, type Capability, CapabilityPanel, DataTrust, KpiTile, Panel, PanelBody, PanelHeader, SectionHeading, StatusWord } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
@@ -24,7 +24,7 @@ const CAPABILITIES: readonly Capability[] = [
   { name: "Stock on hand and movements", connected: false, note: "Needs receive, adjust and count — roadmap 3.2" },
   { name: "Waste log", connected: true, note: "Record from /app/inventory/waste — KITCHEN can use it" },
   { name: "Consumption on order", connected: false, note: "Roadmap 3.4, after recipes" },
-  { name: "Purchase orders and receiving", connected: false, note: "Roadmap 3.7" },
+  { name: "Purchase orders and receiving", connected: true, note: "Draft, send and receive from /app/inventory/purchase-orders — receiving lands stock and updates price" },
 ];
 
 /**
@@ -77,12 +77,20 @@ export default async function InventoryPage() {
         title="Inventory"
         description="What the kitchen buys, who it comes from, and what each usable unit really costs after yield and waste."
         actions={
-          <Button variant="outline" asChild>
-            <Link href="/app/inventory/suppliers">
-              <Truck data-icon="inline-start" aria-hidden="true" />
-              Suppliers
-            </Link>
-          </Button>
+          <>
+            <Button variant="outline" asChild>
+              <Link href="/app/inventory/purchase-orders">
+                <ClipboardList data-icon="inline-start" aria-hidden="true" />
+                Purchase orders
+              </Link>
+            </Button>
+            <Button variant="outline" asChild>
+              <Link href="/app/inventory/suppliers">
+                <Truck data-icon="inline-start" aria-hidden="true" />
+                Suppliers
+              </Link>
+            </Button>
+          </>
         }
       />
 

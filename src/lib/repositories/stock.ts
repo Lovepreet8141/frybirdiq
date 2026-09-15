@@ -400,58 +400,72 @@ export async function receiveStock(orgId: string, actorUserId: string, input: Re
   const locationId = await getStoreLocationId(orgId);
   if (!locationId) return { ok: false, error: "No location is set up for this organization yet." };
 
-  return db().transaction(async (tx) => {
-    const priceResult = await recordIngredientPriceInTx(tx, orgId, actorUserId, {
+  return db().transaction((tx) => receiveStockInTx(tx, orgId, actorUserId, locationId, input));
+}
+
+/**
+ * The body of `receiveStock`, taking an existing transaction and an explicit
+ * `locationId` rather than resolving one — same shape as
+ * `recordIngredientPriceInTx` relative to `recordIngredientPrice` above.
+ *
+ * Purchase-order receiving (roadmap 3.7) calls this once per line, inside
+ * its *own* transaction, with the PO's own `locationId` (a PO already knows
+ * which location it's for — re-resolving the org's "current" location here
+ * would be a second, possibly different, answer to the same question). That
+ * keeps every line's movement and the PO's own status update atomic: one
+ * failed line rolls back everything, never a half-received order.
+ */
+export async function receiveStockInTx(tx: DbTx, orgId: string, actorUserId: string, locationId: string, input: ReceiveStockInput): Promise<StockWriteResult> {
+  const priceResult = await recordIngredientPriceInTx(tx, orgId, actorUserId, {
+    ingredientId: input.ingredientId,
+    purchaseQuantity: input.purchaseQuantity,
+    purchaseUnit: input.purchaseUnit,
+    purchaseCost: input.purchaseCost,
+    supplierId: input.supplierId,
+  });
+  if (!priceResult.ok) return priceResult;
+
+  // Already proven convertible by recordIngredientPriceInTx above.
+  const quantityBase = toBaseUnits(input.purchaseQuantity, input.purchaseUnit);
+  const rawRate = purchaseRatePerBaseUnit(input.purchaseCost, quantityBase);
+  const costPerBaseUnit = rateToPaise(rawRate);
+
+  const [movement] = await tx
+    .insert(inventoryMovements)
+    .values({
+      orgId,
       ingredientId: input.ingredientId,
+      locationId,
+      type: "PURCHASE",
+      quantity: quantityBase,
+      costPerBaseUnit,
+      totalCost: input.purchaseCost,
+      actorUserId,
+      notes: input.notes,
+    })
+    .returning({ id: inventoryMovements.id });
+  if (!movement) throw new Error("stock: purchase movement insert returned no row");
+
+  const onHand = await applyMovementDelta(tx, orgId, input.ingredientId, locationId, quantityBase);
+
+  await tx.insert(auditLogs).values({
+    orgId,
+    actorUserId,
+    action: "stock_received",
+    entity: "inventory_movements",
+    entityId: movement.id,
+    after: {
+      ingredientId: input.ingredientId,
+      quantityBase,
       purchaseQuantity: input.purchaseQuantity,
       purchaseUnit: input.purchaseUnit,
-      purchaseCost: input.purchaseCost,
+      purchaseCost: input.purchaseCost.toString(),
       supplierId: input.supplierId,
-    });
-    if (!priceResult.ok) return priceResult;
-
-    // Already proven convertible by recordIngredientPriceInTx above.
-    const quantityBase = toBaseUnits(input.purchaseQuantity, input.purchaseUnit);
-    const rawRate = purchaseRatePerBaseUnit(input.purchaseCost, quantityBase);
-    const costPerBaseUnit = rateToPaise(rawRate);
-
-    const [movement] = await tx
-      .insert(inventoryMovements)
-      .values({
-        orgId,
-        ingredientId: input.ingredientId,
-        locationId,
-        type: "PURCHASE",
-        quantity: quantityBase,
-        costPerBaseUnit,
-        totalCost: input.purchaseCost,
-        actorUserId,
-        notes: input.notes,
-      })
-      .returning({ id: inventoryMovements.id });
-    if (!movement) throw new Error("stock: purchase movement insert returned no row");
-
-    const onHand = await applyMovementDelta(tx, orgId, input.ingredientId, locationId, quantityBase);
-
-    await tx.insert(auditLogs).values({
-      orgId,
-      actorUserId,
-      action: "stock_received",
-      entity: "inventory_movements",
-      entityId: movement.id,
-      after: {
-        ingredientId: input.ingredientId,
-        quantityBase,
-        purchaseQuantity: input.purchaseQuantity,
-        purchaseUnit: input.purchaseUnit,
-        purchaseCost: input.purchaseCost.toString(),
-        supplierId: input.supplierId,
-        onHand,
-      },
-    });
-
-    return { ok: true, onHand, delta: quantityBase };
+      onHand,
+    },
   });
+
+  return { ok: true, onHand, delta: quantityBase };
 }
 
 export interface AdjustStockInput {
