@@ -155,6 +155,15 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     "orders.cancel",
     "orders.discount",
     "kitchen.view",
+    /*
+     * A one-person counter is also the kitchen at slow hours — the same
+     * person rings up the order and calls it done on the KDS. Withholding
+     * kitchen.update forced a second login for a step one person is already
+     * doing. Owner-approved (roadmap 6): CASHIER can update ticket status,
+     * but nothing here hands them the rest of the kitchen — recipes stay
+     * out of reach.
+     */
+    "kitchen.update",
     "delivery.view",
     "delivery.complete",
     "menu.view",
@@ -194,6 +203,27 @@ export function permissionsFor(role: Role): readonly Permission[] {
 /** Whether any of the actor's roles grants the permission. */
 export function can(roles: readonly Role[], permission: Permission): boolean {
   return roles.some((role) => ROLE_PERMISSIONS[role].includes(permission));
+}
+
+/**
+ * Whether someone holding `actorRoles` may grant `targetRole` to another
+ * account.
+ *
+ * `staff.manage` says "may touch the roster" and nothing about which roles
+ * that person may hand out — unchecked, it would let an ADMIN mint a fresh
+ * OWNER over their own head. The rule: never grant a role that can do
+ * something the granter cannot already do themselves.
+ *
+ * Checked against the real permission sets `permissionsFor` returns, never a
+ * second, hand-maintained rank, so it can never drift from what a role
+ * actually unlocks — and a quirk like `finance.view` being MANAGER-and-OWNER
+ * only (deliberately not ADMIN, see the comment above `ROLE_PERMISSIONS`) is
+ * honoured rather than special-cased away: an ADMIN genuinely cannot grant
+ * MANAGER, because MANAGER can see money ADMIN itself cannot.
+ */
+export function canGrantRole(actorRoles: readonly Role[], targetRole: Role): boolean {
+  const granted = new Set(actorRoles.flatMap((role) => permissionsFor(role)));
+  return permissionsFor(targetRole).every((permission) => granted.has(permission));
 }
 
 export class Forbidden extends Error {

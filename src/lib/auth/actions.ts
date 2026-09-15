@@ -17,10 +17,13 @@ const credentialsSchema = z.object({
 /**
  * Signs a staff member in.
  *
- * There is no sign-up. Staff accounts are created by the owner in the Supabase
- * dashboard and given a role with `pnpm staff:grant` — a counter account is not
- * something a stranger should be able to mint for themselves, and §41's roles
- * mean nothing if anyone can obtain one.
+ * There is no self-serve sign-up. An account starts either by an owner or
+ * admin inviting an email from Staff (roadmap 6.1 — `lib/staff/actions.ts`,
+ * which itself calls the Supabase Admin API, never something a client can
+ * reach directly) or, for the one case that UI does not cover, `pnpm
+ * staff:grant` against an email that already has a Supabase Auth account. A
+ * counter account is not something a stranger should be able to mint for
+ * themselves, and §41's roles mean nothing if anyone can obtain one.
  *
  * Rate limiting is Supabase's, on the auth endpoint. Nothing here should try to
  * re-implement it.

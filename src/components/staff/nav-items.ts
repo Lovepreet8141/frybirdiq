@@ -21,6 +21,7 @@ import {
   ReceiptText,
   Settings2,
   ShieldCheck,
+  ShieldQuestion,
   ShoppingBag,
   Sparkles,
   Store,
@@ -175,7 +176,12 @@ export function buildNavGroups(permissions: NavPermissions): readonly NavGroup[]
     {
       id: "people",
       label: "People",
-      items: canSeeStaff ? [{ href: "/app/staff", label: "Staff", icon: UserCog }] : [],
+      items: canSeeStaff
+        ? [
+            { href: "/app/staff", label: "Staff", icon: UserCog, exclude: ["/app/staff/roles"] },
+            { href: "/app/staff/roles", label: "Roles", icon: ShieldQuestion },
+          ]
+        : [],
     },
     {
       id: "admin",

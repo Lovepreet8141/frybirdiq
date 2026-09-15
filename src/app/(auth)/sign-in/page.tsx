@@ -33,7 +33,7 @@ export default async function SignInPage() {
         <SignInForm />
 
         <p className="text-sm text-muted-foreground">
-          Accounts are set up by the owner. If you can&rsquo;t get in, ask them rather than trying again.
+          Accounts are set up by an owner or admin, from Staff. If you can&rsquo;t get in, ask them rather than trying again.
         </p>
       </div>
     </div>

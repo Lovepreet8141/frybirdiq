@@ -36,6 +36,7 @@ const SECTIONS: readonly { readonly prefix: string; readonly label: string }[] =
   { prefix: "/app/inventory", label: "Ingredients" },
   { prefix: "/app/customers/promotions", label: "Promotions" },
   { prefix: "/app/customers", label: "Customers" },
+  { prefix: "/app/staff/roles", label: "Roles" },
   { prefix: "/app/staff", label: "Staff" },
   { prefix: "/app/finance", label: "Payments" },
   { prefix: "/app/kds", label: "Kitchen" },

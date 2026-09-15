@@ -15,7 +15,7 @@ import {
   fulfilmentsFor,
   isFulfilmentValid,
 } from "./order-channel";
-import { ROLES, authorize, can, permissionsFor } from "./permissions";
+import { ROLES, authorize, can, canGrantRole, permissionsFor } from "./permissions";
 import { REJECTION_LABELS, REJECTION_MESSAGE, REJECTION_REASONS, isRejectionReason } from "./rejection";
 
 describe("order lifecycle", () => {
@@ -225,6 +225,12 @@ describe("permissions", () => {
     }
   });
 
+  it("lets the counter mark a kitchen ticket done — one person often runs both stations (roadmap 6)", () => {
+    expect(can(["CASHIER"], "kitchen.update")).toBe(true);
+    // Still no run of the actual kitchen — recipes stay a KITCHEN/INVENTORY thing.
+    expect(can(["CASHIER"], "recipes.edit")).toBe(false);
+  });
+
   it("lets the counter close a delivery too, for when the rider cannot", () => {
     expect(can(["CASHIER"], "delivery.complete")).toBe(true);
     expect(can(["MANAGER"], "delivery.complete")).toBe(true);
@@ -308,6 +314,46 @@ describe("permissions", () => {
     for (const role of ROLES) {
       expect(permissionsFor(role).length).toBeGreaterThan(0);
     }
+  });
+
+  describe("canGrantRole — the invite screen's ceiling (roadmap 6.1)", () => {
+    it("lets an owner grant anyone, including another owner", () => {
+      for (const role of ROLES) {
+        expect(canGrantRole(["OWNER"], role), role).toBe(true);
+      }
+    });
+
+    it("stops an admin minting a fresh owner over their own head", () => {
+      expect(canGrantRole(["ADMIN"], "OWNER")).toBe(false);
+    });
+
+    it("lets an admin grant another admin — the same level, not a step up", () => {
+      expect(canGrantRole(["ADMIN"], "ADMIN")).toBe(true);
+    });
+
+    it("stops an admin granting manager — finance.view is MANAGER-and-OWNER only, so that would hand out money access ADMIN itself doesn't have", () => {
+      expect(canGrantRole(["ADMIN"], "MANAGER")).toBe(false);
+    });
+
+    it("lets an admin grant the operational roles, which ask for nothing outside what admin already holds", () => {
+      for (const role of ["CASHIER", "KITCHEN", "RIDER", "INVENTORY", "ANALYST"] as const) {
+        expect(canGrantRole(["ADMIN"], role), role).toBe(true);
+      }
+    });
+
+    it("checks the real permission sets, not a hand-authored rank — a cashier can't grant kitchen despite outranking it on paper", () => {
+      // CASHIER holds kitchen.update (roadmap 6) but not recipes.view or
+      // inventory.waste, both of which KITCHEN has — so the grant is refused
+      // even though nothing here says "CASHIER < KITCHEN" directly.
+      expect(canGrantRole(["CASHIER"], "KITCHEN")).toBe(false);
+    });
+
+    it("unions permissions across every role the actor holds, same as can()", () => {
+      // KITCHEN alone is missing purchasing.manage and recipes.edit, both of
+      // which INVENTORY needs — but a person holding both roles has them.
+      expect(canGrantRole(["KITCHEN"], "INVENTORY")).toBe(false);
+      expect(canGrantRole(["KITCHEN", "INVENTORY"], "INVENTORY")).toBe(true);
+    });
   });
 });
 
