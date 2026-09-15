@@ -2,16 +2,14 @@
 
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
+import { Field, errorNoteClass, inputClass, submitClass, successNoteClass } from "@/components/inventory/field";
 import { type RewardsSettingsState, updateStampConfigAction } from "@/lib/loyalty/actions";
+import { cn } from "@/lib/utils";
 
 function Submit() {
   const { pending } = useFormStatus();
   return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="inline-flex min-h-[44px] items-center rounded-md bg-primary px-5 text-sm font-semibold text-primary-foreground disabled:opacity-60"
-    >
+    <button type="submit" disabled={pending} className={submitClass}>
       {pending ? "Saving…" : "Save"}
     </button>
   );
@@ -36,27 +34,24 @@ export function RewardsSettingsForm({
   const [state, action] = useActionState<RewardsSettingsState, FormData>(updateStampConfigAction, { status: "idle" });
 
   return (
-    <form action={action} className="mt-8 flex max-w-lg flex-col gap-5">
+    <form action={action} className="flex flex-col gap-4">
       {state.status === "error" && (
-        <p role="alert" className="border-l-2 border-[var(--destructive)] bg-surface px-4 py-3 text-sm">
+        <p role="alert" className={errorNoteClass}>
           {state.message}
         </p>
       )}
       {state.status === "success" && (
-        <p role="status" className="border-l-2 border-[var(--success)] bg-surface px-4 py-3 text-sm">
+        <p role="status" className={successNoteClass}>
           {state.message}
         </p>
       )}
 
-      <label className="flex min-h-[44px] cursor-pointer items-center gap-3 rounded-md border border-border bg-surface px-4">
+      <label className="flex h-10 cursor-pointer items-center gap-3 rounded-md border border-border bg-surface px-4">
         <input type="checkbox" name="enabled" defaultChecked={enabled} className="size-4 accent-primary" />
         <span className="text-sm font-semibold">FRYBIRD REWARDS is live</span>
       </label>
 
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="stampsRequired" className="text-sm font-semibold">
-          Stamps to unlock a free item
-        </label>
+      <Field id="stampsRequired" label="Stamps to unlock a free item" hint="Currently 7 — collect this many, the next free item is on the house.">
         <input
           id="stampsRequired"
           name="stampsRequired"
@@ -65,46 +60,37 @@ export function RewardsSettingsForm({
           max={50}
           required
           defaultValue={stampsRequired}
-          className="tabular min-h-[44px] w-full rounded-md border border-border bg-surface px-3 py-2.5"
+          className={cn(inputClass, "tabular")}
         />
-        <p className="text-xs text-muted-foreground">Currently 7 — collect this many, the next free item is on the house.</p>
-      </div>
+      </Field>
 
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="minOrderValue" className="text-sm font-semibold">
-          Qualifying spend
-        </label>
+      <Field id="minOrderValue" label="Qualifying spend" hint="An order has to spend more than this — exactly this much does not qualify.">
         <div className="flex items-center gap-2">
-          <span aria-hidden="true" className="text-lg text-muted-foreground">₹</span>
+          <span aria-hidden="true" className="text-base text-muted-foreground">₹</span>
           <input
             id="minOrderValue"
             name="minOrderValue"
             required
             inputMode="decimal"
             defaultValue={toRupeeString(minOrderValue)}
-            className="tabular min-h-[44px] w-full rounded-md border border-border bg-surface px-3 py-2.5"
+            className={cn(inputClass, "tabular")}
           />
         </div>
-        <p className="text-xs text-muted-foreground">An order has to spend more than this — exactly this much does not qualify.</p>
-      </div>
+      </Field>
 
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="maxRewardValue" className="text-sm font-semibold">
-          Free item price cap
-        </label>
+      <Field id="maxRewardValue" label="Free item price cap" hint="Only items listed at this price or under can be the free redemption.">
         <div className="flex items-center gap-2">
-          <span aria-hidden="true" className="text-lg text-muted-foreground">₹</span>
+          <span aria-hidden="true" className="text-base text-muted-foreground">₹</span>
           <input
             id="maxRewardValue"
             name="maxRewardValue"
             required
             inputMode="decimal"
             defaultValue={toRupeeString(maxRewardValue)}
-            className="tabular min-h-[44px] w-full rounded-md border border-border bg-surface px-3 py-2.5"
+            className={cn(inputClass, "tabular")}
           />
         </div>
-        <p className="text-xs text-muted-foreground">Only items listed at this price or under can be the free redemption.</p>
-      </div>
+      </Field>
 
       <div className="flex items-center gap-3 pt-1">
         <Submit />
