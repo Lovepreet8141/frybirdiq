@@ -3354,3 +3354,50 @@ low-risk reuse opportunity, not urgent.
 
 No code changed — docs only, no deploy needed. typecheck, lint, 559
 tests all still clean (unaffected, as expected).
+
+## POS and KDS dark surface fixed — confirmed by live screenshot first
+
+The theme finding from the specs above was confirmed real: user
+screenshots of production showed both `/app/pos` and `/app/kds`
+rendering in the light IQ palette.
+
+Root cause traced precisely before touching anything: `(app)/app/
+layout.tsx` puts both `data-surface="iq"` and `.surface-dark` on the
+same top-level div, for every `/app` route. `globals.css` declares
+`[data-surface="iq"]` after `.surface-dark`, redeclaring every custom
+property the dark rule sets, at equal specificity — so it wins
+everywhere. Git history (`e7fee1f`, "Staff screens stay dark, scoped by
+.surface-dark on the (app) layout") confirms this was never the
+intent — `.surface-dark` was added specifically to keep POS/KDS dark;
+the override just never actually took effect once `data-surface="iq"`
+was introduced for the dashboard.
+
+Also checked and deliberately ruled out before implementing: whether
+Radix `Portal`-based dialogs (POS's modifier picker uses `Dialog`) would
+escape a nested wrapper fix. They do — confirmed `DialogContent` reads
+`bg-popover`/`text-popover-foreground` and the portal targets
+`document.body` by default, outside any wrapper nested in the route
+tree, and neither `<body>` nor `<html>` carry any surface scoping. This
+means portaled dialogs across the *whole app*, IQ included, likely
+already fall back to `:root`'s customer-site colors — a separate,
+pre-existing characteristic, not something this fix was asked to solve
+or could solve without a much larger change (moving surface scoping to
+`<body>`, which the customer site also sits under). Documented as a
+known limitation, not fixed.
+
+Fix (`741150f`): `DarkStaffSurface`, a `contents`-display wrapper
+reapplying `.surface-dark`, plus two one-line `layout.tsx` files for
+`pos/` and `kds/`. Nothing about the shared layout, its CSS, or any
+other `/app` route changes.
+
+typecheck, lint, 559 tests, RSC-boundary check all clean. Deployed.
+Service active, all 6 routes checked (pos/kds/iq/admin/finance/home)
+respond correctly, journal clean of anything but expected
+unauthenticated-smoke-test noise and one standard post-deploy
+"Server Action not found" transient (a client with the previous build
+still open — normal after any deploy, unrelated to this change).
+
+**Not verified: the actual rendered result.** POS and KDS require staff
+auth; there is no session available to this session to load the real
+page and see it. The fix is deployed and gate-verified but not visually
+confirmed — same as the original finding, this needs a human to look.
