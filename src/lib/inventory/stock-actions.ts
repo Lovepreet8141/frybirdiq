@@ -11,11 +11,18 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { requirePermission } from "@/lib/auth";
+import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
 import { unitEnum } from "@/db/schema/inventory";
-import { explain, type InventoryFormState } from "@/lib/inventory/actions";
+import { type InventoryFormState } from "@/lib/inventory/actions";
 import { fromBaseUnits, unitLabel } from "@/lib/iq/units";
 import { fromRupees } from "@/lib/money";
+
+/** Auth failures become a sentence, not a stack trace (§57). Anything else is a real bug and is rethrown. */
+function explain(error: unknown): InventoryFormState {
+  if (error instanceof NotSignedIn) return { status: "error", message: "You've been signed out. Sign in again." };
+  if (error instanceof NotPermitted) return { status: "error", message: "You don't have permission to change inventory." };
+  throw error;
+}
 import { adjustStock, countStock, receiveStock } from "@/lib/repositories/stock";
 
 const optionalText = (max: number) =>
