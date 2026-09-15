@@ -215,7 +215,19 @@ export function CheckoutForm({
                 <SelectTrigger id="schedule-date" className="h-[52px] w-full text-base">
                   <SelectValue placeholder="Choose a date" />
                 </SelectTrigger>
-                <SelectContent>
+                {/*
+                  "popper" positioning, not the default "item-aligned" — the
+                  latter mimics a native <select> by centring on the selected
+                  item, which on a page with real content directly below (the
+                  delivery map, address fields) let the open list visually
+                  cross into it instead of floating clear above/below the
+                  trigger the way a Popover already does elsewhere in this
+                  app. "popper" is the same floating-ui-backed collision
+                  avoidance, already built into this component's CSS
+                  (`--radix-select-content-available-height` etc.) but never
+                  invoked anywhere in this codebase until now.
+                */}
+                <SelectContent position="popper" sideOffset={4}>
                   {scheduleOptions.map((day) => (
                     <SelectItem key={day.date} value={day.date} disabled={day.slots.length === 0}>
                       {day.label}
@@ -234,7 +246,7 @@ export function CheckoutForm({
                 <SelectTrigger id="schedule-time" className="h-[52px] w-full text-base">
                   <SelectValue placeholder="Choose a time" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper" sideOffset={4}>
                   {selectedDay?.slots.map((slot) => (
                     <SelectItem key={slot.iso} value={slot.iso}>
                       {slot.label}
