@@ -3701,3 +3701,73 @@ Expenses (`adf9f5f`), Lane A recipe editor (`72ad089`), Lane C exports
 + settings (`ab77ed3`, `8085a33`), Lane D roles + invites (`1e52e37`).
 kit-ui-batch remained untouched throughout — zero commits unique to
 it, confirmed at the start of this phase, never revisited.
+
+## Next wave dispatched — Lane A 3.2, Lane B design-completion (Modifiers merged, Categories+Combos pending, Media+Product-new merged)
+
+Continuing automatically per standing authorization: 4 worker agents
+dispatched for Roadmap 3.2 (stock movements, next in Lane A's strict
+dependency chain) and three Phase 8 design-completion groups
+(Categories+Combos, Modifiers, Media+Review+Product-new). Skipped
+Phase 8's "POS payment sheet and rewards keypad" item deliberately —
+it touches POS, which stays off-limits without explicit sign-off.
+
+**Worktree-base bug recurred, this time mid-flight.** All 4 agents
+correctly re-verified their base before writing anything (per this
+session's own standing instruction, after the earlier batch's silent
+failure) and caught it. Three genuinely branched from stale `main`,
+exactly as before. The fourth (Categories+Combos) hit a worse variant:
+its worktree was reprovisioned by the harness while paused, and the
+replacement it was handed turned out to be the *live, still-running*
+Lane A stock-movements worktree — a second agent process briefly
+sharing one working directory. It behaved correctly regardless:
+committed only its own 3 owned files, left Lane A's uncommitted WIP
+(`units.ts`, `inventory.ts`) untouched, and flagged the collision
+explicitly rather than guessing. No data was lost. One other agent
+(Media+Review+Product-new), finding itself in the shared main checkout
+with no isolated worktree at all, correctly avoided committing onto
+the shared `kit-radix-nova` branch directly — cut its own branch
+first. Modifiers did the same, as a fresh worktree off `kit-radix-nova`
+explicitly. All defensive; nothing destructive happened anywhere.
+
+Cleanup performed: restored the main checkout from the stray branch it
+had been left on back to `kit-radix-nova`; deleted 3 orphaned
+zero-commit branches left over from the reprovisioning (identical to
+stale `main`, no unique work, no attached worktree). Categories+Combos
+remains uncommitted-to-integration until Lane A's shared worktree
+finishes — its commit (`9460400`) sits cleanly on top of Lane A's
+branch and will be cherry-picked out separately once that lane lands,
+since the two touch disjoint files.
+
+**Modifiers merged** (`e7c753a`, fast-forward — branched from the
+exact current tip, zero staleness): `modifiers/page.tsx`,
+`modifiers/[id]/page.tsx`, `modifiers/new/page.tsx` onto Panel/
+PanelHeader/PanelBody/Badge. Deliberately left `modifier-group-form.tsx`
+and `modifier-list.tsx` untouched — diffed line-by-line against the
+already-modernized `product-price-form.tsx`/`product-modifiers-form.tsx`
+and found them already byte-identical in convention; touching them
+would have been pure churn.
+
+**Media + Product-new merged** (`92fdcef`, ordinary merge — one commit
+of staleness, zero file overlap with Modifiers): `media-library.tsx`,
+`product-create-form.tsx`, one-line cleanup in `products/new/page.tsx`.
+`review/page.tsx` and `media/page.tsx` themselves were found already
+fully modernized from earlier "Batch slice 1/4" work and correctly left
+untouched — the actual staleness was one layer down, in the components
+those routes render. One real bug fixed in scope: the per-photo delete
+button in the media library was hover-only
+(`opacity-0`/`group-hover:opacity-100`), which MASTER.md §7 explicitly
+forbids for a touchscreen/mobile staff surface — now always visible
+with a focus-visible ring.
+
+typecheck, lint, 585 tests (unchanged — both passes were layout-only,
+no logic touched), RSC-boundary, contrast all clean. Deployed; service
+active. Verified live: `/app/iq/menu/modifiers` → 307,
+`/app/iq/menu/media` → 307, `/app/iq/menu/products/new` → 307, all
+sign-in redirects rather than 500s. journalctl clean of anything but
+the known deploy-transition artifact. No browser/visual verification
+was possible in this environment for either merge — noted explicitly
+by both agents and by this integrator; the actual rendering on
+frybirdiq.tech is still owed per CLAUDE.md's verification rule.
+
+Still open: Categories+Combos (pending Lane A), Lane A 3.2 itself
+(stock movements, in progress).
