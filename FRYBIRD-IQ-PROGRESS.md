@@ -3443,3 +3443,39 @@ service active, both routes respond correctly, journal clean. Visual
 result still not independently confirmable from this session (no
 browser tooling, no staff session) — awaiting the user's look, same
 constraint as before.
+
+## KDS given the same light surface as POS — and a correction to this file's own earlier claim
+
+Decided directly this time, not re-diagnosed from a second screenshot:
+KDS follows POS's light direction rather than `.surface-dark`.
+
+Before implementing, read `kds-board.tsx` in full rather than trust the
+earlier summary in `design-system/pages/kds.md`, which had claimed KDS
+didn't depend on `--panel` the way POS's toggle did. That claim was
+**wrong** — line 171 reads `bg-panel` directly on the ticket card. KDS
+carried the identical latent bug as POS (`.surface-dark` never defines
+`--panel`, so a dark reapplication would produce white cards on a dark
+page); it simply hadn't been shipped and screenshotted yet to catch it.
+Worth recording plainly: that earlier claim came from an incomplete
+grep, not a full read, of the file it was describing.
+
+Verified what full, consistent `[data-surface="iq"]` tokens actually
+produce for KDS's existing markup, with no component changes needed:
+white columns on the light page background, white ticket cards
+differentiated by a 2px border (a distinct orange-red when late, not
+brand ember), the late pill on the same distinct orange-red
+(`--destructive`), the advance button on brand ember red
+(`--primary`) — reserved for the one primary action, exactly matching
+"strong FRYBIRD red for primary actions, restrained elsewhere."
+
+Fixed (`1fb41e3`): `kds/layout.tsx` deleted, mirroring the POS revert.
+`DarkStaffSurface` deleted too — confirmed zero remaining callers once
+neither POS nor KDS used it.
+
+typecheck, lint, 559 tests, RSC-boundary check all clean. Deployed;
+service active, all six checked routes (KDS, POS, IQ, Admin, Finance,
+Orders) respond correctly, journal clean of anything but expected
+smoke-test noise. Visual result still not independently confirmable —
+no browser tooling, no staff session, same limitation as every theme
+change this session. Implemented from source and token math, disclosed
+rather than assumed.
