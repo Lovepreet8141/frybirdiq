@@ -205,10 +205,10 @@ export function NewOrderAlert({ canReject, orgId }: { canReject: boolean; orgId:
           orders may already be waiting and nothing else on this screen
           will say so. */}
       {staleDeployment && (
-        <div role="alert" className="sticky top-0 z-40 border-b-2 border-[var(--destructive)] bg-[var(--destructive)] text-white">
+        <div role="alert" className="sticky top-0 z-40 border-b-2 border-destructive bg-destructive text-destructive-foreground">
           <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-[var(--gutter)] py-3">
             <p className="font-heading text-lg font-bold">{STALE_DEPLOYMENT_MESSAGE} New orders won&apos;t appear here until you do.</p>
-            <ReloadAppButton className="!bg-white !text-[var(--destructive)] hover:!opacity-90" />
+            <ReloadAppButton className="!bg-destructive-foreground !text-destructive hover:!opacity-90" />
           </div>
         </div>
       )}
@@ -239,7 +239,7 @@ export function NewOrderAlert({ canReject, orgId }: { canReject: boolean; orgId:
             role="dialog"
             aria-modal="true"
             aria-labelledby="new-order-title"
-            className="flex w-full max-w-md flex-col gap-4 rounded-lg border border-border bg-surface p-6 shadow-2xl"
+            className="flex w-full max-w-md flex-col gap-4 rounded-xl border border-border bg-panel p-6 shadow-2xl"
           >
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -276,7 +276,7 @@ export function NewOrderAlert({ canReject, orgId }: { canReject: boolean; orgId:
             </div>
 
             {error && (
-              <p role="alert" className="rounded-md border border-border bg-surface-muted px-3 py-2 text-sm">
+              <p role="alert" className="rounded-md border-l-2 border-loss bg-loss-soft/60 px-4 py-3 text-sm">
                 {error}
               </p>
             )}
@@ -298,7 +298,7 @@ export function NewOrderAlert({ canReject, orgId }: { canReject: boolean; orgId:
                       name="rejectionReason"
                       checked={reason === option}
                       onChange={() => setReason(option)}
-                      className="size-4 accent-[var(--primary)]"
+                      className="size-4 accent-primary"
                     />
                     <span className="font-medium">{REJECTION_LABELS[option]}</span>
                   </label>
