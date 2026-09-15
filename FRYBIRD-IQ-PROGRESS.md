@@ -3577,3 +3577,63 @@ verified**: the UI to do this now exists at `/app/iq/menu/products/
 <id>`, but populating a real recipe needs a human with a staff session,
 which this integrator doesn't have. Route health confirmed; the actual
 criterion is still open.
+
+## Lane C — Roadmap 5.4 CSV exports + 5.5 restaurant settings (`ab77ed3`, `8085a33`)
+
+Stale base: 3 of 32 files conflicted with kit-radix-nova's own
+movement since the lane's worktree branched. 26 files applied clean
+via one batched `git apply`.
+
+**Resolved by hand, not blind merge:**
+- `checkout/page.tsx` — kept the live `requireOrg()` +
+  `listSavedAddresses(org.id, customer.id)` org-scoping fix (shipped
+  earlier this session), layered the lane's `availableMethods({cash,
+  online})` toggle read on top. Both fixes now coexist.
+- `admin/restaurant/page.tsx` — the lane's base predated kit-radix-nova's
+  own "Batch slice 3/4" modernization (Panel/PanelHeader/DataTrust,
+  replacing the older Section layout). Same shape of problem as the
+  Deliveries+Expenses lane's near-regression, different resolution:
+  this time the lane's new content (BusinessProfileForm,
+  LocationProfileForm, PaymentSettingsForm) was genuinely additive, so
+  it was grafted onto the current, more-modernized structure rather
+  than rejected.
+- `nav-items.ts` — added the Exports nav item's `canSeeExports`
+  plumbing (icon import, `NavPermissions` field, destructuring, the
+  Finance group's ternary→array-spread) without disturbing the
+  Alerts/AI brief/Order history items added to this file since the
+  lane's base.
+
+**Migration bug found and fixed post-hoc:** the lane's
+`0028_restaurant_settings_cod_hours_payment_toggles.sql` was never
+registered in `meta/_journal.json` — `drizzle-kit migrate` reads the
+journal to know which files to run, so the first `pnpm db:migrate`
+reported "applied successfully" while doing nothing at all. Caught by
+verifying the new `organizations` columns directly in production
+afterward rather than trusting the CLI's exit status. Root cause
+confirmed against precedent: migration 0027 (already live, committed
+in `688cb85`) has the same gap — a journal entry with no snapshot
+file — and still applies correctly, proving `migrate` only needs the
+journal entry, not a snapshot, to run hand-written SQL. Fixed by adding
+the missing idx-28 journal entry in the same format as every prior
+entry (`8085a33`), then re-running the migration.
+
+Production backup taken before any of this: `frybird-20260915-1451.dump`
+(61 tables, 312K). Migration re-verified live after the journal fix:
+`cod_cap=150000, cash_enabled=true, online_enabled=true,
+opening_time=11:30, closing_time=23:00` — exactly the current
+hardcoded behavior, so applying it changed nothing observable until a
+form is used. Migration id 29 now recorded in
+`drizzle.__drizzle_migrations`.
+
+typecheck, lint, 577 tests (563 + 14 new: CSV encoder, money's new
+`toPlainDecimal`, payments toggle behavior, SEO), RSC-boundary all
+clean. Deployed; service active. Verified live: `/app/reports` → 307
+(sign-in redirect, not 500), `/app/admin/restaurant` → 307,
+`/checkout` → 307, `/api/reports/export` → 403 unauthenticated (not
+500). journalctl clean of anything but the known deploy-transition
+"Server Action not found" artifact and `NotSignedIn` from these
+unauthenticated smoke checks themselves. **Roadmap 5.4/5.5's "Done
+when" criteria are not yet verified with a real staff session** — the
+export download and the settings forms' actual save behavior need a
+human to click through; route/permission health is confirmed, the
+functional criteria are still open.
