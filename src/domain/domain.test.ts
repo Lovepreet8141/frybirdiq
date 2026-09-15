@@ -263,14 +263,13 @@ describe("permissions", () => {
     expect(can(["OWNER"], "promotions.manage")).toBe(true);
   });
 
-  it("keeps promotions.manage OWNER-only for now — was settings.manage, same access, own permission", () => {
+  it("gives promotions.manage to owner and manager, not admin (decided 2026-09-15)", () => {
     // Moved off settings.manage ("the closest existing permission to
-    // 'decides prices'") onto its own name. Granted to exactly who could
-    // write before, so this changes nobody's access. Whether MANAGER or
-    // ADMIN should also hold it is still open — MANAGER already has
-    // orders.discount (bounded, one order) but not menu.price (unbounded,
-    // every future order); a promotion sits between the two.
-    expect(can(["MANAGER"], "promotions.manage")).toBe(false);
+    // 'decides prices'") onto its own name. Run as an operational tool the
+    // manager who already runs orders.discount can also run, rather than
+    // folded into the OWNER/ADMIN tier menu.price and menu.publish sit in
+    // — a deliberate choice, not the filter default either way.
+    expect(can(["MANAGER"], "promotions.manage")).toBe(true);
     expect(can(["ADMIN"], "promotions.manage")).toBe(false);
   });
 

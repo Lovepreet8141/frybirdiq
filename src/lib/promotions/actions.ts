@@ -53,7 +53,7 @@ async function authorise(): Promise<{ orgId: string; userId: string } | { error:
     return { orgId: staff.orgId, userId: staff.userId };
   } catch (error) {
     if (error instanceof NotSignedIn) return { error: "You've been signed out. Sign in again." };
-    if (error instanceof NotPermitted) return { error: "Only an owner can change promotions." };
+    if (error instanceof NotPermitted) return { error: "You don't have permission to change promotions." };
     throw error;
   }
 }

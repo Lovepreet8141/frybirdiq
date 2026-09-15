@@ -3208,3 +3208,25 @@ DB-fetching orchestration) rather than something to default into.
 489 → 550 tests. typecheck, lint, and the RSC-boundary check all clean.
 Not redeployed — none of this changes served behaviour; test files are
 not part of the production build.
+
+## Promotions get their own permission, decided who holds it
+
+The other half of the promotions permission gap named earlier in this
+file: writes were gated on `settings.manage` ("the closest existing
+permission to 'decides prices'" — the file's own comment). Split into a
+dedicated `promotions.manage`, mechanically first (`b7926fc`, OWNER
+only, exactly who could write before — zero access change), then the
+actual decision asked directly rather than guessed: MANAGER already
+holds `orders.discount` (bounded, one order) but not `menu.price`
+(unbounded, every future order); a promotion sits between the two.
+
+**Decided 2026-09-15: OWNER + MANAGER, not ADMIN.**
+Run as an operational marketing tool the same role that already applies
+counter discounts can also run, rather than folded into the OWNER/ADMIN
+tier `menu.price`/`menu.publish` sit in — the opposite shape from the
+`finance.manage` decision, where ADMIN got in and MANAGER already had
+it. Updated everywhere the old OWNER-only framing was written: the
+domain tests, the server action's error string, and the workspace UI's
+own "Only an owner can change promotions" copy.
+
+552 tests. typecheck, lint, RSC-boundary check all clean.

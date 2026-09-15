@@ -503,7 +503,7 @@ export function PromotionsWorkspace({ promos, products, today, canEdit }: { prom
                   <p className="mt-1 text-xs text-muted-foreground">Saving never activates a promotion. Pushing to POS or the website comes next and is what makes one live.</p>
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">Only an owner can change promotions.</p>
+                <p className="text-sm text-muted-foreground">Only an owner or manager can change promotions.</p>
               )}
             </div>
 

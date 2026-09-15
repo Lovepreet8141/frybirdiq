@@ -49,11 +49,14 @@ export const PERMISSIONS = [
    * qualifying order until it's turned off, not one order in front of a
    * cashier. Was gated on `settings.manage` ("the closest existing
    * permission to 'decides prices'"); this is that dedicated permission.
-   * Granted to OWNER only for now, matching exactly who could write before
-   * — nobody's access changes here. Whether MANAGER or ADMIN should also
-   * hold it is open: MANAGER already has `orders.discount` (bounded, one
-   * order) but not `menu.price` (unbounded, every future order); a
-   * promotion sits between the two.
+   *
+   * Granted to OWNER and MANAGER — decided 2026-09-15. Run as a day-to-day
+   * marketing tool a manager can operate without waiting on the owner,
+   * rather than folded into the OWNER/ADMIN tier `menu.price` and
+   * `menu.publish` sit in. Deliberately not ADMIN, even though ADMIN
+   * outranks MANAGER almost everywhere else in this table — the decision
+   * was specifically that promotions belong with the operational role that
+   * already runs `orders.discount`, not with the administrative one.
    */
   "promotions.manage",
   "analytics.view",
@@ -103,10 +106,8 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
   // 2026-09-15 — nobody's access regresses, this only adds.
   //
   // promotions.manage is excluded here on purpose, unlike finance.manage above
-  // — unlike that case, ADMIN never held this (it was settings.manage, OWNER
-  // only), so leaving it out of the filter default preserves current access
-  // rather than silently widening it. Whether ADMIN should get it is still an
-  // open decision — see the permission's own doc comment above.
+  // — decided 2026-09-15 to sit with OWNER/MANAGER (see the permission's own
+  // doc comment), not the OWNER/ADMIN tier menu.price and menu.publish use.
   ADMIN: PERMISSIONS.filter(
     (permission) => permission !== "settings.manage" && permission !== "finance.view" && permission !== "promotions.manage",
   ),
@@ -131,6 +132,7 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     "recipes.view",
     "customers.view",
     "customers.edit",
+    "promotions.manage",
     "analytics.view",
     "reports.export",
     "finance.view",
