@@ -245,11 +245,24 @@ describe("permissions", () => {
   });
 
   it("recording money is a finance write, not an analytics read (roadmap 0.5)", () => {
-    // The expense and target actions gate on finance.view. An analyst reads
-    // the P&L; they never write into it. Promotion writes sit on settings.manage.
-    expect(can(["ANALYST"], "finance.view")).toBe(false);
+    // The expense and target actions gate on finance.manage, not finance.view
+    // — reading the till ledger and writing into the books are different
+    // questions. An analyst reads the P&L; they never write into it.
+    // Promotion writes sit on settings.manage.
+    expect(can(["OWNER"], "finance.manage")).toBe(true);
+    expect(can(["MANAGER"], "finance.manage")).toBe(true);
+    expect(can(["ANALYST"], "finance.manage")).toBe(false);
     expect(can(["CASHIER"], "settings.manage")).toBe(false);
-    expect(can(["MANAGER"], "finance.view")).toBe(true);
+  });
+
+  it("gives admin finance.manage, unlike the finance.view exclusion above", () => {
+    // ADMIN already holds orders.refund, the highest-trust money action in
+    // this table, so being unable to record that money was spent would have
+    // been an accident of finance.manage not existing, not a boundary anyone
+    // intended. Decided 2026-09-15 — finance.view (the ledger read) is
+    // untouched, still OWNER/MANAGER only.
+    expect(can(["ADMIN"], "finance.manage")).toBe(true);
+    expect(can(["ADMIN"], "finance.view")).toBe(false);
   });
 
   it("adding finance.view took nothing away from admin", () => {

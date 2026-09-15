@@ -48,6 +48,13 @@ export const PERMISSIONS = [
   "reports.export",
   /** The payments ledger — every capture, by whom, by method. Read only. */
   "finance.view",
+  /**
+   * Writing money into the books: recording an expense, setting a food cost
+   * target. Separate from `finance.view` on purpose — reading the till ledger
+   * ("may this person see what was taken today") and writing an expense
+   * ("may this person change what the P&L says") are different questions.
+   */
+  "finance.manage",
   "staff.manage",
   "settings.manage",
   "integrations.manage",
@@ -76,6 +83,12 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
   // finance.view is deliberately OWNER and MANAGER only — the people who run
   // the till day to day — and was added as an explicit decision, not by
   // letting it fall through this "everything but settings" rule.
+  //
+  // finance.manage falls through on purpose, unlike finance.view above: ADMIN
+  // already holds orders.refund, the highest-trust money action in this table,
+  // so being unable to record that money was spent was an accident of
+  // finance.manage not existing yet, not a boundary anyone intended. Decided
+  // 2026-09-15 — nobody's access regresses, this only adds.
   ADMIN: PERMISSIONS.filter((permission) => permission !== "settings.manage" && permission !== "finance.view"),
 
   MANAGER: [
@@ -101,6 +114,7 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     "analytics.view",
     "reports.export",
     "finance.view",
+    "finance.manage",
   ],
 
   CASHIER: [

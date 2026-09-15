@@ -37,10 +37,10 @@ export async function recordExpense(
 ): Promise<ExpenseFormState> {
   const staff = await getStaff();
   if (!staff) return { status: "error", message: "Sign in to record an expense." };
-  // Recording a cost is a finance write, so it takes the finance permission
-  // (OWNER, MANAGER) — not analytics.view, which is read-only by design and
-  // is held by ANALYST.
-  if (!(await staffCan("finance.view"))) {
+  // Recording a cost is a finance WRITE, so it takes finance.manage — not
+  // analytics.view, which is read-only and held by ANALYST, and not
+  // finance.view, which is the till-ledger read. OWNER, MANAGER, ADMIN.
+  if (!(await staffCan("finance.manage"))) {
     return { status: "error", message: "Recording an expense needs the finance permission." };
   }
 
@@ -107,7 +107,9 @@ export async function setFoodCostTarget(
 ): Promise<ExpenseFormState> {
   const staff = await getStaff();
   if (!staff) return { status: "error", message: "Sign in first." };
-  if (!(await staffCan("finance.view"))) {
+  // A food cost target is a figure the P&L measures against, so setting it is
+  // a finance write. finance.manage, not the ledger read — see recordExpense.
+  if (!(await staffCan("finance.manage"))) {
     return { status: "error", message: "Setting a target needs the finance permission." };
   }
 

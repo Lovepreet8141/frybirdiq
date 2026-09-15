@@ -34,7 +34,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
   const { range: requested, saved } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "mtd") as RangeKey;
   const range = resolveRange(key);
-  const [rows, canRecord, canSeeCustomers] = await Promise.all([listExpenses(staff.orgId, range), staffCan("finance.view"), staffCan("customers.view")]);
+  const [rows, canRecord, canSeeCustomers] = await Promise.all([listExpenses(staff.orgId, range), staffCan("finance.manage"), staffCan("customers.view")]);
 
   const total = add(...rows.map((row) => row.amount));
   const direct = add(...rows.filter((row) => row.behaviour === "DIRECT").map((row) => row.amount));

@@ -62,7 +62,7 @@ export default async function PnlPage({ searchParams }: { searchParams: Promise<
   const { range: requested } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "mtd") as RangeKey;
   const range = resolveRange(key);
-  const [pnl, foodCost, canRecord, canSeeCustomers] = await Promise.all([getProfitAndLoss(staff.orgId, range), foodCostWeeklySeries(staff.orgId), staffCan("finance.view"), staffCan("customers.view")]);
+  const [pnl, foodCost, canRecord, canSeeCustomers] = await Promise.all([getProfitAndLoss(staff.orgId, range), foodCostWeeklySeries(staff.orgId), staffCan("finance.manage"), staffCan("customers.view")]);
   const { result } = pnl;
 
   const directTotal = pnl.direct.reduce((sum, row) => sum + row.amount, 0n) as Paise;

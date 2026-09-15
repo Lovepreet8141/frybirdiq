@@ -19,7 +19,7 @@ export default async function NewExpensePage() {
   // The form writes money, so it needs the finance permission; viewers of the
   // ledger who cannot record are sent back to it rather than shown a form
   // whose submit would fail.
-  if (!(await staffCan("finance.view"))) redirect("/app/iq/expenses");
+  if (!(await staffCan("finance.manage"))) redirect("/app/iq/expenses");
 
   const [categories, accounts] = await Promise.all([
     listCategories(staff.orgId),
