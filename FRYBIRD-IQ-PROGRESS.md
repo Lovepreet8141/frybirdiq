@@ -3995,3 +3995,48 @@ Phase 3 status: 3.1 (recipe editor), 3.2 (stock movements), 3.3 (waste
 log), 3.4 (consumption on order) all merged and deployed. Remaining:
 3.5 (actual vs theoretical food cost — now unblocked, since it needs
 3.4's real movement data), 3.6 (Smart 86), 3.7 (purchase orders).
+
+## Lane A 3.5 — actual vs theoretical food cost (`a45aa7a`)
+
+`getFoodCostComparison(orgId, range)` in `stock.ts`, one SQL aggregate
+with `filter` clauses over `inventory_movements`, org- and date-scoped.
+Theoretical = sum of every SALE movement's `totalCost` in the period —
+not recomputed, since 3.4's `recordConsumption` already wrote exactly
+this (recipe quantity × ingredient rate at time of consumption). Actual
+= SALE + WASTE + the negative half of ADJUSTMENT (real shrinkage found
+on a count) — the true cost of everything that left the shelf for any
+reason. Variance = actual − theoretical, which the schema's own
+pre-existing comment predicted almost word for word: "Actual-versus-
+theoretical variance is only computable because SALE movements are
+written from recipes alongside the counted ones."
+
+One real, well-argued deviation from the brief, reviewed and accepted:
+RETURN movements (a SALE reversed by 3.4's `reverseConsumption` when
+an order is rejected/cancelled after ACCEPTED) are excluded from both
+sides entirely rather than netted against SALE. Verified the reasoning
+holds: a RETURN's `totalCost` always exactly equals the SALE it
+undoes, so whichever way it's handled, `varianceCost` — the number
+this whole slice exists to produce — comes out identical; excluding it
+from both is simply the more legible choice. A structural consequence
+worth noting: `varianceCost` is provably ≥ 0 under this scheme, so the
+UI correctly never frames an "under theoretical" case.
+
+Wired into `/app/iq/pnl` as a new Panel, additive alongside the
+existing expense-based "Food cost" KPI tile (a different, coarser
+concept — manually recorded direct costs ÷ revenue — left completely
+untouched). Resolved the page's own pre-existing `DataTrust` line that
+had read "Theoretical food cost from recipes not connected — roadmap
+3.5" since before this session started — it now reports the real
+connected state. Zero-data case (no SALE movements yet — a real state
+for an org with no accepted recipe'd orders) renders an explicit
+"needs at least one accepted order" message, never a false 0-vs-0
+"perfect efficiency" read.
+
+typecheck, lint, 599 tests (unchanged — no new pure logic; reused
+`ratioBps`, already tested), RSC-boundary, contrast, and `next build`
+all clean. No schema changes. Deployed; service active. Verified live:
+`/app/iq/pnl` → 307. journalctl clean of anything but the known
+deploy-transition artifact.
+
+Phase 3 status: 3.1–3.5 all merged and deployed. Remaining: 3.6 (Smart
+86), 3.7 (purchase orders).
