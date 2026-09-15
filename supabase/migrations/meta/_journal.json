@@ -204,6 +204,13 @@
       "when": 1789399000000,
       "tag": "0028_restaurant_settings_cod_hours_payment_toggles",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1789500047121,
+      "tag": "0029_delivery_free_zone",
+      "breakpoints": true
     }
   ]
 }

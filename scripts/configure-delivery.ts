@@ -136,6 +136,8 @@ async function main() {
   const rates = {
     bands,
     freeAboveOrderValue: current.deliveryFreeAbove === null ? null : paise(current.deliveryFreeAbove),
+    freeEnabled: current.deliveryFreeEnabled,
+    freeMaxMetres: current.deliveryFreeMaxMetres,
     roadFactorBps: current.deliveryRoadFactorBps,
   };
 
@@ -146,6 +148,8 @@ async function main() {
   console.log(`  on the map   : ${placed ? `${fromMicro(current.latMicro!)}, ${fromMicro(current.lngMicro!)}` : "NOT SET — delivery cannot be priced"}`);
   console.log(`  delivery     : ${limit > 0 ? "on" : "OFF — set --bands to enable"}`);
   console.log(`  free above   : ${rates.freeAboveOrderValue === null ? "never" : formatINR(rates.freeAboveOrderValue)}`);
+  console.log(`  free enabled : ${rates.freeEnabled ? "yes" : "no"}`);
+  console.log(`  free distance: ${rates.freeMaxMetres === null ? "no limit" : formatDistance(rates.freeMaxMetres)}`);
   console.log(`  road factor  : ${(rates.roadFactorBps / 10_000).toFixed(2)}× straight line`);
 
   if (bands.length > 0) {

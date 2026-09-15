@@ -18,6 +18,7 @@ import {
   updateOperationsSettings,
   updatePaymentSettings,
 } from "@/lib/repositories/settings";
+import { type DeliveryBandInput, updateDeliveryPricing } from "@/lib/repositories/delivery";
 
 export type OperationsSettingsState = { status: "idle" } | { status: "error"; message: string } | { status: "success"; message: string };
 
@@ -171,4 +172,111 @@ export async function updatePaymentSettingsAction(_previous: SettingsFormState, 
   revalidatePath("/app/admin/restaurant");
   revalidatePath("/checkout");
   return { status: "success", message: "Saved. Checkout reads this from the next load." };
+}
+
+export type DeliveryPricingActionResult = { ok: true } | { ok: false; error: string };
+
+const rupeeAmount = (max: number, message: string) =>
+  z
+    .string()
+    .trim()
+    .regex(/^\d+(\.\d{1,2})?$/, message)
+    .refine((value) => Number(value) <= max, `That's an unusually high figure — check it, or contact support if it's genuinely right.`);
+
+const optionalRupeeAmount = (max: number, message: string) =>
+  z
+    .string()
+    .trim()
+    .transform((value) => (value === "" ? null : value))
+    .pipe(rupeeAmount(max, message).nullable());
+
+const optionalKm = z
+  .string()
+  .trim()
+  .transform((value) => (value === "" ? null : value))
+  .pipe(
+    z
+      .string()
+      .regex(/^\d+(\.\d{1,2})?$/, "Enter a distance in kilometres, like 3 or 3.5.")
+      .refine((value) => Number(value) > 0 && Number(value) <= 50, "Enter a distance between 0 and 50 km.")
+      .nullable(),
+  );
+
+const deliveryBandInputSchema = z.object({
+  upToKm: z
+    .string()
+    .trim()
+    .regex(/^\d+(\.\d{1,2})?$/, "Enter a distance in kilometres, like 3 or 3.5.")
+    .refine((value) => Number(value) > 0 && Number(value) <= 50, "A band's distance has to be between 0 and 50 km."),
+  flatFee: rupeeAmount(5_000, "Enter a delivery fee in rupees, like 30."),
+  perKmFee: rupeeAmount(1_000, "Enter a per-km fee in rupees, like 10 — or 0 for none."),
+});
+
+const deliveryPricingSchema = z
+  .object({
+    freeEnabled: z.boolean(),
+    freeAboveOrderValue: optionalRupeeAmount(50_000, "Enter the minimum order value in rupees, like 300."),
+    freeMaxKm: optionalKm,
+    bands: z.array(deliveryBandInputSchema).min(1, "Add at least one distance band — delivery has nothing to charge without one.").max(10, "That's a lot of bands — combine some nearby tiers."),
+  })
+  .refine((value) => !value.freeEnabled || value.freeAboveOrderValue !== null, {
+    message: "Set a minimum order value before turning free delivery on.",
+    path: ["freeAboveOrderValue"],
+  })
+  .refine(
+    (value) => {
+      const kms = value.bands.map((band) => Number(band.upToKm));
+      return kms.every((km, index) => index === 0 || km > kms[index - 1]!);
+    },
+    { message: "Distance bands must be in increasing order, each further than the last.", path: ["bands"] },
+  );
+
+export interface DeliveryPricingActionInput {
+  readonly freeEnabled: boolean;
+  /** Rupees, as typed. Empty string means "not set". */
+  readonly freeAboveOrderValue: string;
+  /** Kilometres, as typed. Empty string means "no distance restriction". */
+  readonly freeMaxKm: string;
+  readonly bands: readonly { readonly upToKm: string; readonly flatFee: string; readonly perKmFee: string }[];
+}
+
+/**
+ * The whole "Delivery Pricing" section — the free-delivery rule and the
+ * distance bands — saved together. `settings.manage`, re-checked here
+ * regardless of what the page rendered (§41); the same permission every
+ * other restaurant-settings write already uses, nothing broadened for this.
+ *
+ * A plain async function taking a structured object, not `(prevState,
+ * formData)` — bands are a dynamic-length list, and `purchase-order-form.tsx`
+ * already established this shape as how this codebase submits one.
+ */
+export async function updateDeliveryPricingAction(input: DeliveryPricingActionInput): Promise<DeliveryPricingActionResult> {
+  let staff;
+  try {
+    staff = await requirePermission("settings.manage");
+  } catch {
+    return { ok: false, error: "You don't have permission to change restaurant settings." };
+  }
+
+  const parsed = deliveryPricingSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the form." };
+
+  const bands: DeliveryBandInput[] = parsed.data.bands.map((band) => ({
+    upToMetres: Math.round(Number(band.upToKm) * 1000),
+    flatFee: fromRupees(band.flatFee),
+    perKmFee: fromRupees(band.perKmFee),
+  }));
+
+  const result = await updateDeliveryPricing(staff.orgId, {
+    freeEnabled: parsed.data.freeEnabled,
+    freeAboveOrderValue: parsed.data.freeAboveOrderValue === null ? null : fromRupees(parsed.data.freeAboveOrderValue),
+    freeMaxMetres: parsed.data.freeMaxKm === null ? null : Math.round(Number(parsed.data.freeMaxKm) * 1000),
+    bands,
+  });
+  if (!result.ok) return { ok: false, error: result.error };
+
+  revalidatePath("/app/admin/restaurant");
+  revalidatePath("/checkout");
+  revalidatePath("/cart");
+  return { ok: true };
 }

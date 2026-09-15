@@ -153,6 +153,22 @@ export const locations = pgTable(
      */
     /** Order value at or above which delivery is free. Null means never. */
     deliveryFreeAbove: money("delivery_free_above"),
+    /**
+     * Whether the free-delivery rule (`deliveryFreeAbove` + `deliveryFreeMaxMetres`)
+     * is currently switched on. A separate toggle rather than nullability on
+     * the value fields themselves, on purpose: turning free delivery off for
+     * a while must not lose the configured ₹ and km — only re-enabling it
+     * should bring the same numbers back untouched.
+     */
+    deliveryFreeEnabled: boolean("delivery_free_enabled").notNull().default(false),
+    /**
+     * The free-delivery rule only applies at or under this distance — beyond
+     * it, normal distance-banded pricing always applies even on a
+     * qualifying order value. Null means no distance restriction (today's
+     * only behaviour, before this column existed): the value threshold
+     * alone decides, at any distance within the delivery area.
+     */
+    deliveryFreeMaxMetres: integer("delivery_free_max_metres"),
     /** Straight-line × this ≈ road distance. 13000 bps is 1.3×. */
     deliveryRoadFactorBps: integer("delivery_road_factor_bps").notNull().default(13_000),
 

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { DataTrust, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { AdminSectionNav } from "@/components/staff/admin-section-nav";
 import { BusinessProfileForm } from "@/components/staff/business-profile-form";
+import { DeliveryPricingForm } from "@/components/staff/delivery-pricing-form";
 import { LocationProfileForm } from "@/components/staff/location-profile-form";
 import { OperationsSettingsForm } from "@/components/staff/operations-settings-form";
 import { PageHeader } from "@/components/staff/page-header";
@@ -157,33 +158,28 @@ export default async function RestaurantSettingsPage() {
           </PanelBody>
         </Panel>
 
-        <Panel>
-          <PanelHeader title="Delivery" description="Banded, not a flat per-kilometre formula: free nearby, a flat charge in the middle ring, per-km once it is far." />
+        <Panel className="lg:col-span-2">
+          <PanelHeader title="Delivery Pricing" description="Banded distance pricing, and an optional free-delivery rule that only waives the fee when both the distance and the order value qualify." />
           <PanelBody className="pt-0">
             <SettingRow label="Delivery offered" value={delivery?.enabled ? <Badge variant="success">Yes</Badge> : <Badge variant="outline">Not yet — needs a pin and at least one band</Badge>} />
-            <SettingRow label="Free delivery above" value={delivery?.rates.freeAboveOrderValue ? formatINR(delivery.rates.freeAboveOrderValue, "whole") : <span className="text-muted-foreground">Never</span>} />
-            <SettingRow label="Road factor" description="Straight-line distance × this ≈ road distance." value={delivery ? `${(delivery.rates.roadFactorBps / 10_000).toFixed(2)}×` : "—"} />
-            {delivery && delivery.rates.bands.length > 0 && (
-              <div className="mt-3 overflow-hidden rounded-lg border border-border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Up to</TableHead>
-                      <TableHead className="text-right">Flat fee</TableHead>
-                      <TableHead className="text-right">Per km beyond</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {delivery.rates.bands.map((band) => (
-                      <TableRow key={band.upToMetres}>
-                        <TableCell className="tabular font-medium">{(band.upToMetres / 1000).toFixed(1)} km</TableCell>
-                        <TableCell className="tabular text-right">{band.flatFee === 0n ? "Free" : formatINR(band.flatFee)}</TableCell>
-                        <TableCell className="tabular text-right text-muted-foreground">{band.perKmFee === 0n ? "—" : formatINR(band.perKmFee)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+            <SettingRow label="Road factor" description="Straight-line distance × this ≈ road distance. Not editable here." value={delivery ? `${(delivery.rates.roadFactorBps / 10_000).toFixed(2)}×` : "—"} />
+            {delivery && delivery.enabled ? (
+              <div className="pt-4">
+                <DeliveryPricingForm
+                  freeEnabled={delivery.rates.freeEnabled}
+                  freeAboveOrderValueRupees={delivery.rates.freeAboveOrderValue === null ? null : Number(delivery.rates.freeAboveOrderValue / 100n)}
+                  freeMaxKm={delivery.rates.freeMaxMetres === null ? null : delivery.rates.freeMaxMetres / 1000}
+                  bands={delivery.rates.bands.map((band) => ({
+                    upToKm: String(band.upToMetres / 1000),
+                    flatFee: String(band.flatFee / 100n),
+                    perKmFee: String(band.perKmFee / 100n),
+                  }))}
+                />
               </div>
+            ) : (
+              <p className="mt-3 rounded-lg border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground">
+                Delivery needs a map pin and at least one distance band before pricing can be edited here.
+              </p>
             )}
           </PanelBody>
         </Panel>

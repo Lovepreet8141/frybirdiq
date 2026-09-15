@@ -29,6 +29,8 @@ const RATES: DeliveryRates = {
     { upToMetres: 8000, flatFee: fromRupees("30"), perKmFee: fromRupees("10") },
   ],
   freeAboveOrderValue: null,
+  freeEnabled: false,
+  freeMaxMetres: null,
   roadFactorBps: 10_000,
 };
 
@@ -149,13 +151,95 @@ describe("pricing", () => {
     expect(formatINR(result.fee)).toBe("₹30");
   });
 
-  it("waives the fee above the free-delivery threshold", () => {
-    const rates = { ...RATES, freeAboveOrderValue: fromRupees("500") };
+  it("waives the fee above the free-delivery threshold, with no distance limit set", () => {
+    const rates = { ...RATES, freeEnabled: true, freeAboveOrderValue: fromRupees("500") };
     expect(feeAt(6, rates, fromRupees("499"))).toBe("₹40");
 
     const over = atKm(6, rates, fromRupees("500"));
     expect(over.available && over.fee).toBe(ZERO);
     expect(over.available && over.waived).toBe(true);
+  });
+
+  it("does not waive the fee when freeEnabled is off, even above the threshold", () => {
+    // The standalone toggle, not nullability, decides — configured numbers
+    // stay in place but inert while paused.
+    const rates = { ...RATES, freeEnabled: false, freeAboveOrderValue: fromRupees("300") };
+    expect(feeAt(1, rates, fromRupees("1000"))).toBe("₹0"); // band 1 is free anyway in this fixture
+    expect(feeAt(6, rates, fromRupees("1000"))).toBe("₹40"); // would have been waived if enabled
+  });
+
+  describe("free-delivery distance gate", () => {
+    // The approved rule: free delivery requires ALL of enabled, within the
+    // configured distance, and at/above the minimum order value.
+    const freeRates: DeliveryRates = { ...RATES, freeEnabled: true, freeAboveOrderValue: fromRupees("300"), freeMaxMetres: 3000 };
+
+    it("<= 3 km + >= ₹300 → FREE", () => {
+      const quote = atKm(3, freeRates, fromRupees("300"));
+      expect(quote.available && quote.fee).toBe(ZERO);
+      expect(quote.available && quote.waived).toBe(true);
+    });
+
+    it("<= 3 km + < ₹300 → the configured normal 0–3 km fee, not waived", () => {
+      // This fixture's band 1 flat fee happens to be ₹0 — the point is
+      // `waived` is false and the band lookup ran, not the number itself.
+      const quote = atKm(3, freeRates, fromRupees("299"));
+      expect(quote.available && quote.waived).toBe(false);
+      expect(feeAt(3, freeRates, fromRupees("299"))).toBe("₹0");
+    });
+
+    it("2 km + ₹300 → FREE", () => {
+      const quote = atKm(2, freeRates, fromRupees("300"));
+      expect(quote.available && quote.waived).toBe(true);
+    });
+
+    it("2 km + ₹200 → normal fee, not waived", () => {
+      const quote = atKm(2, freeRates, fromRupees("200"));
+      expect(quote.available && quote.waived).toBe(false);
+    });
+
+    it("3.1 km + ₹300 → beyond the free distance, normal distance-band pricing applies regardless of order value", () => {
+      const quote = atKm(3.1, freeRates, fromRupees("10000"));
+      expect(quote.available && quote.waived).toBe(false);
+      // 3.1 km lands in the 3–5 km band, ₹30 flat in this fixture.
+      expect(feeAt(3.1, freeRates, fromRupees("10000"))).toBe("₹30");
+    });
+
+    it("has no distance restriction when freeMaxMetres is null — the value threshold alone decides, at any distance in the delivery area", () => {
+      const rates = { ...freeRates, freeMaxMetres: null };
+      const quote = atKm(6, rates, fromRupees("300"));
+      expect(quote.available && quote.waived).toBe(true);
+    });
+  });
+
+  describe("freeDeliveryGap — 'add ₹X more for free delivery'", () => {
+    const freeRates: DeliveryRates = { ...RATES, freeEnabled: true, freeAboveOrderValue: fromRupees("300"), freeMaxMetres: 3000 };
+
+    it("is null once the order already qualifies for free delivery", () => {
+      const quote = atKm(2, freeRates, fromRupees("300"));
+      expect(quote.available && quote.freeDeliveryGap).toBe(null);
+    });
+
+    it("is the exact shortfall when within the free distance but under the minimum", () => {
+      const quote = atKm(2, freeRates, fromRupees("250"));
+      expect(quote.available && quote.freeDeliveryGap).toBe(fromRupees("50"));
+    });
+
+    it("is null beyond the free distance — no amount of extra spend would waive the fee from here", () => {
+      const quote = atKm(4, freeRates, fromRupees("50"));
+      expect(quote.available && quote.freeDeliveryGap).toBe(null);
+    });
+
+    it("is null when free delivery is disabled", () => {
+      const rates = { ...freeRates, freeEnabled: false };
+      const quote = atKm(2, rates, fromRupees("250"));
+      expect(quote.available && quote.freeDeliveryGap).toBe(null);
+    });
+
+    it("is null when no threshold is configured at all", () => {
+      const rates = { ...freeRates, freeAboveOrderValue: null };
+      const quote = atKm(2, rates, fromRupees("250"));
+      expect(quote.available && quote.freeDeliveryGap).toBe(null);
+    });
   });
 
   it("says it does not deliver when no bands are configured", () => {

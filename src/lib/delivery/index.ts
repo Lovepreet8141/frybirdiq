@@ -28,7 +28,7 @@
  * sector town typically run 20–40% longer than the crow flies.
  */
 
-import { type Bps, type Paise, ZERO, add, multiply } from "@/lib/money";
+import { type Bps, type Paise, ZERO, add, multiply, subtract } from "@/lib/money";
 
 /** Degrees × 1e-6, as an integer. */
 export type Microdegrees = number;
@@ -117,8 +117,22 @@ export interface DeliveryBand {
 export interface DeliveryRates {
   /** Ordered by `upToMetres`, ascending. The last one is the delivery limit. */
   readonly bands: readonly DeliveryBand[];
-  /** Order value at or above which delivery is free. Null means never. */
+  /** Order value at or above which delivery is free, subject to `freeEnabled` and `freeMaxMetres` below. Null means the threshold itself was never set. */
   readonly freeAboveOrderValue: Paise | null;
+  /**
+   * A standalone switch, independent of the value/distance fields — pausing
+   * free delivery must not lose the configured numbers, only re-enabling it
+   * should bring them straight back.
+   */
+  readonly freeEnabled: boolean;
+  /**
+   * The free-delivery rule only applies at or under this distance; beyond
+   * it, normal band pricing always applies regardless of order value. Null
+   * means no distance restriction — the value threshold alone decides, at
+   * any distance within the delivery area (the only behaviour before this
+   * field existed).
+   */
+  readonly freeMaxMetres: number | null;
   /**
    * Straight-line × this ≈ road distance. 13000 bps is 1.3×.
    * 10000 bps means "charge on the crow-flies distance".
@@ -129,6 +143,8 @@ export interface DeliveryRates {
 export const DELIVERY_DISABLED: DeliveryRates = {
   bands: [],
   freeAboveOrderValue: null,
+  freeEnabled: false,
+  freeMaxMetres: null,
   roadFactorBps: 13_000,
 };
 
@@ -147,6 +163,16 @@ export type DeliveryQuote =
       readonly fee: Paise;
       /** True when the fee was waived by order value. */
       readonly waived: boolean;
+      /**
+       * How much more the order needs to reach free delivery, when that is
+       * actually achievable from here — free delivery is enabled, this pin
+       * is within `freeMaxMetres` (or no distance limit is set), a threshold
+       * is configured, and the order has not reached it yet. Null whenever
+       * adding more would not change the answer: already free, free
+       * delivery off, no threshold set, or this pin is beyond the free
+       * distance regardless of order value.
+       */
+      readonly freeDeliveryGap: Paise | null;
     }
   | {
       readonly available: false;
@@ -158,8 +184,15 @@ export type DeliveryQuote =
 /**
  * Prices a delivery.
  *
- * Finds the band the distance falls in, then charges that band's flat fee plus
- * any per-kilometre element for the distance past where the band starts.
+ * Free delivery is checked first: it requires `freeEnabled`, an
+ * `orderValue` at or above `freeAboveOrderValue`, and — when `freeMaxMetres`
+ * is set — a chargeable distance at or under it. All three gates have to
+ * hold; missing any one falls straight through to the normal band lookup
+ * below, exactly as if free delivery were not configured at all.
+ *
+ * Otherwise, finds the band the distance falls in, then charges that band's
+ * flat fee plus any per-kilometre element for the distance past where the
+ * band starts.
  *
  * Each **started** kilometre is charged in full rather than pro-rated. That is
  * what a per-km price means to a customer, and it means the same pin always
@@ -199,9 +232,21 @@ export function quoteDelivery({
     };
   }
 
-  if (rates.freeAboveOrderValue !== null && orderValue >= rates.freeAboveOrderValue) {
-    return { available: true, straightLineMetres: straight, chargeableMetres: chargeable, fee: ZERO, waived: true };
+  const withinFreeDistance = rates.freeMaxMetres === null || chargeable <= rates.freeMaxMetres;
+  if (rates.freeEnabled && rates.freeAboveOrderValue !== null && orderValue >= rates.freeAboveOrderValue && withinFreeDistance) {
+    return { available: true, straightLineMetres: straight, chargeableMetres: chargeable, fee: ZERO, waived: true, freeDeliveryGap: null };
   }
+
+  // "Add ₹X more for free delivery" — only meaningful when reaching the
+  // threshold from here would actually waive the fee: free delivery has to
+  // be on, this pin within whatever distance limit applies, and a threshold
+  // actually configured. A pin beyond the free distance never gets this
+  // nudge, no matter the order value — more money would not change the
+  // answer, so telling the customer to add more would be a lie.
+  const freeDeliveryGap =
+    rates.freeEnabled && withinFreeDistance && rates.freeAboveOrderValue !== null && orderValue < rates.freeAboveOrderValue
+      ? subtract(rates.freeAboveOrderValue, orderValue)
+      : null;
 
   // The first band whose ceiling the distance does not exceed.
   let bandStart = 0;
@@ -210,7 +255,7 @@ export function quoteDelivery({
       const beyond = Math.max(0, chargeable - bandStart);
       const startedKm = band.perKmFee === ZERO ? 0 : Math.ceil(beyond / 1000);
       const fee = add(band.flatFee, multiply(band.perKmFee, startedKm));
-      return { available: true, straightLineMetres: straight, chargeableMetres: chargeable, fee, waived: false };
+      return { available: true, straightLineMetres: straight, chargeableMetres: chargeable, fee, waived: false, freeDeliveryGap };
     }
     bandStart = band.upToMetres;
   }

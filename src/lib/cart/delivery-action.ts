@@ -24,6 +24,8 @@ export type DeliveryQuoteResult =
       /** Null when the business charges no GST. */
       taxTotal: string | null;
       waived: boolean;
+      /** Pre-formatted "add ₹X more" amount — null unless getting to free delivery from here is actually achievable (see `quoteDelivery`'s `freeDeliveryGap`). */
+      freeDeliveryGap: string | null;
     }
   | { available: false; reason: string };
 
@@ -77,5 +79,6 @@ export async function quoteDeliveryAction(input: unknown): Promise<DeliveryQuote
     orderTotal: formatINR(withFee.gross),
     taxTotal: withFee.total > 0n ? formatINR(withFee.total) : null,
     waived: quote.waived,
+    freeDeliveryGap: quote.freeDeliveryGap === null ? null : formatINR(quote.freeDeliveryGap),
   };
 }

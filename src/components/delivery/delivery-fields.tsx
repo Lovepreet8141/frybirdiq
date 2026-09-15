@@ -180,8 +180,11 @@ export function DeliveryFields({ shop, saved }: { shop: Point; saved: SavedAddre
             <div className="flex flex-col gap-1.5 text-sm">
               <div className="flex items-baseline justify-between gap-4">
                 <span className="text-muted-foreground">Delivery · {quote.distance}</span>
-                <span className="tabular font-semibold">{quote.waived ? "Free" : quote.fee}</span>
+                <span className={cn("tabular font-semibold", quote.waived && "text-gain")}>{quote.waived ? "Free delivery" : `Delivery ${quote.fee}`}</span>
               </div>
+              {quote.freeDeliveryGap && (
+                <p className="text-[12.5px] text-muted-foreground">Add {quote.freeDeliveryGap} more for free delivery.</p>
+              )}
               <div className="flex items-baseline justify-between gap-4 border-t border-border pt-1.5">
                 <span className="font-semibold">To pay</span>
                 <span className="tabular text-lg font-bold">{quote.orderTotal}</span>
