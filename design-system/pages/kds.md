@@ -58,6 +58,13 @@ Not independently audited in this pass beyond what's stated above (the late pill
 
 Follows `content.md`. The per-column empty lines and the "waiting for the counter to hand over" line are both in the plain, specific register the voice guide asks for — no departure to record.
 
-## Needs visual verification before treating as settled
+## Needs visual verification before treating as settled — evaluate independently of POS
 
-Same finding as `design-system/pages/pos.md`: `[data-surface="iq"]` is applied at the top level in `src/app/(app)/app/layout.tsx`, wrapping every `/app/*` route including KDS, and fully overrides `.surface-dark`'s entire token set at equal specificity, later in the cascade. **KDS is very likely rendering in the light IQ palette instead of the intended dark theme.** For KDS specifically this is the highest-stakes instance of the three surfaces — it's mounted in a kitchen and stared at continuously through a shift, exactly the condition `.surface-dark`'s own reasoning cites. Not visually confirmed — no browser tooling this session. Load `/app/kds` on a real screen before deciding anything about KDS colour.
+Same CSS mechanism as `design-system/pages/pos.md` originally described: `[data-surface="iq"]` is applied at the top level in `src/app/(app)/app/layout.tsx`, wrapping every `/app/*` route including KDS, and fully overrides `.surface-dark`'s entire token set at equal specificity, later in the cascade — so KDS renders the light IQ palette today.
+
+**Do not assume the POS outcome applies here.** POS's dark-theme fix was tried, shipped, confirmed live, and reverted the same day (2026-09-15) — it turned out POS was deliberately designed light, and `.surface-dark`'s "look at this screen for a whole shift" reasoning described an intent that was never actually executed or checked against real components. KDS is a genuinely different case worth checking on its own terms, not by analogy:
+
+- KDS has no equivalent "Design phase… touch polish" commit found in this pass describing it in explicit light-surface language the way POS's does — its current light appearance may be pure ambient inheritance (nobody ever designed it either way) rather than a deliberate choice either direction.
+- A kitchen display mounted for a whole shift is exactly the condition `.surface-dark`'s reasoning describes, and KDS — unlike POS — was not shown to be visually broken by a `.surface-dark` reapplication (no `--panel`/`--inverse` usage was confirmed in KDS's own component research; its ticket cards use their own late/on-time styling, not the IQ panel/inverse tokens POS's toggle depends on). The failure mode that sank the POS attempt may not apply to KDS at all.
+
+Before deciding: load `/app/kds` on a real screen (or share a production screenshot, as was done for POS) and look at both a light and a `.surface-dark`-reapplied version side by side. Don't reapply `DarkStaffSurface` here, or rule it out, from source reasoning alone — that's exactly what went wrong on POS the first time.
