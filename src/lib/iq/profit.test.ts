@@ -142,8 +142,38 @@ describe("requiredPrice", () => {
     ).toThrow(/unreachable/);
   });
 
+  it("refuses a negative margin target — that would price below cost", () => {
+    expect(() =>
+      requiredPrice({ mode: "margin", productCost: fromRupees("70"), targetMarginBps: bps(-1) }),
+    ).toThrow(/below cost/);
+  });
+
+  it("refuses a food cost target of 0%, which needs an infinite price", () => {
+    expect(() =>
+      requiredPrice({ mode: "foodCost", ingredientCost: fromRupees("52.50"), targetFoodCostBps: bps(0) }),
+    ).toThrow(/infinite price/);
+  });
+
+  it("refuses a food cost target above 100%, which prices below the ingredients", () => {
+    expect(() =>
+      requiredPrice({ mode: "foodCost", ingredientCost: fromRupees("52.50"), targetFoodCostBps: bps(101) }),
+    ).toThrow(/below its ingredients/);
+  });
+
   it("rounds up to a whole rupee for the board", () => {
     expect(formatINR(toMenuPrice(fromRupees("164.06")))).toBe("₹165");
     expect(toMenuPrice(fromRupees("165"))).toBe(fromRupees("165"));
+  });
+});
+
+describe("achievedMarginBps", () => {
+  it("has no margin to report on a zero or negative price", () => {
+    // A free or comped item is not "a 100% loss margin" — it is not priced at
+    // all, and division by zero would otherwise produce it.
+    expect(achievedMarginBps(fromRupees("0"), fromRupees("70"))).toBeNull();
+  });
+
+  it("reports a negative margin honestly when the price sits below cost", () => {
+    expect(achievedMarginBps(fromRupees("50"), fromRupees("70"))).toBeLessThan(0);
   });
 });

@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { sampleReceipt } from "./data";
 import { renderReceipt } from "./render";
-import { type ItemsSection, type ReceiptTemplate, type Section, defaultTemplate, parseTemplate } from "./template";
+import {
+  IMAGE_WIDTH_PCT,
+  type ItemsSection,
+  type ReceiptTemplate,
+  SECTION_LABELS,
+  type Section,
+  defaultTemplate,
+  newTextSection,
+  parseTemplate,
+} from "./template";
 
 const seed = { name: "FRYBIRD", address1: "Sector 9", address2: null, city: "Ambala City", state: "Haryana", pin: null, phone: "98765 43210", gstin: null };
 const base = defaultTemplate(seed);
@@ -23,6 +32,48 @@ describe("template", () => {
   it("refuses a template that is not one", () => {
     expect(parseTemplate({ version: 1, paperWidthMm: 80, divider: "dashed", sections: [] }).ok).toBe(false);
     expect(parseTemplate({ ...base, sections: [{ id: "x", kind: "nope" }] }).ok).toBe(false);
+  });
+
+  it("refuses a template with no sections at all", () => {
+    expect(parseTemplate({ version: 1, paperWidthMm: 79, divider: "dashed", sections: [] }).ok).toBe(false);
+  });
+
+  it("refuses a section field that does not parse as a URL", () => {
+    const withBadUrl = withSection(base, "logo", (section) => ({ ...section, url: "not-a-url" }) as Section);
+    expect(parseTemplate(withBadUrl).ok).toBe(false);
+  });
+
+  it("shows a restaurant field only when the seed actually has a value for it", () => {
+    const withPhone = defaultTemplate({ ...seed, phone: "98765 43210" });
+    const withoutPhone = defaultTemplate({ ...seed, phone: null });
+    const field = (t: ReceiptTemplate) => {
+      const restaurant = t.sections.find((s) => s.kind === "restaurant");
+      return restaurant?.kind === "restaurant" ? restaurant.fields.find((f) => f.key === "phone") : undefined;
+    };
+    expect(field(withPhone)?.show).toBe(true);
+    expect(field(withoutPhone)?.show).toBe(false);
+  });
+
+  it("gives a new custom text block a stable shape that already validates", () => {
+    const section = newTextSection(1);
+    expect(section.kind).toBe("text");
+    expect(section.visible).toBe(true);
+    expect(parseTemplate({ ...base, sections: [...base.sections, section] }).ok).toBe(true);
+  });
+
+  it("gives two new text blocks different ids, so they do not collide as the same section", () => {
+    expect(newTextSection(1).id).not.toBe(newTextSection(1).id);
+  });
+
+  it("labels every kind of section the default template actually uses, plus the custom text kind", () => {
+    for (const kind of [...base.sections.map((s) => s.kind), "text"]) {
+      expect(SECTION_LABELS[kind as keyof typeof SECTION_LABELS]).toBeTruthy();
+    }
+  });
+
+  it("gives every image size a width, larger sizes wider", () => {
+    expect(IMAGE_WIDTH_PCT.sm).toBeLessThan(IMAGE_WIDTH_PCT.md);
+    expect(IMAGE_WIDTH_PCT.md).toBeLessThan(IMAGE_WIDTH_PCT.lg);
   });
 });
 

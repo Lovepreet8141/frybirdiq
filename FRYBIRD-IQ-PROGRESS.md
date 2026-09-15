@@ -3164,3 +3164,47 @@ question (`orders_channel_placed_idx`), it reuses `analytics.ts`'s existing
 `paidOrders()` revenue definition unchanged, it's gated on the existing
 `analytics.view`, needs zero schema, and `FRYBIRD-ADMIN-ARCHITECTURE.md`
 already flags channel performance as "revisit if it becomes a real need."
+
+## Closing the test-coverage gap — and correcting the list it came from
+
+A prior audit listed 8 `src/lib` files as untested by checking only for a
+same-named sibling `.test.ts`. That check has a real blind spot: this
+codebase's own convention is to group tests by *feature*, not by
+filename — `src/lib/iq/profit.test.ts` already covered `breakeven.ts` and
+`pricing.ts`'s main paths, and `src/lib/receipt/render.test.ts` already
+had a `describe("template", ...)` block covering `template.ts`'s core
+cases. Two of the eight were reported untested and were not — verified by
+grepping every `.test.ts` for each function name before writing anything,
+not by trusting the original list.
+
+**What was actually added, 2026-09-15:**
+- `src/lib/iq/units.test.ts` (new) — genuinely had zero coverage.
+- `src/lib/promotions/form.test.ts` (new) — genuinely had zero coverage.
+- `src/lib/cart/schema.test.ts` (new) — genuinely had zero coverage. Tests
+  `lineKey`'s real behaviour but deliberately does not assert on the known
+  `"|"`-join ambiguity (see `claude/v2-evolution`'s unmerged `1f9c505`) —
+  fixing that is someone else's pending decision, not this slice's.
+- `src/lib/notifications/whatsapp-link.test.ts` (new) — genuinely had zero
+  coverage.
+- `src/lib/iq/profit.test.ts` (extended) — `pricing.ts`'s four `throw`
+  branches (unreachable/negative margin, 0%/>100% food cost target) and
+  `achievedMarginBps`'s zero-price case were real gaps even though the
+  file existed; added rather than duplicated into a new `pricing.test.ts`.
+- `src/lib/receipt/render.test.ts` (extended) — `template.ts`'s URL
+  validation, empty-sections rejection, seed-conditional field visibility,
+  `newTextSection`, `SECTION_LABELS`, and `IMAGE_WIDTH_PCT` were real gaps
+  in an already-existing `describe` block.
+
+**Deliberately not touched:** `src/lib/pos/pricing.ts`. It lives under
+`src/lib` but imports `server-only` and calls two DB-backed repository
+functions (`getMenu`, `resolvePricingContext`) directly — it is not pure
+the way CLAUDE.md's "every function in domain/lib has a test" is scoped
+for, the same exception the repository layer already gets. No test in
+this codebase's 550 cases uses `vi.mock`; introducing one here would be a
+new testing pattern, not a missing test, and is a real decision (mock the
+repositories, or split the pure line-resolution logic out of the
+DB-fetching orchestration) rather than something to default into.
+
+489 → 550 tests. typecheck, lint, and the RSC-boundary check all clean.
+Not redeployed — none of this changes served behaviour; test files are
+not part of the production build.
