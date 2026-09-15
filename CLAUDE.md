@@ -194,7 +194,12 @@ change to a calculation without a change to its test is incomplete.
 Follow `BUILD-PLAN.md` §73. Do not skip ahead. Phase 1 must let a real customer
 place a real order end to end before POS work begins.
 
-Current phase: **4 — web POS.**
+This line used to hardcode a phase number here; it went stale (said "4 —
+web POS" while the actual frontier was deep in IQ dashboard, admin, and
+hardware work, with POS itself untouched for an entire build arc) because
+nothing kept it in sync with reality. Current phase now lives in one
+place: `docs/ROADMAP.md`, which is dated and updated as phases complete —
+check its top section rather than trusting a number here.
 
 <!-- BEGIN:nextjs-agent-rules -->
 
