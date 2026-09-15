@@ -52,7 +52,24 @@ export const EMPTY_CART: Cart = { lines: [] };
  * Two of the same burger are one line of quantity two; the same wings at
  * different heat are two lines. Modifiers are sorted so selection order does
  * not create a duplicate line.
+ *
+ * JSON rather than a `|` join, because a join has no escape. Joining on a
+ * separator makes `{slug: "burger", modifiers: ["a|b"]}` and
+ * `{slug: "burger", modifiers: ["a", "b"]}` the same key, and this key decides
+ * which line `setQuantity` sets and which line `removeLine` removes — so a
+ * collision edits the wrong line, or two lines at once.
+ *
+ * Real slugs cannot collide: the menu admin constrains them to
+ * `[a-z0-9-]+` (`menu-admin/actions.ts`). But this cart is parsed from a
+ * cookie the browser can edit, and `cartLineSchema` accepts any string up to
+ * 120 characters there — deliberately, because tightening the cookie schema to
+ * the slug format would reject any legacy cart whose slug predates that rule
+ * and silently empty it. So the ambiguity is removed here, where it costs
+ * nothing, rather than at a boundary where narrowing has a blast radius.
+ *
+ * The format is not persisted anywhere — it is recomputed on every read — so
+ * changing it cannot invalidate stored data.
  */
 export function lineKey(line: Pick<CartLine, "slug" | "modifiers">): string {
-  return [line.slug, ...[...line.modifiers].sort()].join("|");
+  return JSON.stringify([line.slug, [...line.modifiers].sort()]);
 }
