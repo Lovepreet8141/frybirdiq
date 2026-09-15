@@ -4040,3 +4040,50 @@ deploy-transition artifact.
 
 Phase 3 status: 3.1–3.5 all merged and deployed. Remaining: 3.6 (Smart
 86), 3.7 (purchase orders).
+
+## Lane A 3.6 — Smart 86, read-only stockout projection (`788441a`)
+
+Graduated `inventoryAvailability` in `menu-admin.ts` from a dead
+`"unknown"`-always stub (confirmed zero callers before touching it)
+into a real per-product risk, exactly the integration point
+docs/INVENTORY-ARCHITECTURE.md §10 names. New pure module
+`src/lib/iq/stockout.ts` (`assessIngredientStock` and friends, 21
+tests) is the one place two related signals combine into a single
+`StockRisk`: a same-day clock-time projection ("short around 20:45",
+the roadmap's own worked example, reproduced as a test) when the
+trailing 7-day velocity would exhaust on-hand before closing today,
+falling back to a coarser ~2-day days-of-cover flag (the pre-approved
+threshold from earlier this session) for anything not urgent today but
+trending low, plus an independent manual `reorderThreshold` override
+that fires even with zero sales history. One risk definition, read two
+ways — per-ingredient (`getSmart86Projections`, new panel on
+`/app/iq/alerts`) and per-product (the graduated `inventoryAvailability`,
+an advisory callout on the product edit page) — so the two views can
+never disagree about what "at risk" means.
+
+**Confirmed read-only the hard way, not just by trusting the report**:
+grepped the full diff for `.insert(`/`.update(`/`.delete(` — zero
+matches anywhere in 8 changed files. Every write path this slice could
+have touched (`productAvailability`, the manual availability toggle)
+is completely untouched; the product-page callout's own copy says so
+explicitly ("This is a recommendation, not a change — availability
+below is still set by hand").
+
+**KDS boundary correctly respected again**: docs/INVENTORY-ARCHITECTURE.md
+§12 lists this feature's eventual destination as "products and the
+KDS," but KDS stayed untouched per this session's standing protection
+— flagged in the same pattern 3.3 (waste log) used for its own
+KITCHEN/KDS boundary, rather than built anyway because a doc mentioned
+it.
+
+typecheck, lint, 624 tests (599 + 25 new: 21 in `stockout.test.ts`
+including the roadmap's own worked example, 4 for new `dates.ts`
+helpers `timeOnBusinessDate`/`openHoursSpan`, which correctly handle
+an overnight shift wrapping past midnight), RSC-boundary, contrast,
+and `next build` all clean. No schema changes — every table this
+needed already existed. Deployed; service active. Verified live:
+`/app/iq/alerts` → 307. journalctl clean of anything but the known
+deploy-transition artifact.
+
+Phase 3 status: 3.1–3.6 all merged and deployed. Remaining: 3.7
+(purchase orders) — the last slice in this phase.
