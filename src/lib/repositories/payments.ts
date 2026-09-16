@@ -358,33 +358,68 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
        * requires to have none.
        *
        * The sequence is per financial year and per organization, found by
-       * counting what has already been issued this year. Under real
-       * concurrency this wants a database sequence rather than a count — two
-       * simultaneous settlements could read the same number — but the unique
-       * constraint on (org_id, invoice_number) turns that into a failed write
-       * rather than a duplicate invoice, and one counter serves one queue.
+       * counting what has already been issued this year — a real database
+       * sequence would be cleaner, but would need one per (org, financial
+       * year), created on demand, for a single-column figure that only
+       * needs to be right, not fast. The unique constraint on (org_id,
+       * invoice_number) turns two simultaneous settlements reading the
+       * same count into a failed write, not a duplicate invoice — but a
+       * failed write on its own would crash a settlement whose payment had
+       * *already* captured moments earlier as a separate statement: real
+       * money taken, and then an unrelated numbering collision throwing an
+       * unhandled error back at the cashier, with the order stuck unpaid
+       * despite the till already being short the cash. Retried on that
+       * specific conflict — recomputing the count fresh each attempt — the
+       * same way `insertOrder`'s own order-number collision already is,
+       * just below in this same file's sibling `orders.ts`.
        */
       const issuedAt = now;
       const year = financialYear(issuedAt);
-      const issuedThisYear = await database
-        .select({ invoiceNumber: orders.invoiceNumber })
-        .from(orders)
-        .where(and(eq(orders.orgId, order.orgId), like(orders.invoiceNumber, `${year}/%`)));
+      const settlingOrder = order; // rebound so the nested closure below keeps TS's non-undefined narrowing
 
-      const highest = issuedThisYear.reduce((max, row) => {
-        const parsed = row.invoiceNumber ? parseInvoiceNumber(row.invoiceNumber) : null;
-        return parsed && parsed.sequence > max ? parsed.sequence : max;
-      }, 0);
+      async function issueInvoiceNumber(): Promise<void> {
+        const issuedThisYear = await database
+          .select({ invoiceNumber: orders.invoiceNumber })
+          .from(orders)
+          .where(and(eq(orders.orgId, settlingOrder.orgId), like(orders.invoiceNumber, `${year}/%`)));
 
-      await database
-        .update(orders)
-        .set({
-          ...(movesToPaid ? { status: "PAID" as const } : {}),
-          invoiceNumber: order.invoiceNumber ?? invoiceNumber(issuedAt, highest + 1),
-          invoicedAt: order.invoicedAt ?? issuedAt,
-          updatedAt: issuedAt,
-        })
-        .where(eq(orders.id, order.id));
+        const highest = issuedThisYear.reduce((max, row) => {
+          const parsed = row.invoiceNumber ? parseInvoiceNumber(row.invoiceNumber) : null;
+          return parsed && parsed.sequence > max ? parsed.sequence : max;
+        }, 0);
+
+        await database
+          .update(orders)
+          .set({
+            ...(movesToPaid ? { status: "PAID" as const } : {}),
+            invoiceNumber: settlingOrder.invoiceNumber ?? invoiceNumber(issuedAt, highest + 1),
+            invoicedAt: settlingOrder.invoicedAt ?? issuedAt,
+            updatedAt: issuedAt,
+          })
+          .where(eq(orders.id, settlingOrder.id));
+      }
+
+      // Recount-and-increment means a fully adversarial burst of N
+      // concurrent settlements can force the unluckiest one through up to
+      // N-1 retries — every round only the single writer that lands first
+      // survives, and everyone else recomputes the same next number and
+      // collides again together. 10 attempts comfortably covers a busier
+      // burst than "single owner-operator, one location" will ever produce
+      // at the counter; each retry is one cheap select+update, not
+      // something worth being stingy about.
+      const MAX_INVOICE_NUMBER_ATTEMPTS = 10;
+      for (let attempt = 0; attempt < MAX_INVOICE_NUMBER_ATTEMPTS; attempt += 1) {
+        try {
+          await issueInvoiceNumber();
+          break;
+        } catch (error) {
+          // 23505 is unique_violation — another settlement claimed the
+          // same invoice number in between the read above and this write.
+          // Anything else is a real failure.
+          const code = (error as { cause?: { code?: string }; code?: string }).cause?.code ?? (error as { code?: string }).code;
+          if (code !== "23505" || attempt === MAX_INVOICE_NUMBER_ATTEMPTS - 1) throw error;
+        }
+      }
 
       /*
        * Points are awarded when the money actually arrives, not when the order
