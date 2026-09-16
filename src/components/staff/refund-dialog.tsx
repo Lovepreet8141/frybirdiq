@@ -33,6 +33,11 @@ export function RefundDialog({
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  // One key per refund attempt. A retried submit (a slow network, a second
+  // click that beat `pending`) reuses it, so the server replays the first
+  // result instead of refunding twice; closing the dialog — cancelled or
+  // completed — rotates it, so the next attempt is a genuinely new one.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   const remaining = payment ? ((payment.amount - payment.refunded) as Paise) : (0n as Paise);
   const remainingRupees = payment ? formatAmount(remaining) : "0";
@@ -42,13 +47,14 @@ export function RefundDialog({
     setReason("");
     setError(null);
     setDone(null);
+    setIdempotencyKey(crypto.randomUUID());
   }
 
   function submit() {
     if (!payment) return;
     setError(null);
     startTransition(async () => {
-      const result = await refundPaymentAction({ paymentId: payment.id, amount: amount.trim() === "" ? remainingRupees : amount.trim(), reason });
+      const result = await refundPaymentAction({ paymentId: payment.id, amount: amount.trim() === "" ? remainingRupees : amount.trim(), reason, idempotencyKey });
       if (result.ok) {
         setDone(`Refunded. ${payment.provider === "razorpay" ? "Razorpay has been told; the customer sees it in a few days." : "Hand the cash over now."}`);
         router.refresh();

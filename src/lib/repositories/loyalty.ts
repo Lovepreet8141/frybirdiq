@@ -17,7 +17,7 @@ import "server-only";
  * pure rules in `src/lib/loyalty/stamps.ts`, which do have full coverage.
  */
 
-import { and, asc, eq, isNull, like, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, like, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { loyaltyAccounts, loyaltyRewards, loyaltyStampEvents, loyaltyTransactions, orders, organizations } from "@/db/schema";
 import { pointsReclaimable } from "@/lib/loyalty";
@@ -283,6 +283,49 @@ export async function reversePointsForOrder(input: { orgId: string; orderId: str
     reason: `${REVERSAL_PREFIX} ${input.reason}`,
     orderId: input.orderId,
   });
+}
+
+/**
+ * Spends points a priced order redeemed, once the order row itself exists.
+ *
+ * The counterpart to `reversePointsForOrder` above, and atomic for the same
+ * reason: the previous version read `pointsBalance` and then wrote
+ * `balance - points` computed in JS, with no re-check at all that the
+ * balance still covered the spend. Two orders from the same customer placed
+ * close enough together would both read the same starting balance, and the
+ * second write would silently clobber the first deduction — or the balance
+ * could be driven negative outright, since nothing stopped it. The `WHERE
+ * pointsBalance >= points` makes the write itself the check: it only
+ * applies against whatever the balance actually is at that instant, and
+ * updates zero rows — surfaced to the caller, not swallowed — if a
+ * concurrent spend already used the balance up.
+ *
+ * By the time this runs the order has already been written with the
+ * discount priced in (matching the comment at this function's call site):
+ * a failed spend here cannot be un-ordered, only reported.
+ */
+export async function spendPointsForOrder(input: { orgId: string; customerId: string; orderId: string; orderNumber: string; points: number }): Promise<{ debited: boolean }> {
+  if (input.points <= 0) return { debited: true };
+  const database = db();
+
+  const [account] = await database.select({ id: loyaltyAccounts.id }).from(loyaltyAccounts).where(eq(loyaltyAccounts.customerId, input.customerId)).limit(1);
+  if (!account) return { debited: false };
+
+  const [debited] = await database
+    .update(loyaltyAccounts)
+    .set({ pointsBalance: sql`${loyaltyAccounts.pointsBalance} - ${input.points}`, updatedAt: new Date() })
+    .where(and(eq(loyaltyAccounts.id, account.id), gte(loyaltyAccounts.pointsBalance, input.points)))
+    .returning({ id: loyaltyAccounts.id });
+  if (!debited) return { debited: false };
+
+  await database.insert(loyaltyTransactions).values({
+    orgId: input.orgId,
+    accountId: account.id,
+    points: -input.points,
+    reason: `Spent on order #${input.orderNumber}`,
+    orderId: input.orderId,
+  });
+  return { debited: true };
 }
 
 /** The oldest reward still sitting available for a customer, if any. Redeem oldest first. */

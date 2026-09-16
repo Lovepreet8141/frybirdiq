@@ -507,6 +507,13 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
 
 export type RefundPaymentResult = { ok: true; refundId: string; orderId: string; fullyRefunded: boolean } | { ok: false; error: string };
 
+type RefundTxOutcome =
+  // refundedAmount travels as a string, not a Paise/bigint: withIdempotency
+  // stores this whole object as a jsonb responseSnapshot for a replay to
+  // return later, and JSON has no bigint representation.
+  | { ok: true; refundId: string; orderId: string; fullyRefunded: boolean; orderStatusBefore: OrderRow["status"]; orderFulfilment: OrderRow["fulfilment"]; refundedAmount: string; reason: string }
+  | { ok: false; error: string };
+
 /**
  * Gives money back.
  *
@@ -517,6 +524,16 @@ export type RefundPaymentResult = { ok: true; refundId: string; orderId: string;
  * which also voids the FRYBIRD REWARDS stamp) when the lifecycle allows the
  * move, and a partial one leaves the order where it is. Every refund lands
  * a `refunds` row, an `order_events` row and an audit row with the actor.
+ *
+ * Idempotent on the caller's key (a retried request — a network timeout, a
+ * double-tap — replays the first result rather than refunding twice), and
+ * the balance check is additionally serialized with `SELECT ... FOR UPDATE`
+ * on the payment row: two genuinely concurrent refund requests against the
+ * *same* payment (different keys — two managers, two devices) would
+ * otherwise both read "remaining" before either wrote, and could together
+ * refund more than was ever captured. The lock makes the second request
+ * wait for the first to finish and see its result before checking its own
+ * amount against what is actually left.
  */
 export async function refundPayment(input: {
   paymentId: string;
@@ -525,6 +542,7 @@ export async function refundPayment(input: {
   actorUserId: string;
   actorRoles: readonly Role[];
   orgId: string;
+  idempotencyKey: string;
 }): Promise<RefundPaymentResult> {
   try {
     authorize(input.actorRoles, "orders.refund");
@@ -536,89 +554,117 @@ export async function refundPayment(input: {
   if (reason.length < 3) return { ok: false, error: "Say why, in a few words." };
 
   const database = db();
-  const [payment] = await database
-    .select()
-    .from(payments)
-    .where(and(eq(payments.id, input.paymentId), eq(payments.orgId, input.orgId)))
-    .limit(1);
-  if (!payment) return { ok: false, error: "That payment does not exist." };
-  if (payment.status !== "CAPTURED" && payment.status !== "PARTIALLY_REFUNDED") {
-    return { ok: false, error: `Only a captured payment can be refunded; this one is ${payment.status.toLowerCase().replace("_", " ")}.` };
-  }
 
-  const [order] = await database.select().from(orders).where(eq(orders.id, payment.orderId)).limit(1);
-  if (!order) return { ok: false, error: "That order does not exist." };
-
-  const booked = await database.select({ amount: refunds.amount }).from(refunds).where(eq(refunds.paymentId, payment.id));
-  const alreadyRefunded = booked.reduce((sum, row) => add(sum, paise(row.amount)), ZERO);
-  const remaining = subtract(paise(payment.amount), alreadyRefunded);
-  if (input.amount > remaining) {
-    return { ok: false, error: `Only ${formatINR(remaining)} is left to refund on this payment.` };
-  }
-
-  const provider = getProvider(payment.provider);
-  const refunded = await provider.refund({ providerPaymentId: payment.providerPaymentId, amount: input.amount, reason });
-  if (!refunded.ok) return { ok: false, error: refunded.error ?? "The refund could not be made." };
-
-  const now = new Date();
-  const [row] = await database
-    .insert(refunds)
-    .values({
+  const { result: outcome, replayed } = await withIdempotency(
+    {
+      key: input.idempotencyKey,
+      operation: "refund_payment",
       orgId: input.orgId,
-      paymentId: payment.id,
-      orderId: order.id,
-      amount: refunded.refundedAmount,
-      reason,
-      actorUserId: input.actorUserId,
-      provider: payment.provider,
-      providerRefundId: refunded.providerRefundId,
-    })
-    .returning({ id: refunds.id });
-  if (!row) return { ok: false, error: "The refund was made but could not be recorded. Tell the owner." };
-
-  const fullyRefunded = add(alreadyRefunded, refunded.refundedAmount) >= paise(payment.amount);
-  await database
-    .update(payments)
-    .set({ status: fullyRefunded ? "REFUNDED" : "PARTIALLY_REFUNDED", updatedAt: now })
-    .where(eq(payments.id, payment.id));
-
-  await database.insert(auditLogs).values({
-    orgId: input.orgId,
-    locationId: order.locationId,
-    actorUserId: input.actorUserId,
-    action: "payment_refunded",
-    entity: "payments",
-    entityId: payment.id,
-    before: { status: payment.status, refunded: alreadyRefunded.toString() },
-    after: {
-      status: fullyRefunded ? "REFUNDED" : "PARTIALLY_REFUNDED",
-      amount: refunded.refundedAmount.toString(),
-      reason,
-      provider: payment.provider,
-      providerRefundId: refunded.providerRefundId,
-      orderId: order.id,
+      request: { paymentId: input.paymentId, amount: input.amount.toString(), reason },
     },
-  });
+    async (): Promise<RefundTxOutcome> =>
+      database.transaction(async (tx) => {
+        const [payment] = await tx
+          .select()
+          .from(payments)
+          .where(and(eq(payments.id, input.paymentId), eq(payments.orgId, input.orgId)))
+          .for("update")
+          .limit(1);
+        if (!payment) return { ok: false, error: "That payment does not exist." };
+        if (payment.status !== "CAPTURED" && payment.status !== "PARTIALLY_REFUNDED") {
+          return { ok: false, error: `Only a captured payment can be refunded; this one is ${payment.status.toLowerCase().replace("_", " ")}.` };
+        }
+
+        const [order] = await tx.select().from(orders).where(eq(orders.id, payment.orderId)).limit(1);
+        if (!order) return { ok: false, error: "That order does not exist." };
+
+        const booked = await tx.select({ amount: refunds.amount }).from(refunds).where(eq(refunds.paymentId, payment.id));
+        const alreadyRefunded = booked.reduce((sum, row) => add(sum, paise(row.amount)), ZERO);
+        const remaining = subtract(paise(payment.amount), alreadyRefunded);
+        if (input.amount > remaining) {
+          return { ok: false, error: `Only ${formatINR(remaining)} is left to refund on this payment.` };
+        }
+
+        const provider = getProvider(payment.provider);
+        const refunded = await provider.refund({ providerPaymentId: payment.providerPaymentId, amount: input.amount, reason });
+        if (!refunded.ok) return { ok: false, error: refunded.error ?? "The refund could not be made." };
+
+        const now = new Date();
+        const [row] = await tx
+          .insert(refunds)
+          .values({
+            orgId: input.orgId,
+            paymentId: payment.id,
+            orderId: order.id,
+            amount: refunded.refundedAmount,
+            reason,
+            actorUserId: input.actorUserId,
+            provider: payment.provider,
+            providerRefundId: refunded.providerRefundId,
+          })
+          .returning({ id: refunds.id });
+        if (!row) return { ok: false, error: "The refund was made but could not be recorded. Tell the owner." };
+
+        const fullyRefunded = add(alreadyRefunded, refunded.refundedAmount) >= paise(payment.amount);
+        await tx
+          .update(payments)
+          .set({ status: fullyRefunded ? "REFUNDED" : "PARTIALLY_REFUNDED", updatedAt: now })
+          .where(eq(payments.id, payment.id));
+
+        await tx.insert(auditLogs).values({
+          orgId: input.orgId,
+          locationId: order.locationId,
+          actorUserId: input.actorUserId,
+          action: "payment_refunded",
+          entity: "payments",
+          entityId: payment.id,
+          before: { status: payment.status, refunded: alreadyRefunded.toString() },
+          after: {
+            status: fullyRefunded ? "REFUNDED" : "PARTIALLY_REFUNDED",
+            amount: refunded.refundedAmount.toString(),
+            reason,
+            provider: payment.provider,
+            providerRefundId: refunded.providerRefundId,
+            orderId: order.id,
+          },
+        });
+
+        return { ok: true, refundId: row.id, orderId: order.id, fullyRefunded, orderStatusBefore: order.status, orderFulfilment: order.fulfilment, refundedAmount: refunded.refundedAmount.toString(), reason };
+      }),
+  );
+
+  if (!outcome.ok) return outcome;
+
+  // A replay must not repeat what only the first, successful run should do
+  // — the transaction above already ran exactly once and wrote everything
+  // that belongs to the refund itself. Moving the order and writing its
+  // event are the one part deliberately left outside that transaction (see
+  // below), so they need their own guard against running a second time.
+  if (replayed) return { ok: true, refundId: outcome.refundId, orderId: outcome.orderId, fullyRefunded: outcome.fullyRefunded };
 
   // A full refund closes the order as REFUNDED where the lifecycle allows
   // it (paid, cooking, ready, out, completed). advanceOrder writes the event
   // and voids the stamp. A partial refund, or an order the graph will not
   // move, gets an event of its own so the trail still shows the money.
-  if (fullyRefunded && canTransition(order.status, "REFUNDED", order.fulfilment)) {
-    const moved = await advanceOrder({ orderId: order.id, to: "REFUNDED", actorUserId: input.actorUserId, orgId: input.orgId });
+  // Outside the locked transaction deliberately: advanceOrder does its own
+  // writes (and its own idempotency, via order-status transition checks)
+  // and does not need to hold the payment row lock to do them.
+  const refundedAmount = paise(BigInt(outcome.refundedAmount));
+  if (outcome.fullyRefunded && canTransition(outcome.orderStatusBefore, "REFUNDED", outcome.orderFulfilment)) {
+    const moved = await advanceOrder({ orderId: outcome.orderId, to: "REFUNDED", actorUserId: input.actorUserId, orgId: input.orgId });
     if (!moved.ok) {
-      await database.insert(orderEvents).values({ orgId: input.orgId, orderId: order.id, fromStatus: order.status, toStatus: order.status, actorUserId: input.actorUserId, reason: `Refunded ${formatINR(refunded.refundedAmount)} — ${reason}` });
+      await database.insert(orderEvents).values({ orgId: input.orgId, orderId: outcome.orderId, fromStatus: outcome.orderStatusBefore, toStatus: outcome.orderStatusBefore, actorUserId: input.actorUserId, reason: `Refunded ${formatINR(refundedAmount)} — ${outcome.reason}` });
     }
   } else {
     await database.insert(orderEvents).values({
       orgId: input.orgId,
-      orderId: order.id,
-      fromStatus: order.status,
-      toStatus: order.status,
+      orderId: outcome.orderId,
+      fromStatus: outcome.orderStatusBefore,
+      toStatus: outcome.orderStatusBefore,
       actorUserId: input.actorUserId,
-      reason: `${fullyRefunded ? "Refunded" : "Part refunded"} ${formatINR(refunded.refundedAmount)} — ${reason}`,
+      reason: `${outcome.fullyRefunded ? "Refunded" : "Part refunded"} ${formatINR(refundedAmount)} — ${outcome.reason}`,
     });
   }
 
-  return { ok: true, refundId: row.id, orderId: order.id, fullyRefunded };
+  return { ok: true, refundId: outcome.refundId, orderId: outcome.orderId, fullyRefunded: outcome.fullyRefunded };
 }

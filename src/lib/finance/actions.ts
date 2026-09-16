@@ -25,6 +25,8 @@ const refundSchema = z.object({
     .trim()
     .regex(/^\d+(\.\d{1,2})?$/, "Enter an amount like 150 or 150.50."),
   reason: z.string().trim().min(3, "Say why, in a few words.").max(200),
+  /** One key per refund attempt, minted client-side — see RefundDialog. A retry of the same attempt reuses it; a new attempt gets a fresh one. */
+  idempotencyKey: z.uuid(),
 });
 
 export async function refundPaymentAction(input: unknown): Promise<RefundActionResult> {
@@ -40,6 +42,7 @@ export async function refundPaymentAction(input: unknown): Promise<RefundActionR
       actorUserId: staff.userId,
       actorRoles: staff.roles,
       orgId: staff.orgId,
+      idempotencyKey: parsed.data.idempotencyKey,
     });
     if (result.ok) {
       revalidatePath("/app/finance");

@@ -13,7 +13,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   categories,
@@ -171,6 +171,22 @@ export async function createTestCustomer(orgId: string): Promise<TestCustomer> {
 /** A membership row — the one thing `staff.orgId`-style authorization checks ultimately read. Not exercised by these tests (they call repository functions directly, already past that layer), kept for completeness/future use. */
 export async function createTestStaffMembership(orgId: string, userId: string, role: "OWNER" | "ADMIN" | "MANAGER" | "CASHIER" | "KITCHEN" | "RIDER" | "INVENTORY" | "ANALYST" = "OWNER"): Promise<void> {
   await db().insert(memberships).values({ orgId, userId, role, isActive: true });
+}
+
+/**
+ * Forces a handful of real connections open in the pool before a
+ * `Promise.all` race.
+ *
+ * Without this, a cold pool's first two concurrent queries can end up
+ * accidentally serialized by connection-acquisition/setup latency alone,
+ * before either ever touches the row a real race is meant to contend on —
+ * which would make a concurrency test pass whether or not the code under
+ * test is actually safe. Found reviewing this priority's own race tests:
+ * the reviewer proved it by reverting the fix under test and watching the
+ * "proves the race" test keep passing anyway, on a cold pool.
+ */
+export async function warmPool(connections = 6): Promise<void> {
+  await Promise.all(Array.from({ length: connections }, () => db().execute(sql`select 1`)));
 }
 
 function rupeesToPaise(rupees: string): bigint {

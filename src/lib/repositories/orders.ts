@@ -15,7 +15,7 @@ import "server-only";
 import { and, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { addresses, customers, locations, loyaltyAccounts, loyaltyStampEvents, loyaltyTransactions, memberships, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments, tables } from "@/db/schema";
+import { addresses, customers, locations, loyaltyStampEvents, memberships, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments, tables } from "@/db/schema";
 import { assertChannelFulfilment, fulfilmentsFor, type OrderChannel } from "@/domain/order-channel";
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition, foodWasCooking } from "@/domain/order-status";
 import type { Role } from "@/domain/permissions";
@@ -38,7 +38,7 @@ import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
 import { createPendingPayment, recordCashPayment } from "./payments";
 import { CASH_PROVIDER, RAZORPAY_PROVIDER, availableMethods, codAllowed, getProvider, type PaymentMethod } from "@/lib/payments";
-import { reversePointsForOrder, reverseStampForOrder } from "./loyalty";
+import { reversePointsForOrder, reverseStampForOrder, spendPointsForOrder } from "./loyalty";
 import { recordConsumption, reverseConsumption } from "./stock";
 import { IdempotencyConflict, withIdempotency } from "./idempotency";
 
@@ -464,28 +464,16 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
    * Spend the points, and count the code.
    *
    * Both happen only once the order row exists. Deducting a balance for an
-   * order that then failed to write would take points for food nobody ordered.
+   * order that then failed to write would take points for food nobody
+   * ordered. `spendPointsForOrder` (loyalty.ts) does the write atomically —
+   * see its own doc comment — and reports back whether the balance actually
+   * covered it, which is checked below since a failed spend at this point
+   * cannot un-place an order that already priced the discount in.
    */
   if (cart.points && customer) {
-    const [account] = await database
-      .select()
-      .from(loyaltyAccounts)
-      .where(eq(loyaltyAccounts.customerId, customer.id))
-      .limit(1);
-
-    if (account) {
-      await database
-        .update(loyaltyAccounts)
-        .set({ pointsBalance: account.pointsBalance - cart.points.points, updatedAt: now })
-        .where(eq(loyaltyAccounts.id, account.id));
-
-      await database.insert(loyaltyTransactions).values({
-        orgId,
-        accountId: account.id,
-        points: -cart.points.points,
-        reason: `Spent on order #${orderNumber}`,
-        orderId: order.id,
-      });
+    const { debited } = await spendPointsForOrder({ orgId, customerId: customer.id, orderId: order.id, orderNumber, points: cart.points.points });
+    if (!debited) {
+      console.error(`loyalty points: order #${orderNumber} priced a ${cart.points.points}-point redemption but the balance was insufficient at spend time (concurrent order?) — no deduction recorded, customer ${customer.id}`);
     }
   }
 
