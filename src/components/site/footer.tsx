@@ -1,13 +1,13 @@
 import Link from "next/link";
-import { SiteWordmark } from "@/components/site/wordmark";
+import { Wordmark } from "@/components/home/wordmark";
 import { getOrg } from "@/lib/repositories/org";
 
 /**
  * Site footer.
  *
- * Dark, as in the site design — the page ends on ink rather than fading out on
- * more cream, and the cream wordmark reads against it without needing the ink
- * variant the header uses.
+ * Dark, as in the site design — the page ends on ink rather than fading out
+ * on more cream. Uses the same `Wordmark` component as `HomeNav` and the
+ * homepage's own footer, not a separate asset.
  */
 export async function Footer() {
   const org = await getOrg();
@@ -15,7 +15,7 @@ export async function Footer() {
     <footer className="mt-auto bg-[var(--ink)] text-[var(--cream-hi)]">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-[var(--gutter)] py-12 sm:flex-row sm:justify-between">
         <div className="flex flex-col gap-2">
-          <SiteWordmark className="h-[28px]" tone="dark" />
+          <Wordmark />
           <p className="text-sm text-[var(--cream-2)]">Born crispy. Built bold.</p>
         </div>
 

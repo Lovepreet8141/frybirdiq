@@ -6,19 +6,21 @@ import Link from "next/link";
 import { Wordmark } from "./wordmark";
 
 /**
- * Ported from frybird-web's src/components/site/nav.tsx. Homepage-only —
- * every other customer route (menu, cart, checkout, account, order
- * tracking) keeps its existing Header/Footer untouched, per the approved
- * scope. Exactly the four links the homepage nav is scoped to: Menu, Find
- * us, Franchise, and account access. Cart access remains reachable the same
- * way it already is everywhere else — from the real Header once a visitor
- * is inside /menu or beyond — this nav doesn't need to duplicate that, it
- * only needs to get someone there.
+ * Ported from frybird-web's src/components/site/nav.tsx. The one canonical
+ * customer-facing website header — rendered by both `(home)/layout.tsx`
+ * (homepage) and `(site)/layout.tsx` (menu, item, cart, checkout, account,
+ * order tracking and every other customer route), so the header is
+ * identical everywhere rather than two implementations that can drift.
+ *
+ * Find us and Franchise are sections of the homepage, not every page, so
+ * their hrefs are homepage-absolute (`/#find-us`) rather than bare hashes —
+ * on `/` that's still a same-document scroll; from any other route it
+ * navigates to `/` and then scrolls.
  */
 const LINKS = [
   { href: "/menu", label: "Menu" },
-  { href: "#find-us", label: "Find us" },
-  { href: "#franchise", label: "Franchise" },
+  { href: "/#find-us", label: "Find us" },
+  { href: "/#franchise", label: "Franchise" },
 ];
 
 interface HomeNavProps {
