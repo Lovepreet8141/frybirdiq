@@ -16,6 +16,7 @@ import { unitEnum } from "@/db/schema/inventory";
 import { type InventoryFormState } from "@/lib/inventory/actions";
 import { fromBaseUnits, unitLabel } from "@/lib/iq/units";
 import { fromRupees } from "@/lib/money";
+import { IdempotencyConflict } from "@/lib/repositories/idempotency";
 
 /** Auth failures become a sentence, not a stack trace (§57). Anything else is a real bug and is rethrown. */
 function explain(error: unknown): InventoryFormState {
@@ -23,6 +24,21 @@ function explain(error: unknown): InventoryFormState {
   if (error instanceof NotPermitted) return { status: "error", message: "You don't have permission to change inventory." };
   throw error;
 }
+
+/**
+ * A stock-write failure that isn't a validation refusal (those come back
+ * as an ordinary `{ok:false}` value, not a throw). `IdempotencyConflict`
+ * gets its own honest message — same key, content that doesn't match the
+ * earlier attempt it's tied to, normally only reachable by editing the
+ * form and resubmitting while the first attempt is still in flight, per
+ * `useIdempotencyKey`'s own comment in stock-forms.tsx — rather than
+ * being lumped in with a genuine network failure.
+ */
+function explainWriteFailure(error: unknown, noun: string): InventoryFormState {
+  if (error instanceof IdempotencyConflict) return { status: "error", message: "That looks like a repeat submission. Check the form and try again." };
+  return { status: "error", message: `Couldn't reach the server. Try again — it's safe, this ${noun} can't be recorded twice.` };
+}
+
 import { adjustStock, countStock, receiveStock } from "@/lib/repositories/stock";
 
 const optionalText = (max: number) =>
@@ -64,6 +80,11 @@ const receiveSchema = z.object({
     .refine((value) => Number(value) > 0, "The price must be more than zero."),
   supplierId: optionalUuid,
   notes: optionalText(300),
+  // Minted once by the form on mount (stock-forms.tsx), carried on every
+  // retry of the same submission. A network error or a double-tap resends
+  // this same key, and receiveStock's withIdempotency wrap returns the
+  // first attempt's result instead of recording the delivery twice.
+  idempotencyKey: z.uuid(),
 });
 
 export async function receiveStockAction(_previous: InventoryFormState, formData: FormData): Promise<InventoryFormState> {
@@ -74,6 +95,7 @@ export async function receiveStockAction(_previous: InventoryFormState, formData
     purchaseCost: String(formData.get("purchaseCost") ?? ""),
     supplierId: String(formData.get("supplierId") ?? ""),
     notes: String(formData.get("notes") ?? ""),
+    idempotencyKey: String(formData.get("idempotencyKey") ?? ""),
   });
   if (!parsed.success) return { status: "error", message: parsed.error.issues[0]?.message ?? "Check the form." };
 
@@ -84,14 +106,30 @@ export async function receiveStockAction(_previous: InventoryFormState, formData
     return explain(error);
   }
 
-  const result = await receiveStock(staff.orgId, staff.userId, {
-    ingredientId: parsed.data.ingredientId,
-    purchaseQuantity: Number(parsed.data.purchaseQuantity),
-    purchaseUnit: parsed.data.purchaseUnit,
-    purchaseCost: fromRupees(parsed.data.purchaseCost),
-    supplierId: parsed.data.supplierId,
-    notes: parsed.data.notes,
-  });
+  let result;
+  try {
+    result = await receiveStock(
+      staff.orgId,
+      staff.userId,
+      {
+        ingredientId: parsed.data.ingredientId,
+        purchaseQuantity: Number(parsed.data.purchaseQuantity),
+        purchaseUnit: parsed.data.purchaseUnit,
+        purchaseCost: fromRupees(parsed.data.purchaseCost),
+        supplierId: parsed.data.supplierId,
+        notes: parsed.data.notes,
+      },
+      parsed.data.idempotencyKey,
+    );
+  } catch (error) {
+    // An unhandled throw here would otherwise reach the route's error
+    // boundary and remount this form, losing the idempotencyKey React is
+    // holding — the one thing that makes "try again" safe. Converting it
+    // to a normal error response keeps the form (and the key) exactly
+    // where they are, matching the same fix already applied to the POS
+    // payment sheet for the same class of risk.
+    return explainWriteFailure(error, "delivery");
+  }
   if (!result.ok) return { status: "error", message: result.error };
 
   revalidateIngredient(parsed.data.ingredientId);
@@ -112,6 +150,7 @@ const adjustSchema = z.object({
     .refine((value) => Number(value) > 0, "Quantity must be more than zero."),
   unit: notPack,
   notes: z.string().trim().min(1, "Say why you're adjusting stock.").max(300),
+  idempotencyKey: z.uuid(),
 });
 
 export async function adjustStockAction(_previous: InventoryFormState, formData: FormData): Promise<InventoryFormState> {
@@ -121,6 +160,7 @@ export async function adjustStockAction(_previous: InventoryFormState, formData:
     quantity: String(formData.get("quantity") ?? ""),
     unit: String(formData.get("unit") ?? ""),
     notes: String(formData.get("notes") ?? ""),
+    idempotencyKey: String(formData.get("idempotencyKey") ?? ""),
   });
   if (!parsed.success) return { status: "error", message: parsed.error.issues[0]?.message ?? "Check the form." };
 
@@ -131,13 +171,23 @@ export async function adjustStockAction(_previous: InventoryFormState, formData:
     return explain(error);
   }
 
-  const result = await adjustStock(staff.orgId, staff.userId, {
-    ingredientId: parsed.data.ingredientId,
-    direction: parsed.data.direction,
-    quantity: parsed.data.quantity,
-    unit: parsed.data.unit,
-    notes: parsed.data.notes,
-  });
+  let result;
+  try {
+    result = await adjustStock(
+      staff.orgId,
+      staff.userId,
+      {
+        ingredientId: parsed.data.ingredientId,
+        direction: parsed.data.direction,
+        quantity: parsed.data.quantity,
+        unit: parsed.data.unit,
+        notes: parsed.data.notes,
+      },
+      parsed.data.idempotencyKey,
+    );
+  } catch (error) {
+    return explainWriteFailure(error, "adjustment");
+  }
   if (!result.ok) return { status: "error", message: result.error };
 
   revalidateIngredient(parsed.data.ingredientId);

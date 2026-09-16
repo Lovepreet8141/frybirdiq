@@ -21,6 +21,7 @@ import { auditLogs, ingredients, inventoryItems, inventoryMovements, memberships
 import { movementTypeEnum, type Unit } from "@/db/schema/inventory";
 import { businessDate, openHoursSpan, type DateRange, timeOnBusinessDate } from "@/lib/dates";
 import { getStoreLocationId } from "@/lib/repositories/hardware";
+import { withIdempotency } from "@/lib/repositories/idempotency";
 import { type DbTx, recordIngredientPriceInTx } from "@/lib/repositories/inventory";
 import { consumptionQuantity, costFromRate, type MilliPaise, purchaseRatePerBaseUnit, rateToPaise } from "@/lib/iq/costing";
 import { assessIngredientStock, type StockRisk } from "@/lib/iq/stockout";
@@ -405,12 +406,37 @@ export interface ReceiveStockInput {
  * what was actually paid for what actually arrived, matching
  * docs/INVENTORY-ARCHITECTURE.md's worked reconciliation (§12a) — the usable
  * rate is a recipe-costing concern, not a receiving one.
+ *
+ * Idempotent on a caller-supplied key — unlike `receivePurchaseOrder`,
+ * which can key off the PO's own id since receiving one is inherently a
+ * one-time event, a manual delivery has no pre-existing identifier: the
+ * manager's form mints one (`stock-forms.tsx`), the same shape checkout's
+ * own idempotency key takes, so a retried submission (a timeout, a
+ * double-tap that slipped past the disabled button) returns the first
+ * attempt's result rather than recording the same delivery twice.
  */
-export async function receiveStock(orgId: string, actorUserId: string, input: ReceiveStockInput): Promise<StockWriteResult> {
-  const locationId = await getStoreLocationId(orgId);
-  if (!locationId) return { ok: false, error: "No location is set up for this organization yet." };
-
-  return db().transaction((tx) => receiveStockInTx(tx, orgId, actorUserId, locationId, input));
+export async function receiveStock(orgId: string, actorUserId: string, input: ReceiveStockInput, idempotencyKey: string): Promise<StockWriteResult> {
+  const { result } = await withIdempotency(
+    {
+      key: idempotencyKey,
+      operation: "receive_stock",
+      orgId,
+      request: {
+        ingredientId: input.ingredientId,
+        purchaseQuantity: input.purchaseQuantity,
+        purchaseUnit: input.purchaseUnit,
+        purchaseCost: input.purchaseCost.toString(),
+        supplierId: input.supplierId,
+        notes: input.notes,
+      },
+    },
+    async (): Promise<StockWriteResult> => {
+      const locationId = await getStoreLocationId(orgId);
+      if (!locationId) return { ok: false, error: "No location is set up for this organization yet." };
+      return db().transaction((tx) => receiveStockInTx(tx, orgId, actorUserId, locationId, input));
+    },
+  );
+  return result;
 }
 
 /**
@@ -493,62 +519,77 @@ export interface AdjustStockInput {
  * genuinely gone with no purchase, waste or sale movement to explain it.
  * Signed by `direction`; the note is mandatory (docs/INVENTORY-ARCHITECTURE.md
  * D5 / write path 8).
+ *
+ * Idempotent on a caller-supplied key, same reasoning as `receiveStock`
+ * above — a manual correction has no natural identifier of its own to key
+ * off, so the form mints one.
  */
-export async function adjustStock(orgId: string, actorUserId: string, input: AdjustStockInput): Promise<StockWriteResult> {
-  const locationId = await getStoreLocationId(orgId);
-  if (!locationId) return { ok: false, error: "No location is set up for this organization yet." };
-
-  return db().transaction(async (tx) => {
-    const ingredient = await loadIngredientForWrite(tx, orgId, input.ingredientId);
-    if (!ingredient) return { ok: false, error: "That ingredient no longer exists." };
-
-    let magnitude: number;
-    try {
-      const conversion = conversionFor(input.unit);
-      if (conversion.baseUnit !== ingredient.baseUnit) {
-        return { ok: false, error: unitMismatchError(ingredient.baseUnit, input.unit) };
-      }
-      magnitude = toBaseUnitsDecimal(input.quantity, input.unit);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "That quantity can't be converted." };
-    }
-    if (magnitude <= 0) return { ok: false, error: "Enter a quantity greater than zero." };
-
-    const delta = input.direction === "REMOVE" ? -magnitude : magnitude;
-    const rate = ingredient.costPerBaseUnitMilli as MilliPaise;
-    const costPerBaseUnit = rateToPaise(rate);
-    // costFromRate(0, …) is already zero when nothing has ever been priced.
-    const totalCost = costFromRate(rate, magnitude);
-
-    const [movement] = await tx
-      .insert(inventoryMovements)
-      .values({
-        orgId,
-        ingredientId: input.ingredientId,
-        locationId,
-        type: "ADJUSTMENT",
-        quantity: delta,
-        costPerBaseUnit,
-        totalCost,
-        actorUserId,
-        notes: input.notes,
-      })
-      .returning({ id: inventoryMovements.id });
-    if (!movement) throw new Error("stock: adjustment movement insert returned no row");
-
-    const onHand = await applyMovementDelta(tx, orgId, input.ingredientId, locationId, delta);
-
-    await tx.insert(auditLogs).values({
+export async function adjustStock(orgId: string, actorUserId: string, input: AdjustStockInput, idempotencyKey: string): Promise<StockWriteResult> {
+  const { result } = await withIdempotency(
+    {
+      key: idempotencyKey,
+      operation: "adjust_stock",
       orgId,
-      actorUserId,
-      action: "stock_adjusted",
-      entity: "inventory_movements",
-      entityId: movement.id,
-      after: { ingredientId: input.ingredientId, delta, notes: input.notes, onHand },
-    });
+      request: { ingredientId: input.ingredientId, direction: input.direction, quantity: input.quantity, unit: input.unit, notes: input.notes },
+    },
+    async (): Promise<StockWriteResult> => {
+      const locationId = await getStoreLocationId(orgId);
+      if (!locationId) return { ok: false, error: "No location is set up for this organization yet." };
 
-    return { ok: true, onHand, delta };
-  });
+      return db().transaction(async (tx): Promise<StockWriteResult> => {
+        const ingredient = await loadIngredientForWrite(tx, orgId, input.ingredientId);
+        if (!ingredient) return { ok: false, error: "That ingredient no longer exists." };
+
+        let magnitude: number;
+        try {
+          const conversion = conversionFor(input.unit);
+          if (conversion.baseUnit !== ingredient.baseUnit) {
+            return { ok: false, error: unitMismatchError(ingredient.baseUnit, input.unit) };
+          }
+          magnitude = toBaseUnitsDecimal(input.quantity, input.unit);
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : "That quantity can't be converted." };
+        }
+        if (magnitude <= 0) return { ok: false, error: "Enter a quantity greater than zero." };
+
+        const delta = input.direction === "REMOVE" ? -magnitude : magnitude;
+        const rate = ingredient.costPerBaseUnitMilli as MilliPaise;
+        const costPerBaseUnit = rateToPaise(rate);
+        // costFromRate(0, …) is already zero when nothing has ever been priced.
+        const totalCost = costFromRate(rate, magnitude);
+
+        const [movement] = await tx
+          .insert(inventoryMovements)
+          .values({
+            orgId,
+            ingredientId: input.ingredientId,
+            locationId,
+            type: "ADJUSTMENT",
+            quantity: delta,
+            costPerBaseUnit,
+            totalCost,
+            actorUserId,
+            notes: input.notes,
+          })
+          .returning({ id: inventoryMovements.id });
+        if (!movement) throw new Error("stock: adjustment movement insert returned no row");
+
+        const onHand = await applyMovementDelta(tx, orgId, input.ingredientId, locationId, delta);
+
+        await tx.insert(auditLogs).values({
+          orgId,
+          actorUserId,
+          action: "stock_adjusted",
+          entity: "inventory_movements",
+          entityId: movement.id,
+          after: { ingredientId: input.ingredientId, delta, notes: input.notes, onHand },
+        });
+
+        return { ok: true, onHand, delta };
+      });
+    },
+  );
+  return result;
 }
 
 export interface CountStockInput {
