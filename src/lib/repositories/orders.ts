@@ -30,7 +30,7 @@ import { type SnapshotLineInput, snapshotLines } from "@/lib/orders/snapshot";
 import type { CartLine } from "@/lib/cart/schema";
 import { priceDraft } from "@/lib/pos/pricing";
 import { quoteForPin } from "./delivery";
-import { countPromotionUse } from "./promotions";
+import { claimPromotionUse } from "./promotions";
 import { requireOrg, resolvePricingContext } from "./org";
 import { ensureCustomerByPhone } from "./customers";
 import { COUNTER_PLACED_STATUS } from "@/lib/pos/counter-placement";
@@ -379,6 +379,39 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     })
     .returning();
 
+  /*
+   * Claim the promotion's usage slot before the order that spends it is
+   * written — not after, the way this used to work. `cart.promotion` was
+   * resolved against a snapshot read minutes (or milliseconds) ago; another
+   * order on the same near-exhausted code may have claimed the last slot in
+   * between. Claiming here, right before persisting, and refusing to
+   * persist at all when the claim fails, means an order can never exist
+   * with a discount the code's own limit did not actually have room for —
+   * unlike a customer's spent points (spendPointsForOrder below), a promo
+   * slot can be checked *before* the order becomes real, rather than only
+   * after.
+   *
+   * Not fully airtight: this claim and `persistOrder` below are separate
+   * statements, not one transaction, so a claim that succeeds and is then
+   * followed by a `persistOrder` failure (an order-number collision that
+   * outlasts its own retries, say) burns a real slot with no order to show
+   * for it. Accepted for the same reason the customer/address writes just
+   * above already accept the same shape of risk — narrower here only
+   * because a usage slot, unlike an idempotent upsert, cannot be "written
+   * again harmlessly" if this ever needs tightening.
+   */
+  if (cart.promotion) {
+    const claimed = await claimPromotionUse(orgId, cart.promotion.code);
+    // No `fieldErrors` here on purpose — checkout-form.tsx only shows the
+    // generic error banner (`state.message`) when `fieldErrors` is absent,
+    // and "promoCode" isn't one of the named fields it renders a
+    // field-level message for. Setting one would silently swallow this
+    // message instead of surfacing it.
+    if (!claimed) {
+      return { ok: false, error: "That offer just reached its usage limit. Remove the code and try again." };
+    }
+  }
+
   // The row, the §51 snapshots, the placement event and the pending payment —
   // through the same core the counter uses, so a website order and a till
   // order record exactly the same things. What is actually charged is the
@@ -477,9 +510,6 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     }
   }
 
-  if (cart.promotion) {
-    await countPromotionUse(orgId, cart.promotion.code);
-  }
 
   return { ok: true, orderId: order.id, orderNumber, payment: details.payment };
   }

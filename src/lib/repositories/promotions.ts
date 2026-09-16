@@ -242,13 +242,38 @@ export async function deletePromotion(orgId: string, actorUserId: string, id: st
 }
 
 /**
- * Counts a use, once the order is safely written. Incremented in SQL rather
- * than read-modify-written, so two orders placed at the same moment cannot
- * both read the same count and let a limited code go one over.
+ * Claims one use of a promotion, atomically, and reports whether the claim
+ * actually held.
+ *
+ * The increment being SQL rather than read-modify-write only keeps the
+ * *counter* from losing an update — it says nothing about the *limit*.
+ * `applyPromotion` (src/lib/promotions/index.ts) checks `usageCount >=
+ * usageLimit` against a snapshot read at cart-pricing time, and that
+ * snapshot can be stale by the time an order actually commits: two
+ * customers placing an order with the same near-exhausted code within the
+ * same window both see the code as still valid, both get the discount
+ * priced in, and an unconditional increment afterward — which is what this
+ * function used to be — would let a limit of 1 go to 2 with neither write
+ * ever knowing about the other.
+ *
+ * The `WHERE usageLimit IS NULL OR usageCount < usageLimit` makes the claim
+ * itself the check: it only succeeds against the row's *actual* count at
+ * that instant, so the loser of a genuine race gets `false` — the caller
+ * must not persist an order it can't back with a real claimed slot; a
+ * committed order with a promo the shop never actually intended to grant
+ * twice is not something a later count-only write can undo.
  */
-export async function countPromotionUse(orgId: string, code: string): Promise<void> {
-  await db()
+export async function claimPromotionUse(orgId: string, code: string): Promise<boolean> {
+  const [row] = await db()
     .update(promotions)
     .set({ usageCount: sql`${promotions.usageCount} + 1`, updatedAt: new Date() })
-    .where(and(eq(promotions.orgId, orgId), eq(promotions.code, normaliseCode(code))));
+    .where(
+      and(
+        eq(promotions.orgId, orgId),
+        eq(promotions.code, normaliseCode(code)),
+        sql`(${promotions.usageLimit} IS NULL OR ${promotions.usageCount} < ${promotions.usageLimit})`,
+      ),
+    )
+    .returning({ id: promotions.id });
+  return row !== undefined;
 }
