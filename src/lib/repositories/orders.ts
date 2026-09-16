@@ -12,7 +12,7 @@ import "server-only";
  * seed, and it is the first thing to verify once keys exist.
  */
 
-import { and, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { addresses, customers, locations, loyaltyStampEvents, memberships, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments, tables } from "@/db/schema";
@@ -103,7 +103,7 @@ export type CheckoutInput = z.infer<typeof checkoutSchema>;
 
 export type PlaceOrderResult =
   | { ok: true; orderId: string; orderNumber: string; payment: "COD" | "ONLINE" }
-  | { ok: false; error: string; fieldErrors?: Record<string, string> };
+  | { ok: false; error: string; fieldErrors?: Record<string, string>; resumeOrderId?: string };
 
 /**
  * The next order number, as the counter would call it out.
@@ -125,6 +125,40 @@ export type PlaceOrderResult =
 async function nextOrderNumber(): Promise<string> {
   const [row] = await db().execute<{ next: string }>(sql`SELECT nextval('order_number_seq') AS next`);
   return String(row?.next);
+}
+
+/**
+ * The most recent still-unpaid online order under this phone, if any —
+ * `placeOrder`'s guard against minting a parallel Razorpay Order for what
+ * is likely the same purchase attempt as one already waiting on payment.
+ * Exported so it can be proven directly against a real database, since
+ * `placeOrder` itself depends on cookie-scoped cart state a plain
+ * repository-layer test cannot supply.
+ *
+ * Scoped by phone, not customerId — the identity that exists on every
+ * order regardless of whether the customer is signed in (§ this file's
+ * own checkout schema comment: "Phone is the identity that matters in
+ * India"). `sinceMs` is a window, not a hard rule: Razorpay Orders do not
+ * expire on any timeline this function controls, so a customer who
+ * genuinely wants a second order after waiting this long is let through
+ * rather than blocked forever by one they may have abandoned.
+ */
+export async function findResumableOnlineOrder(orgId: string, phone: string, sinceMs = 30 * 60_000): Promise<string | null> {
+  const [resumable] = await db()
+    .select({ orderId: orders.id })
+    .from(orders)
+    .innerJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.status, "PENDING")))
+    .where(
+      and(
+        eq(orders.orgId, orgId),
+        eq(orders.customerPhone, phone),
+        eq(orders.status, "PENDING_PAYMENT"),
+        gte(orders.placedAt, new Date(Date.now() - sinceMs)),
+      ),
+    )
+    .orderBy(desc(orders.placedAt))
+    .limit(1);
+  return resumable?.orderId ?? null;
 }
 
 /**
@@ -288,6 +322,32 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     if (!onlineAvailable) {
       return { ok: false, error: "Online payment isn't available right now. Choose pay on collection.", fieldErrors: { payment: "Not available right now." } };
     }
+
+    /*
+     * Resume, don't duplicate.
+     *
+     * Nothing else here stops the same phone from opening a genuinely new
+     * checkout — the cart is only cleared once an order is actually placed
+     * (checkout-action.ts), so a customer who thinks their first attempt
+     * failed (a stalled Razorpay window, a slow network, a closed tab
+     * before the payment finished) and goes back to order the *same* food
+     * again would otherwise get a second, fully independent order with its
+     * own Razorpay Order — not a double charge on the first one (Razorpay
+     * itself refuses a second successful payment against one Order id
+     * once the first succeeds), but two orders paid for one meal, only
+     * discovered later. If a recent order under this phone is still
+     * sitting unpaid, send them back to finish paying *that* one instead
+     * of minting another.
+     */
+    const resumeOrderId = await findResumableOnlineOrder(org.id, details.phone);
+    if (resumeOrderId) {
+      return {
+        ok: false,
+        error: "You already have an unpaid order from the last few minutes. Pay that one, or wait a while before starting a new one.",
+        resumeOrderId,
+      };
+    }
+
     try {
       const intent = await getProvider(RAZORPAY_PROVIDER).createIntent({ orderId: details.idempotencyKey, amount: payable, method: "UPI" });
       payment = { provider: RAZORPAY_PROVIDER, method: "UPI", providerOrderId: intent.providerOrderId };

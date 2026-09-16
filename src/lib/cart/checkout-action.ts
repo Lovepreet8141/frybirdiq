@@ -41,6 +41,11 @@ export async function submitCheckout(_previous: CheckoutState, formData: FormDat
   });
 
   if (!result.ok) {
+    // A recent unpaid order already exists for this phone — sent back to
+    // finish paying it rather than shown a dead-end error. The current
+    // cart is deliberately left untouched here (unlike the success path
+    // below): nothing new was placed, so there is nothing to clear.
+    if (result.resumeOrderId) redirect(`/order/${result.resumeOrderId}?pay=1`);
     return { status: "error", message: result.error, fieldErrors: result.fieldErrors };
   }
 
