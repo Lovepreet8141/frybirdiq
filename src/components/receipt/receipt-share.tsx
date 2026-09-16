@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Download, Loader2, MessageCircle } from "lucide-react";
 import { whatsappOrderLink } from "@/lib/notifications/actions";
-import { canShareFile, isShareCancelled, renderElementToJpegFile } from "@/lib/receipt/share-image";
+import { canShareFile, describeError, isShareCancelled, renderElementToJpegFile } from "@/lib/receipt/share-image";
 
 interface ReceiptShareProps {
   readonly children: React.ReactNode;
@@ -30,6 +30,7 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
   const captureRef = useRef<HTMLDivElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<"preparing" | "ready" | "unsupported" | "error">("preparing");
+  const [genErrorDetail, setGenErrorDetail] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
   const [linkPending, setLinkPending] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
@@ -45,8 +46,10 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
         setFile(generated);
         setStatus(canShareFile(generated) ? "ready" : "unsupported");
       })
-      .catch(() => {
-        if (!cancelled) setStatus("error");
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setGenErrorDetail(describeError(error));
+        setStatus("error");
       });
     return () => {
       cancelled = true;
@@ -65,14 +68,28 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
   }, [objectUrl]);
 
   // Deliberately synchronous: called directly from onClick, no await before
-  // navigator.share, so the browser still sees this as the same user
-  // gesture that started the click.
+  // the first navigator.share, so the browser still sees this as the same
+  // user gesture that started the click.
+  //
+  // Tries files+caption first — valid per spec, and there's no evidence
+  // against it, only evidence that this handler wasn't being reached at
+  // all (see share-image.ts / the investigation that led here). If a share
+  // target genuinely rejects the combined payload, retries once with the
+  // image alone, in the same gesture (a .catch() continuation, not a new
+  // click) — file delivery matters more than the caption riding along with
+  // it. A rejection here is a real, reportable failure either way; the
+  // native share sheet resolving "successfully" but the target app quietly
+  // discarding the file is not something a web page can detect — nothing
+  // in the Web Share API surfaces what the receiving app did with it.
   function handleShare() {
     if (!file) return;
     setShareError(null);
     navigator.share({ files: [file], text: message }).catch((error: unknown) => {
       if (isShareCancelled(error)) return;
-      setShareError("Couldn't open the share sheet. Try downloading the image instead.");
+      navigator.share({ files: [file] }).catch((retryError: unknown) => {
+        if (isShareCancelled(retryError)) return;
+        setShareError(`Couldn't open the share sheet (${describeError(retryError)}). Try downloading the image instead.`);
+      });
     });
   }
 
@@ -94,6 +111,10 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
       <div ref={captureRef}>{children}</div>
 
       <div className="mt-4 flex flex-col items-end gap-2 print:hidden">
+        {(status === "ready" || status === "preparing") && (
+          <p className="max-w-[26rem] text-right text-sm text-muted-foreground">{message}</p>
+        )}
+
         {status === "ready" && (
           <button
             type="button"
@@ -115,8 +136,13 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
         {(status === "unsupported" || status === "error") && (
           <div className="flex flex-col items-end gap-2">
             <p className="max-w-[26rem] text-right text-sm text-muted-foreground">
-              Image sharing isn&rsquo;t supported on this device. Download the invoice image and share it through WhatsApp.
+              {status === "unsupported"
+                ? "Image sharing isn’t supported on this device. Download the invoice image and share it through WhatsApp."
+                : "Couldn’t prepare the invoice image on this device. Download it below, or send the order link instead."}
             </p>
+            {status === "error" && genErrorDetail && (
+              <p className="max-w-[26rem] text-right text-xs text-muted-foreground/70">{genErrorDetail}</p>
+            )}
             <div className="flex flex-wrap items-center justify-end gap-2">
               {objectUrl && (
                 <a
@@ -140,7 +166,7 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
                   ) : (
                     <MessageCircle className="size-4" aria-hidden="true" />
                   )}
-                  Send text link via WhatsApp instead
+                  Send order link via WhatsApp (no image)
                 </button>
               )}
             </div>

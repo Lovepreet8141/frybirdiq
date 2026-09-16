@@ -33,3 +33,9 @@ export function canShareFile(file: File): boolean {
 export function isShareCancelled(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
+
+/** A short, real diagnostic string — never a generic "something went wrong" — for the one thing on-screen that can show it. */
+export function describeError(error: unknown): string {
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  return String(error);
+}
