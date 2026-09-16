@@ -36,14 +36,14 @@ async function main() {
   console.log(`settling #${order.orderNumber} — ${inr(order.grandTotal)}\n`);
 
   // Permission first: a KITCHEN role holds no orders.update.
-  const denied = await recordCashPayment({ orderId: order.id, actorUserId: ACTOR, actorRoles: ["KITCHEN"] });
+  const denied = await recordCashPayment({ orderId: order.id, actorUserId: ACTOR, actorRoles: ["KITCHEN"], orgId: order.orgId });
   console.log(`as KITCHEN  : ${denied.ok ? "ALLOWED (wrong)" : `refused — ${denied.error}`}`);
 
-  const first = await recordCashPayment({ orderId: order.id, actorUserId: ACTOR, actorRoles: ["CASHIER"] });
+  const first = await recordCashPayment({ orderId: order.id, actorUserId: ACTOR, actorRoles: ["CASHIER"], orgId: order.orgId });
   console.log(`as CASHIER  : ${first.ok ? `taken (replayed=${first.replayed})` : `failed — ${first.error}`}`);
 
   // The double-press. Must not book the money twice.
-  const second = await recordCashPayment({ orderId: order.id, actorUserId: ACTOR, actorRoles: ["CASHIER"] });
+  const second = await recordCashPayment({ orderId: order.id, actorUserId: ACTOR, actorRoles: ["CASHIER"], orgId: order.orgId });
   console.log(`pressed again: ${second.ok ? `ok (replayed=${second.replayed})` : `refused — ${second.error}`}`);
 
   const [after] = await d.select().from(orders).where(eq(orders.id, order.id)).limit(1);

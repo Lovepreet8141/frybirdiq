@@ -199,6 +199,7 @@ async function main() {
       orderId: counterOrder.id,
       actorUserId: randomUUID(),
       actorRoles: ["OWNER"],
+      orgId: org.id,
     });
     assert("recordCashPayment (the real counter settlement call) succeeds for a DINE_IN order", settled.ok);
 

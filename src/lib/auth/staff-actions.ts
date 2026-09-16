@@ -42,6 +42,7 @@ export async function markPaidAction(input: unknown): Promise<StaffActionResult>
       orderId: parsed.data.orderId,
       actorUserId: staff.userId,
       actorRoles: staff.roles,
+      orgId: staff.orgId,
     });
     revalidatePath("/app/orders");
     return result.ok ? { ok: true } : { ok: false, error: result.error };

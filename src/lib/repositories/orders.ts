@@ -1298,6 +1298,7 @@ export async function completeDelivery(input: {
       orderId: order.id,
       actorUserId: input.actorUserId,
       actorRoles: input.actorRoles,
+      orgId: input.orgId,
     });
     // "Already paid" is not a failure here — it means someone recorded it
     // first, and the delivery should still close.

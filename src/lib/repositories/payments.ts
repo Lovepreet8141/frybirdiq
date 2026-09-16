@@ -109,6 +109,8 @@ export async function recordCashPayment(input: {
   orderId: string;
   actorUserId: string;
   actorRoles: readonly Role[];
+  /** The acting staff member's own org — enforced against the order, not trusted from it. See `Settlement.orgId`. */
+  orgId: string;
   /** What the customer handed over, when the till knows it. Must cover the amount due; the change is stored with the payment. */
   tendered?: Paise;
 }): Promise<RecordPaymentResult> {
@@ -120,6 +122,7 @@ export async function recordCashPayment(input: {
 
   return settle({
     orderId: input.orderId,
+    orgId: input.orgId,
     provider: CASH_PROVIDER,
     actorUserId: input.actorUserId,
     idempotencyKey: (order) => `cash-payment:${order.id}`,
@@ -226,11 +229,30 @@ interface Settlement {
   readonly reasonFor: (amount: Paise, method: PaymentMethod) => string;
   readonly providerPaymentId?: string;
   readonly providerOrderId?: string | null;
+  /**
+   * The caller's own org, when there is a staff session to check it against
+   * — cash at the counter or the door. Omitted for the Razorpay/webhook path,
+   * which has no staff session at all; that path's boundary is the
+   * provider's cryptographic signature over a specific payment id, not org
+   * membership, so there is nothing meaningful to compare it against.
+   *
+   * When present, this is enforced on the very first read: every other
+   * order-mutating function in this codebase (`refundPayment`,
+   * `advanceOrder`, `completeDelivery`) fetches its order scoped by
+   * `orgId`, and cash settlement was the one exception — a staff member
+   * could otherwise settle any order in the database by UUID alone, with
+   * only a role check and no tenant check at all.
+   */
+  readonly orgId?: string;
 }
 
 async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
   const database = db();
-  const [order] = await database.select().from(orders).where(eq(orders.id, settlement.orderId)).limit(1);
+  const [order] = await database
+    .select()
+    .from(orders)
+    .where(settlement.orgId ? and(eq(orders.id, settlement.orderId), eq(orders.orgId, settlement.orgId)) : eq(orders.id, settlement.orderId))
+    .limit(1);
   if (!order) return { ok: false, error: "That order does not exist." };
 
   // Already settled. For a gateway, the same payment id arriving twice (the

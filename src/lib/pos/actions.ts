@@ -202,7 +202,7 @@ export async function placeCounterOrderAction(input: unknown): Promise<CounterCh
   });
   if (!placed.ok) return placed;
 
-  const payment = await recordCashPayment({ orderId: placed.orderId, actorUserId: staff.userId, actorRoles: staff.roles, tendered });
+  const payment = await recordCashPayment({ orderId: placed.orderId, actorUserId: staff.userId, actorRoles: staff.roles, orgId: staff.orgId, tendered });
 
   // The kitchen and the orders list need this ticket now. The counter screen
   // deliberately is not revalidated here: refreshing the route the till is
