@@ -18,6 +18,7 @@ import { db } from "@/db";
 import { categories, orderItems, orders, payments, products, recipeItems, recipes } from "@/db/schema";
 import { ORDER_CHANNELS, type OrderChannel } from "@/domain/order-channel";
 import { type Paise, ZERO, add, paise, ratioBps, scale } from "@/lib/money";
+import { netRevenueOf } from "@/lib/iq/profit";
 import {
   type DateRange,
   addDays,
@@ -85,12 +86,21 @@ export function changeBps(current: bigint | number, previous: bigint | number): 
  * figure in FRYBIRD IQ reads through, exported so `src/lib/repositories/
  * expenses.ts`'s P&L computes revenue from the same rows as this dashboard
  * rather than a second copy of the same join and filter.
+ *
+ * Carries both totals so a caller can pick the right one rather than the
+ * query deciding for them: `taxableTotal` (net of GST, stored at placement —
+ * `src/lib/repositories/orders.ts`'s `persistOrder`) is what every aggregate
+ * "revenue" figure means, per `src/lib/pricing`'s own rule that GST is never
+ * revenue; `grandTotal` (what the customer actually pays) is for a figure
+ * that means money owed or collected, not money earned — an open order's
+ * pipeline value, a single order's amount on an alert.
  */
 export async function paidOrders(orgId: string, range: DateRange) {
   return db()
     .select({
       id: orders.id,
       grandTotal: orders.grandTotal,
+      taxableTotal: orders.taxableTotal,
       fulfilment: orders.fulfilment,
       channel: orders.channel,
       placedAt: orders.placedAt,
@@ -114,7 +124,7 @@ export async function getDashboard(orgId: string, range: DateRange): Promise<Das
 
   const [current, prior] = await Promise.all([paidOrders(orgId, range), paidOrders(orgId, before)]);
 
-  const revenueOf = (rows: typeof current) => add(...rows.map((row) => paise(row.grandTotal)));
+  const revenueOf = netRevenueOf;
   const revenue = revenueOf(current);
   const priorRevenue = revenueOf(prior);
 
@@ -155,7 +165,10 @@ export async function getDashboard(orgId: string, range: DateRange): Promise<Das
     const found = byProduct.get(item.productName) ?? { quantity: 0, revenue: ZERO };
     byProduct.set(item.productName, {
       quantity: found.quantity + item.quantity,
-      revenue: (found.revenue + paise(item.lineTotal)) as Paise,
+      // Net of GST — lineTaxable, not lineTotal — so this card's ranking sits
+      // under the same-page headline Revenue KPI without a basis mismatch a
+      // reader would have no way to see.
+      revenue: (found.revenue + paise(item.lineTaxable)) as Paise,
     });
   }
 
@@ -168,7 +181,7 @@ export async function getDashboard(orgId: string, range: DateRange): Promise<Das
   for (const row of current) {
     const day = businessDate(row.createdAt);
     const found = byDay.get(day) ?? { revenue: ZERO, orders: 0 };
-    byDay.set(day, { revenue: (found.revenue + paise(row.grandTotal)) as Paise, orders: found.orders + 1 });
+    byDay.set(day, { revenue: (found.revenue + paise(row.taxableTotal)) as Paise, orders: found.orders + 1 });
   }
 
   const series = daysInRange(range).map((date) => ({
@@ -224,7 +237,7 @@ export interface ChannelBreakdown {
 export async function getChannelBreakdown(orgId: string, range: DateRange): Promise<ChannelBreakdown> {
   const [current, prior] = await Promise.all([paidOrders(orgId, range), paidOrders(orgId, previousPeriod(range))]);
 
-  const revenueOf = (rows: typeof current) => add(...rows.map((row) => paise(row.grandTotal)));
+  const revenueOf = netRevenueOf;
   const mean = (total: Paise, count: number) => (count === 0 ? ZERO : ((total / BigInt(count)) as Paise));
   const total = revenueOf(current);
 
@@ -248,7 +261,7 @@ export async function getChannelBreakdown(orgId: string, range: DateRange): Prom
   for (const row of current) {
     const day = businessDate(row.createdAt);
     const found = byDay.get(day) ?? { DINE_IN: ZERO, TAKEAWAY: ZERO, ONLINE: ZERO };
-    found[row.channel] = add(found[row.channel], paise(row.grandTotal));
+    found[row.channel] = add(found[row.channel], paise(row.taxableTotal));
     byDay.set(day, found);
   }
   const series = daysInRange(range).map((date) => ({
@@ -300,16 +313,21 @@ export interface MenuPerformance {
 
 /**
  * What each product actually did — units, revenue, share, average paid —
- * over a range, against the previous period. Same `paidOrders` rows and the
- * same `lineTotal` aggregation `getDashboard`'s top-products uses, extended
- * to every product and joined to today's catalogue for category, image and
- * recipe status.
+ * over a range, against the previous period. Same `paidOrders` rows
+ * `getDashboard` uses, extended to every product and joined to today's
+ * catalogue for category, image and recipe status.
  *
- * Deliberately no margin or contribution column yet. A margin needs the
- * product's cost (no recipe has ingredient lines in production) *and*
- * net-of-tax revenue through `src/lib/pricing` (`basePrice` is
- * GST-inclusive) — both are real work with real rules, not a column to add
- * here. `recipe` says honestly how far each product is from having one.
+ * Revenue here is `lineTotal` — GST-inclusive, what the customer paid —
+ * unlike the Overview and P&L, which read `taxableTotal`/`lineTaxable`
+ * (net of GST, `src/lib/pricing`'s rule that GST is never revenue). The
+ * Products page discloses this basis mismatch explicitly rather than
+ * claiming consistency it doesn't have. Netting this figure is a trivial
+ * column swap (`lineTaxable` already exists and is populated the same way);
+ * it hasn't been done because a *margin* column needs the product's cost
+ * too (no recipe has ingredient lines in production yet), and shipping a
+ * half-netted "revenue" that still can't show a margin would trade one
+ * inconsistency for another. `recipe` says honestly how far each product is
+ * from having a cost.
  */
 export async function getMenuPerformance(orgId: string, range: DateRange): Promise<MenuPerformance> {
   const database = db();
@@ -484,10 +502,10 @@ export interface DayTotal {
   readonly orders: number;
 }
 
-/** Revenue and order count for one arbitrary window — lighter than {@link getDashboard} when neither AOV nor a product breakdown is needed. */
+/** Revenue and order count for one arbitrary window — lighter than {@link getDashboard} when neither AOV nor a product breakdown is needed. Net of GST, same rule as getDashboard. */
 export async function periodTotals(orgId: string, range: DateRange): Promise<DayTotal> {
   const rows = await paidOrders(orgId, range);
-  return { revenue: add(...rows.map((row) => paise(row.grandTotal))), orders: rows.length };
+  return { revenue: netRevenueOf(rows), orders: rows.length };
 }
 
 export interface TodayComparison {

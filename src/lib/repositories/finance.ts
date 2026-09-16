@@ -4,11 +4,11 @@ import "server-only";
  * The payments ledger — money that actually moved, one row per payment.
  *
  * Read-only. This is deliberately NOT a second definition of revenue:
- * revenue stays `analytics.ts`'s (an order's `grandTotal`, once it has a
- * captured payment). What this shows is the payment records themselves —
- * amount, method, provider fee, who captured it — which is the surface a
- * manager reads to check the till, not the dashboard figure. The two are
- * labelled differently on screen for that reason ("captured", never
+ * revenue stays `analytics.ts`'s (an order's `taxableTotal` — net of GST —
+ * once it has a captured payment). What this shows is the payment records
+ * themselves — amount, method, provider fee, who captured it — which is the
+ * surface a manager reads to check the till, not the dashboard figure. The
+ * two are labelled differently on screen for that reason ("captured", never
  * "revenue").
  *
  * "Who captured" comes from the `payment_captured` audit row

@@ -130,14 +130,17 @@ export interface PromotionRow {
 /**
  * Every promotion, with what it has actually done. `performance` is
  * measured from paid, not-cancelled orders — the same definition every
- * revenue figure in this app uses — not from `usageCount`.
+ * revenue figure in this app uses — not from `usageCount`. Net of GST
+ * (`taxableTotal`), same rule as `src/lib/repositories/analytics.ts`'s
+ * `paidOrders`/`netRevenueOf` — GST collected is never revenue, promo
+ * performance included.
  */
 export async function listPromotions(orgId: string): Promise<readonly PromotionRow[]> {
   const database = db();
   const [rows, used] = await Promise.all([
     database.select().from(promotions).where(eq(promotions.orgId, orgId)).orderBy(asc(promotions.createdAt)),
     database
-      .select({ code: orders.promotionCode, grandTotal: orders.grandTotal, discountTotal: orders.discountTotal })
+      .select({ code: orders.promotionCode, taxableTotal: orders.taxableTotal, discountTotal: orders.discountTotal })
       .from(orders)
       .innerJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, "CAPTURED")))
       .where(and(eq(orders.orgId, orgId), isNotNull(orders.promotionCode), sql`${orders.status} NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')`)),
@@ -148,7 +151,7 @@ export async function listPromotions(orgId: string): Promise<readonly PromotionR
     const code = normaliseCode(order.code ?? "");
     if (!code) continue;
     const found = byCode.get(code) ?? { orders: 0, revenue: ZERO, discountGiven: ZERO };
-    byCode.set(code, { orders: found.orders + 1, revenue: add(found.revenue, paise(order.grandTotal)), discountGiven: add(found.discountGiven, paise(order.discountTotal)) });
+    byCode.set(code, { orders: found.orders + 1, revenue: add(found.revenue, paise(order.taxableTotal)), discountGiven: add(found.discountGiven, paise(order.discountTotal)) });
   }
 
   return rows.map((row) => ({

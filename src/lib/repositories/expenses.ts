@@ -16,7 +16,7 @@ import { db } from "@/db";
 import { accounts, expenseCategories, expenses, targets } from "@/db/schema";
 import { type DateRange, addDays, businessDate, daysInRange, endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
 import { type Bps, type Paise, ZERO, add, paise, ratioBps } from "@/lib/money";
-import { profit, type ProfitResult } from "@/lib/iq/profit";
+import { netRevenueOf, profit, type ProfitResult } from "@/lib/iq/profit";
 import { paidOrders } from "@/lib/repositories/analytics";
 
 export interface ExpenseRow {
@@ -94,7 +94,10 @@ export interface ProfitAndLoss {
 
 export async function getProfitAndLoss(orgId: string, range: DateRange): Promise<ProfitAndLoss> {
   const [paid, totals, target] = await Promise.all([paidOrders(orgId, range), expenseTotals(orgId, range), monthTarget(orgId, range)]);
-  const revenue = add(...paid.map((order) => paise(order.grandTotal)));
+  // netRevenueOf, not a sum of grandTotal — every margin figure below
+  // (`profit()`) is only correct against net-of-tax revenue. See its own
+  // doc comment in src/lib/iq/profit.ts.
+  const revenue = netRevenueOf(paid);
   const orderCount = paid.length;
 
   const operating = totals.filter((t) => !t.isNonOperating);
@@ -202,7 +205,9 @@ export async function foodCostWeeklySeries(orgId: string, weeks = 8): Promise<re
   const revenueByDay = new Map<string, Paise>();
   for (const row of revenueRows) {
     const day = businessDate(row.createdAt);
-    revenueByDay.set(day, paise((revenueByDay.get(day) ?? ZERO) + paise(row.grandTotal)));
+    // Net of GST, same rule as getProfitAndLoss above — foodCostBps below is
+    // a margin figure and must not be computed against tax-inclusive revenue.
+    revenueByDay.set(day, paise((revenueByDay.get(day) ?? ZERO) + paise(row.taxableTotal)));
   }
 
   const directByDay = new Map<string, Paise>();

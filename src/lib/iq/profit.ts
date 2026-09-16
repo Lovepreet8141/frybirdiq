@@ -67,3 +67,26 @@ export function shareOfRevenueBps(amount: Paise, revenue: Paise): Bps | null {
 export function total(amounts: readonly Paise[]): Paise {
   return amounts.reduce<Paise>((sum, amount) => paise(sum + amount), ZERO);
 }
+
+/**
+ * Net-of-GST revenue for a set of paid orders.
+ *
+ * The one place every revenue aggregate in FRYBIRD IQ — the Overview
+ * dashboard, the channel breakdown, today-vs-yesterday, the P&L, food cost
+ * by week (`src/lib/repositories/analytics.ts`, `expenses.ts`) — sums an
+ * order's total, so a future one reaches for this rather than re-deriving
+ * the rule inline. GST collected on the government's behalf is never
+ * revenue (`src/lib/pricing`'s own rule: "GST is never revenue... every
+ * margin figure here works from taxable... and never from gross"), so this
+ * sums `taxableTotal` — the pre-tax value stored on the order at
+ * placement — never `grandTotal`, which is what the customer paid, tax
+ * included.
+ *
+ * Deliberately not used for a *single* order's own amount-owed display (an
+ * order alert, an open-orders pipeline value) — there, `grandTotal` is
+ * correct, because that figure means money owed or collected, not money
+ * earned. This function is only for a revenue *aggregate*.
+ */
+export function netRevenueOf(orders: readonly { readonly taxableTotal: bigint }[]): Paise {
+  return total(orders.map((order) => paise(order.taxableTotal)));
+}

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { bps, formatINR, fromRupees } from "@/lib/money";
+import { add, bps, formatINR, fromRupees } from "@/lib/money";
 
 import { breakEven, surplus } from "./breakeven";
-import { contribution, profit, shareOfRevenueBps, total } from "./profit";
+import { contribution, netRevenueOf, profit, shareOfRevenueBps, total } from "./profit";
 import { achievedMarginBps, requiredPrice, toMenuPrice } from "./pricing";
 
 describe("profit", () => {
@@ -60,6 +60,34 @@ describe("profit", () => {
 
   it("has no share of revenue to report when there is none", () => {
     expect(shareOfRevenueBps(fromRupees("100"), fromRupees("0"))).toBeNull();
+  });
+});
+
+describe("netRevenueOf", () => {
+  it("sums the net-of-tax total, not what the customer paid", () => {
+    // The exact worked example from src/lib/pricing's own docs: a ₹99
+    // burger at 5% GST earns ₹94.29, not ₹99 — the bug this guards against
+    // is reading grandTotal (gross) here instead of taxableTotal (net).
+    const orders = [
+      { taxableTotal: fromRupees("94.29"), grandTotal: fromRupees("99.00") },
+      { taxableTotal: fromRupees("94.29"), grandTotal: fromRupees("99.00") },
+    ];
+    expect(formatINR(netRevenueOf(orders))).toBe("₹188.58");
+    // Confirms this is genuinely reading a different column, not coincidentally
+    // matching — the gross sum would be ₹198.
+    expect(netRevenueOf(orders)).not.toBe(add(...orders.map((o) => o.grandTotal)));
+  });
+
+  it("is zero for an empty period, not a crash", () => {
+    expect(netRevenueOf([])).toBe(fromRupees("0"));
+  });
+
+  it("ignores every field but taxableTotal, so a caller cannot pass grandTotal by mistake and have it compile away silently", () => {
+    // TypeScript enforces the shape; this just documents that extra fields
+    // (channel, fulfilment, id — the real shape of a paidOrders() row) are
+    // fine to pass through untouched.
+    const rows = [{ taxableTotal: fromRupees("50"), grandTotal: fromRupees("52.50"), channel: "ONLINE" as const, id: "abc" }];
+    expect(netRevenueOf(rows)).toBe(fromRupees("50"));
   });
 });
 

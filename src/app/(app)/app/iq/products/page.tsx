@@ -67,8 +67,8 @@ export default async function ProductsAnalyticsPage({ searchParams }: { searchPa
         <>
           <DataTrust
             items={[
-              { tone: "gain", text: `Paid orders only · same revenue rule as Overview · ${range.label}` },
-              { tone: "flag", text: `Margin not connected — ${withRecipeLines} of ${catalogued.length} products have recipe lines, and revenue is not yet netted of GST for costing` },
+              { tone: "gain", text: `Paid orders only · ${range.label}` },
+              { tone: "flag", text: `Revenue here is GST-inclusive, unlike Overview and P&L — ${withRecipeLines} of ${catalogued.length} products have recipe lines, and per-product revenue is not yet netted of GST for costing` },
             ]}
           />
 
