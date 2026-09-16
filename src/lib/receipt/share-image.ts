@@ -1,5 +1,12 @@
 import { toCanvas } from "html-to-image";
 
+export interface RenderedImage {
+  readonly file: File;
+  /** The captured canvas's own pixel dimensions — surfaced so a broken/blank/zero-size capture is visible, not just assumed good because the promise resolved. */
+  readonly canvasWidth: number;
+  readonly canvasHeight: number;
+}
+
 /**
  * Rasterises a DOM node into a JPEG `File`, entirely client-side — no
  * upload, no server round-trip. `html-to-image`'s `toCanvas` does the DOM
@@ -11,12 +18,12 @@ import { toCanvas } from "html-to-image";
  * the receipt itself renders at CSS pixel density; `backgroundColor` fills
  * where the DOM has none, since JPEG has no alpha channel.
  */
-export async function renderElementToJpegFile(node: HTMLElement, filename: string): Promise<File> {
+export async function renderElementToJpegFile(node: HTMLElement, filename: string): Promise<RenderedImage> {
   const canvas = await toCanvas(node, { pixelRatio: 2, backgroundColor: "#FBF8F1", cacheBust: true });
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((result) => (result ? resolve(result) : reject(new Error("Could not create the invoice image."))), "image/jpeg", 0.92);
   });
-  return new File([blob], filename, { type: "image/jpeg" });
+  return { file: new File([blob], filename, { type: "image/jpeg" }), canvasWidth: canvas.width, canvasHeight: canvas.height };
 }
 
 /** Whether this browser can actually share this file via the native share sheet — never assumed from device/UA. */

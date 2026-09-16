@@ -13,7 +13,42 @@ interface ReceiptShareProps {
   readonly phone: string | null;
 }
 
+interface ShareDiagnostics {
+  readonly fileName: string | null;
+  readonly fileType: string | null;
+  readonly fileSizeBytes: number | null;
+  readonly canvasWidth: number | null;
+  readonly canvasHeight: number | null;
+  readonly canShareResult: boolean | null;
+  readonly shareInvoked: boolean;
+  readonly sharePayloadKeys: readonly string[] | null;
+  readonly shareOutcome: "pending" | "resolved" | "cancelled" | "rejected" | null;
+  readonly shareErrorName: string | null;
+  readonly shareErrorMessage: string | null;
+}
+
+const EMPTY_DIAG: ShareDiagnostics = {
+  fileName: null,
+  fileType: null,
+  fileSizeBytes: null,
+  canvasWidth: null,
+  canvasHeight: null,
+  canShareResult: null,
+  shareInvoked: false,
+  sharePayloadKeys: null,
+  shareOutcome: null,
+  shareErrorName: null,
+  shareErrorMessage: null,
+};
+
 /**
+ * TEMPORARY: this component carries a "Diagnostic info" panel (collapsed by
+ * default) added specifically for the Web Share investigation — real facts
+ * about the generated file and the actual share() call, read off the real
+ * device, since nothing in this environment can open a phone. Meant to come
+ * back out once the investigation concludes; it changes no default-visible
+ * behaviour for an ordinary customer.
+ *
  * Wraps the (unmodified, server-rendered) invoice with the native-share
  * flow: press Send on WhatsApp → the OS/browser share sheet opens with the
  * invoice already attached as an image → pick WhatsApp → pick a contact →
@@ -35,6 +70,7 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
   const [linkPending, setLinkPending] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
+  const [diag, setDiag] = useState<ShareDiagnostics>(EMPTY_DIAG);
 
   useEffect(() => {
     const node = captureRef.current;
@@ -42,10 +78,20 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
     let cancelled = false;
     setStatus("preparing");
     renderElementToJpegFile(node, filename)
-      .then((generated) => {
+      .then(({ file: generated, canvasWidth, canvasHeight }) => {
         if (cancelled) return;
+        const shareable = canShareFile(generated);
         setFile(generated);
-        setStatus(canShareFile(generated) ? "ready" : "unsupported");
+        setDiag((prev) => ({
+          ...prev,
+          fileName: generated.name,
+          fileType: generated.type,
+          fileSizeBytes: generated.size,
+          canvasWidth,
+          canvasHeight,
+          canShareResult: shareable,
+        }));
+        setStatus(shareable ? "ready" : "unsupported");
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -72,22 +118,34 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
   // navigator.share, so the browser still sees this as the same user
   // gesture that started the click.
   //
-  // files only, title explicitly blank — no `text`. Investigated and
-  // confirmed against real, documented reports (not a guess): iOS Safari
-  // handing a combined {files, text} share off to WhatsApp's share
-  // extension is known to silently keep the text and drop the file — the
-  // share() promise still resolves, so there's nothing to catch and retry
-  // on. The one payload shape reliably reported to deliver the file is
-  // files-only with an explicit blank title. The channel message stays on
-  // the page instead (below), with its own Copy action, rather than riding
-  // in a payload known to cause WhatsApp to discard the image.
+  // files only, title explicitly blank — no `text`. Every step of this call
+  // is now recorded into `diag` (payload shape, resolve/reject, exact
+  // error) rather than assumed from silence — see the diagnostic panel.
   function handleShare() {
     if (!file) return;
     setShareError(null);
-    navigator.share({ title: "", files: [file] }).catch((error: unknown) => {
-      if (isShareCancelled(error)) return;
-      setShareError(`Couldn't open the share sheet (${describeError(error)}). Try downloading the image instead.`);
-    });
+    const payload = { title: "", files: [file] };
+    setDiag((prev) => ({
+      ...prev,
+      shareInvoked: true,
+      sharePayloadKeys: Object.keys(payload),
+      shareOutcome: "pending",
+      shareErrorName: null,
+      shareErrorMessage: null,
+    }));
+    navigator.share(payload).then(
+      () => setDiag((prev) => ({ ...prev, shareOutcome: "resolved" })),
+      (error: unknown) => {
+        if (isShareCancelled(error)) {
+          setDiag((prev) => ({ ...prev, shareOutcome: "cancelled" }));
+          return;
+        }
+        const name = error instanceof DOMException || error instanceof Error ? error.name : "UnknownError";
+        const msg = describeError(error);
+        setDiag((prev) => ({ ...prev, shareOutcome: "rejected", shareErrorName: name, shareErrorMessage: msg }));
+        setShareError(`Couldn't open the share sheet (${msg}). Try downloading the image instead.`);
+      },
+    );
   }
 
   function copyMessage() {
@@ -125,6 +183,17 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
       <div ref={captureRef}>{children}</div>
 
       <div className="mt-4 flex flex-col items-end gap-2 print:hidden">
+        {status !== "preparing" && (
+          <p className="text-xs font-semibold text-muted-foreground">
+            Native image share:{" "}
+            {status === "ready"
+              ? "SUPPORTED (native share sheet will open)"
+              : status === "unsupported"
+                ? "NOT SUPPORTED on this browser (canShare returned false — fallback shown below)"
+                : "FAILED to prepare image (fallback shown below)"}
+          </p>
+        )}
+
         {(status === "ready" || status === "preparing") && (
           <div className="flex flex-col items-end gap-1">
             <p className="max-w-[26rem] text-right text-sm text-muted-foreground">{message}</p>
@@ -221,6 +290,38 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
             {shareError}
           </p>
         )}
+
+        <details className="mt-2 w-full max-w-[26rem] rounded-md border border-border-strong p-3 text-xs text-muted-foreground">
+          <summary className="cursor-pointer font-semibold text-foreground">Diagnostic info (temporary)</summary>
+          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+            <dt>navigator.share</dt>
+            <dd>{typeof navigator !== "undefined" && !!navigator.share ? "present" : "missing"}</dd>
+            <dt>navigator.canShare</dt>
+            <dd>{typeof navigator !== "undefined" && !!navigator.canShare ? "present" : "missing"}</dd>
+            <dt>File name</dt>
+            <dd className="break-all">{diag.fileName ?? "—"}</dd>
+            <dt>File type</dt>
+            <dd>{diag.fileType ?? "—"}</dd>
+            <dt>File size</dt>
+            <dd>{diag.fileSizeBytes !== null ? `${diag.fileSizeBytes.toLocaleString()} bytes` : "—"}</dd>
+            <dt>Canvas size</dt>
+            <dd>{diag.canvasWidth !== null ? `${diag.canvasWidth} × ${diag.canvasHeight}px` : "—"}</dd>
+            <dt>{"canShare({files})"}</dt>
+            <dd>{diag.canShareResult === null ? "—" : String(diag.canShareResult)}</dd>
+            <dt>share() called</dt>
+            <dd>{diag.shareInvoked ? "yes" : "no"}</dd>
+            <dt>Payload keys</dt>
+            <dd>{diag.sharePayloadKeys ? diag.sharePayloadKeys.join(", ") : "—"}</dd>
+            <dt>share() outcome</dt>
+            <dd>{diag.shareOutcome ?? "—"}</dd>
+            <dt>Error name</dt>
+            <dd>{diag.shareErrorName ?? "—"}</dd>
+            <dt>Error message</dt>
+            <dd className="break-all">{diag.shareErrorMessage ?? "—"}</dd>
+            <dt>User agent</dt>
+            <dd className="break-all">{typeof navigator !== "undefined" ? navigator.userAgent : "—"}</dd>
+          </dl>
+        </details>
       </div>
     </>
   );
