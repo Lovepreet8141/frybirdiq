@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
-import { OrderStamp } from "./ctas";
 import { Wordmark } from "./wordmark";
 
 /**
@@ -11,10 +10,10 @@ import { Wordmark } from "./wordmark";
  * every other customer route (menu, cart, checkout, account, order
  * tracking) keeps its existing Header/Footer untouched, per the approved
  * scope. Exactly the four links the homepage nav is scoped to: Menu, Find
- * us, Franchise, Order now. Account and cart access remain reachable the
- * same way they already are everywhere else — from the real Header once a
- * visitor is inside /menu or beyond — this nav doesn't need to duplicate
- * that, it only needs to get someone there.
+ * us, Franchise, and account access. Cart access remains reachable the same
+ * way it already is everywhere else — from the real Header once a visitor
+ * is inside /menu or beyond — this nav doesn't need to duplicate that, it
+ * only needs to get someone there.
  */
 const LINKS = [
   { href: "/menu", label: "Menu" },
@@ -22,7 +21,12 @@ const LINKS = [
   { href: "#franchise", label: "Franchise" },
 ];
 
-export function HomeNav() {
+interface HomeNavProps {
+  /** Whether a customer session exists — never the customer record itself, resolved server-side by the page (see `getCustomer` in `src/lib/customer`), same session the rest of the site's Header already reads. */
+  readonly signedIn: boolean;
+}
+
+export function HomeNav({ signedIn }: HomeNavProps) {
   const [solid, setSolid] = useState(false);
   const [hidden, setHidden] = useState(false);
 
@@ -55,7 +59,9 @@ export function HomeNav() {
           ))}
         </ul>
       </nav>
-      <OrderStamp />
+      <Link className="fb-stamp" href={signedIn ? "/account" : "/account/sign-in"}>
+        {signedIn ? "Account" : "Sign in"}
+      </Link>
     </header>
   );
 }

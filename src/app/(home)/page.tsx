@@ -14,6 +14,7 @@ import { HomeMotion } from "@/components/home/motion";
 import { getAllProducts } from "@/lib/repositories/menu";
 import { getDeliverySettings } from "@/lib/repositories/delivery";
 import { getOrg, getStoreContact } from "@/lib/repositories/org";
+import { getCustomer } from "@/lib/customer";
 import { formatHoursRange, restaurantSchema } from "@/lib/seo/restaurant";
 import { summarizeDeliveryBands, summarizeFreeDelivery } from "@/lib/delivery/summary";
 
@@ -39,12 +40,16 @@ const MAPS_PLACE_URL = "https://maps.google.com/?cid=16250293097084103835";
 const MAPS_DIRECTIONS_URL = "https://www.google.com/maps/dir/?api=1&destination=30.3618007%2C76.7808927";
 
 export default async function HomePage() {
-  const [org, contact, delivery, products] = await Promise.all([
+  const [org, contact, delivery, products, customer] = await Promise.all([
     getOrg(),
     getStoreContact(),
     getDeliverySettings(),
     getAllProducts("ONLINE"),
+    getCustomer(),
   ]);
+  // Only whether someone is signed in crosses into the client nav — never the
+  // customer record itself.
+  const signedIn = customer !== null;
 
   const opens = org?.openingTime ?? "11:30";
   const closes = org?.closingTime ?? "23:00";
@@ -88,7 +93,7 @@ export default async function HomePage() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema({ opens, closes })) }}
       />
       <div className="fb">
-        <HomeNav />
+        <HomeNav signedIn={signedIn} />
         <main>
           <Hero
             city={CITY}
