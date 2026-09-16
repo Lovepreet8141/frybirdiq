@@ -1,7 +1,7 @@
-import Image from "next/image";
 import Link from "next/link";
 import { ShoppingBag, User } from "lucide-react";
 import { CartBadge } from "@/components/site/cart-badge";
+import { SiteWordmark } from "@/components/site/wordmark";
 import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
 
@@ -21,19 +21,7 @@ export async function Header() {
     <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
       <div className="mx-auto flex h-[68px] w-full max-w-6xl items-center justify-between gap-4 px-[var(--gutter)]">
         <Link href="/" className="flex min-h-[44px] items-center" aria-label="FRYBIRD, home">
-          {/*
-            The wordmark is cream and amber on a transparent ground, drawn to
-            sit on the charred background. Width is set and height derived from
-            the 4.5:1 artwork, so nothing shifts as it loads.
-          */}
-          <Image
-            src="/frybird-wordmark-ink.svg"
-            alt="FRYBIRD"
-            width={132}
-            height={30}
-            priority
-            className="h-[26px] w-auto sm:h-[30px]"
-          />
+          <SiteWordmark className="h-[26px] w-auto sm:h-[30px]" priority tone="light" />
         </Link>
 
         <nav className="flex items-center gap-1" aria-label="Main">

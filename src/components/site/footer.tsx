@@ -1,5 +1,5 @@
-import Image from "next/image";
 import Link from "next/link";
+import { SiteWordmark } from "@/components/site/wordmark";
 import { getOrg } from "@/lib/repositories/org";
 
 /**
@@ -15,7 +15,7 @@ export async function Footer() {
     <footer className="mt-auto bg-[var(--ink)] text-[var(--cream-hi)]">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-[var(--gutter)] py-12 sm:flex-row sm:justify-between">
         <div className="flex flex-col gap-2">
-          <Image src="/frybird-wordmark.svg" alt="FRYBIRD" width={140} height={31} className="h-[28px] w-auto" />
+          <SiteWordmark className="h-[28px]" tone="dark" />
           <p className="text-sm text-[var(--cream-2)]">Born crispy. Built bold.</p>
         </div>
 
