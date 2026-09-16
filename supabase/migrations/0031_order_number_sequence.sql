@@ -1,0 +1,16 @@
+-- Order numbers stop resetting at the business-day boundary and become one
+-- continuous sequence instead, starting at 1225 — the first new number is
+-- comfortably clear of every historical order_number ever issued (the
+-- highest seen across all history is 29, all under the old per-day scheme).
+--
+-- A Postgres sequence is atomic under concurrent callers by construction, so
+-- application code no longer has to race a MAX(order_number)+1 read against
+-- another checkout — see nextOrderNumber() in src/lib/repositories/orders.ts,
+-- which now calls nextval() here instead. The existing
+-- orders_org_day_number_unique constraint is untouched: a globally-unique
+-- value trivially satisfies a constraint that is only unique per org per day.
+--
+-- Global, not per-organization — FRYBIRD is single-location today (see
+-- CLAUDE.md). A second location would need this reconsidered, the same way
+-- orders.orgId already anticipates it elsewhere in the schema.
+CREATE SEQUENCE order_number_seq START WITH 1225;

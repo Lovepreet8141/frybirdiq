@@ -12,7 +12,7 @@ import "server-only";
  * seed, and it is the first thing to verify once keys exist.
  */
 
-import { and, desc, eq, inArray, isNull, max, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { addresses, customers, locations, loyaltyAccounts, loyaltyStampEvents, loyaltyTransactions, memberships, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments, tables } from "@/db/schema";
@@ -106,43 +106,25 @@ export type PlaceOrderResult =
   | { ok: false; error: string; fieldErrors?: Record<string, string> };
 
 /**
- * Builds today's order number.
+ * The next order number, as the counter would call it out.
  *
- * Short enough for the counter to call out and the kitchen to write on a
- * ticket — §21. Resets each day, so it never grows into something nobody can
- * read aloud across a noisy kitchen.
+ * A continuous sequence (order_number_seq, migration 0031) starting at 1225 —
+ * it does not reset at the business-day boundary, so a number is never
+ * repeated across days. `nextval()` is atomic under concurrent callers by
+ * construction, which is also strictly safer than the MAX(order_number)+1
+ * read this replaces: that version had to race another checkout landing in
+ * the same millisecond and depended on the caller retrying on a unique
+ * violation. `orders_org_day_number_unique` is unchanged — a globally-unique
+ * value trivially satisfies a constraint that is only unique per org per day.
+ *
+ * Only ever called from inside persistOrder(), which itself is only ever
+ * called from inside a withIdempotency() work callback — a retried request,
+ * a double-tap or a receipt reprint replays the stored result and never
+ * reaches this function, so a number is issued once per order, ever.
  */
-/**
- * The next order number for today, as the counter would call it out.
- *
- * Three things went wrong in the version this replaces, and each of them broke
- * checkout outright rather than producing an odd number:
- *
- * The day boundary came from `new Date().setHours(0,0,0,0)`, which is midnight
- * in the *server's* timezone. The server runs UTC, so the day rolled over at
- * 05:30 IST — the count reset while the shop was shut and then collided with
- * the morning's real orders.
- *
- * The count was `rows + 1`, so a cancelled or deleted order made the next one
- * reuse a number that was still in the table.
- *
- * And the number resets daily while the unique constraint spanned all time, so
- * the first order of any second day was guaranteed to fail. That is fixed by
- * the constraint now including the business date; this function only has to be
- * right about the date and the maximum.
- *
- * Still not safe against two checkouts landing in the same millisecond — the
- * caller retries on the unique violation, which is the cheap correct answer at
- * one outlet's volume. A sequence per day would be the answer at ten.
- */
-async function nextOrderNumber(orgId: string, businessDay: string): Promise<string> {
-  const [row] = await db()
-    .select({ highest: max(orders.orderNumber) })
-    .from(orders)
-    .where(and(eq(orders.orgId, orgId), eq(orders.businessDate, businessDay)));
-
-  const next = row?.highest ? Number(row.highest) + 1 : 1;
-  return String(next).padStart(3, "0");
+async function nextOrderNumber(): Promise<string> {
+  const [row] = await db().execute<{ next: string }>(sql`SELECT nextval('order_number_seq') AS next`);
+  return String(row?.next);
 }
 
 /**
@@ -554,7 +536,7 @@ export async function persistOrder(input: PersistOrderInput): Promise<PersistOrd
 
   const businessDay = businessDate(new Date());
   const now = new Date();
-  let orderNumber = await nextOrderNumber(input.orgId, businessDay);
+  let orderNumber = await nextOrderNumber();
 
   const insertOrder = () =>
     database
@@ -594,7 +576,7 @@ export async function persistOrder(input: PersistOrderInput): Promise<PersistOrd
       // 23505 is unique_violation. Anything else is a real failure.
       const code = (error as { cause?: { code?: string }; code?: string }).cause?.code ?? (error as { code?: string }).code;
       if (code !== "23505" || attempt === 3) throw error;
-      orderNumber = await nextOrderNumber(input.orgId, businessDay);
+      orderNumber = await nextOrderNumber();
     }
   }
 

@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import type { OrderChannel } from "@/domain/order-channel";
 import { lineKey } from "@/lib/cart/schema";
 import { type PriceDraftOk, placeCounterOrderAction, pollPosMenu, priceDraftOrder } from "@/lib/pos/actions";
+import { needsPosModifierPicker } from "@/lib/pos/modifier-gate";
 import type { MenuCategory, MenuProduct } from "@/lib/repositories/menu";
 import { recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 import { useMenuChanges } from "@/lib/realtime/client";
@@ -209,7 +210,11 @@ export function PosShell({
 
   function handleTap(product: MenuProduct) {
     if (!online || channel === null || !product.availability.available) return;
-    if (product.modifierGroups.length > 0) {
+    // Only a group the customer must choose from stops the tap — an optional
+    // sauce/add-on shouldn't interrupt the counter the way it does on the
+    // website. The picker is still there for the groups that actually need
+    // a decision. See needsPosModifierPicker for the rule and its tests.
+    if (needsPosModifierPicker(product.modifierGroups)) {
       setPickerProduct(product);
       return;
     }

@@ -43,7 +43,13 @@ export const orders = pgTable(
       .notNull()
       .references(() => locations.id, { onDelete: "restrict" }),
 
-    /** Short human number the counter and kitchen say out loud. */
+    /**
+     * Short human number the counter and kitchen say out loud.
+     *
+     * A continuous Postgres sequence (order_number_seq, migration 0031)
+     * starting at 1225 — it no longer resets at the business-day boundary.
+     * See nextOrderNumber() in src/lib/repositories/orders.ts.
+     */
     orderNumber: text("order_number").notNull(),
     /**
      * The IST business day this order belongs to.
@@ -174,11 +180,12 @@ export const orders = pgTable(
   },
   (table) => [
     /*
-     * Order numbers restart each day — a counter calling out "number seven" is
-     * the point of them — so uniqueness is per business day, not for all time.
-     * The old constraint spanned every day at once, which meant the first order
-     * of the second day collided with the first order of the first and checkout
-     * failed for everyone until midnight UTC moved again.
+     * order_number is now a continuous sequence (migration 0031) rather than
+     * a per-day count, so it's already globally unique — this constraint is
+     * kept as the narrower, still-true guarantee (per org per day) rather
+     * than removed, and needs no migration of its own: a globally-unique
+     * value trivially satisfies a constraint that only asks for uniqueness
+     * within one org's one business day.
      */
     unique("orders_org_day_number_unique").on(table.orgId, table.businessDate, table.orderNumber),
     unique("orders_org_invoice_unique").on(table.orgId, table.invoiceNumber),

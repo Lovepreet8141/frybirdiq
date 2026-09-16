@@ -17,7 +17,7 @@
  * replays the same placement instead of ringing the order up twice. §17.
  */
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { Banknote, CheckCircle2, Gift, Loader2, Printer, TriangleAlert } from "lucide-react";
 import { formatINR, paise, subtract } from "@/lib/money";
 import type { CounterCheckoutResult, PriceDraftOk } from "@/lib/pos/actions";
@@ -110,12 +110,11 @@ export function PaymentSheet({
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // A till is worked by hand, so the amount field should already be focused.
-  // Touching the DOM, not synchronising state — the only thing an effect is
-  // for here.
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+  // Deliberately not auto-focused: on a touchscreen till, focusing this
+  // field on mount immediately raises the OS numeric keyboard over the
+  // payment sheet before the cashier has looked at it. The field is a
+  // normal, visible control — tapping it opens the keyboard when the
+  // cashier actually wants to type an amount.
 
   const total = useMemo(() => paise(BigInt(priced.totalPaise)), [priced.totalPaise]);
   const quick = useMemo(() => quickTenders(total), [total]);
