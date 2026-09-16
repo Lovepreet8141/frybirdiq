@@ -53,6 +53,7 @@
     "cmdk": "^1.1.1",
     "cn": "^0.2.6",
     "drizzle-orm": "^0.45.2",
+    "html-to-image": "^1.11.13",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.43.0",
     "motion": "^13.2.0",

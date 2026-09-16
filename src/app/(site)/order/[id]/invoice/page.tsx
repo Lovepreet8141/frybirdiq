@@ -4,8 +4,9 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { FrybirdReceipt } from "@/components/receipt/frybird-receipt";
 import { ReceiptPrintButton } from "@/components/receipt/receipt-print-button";
-import { WhatsAppButton } from "@/components/order/whatsapp-button";
+import { ReceiptShare } from "@/components/receipt/receipt-share";
 import { getCustomerReceipt } from "@/lib/receipt/customer-view";
+import { channelThankYouMessage } from "@/lib/receipt/share-message";
 
 export const metadata: Metadata = { title: "Receipt", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -39,13 +40,19 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
 
         <div className="flex items-center gap-2">
           <ReceiptPrintButton />
-          <WhatsAppButton orderId={receipt.orderId} phone={receipt.customer.phone} />
         </div>
       </div>
 
-      <div className="mt-6 print:mt-0">
-        <FrybirdReceipt data={receipt} />
-      </div>
+      <ReceiptShare
+        filename={`FRYBIRD-Order-${receipt.orderNumber}-Invoice.jpg`}
+        message={channelThankYouMessage(receipt.fulfilment)}
+        orderId={receipt.orderId}
+        phone={receipt.customer.phone}
+      >
+        <div className="mt-6 print:mt-0">
+          <FrybirdReceipt data={receipt} />
+        </div>
+      </ReceiptShare>
 
       <p className="mt-4 text-center text-sm text-muted-foreground print:hidden">Save as PDF above, or use your browser&rsquo;s print.</p>
     </div>
