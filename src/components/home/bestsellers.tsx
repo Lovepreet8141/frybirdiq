@@ -80,7 +80,7 @@ export function Bestsellers({ items }: { items: readonly HomeBestseller[] }) {
                 <p className="fb-best__note-text">{item.note}</p>
                 <div className="fb-best__row">
                   <span className="fb-best__price">{rupees(item.price)}</span>
-                  <Link className="fb-btn fb-btn--small" href="/menu" onClick={() => buzz()}>
+                  <Link className="fb-btn fb-btn--small" href={`/item/${item.slug}`} onClick={() => buzz()}>
                     Order
                   </Link>
                 </div>

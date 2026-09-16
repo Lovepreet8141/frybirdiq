@@ -106,7 +106,7 @@ export function Reels({ items, startIndex, onClose }: ReelsProps) {
               <p className="fb-reels__note">{item.note}</p>
               <div className="fb-reels__row">
                 <span className="fb-reels__price">{rupees(item.price)}</span>
-                <Link className="fb-btn" href="/menu">
+                <Link className="fb-btn" href={`/item/${item.slug}`}>
                   Order now
                 </Link>
               </div>
