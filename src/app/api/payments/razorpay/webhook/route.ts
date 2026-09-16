@@ -75,7 +75,22 @@ export async function POST(request: Request): Promise<NextResponse> {
     eventRowId = existing.id; // recorded before, never finished — run it again
   }
 
-  const outcome = await handle(eventType, parsed);
+  let outcome: Outcome;
+  try {
+    outcome = await handle(eventType, parsed);
+  } catch (error) {
+    // An unexpected throw from `handle` (a database error, an exhausted
+    // retry inside settle()'s invoice-numbering, anything not already
+    // turned into a `{ ok: false }` result) used to escape this route
+    // entirely — the `webhookEvents` row below was never reached, so it
+    // stayed at `processedAt: null` with no `error` recorded: invisible to
+    // the audit trail this table exists for, and worse, the payment can
+    // already have been captured as an earlier, separate statement by the
+    // time the throw happens, so this is not a "nothing happened" failure.
+    // Recorded and retried exactly like an ordinary `{ ok: false, retry:
+    // true }` outcome, rather than a raw 500 with nothing written down.
+    outcome = { ok: false, error: error instanceof Error ? error.message : "unexpected error", retry: true };
+  }
 
   await database
     .update(webhookEvents)
