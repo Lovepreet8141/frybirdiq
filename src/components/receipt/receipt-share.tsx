@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Download, Loader2, MessageCircle } from "lucide-react";
+import { Check, Copy, Download, Loader2, MessageCircle } from "lucide-react";
 import { whatsappOrderLink } from "@/lib/notifications/actions";
 import { canShareFile, describeError, isShareCancelled, renderElementToJpegFile } from "@/lib/receipt/share-image";
 
@@ -34,6 +34,7 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
   const [shareError, setShareError] = useState<string | null>(null);
   const [linkPending, setLinkPending] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
 
   useEffect(() => {
     const node = captureRef.current;
@@ -68,30 +69,43 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
   }, [objectUrl]);
 
   // Deliberately synchronous: called directly from onClick, no await before
-  // the first navigator.share, so the browser still sees this as the same
-  // user gesture that started the click.
+  // navigator.share, so the browser still sees this as the same user
+  // gesture that started the click.
   //
-  // Tries files+caption first — valid per spec, and there's no evidence
-  // against it, only evidence that this handler wasn't being reached at
-  // all (see share-image.ts / the investigation that led here). If a share
-  // target genuinely rejects the combined payload, retries once with the
-  // image alone, in the same gesture (a .catch() continuation, not a new
-  // click) — file delivery matters more than the caption riding along with
-  // it. A rejection here is a real, reportable failure either way; the
-  // native share sheet resolving "successfully" but the target app quietly
-  // discarding the file is not something a web page can detect — nothing
-  // in the Web Share API surfaces what the receiving app did with it.
+  // files only, title explicitly blank — no `text`. Investigated and
+  // confirmed against real, documented reports (not a guess): iOS Safari
+  // handing a combined {files, text} share off to WhatsApp's share
+  // extension is known to silently keep the text and drop the file — the
+  // share() promise still resolves, so there's nothing to catch and retry
+  // on. The one payload shape reliably reported to deliver the file is
+  // files-only with an explicit blank title. The channel message stays on
+  // the page instead (below), with its own Copy action, rather than riding
+  // in a payload known to cause WhatsApp to discard the image.
   function handleShare() {
     if (!file) return;
     setShareError(null);
-    navigator.share({ files: [file], text: message }).catch((error: unknown) => {
+    navigator.share({ title: "", files: [file] }).catch((error: unknown) => {
       if (isShareCancelled(error)) return;
-      navigator.share({ files: [file] }).catch((retryError: unknown) => {
-        if (isShareCancelled(retryError)) return;
-        setShareError(`Couldn't open the share sheet (${describeError(retryError)}). Try downloading the image instead.`);
-      });
+      setShareError(`Couldn't open the share sheet (${describeError(error)}). Try downloading the image instead.`);
     });
   }
+
+  function copyMessage() {
+    if (!navigator.clipboard?.writeText) {
+      setCopyStatus("error");
+      return;
+    }
+    navigator.clipboard.writeText(message).then(
+      () => setCopyStatus("copied"),
+      () => setCopyStatus("error"),
+    );
+  }
+
+  useEffect(() => {
+    if (copyStatus === "idle") return;
+    const timer = setTimeout(() => setCopyStatus("idle"), 2000);
+    return () => clearTimeout(timer);
+  }, [copyStatus]);
 
   function requestTextLink() {
     setLinkPending(true);
@@ -112,7 +126,31 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
 
       <div className="mt-4 flex flex-col items-end gap-2 print:hidden">
         {(status === "ready" || status === "preparing") && (
-          <p className="max-w-[26rem] text-right text-sm text-muted-foreground">{message}</p>
+          <div className="flex flex-col items-end gap-1">
+            <p className="max-w-[26rem] text-right text-sm text-muted-foreground">{message}</p>
+            <button
+              type="button"
+              onClick={copyMessage}
+              className="inline-flex min-h-[32px] items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
+            >
+              {copyStatus === "copied" ? (
+                <>
+                  <Check className="size-3.5" aria-hidden="true" />
+                  Copied
+                </>
+              ) : copyStatus === "error" ? (
+                <>
+                  <Copy className="size-3.5" aria-hidden="true" />
+                  Couldn&rsquo;t copy — select the text above
+                </>
+              ) : (
+                <>
+                  <Copy className="size-3.5" aria-hidden="true" />
+                  Copy message
+                </>
+              )}
+            </button>
+          </div>
         )}
 
         {status === "ready" && (
