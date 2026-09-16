@@ -145,6 +145,18 @@ export async function awardStampForOrder(input: {
  * that only contributed to a reward still sitting *available* voids that
  * reward too, and hands its other stamps back to the pool so the customer
  * does not lose progress on visits that were never refunded.
+ *
+ * The AVAILABLE → REVERSED write is guarded in its own WHERE clause, not
+ * decided by an earlier read — the same reason `redeemStampReward` folds
+ * its check into its write. Two different orders can share one reward id
+ * (see that function's own doc comment: `getAvailableStampReward` never
+ * claims, only reads), so this order's refund and a *different* order's
+ * settlement can race the same reward: a read-then-write here would still
+ * fire its update after losing that race — clobbering a reward a
+ * concurrent, real redemption had just marked REDEEMED back to REVERSED,
+ * while leaving that redemption's own `redeemedOrderId`/`redeemedAt`
+ * untouched, a self-contradictory row (redeemed and reversed at once) with
+ * nothing anywhere pointing at how it got that way.
  */
 export async function reverseStampForOrder(input: { orgId: string; orderId: string; reason: string }): Promise<void> {
   const database = db();
@@ -162,20 +174,31 @@ export async function reverseStampForOrder(input: { orgId: string; orderId: stri
     .where(eq(loyaltyStampEvents.id, event.id));
 
   if (event.rewardId) {
-    const [reward] = await database.select().from(loyaltyRewards).where(eq(loyaltyRewards.id, event.rewardId)).limit(1);
+    const [reversed] = await database
+      .update(loyaltyRewards)
+      .set({ status: "REVERSED", reversedAt: new Date(), reversalReason: input.reason, updatedAt: new Date() })
+      .where(and(eq(loyaltyRewards.id, event.rewardId), eq(loyaltyRewards.status, "AVAILABLE")))
+      .returning({ id: loyaltyRewards.id });
 
-    if (reward && reward.status === "AVAILABLE") {
-      await database
-        .update(loyaltyRewards)
-        .set({ status: "REVERSED", reversedAt: new Date(), reversalReason: input.reason, updatedAt: new Date() })
-        .where(eq(loyaltyRewards.id, reward.id));
-
+    if (reversed) {
       // Give the reward's other stamps back to the pool — they were paid
       // for and did not stop being real because a different order refunded.
       await database
         .update(loyaltyStampEvents)
         .set({ rewardId: null, updatedAt: new Date() })
-        .where(and(eq(loyaltyStampEvents.rewardId, reward.id), isNull(loyaltyStampEvents.reversedAt)));
+        .where(and(eq(loyaltyStampEvents.rewardId, event.rewardId), isNull(loyaltyStampEvents.reversedAt)));
+    } else {
+      // Not AVAILABLE by the time this tried to void it. Ordinarily that
+      // just means an earlier call already reversed it — a quiet no-op,
+      // same as this function's own top-level guard above. The one case
+      // worth knowing about is the race this whole guard exists for: the
+      // reward was actually redeemed by a different order that shared its
+      // id, in which case a real, paid order is now sitting on a reward
+      // this refund cannot touch — surfaced rather than swallowed.
+      const [current] = await database.select({ status: loyaltyRewards.status }).from(loyaltyRewards).where(eq(loyaltyRewards.id, event.rewardId)).limit(1);
+      if (current?.status === "REDEEMED") {
+        console.error(`loyalty reward: order ${input.orderId} was refunded but its reward ${event.rewardId} had already been redeemed by a different order sharing the same reward id by the time this refund tried to void it — left REDEEMED, nothing reversed`);
+      }
     }
   }
 

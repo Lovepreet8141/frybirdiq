@@ -70,7 +70,7 @@ describe("claimPromotionUse", () => {
     expect(claimed).toBe(true);
   });
 
-  it("Priority's actual design point: two concurrent claims on a code with exactly ONE slot left never both succeed", async () => {
+  it("two concurrent claims on a code with exactly ONE slot left never both succeed", async () => {
     const code = `RACE-${randomUUID().slice(0, 8).toUpperCase()}`;
     await createTestPromotion(org, code, 5, 4); // exactly one slot remains
 

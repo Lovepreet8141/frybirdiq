@@ -83,7 +83,7 @@ describe("spendPointsForOrder", () => {
     expect(rows).toHaveLength(0); // no ledger entry for a spend that never happened
   });
 
-  it("Priority's actual design point: two concurrent spends racing the SAME balance never together overdraw it", async () => {
+  it("two concurrent spends racing the SAME balance never together overdraw it", async () => {
     const customer = await createTestCustomer(org.orgId);
     await seedLoyaltyAccount(org.orgId, customer.id, 30);
     const orderA = await createTestOrderRow(org, `SPEND-${randomUUID().slice(0, 8)}`);

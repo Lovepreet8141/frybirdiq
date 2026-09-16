@@ -120,7 +120,7 @@ describe("refundPayment", () => {
     expect(refundRows).toHaveLength(1); // not two ₹100 refunds
   });
 
-  it("Priority's actual design point: two concurrent refunds with DIFFERENT keys never together exceed what was captured", async () => {
+  it("two concurrent refunds with DIFFERENT keys never together exceed what was captured", async () => {
     const orderId = await createTestOrder(org, productSlug, "150");
     const paymentId = await createCapturedPayment(org, orderId, "150");
 

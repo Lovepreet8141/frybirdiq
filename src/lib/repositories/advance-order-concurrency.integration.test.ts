@@ -64,7 +64,7 @@ describe("advanceOrder", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("Priority's actual design point: two concurrent, individually-valid transitions on the SAME order never both land", async () => {
+  it("two concurrent, individually-valid transitions on the SAME order never both land", async () => {
     const orderId = await createTestOrderAt(org, "PREPARING");
 
     await warmPool();
