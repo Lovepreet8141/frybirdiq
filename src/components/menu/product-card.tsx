@@ -52,10 +52,7 @@ export function ProductCard({
       className="group flex h-full min-h-[44px] w-full cursor-pointer flex-col rounded-xl border-[2.5px] border-[var(--ink)] bg-[var(--cream-hi)] p-4 text-center shadow-[6px_6px_0_var(--red)] transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-[5px] hover:shadow-[10px_12px_0_var(--red)] focus-visible:-translate-y-[5px] focus-visible:shadow-[10px_12px_0_var(--red)] motion-safe:hover:[transform:translateY(-5px)_rotateX(5deg)] sm:p-5"
     >
       {product.image ? (
-        <div
-          data-product-media
-          className="flex h-[150px] shrink-0 items-center justify-center rounded-xl bg-[linear-gradient(180deg,var(--stage-yellow)_0%,var(--stage-yellow)_68%,var(--stage-yellow-deep)_100%)] p-3"
-        >
+        <div data-product-media className="flex h-[150px] shrink-0 items-center justify-center">
           <Image
             src={product.image.url}
             alt={product.image.alt}
@@ -70,12 +67,8 @@ export function ProductCard({
         /* No photograph for this item. The space is still reserved so the card
            lines up with its neighbours in the row, and the mark carries it —
            an empty gap would read as an image that failed to load. */
-        <div
-          data-product-media
-          className="flex h-[150px] shrink-0 items-center justify-center rounded-xl bg-[linear-gradient(180deg,var(--stage-yellow)_0%,var(--stage-yellow)_68%,var(--stage-yellow-deep)_100%)] p-3"
-          aria-hidden="true"
-        >
-          <span className="font-heading text-5xl font-black italic leading-none text-[var(--ink)] opacity-80">F</span>
+        <div data-product-media className="flex h-[150px] shrink-0 items-center justify-center" aria-hidden="true">
+          <span className="font-heading text-5xl font-black italic leading-none text-secondary">F</span>
         </div>
       )}
 

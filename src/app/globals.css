@@ -149,9 +149,6 @@
   --cream-2: #eae0c8;
   --ink: #2c211b;
   --ink-deep: #1a120f;
-  /* Same yellow as the homepage hero's "stage" backdrop — see (home)/frybird-home.css's .fb-hero. Product-photo staging only, not a semantic token. */
-  --stage-yellow: #f8b317;
-  --stage-yellow-deep: #f2b120;
 
   /* Semantic. The customer site is cream; staff screens override these
      wholesale in .surface-dark below — a counter display runs for eight hours
