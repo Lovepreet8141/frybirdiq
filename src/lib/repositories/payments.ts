@@ -455,12 +455,20 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
         });
 
         if (order.stampRewardId && order.stampRewardProductSlug) {
-          await redeemStampReward({
+          const { redeemed } = await redeemStampReward({
             rewardId: order.stampRewardId,
             orgId: order.orgId,
             orderId: order.id,
             productSlug: order.stampRewardProductSlug,
           });
+          if (!redeemed) {
+            // The order is already committed with the free item priced in —
+            // nothing here can charge for it a second time. This is the
+            // one thing left to do: make it loud rather than silent, since
+            // the reward itself is still sitting AVAILABLE for whichever
+            // order actually claimed it.
+            console.error(`loyalty reward: order #${order.orderNumber} was priced with reward ${order.stampRewardId} but it was already redeemed by another order by settlement time (two unpaid orders selecting the same reward?) — free item given, no matching redemption recorded, customer ${order.customerId}`);
+          }
         }
       }
 

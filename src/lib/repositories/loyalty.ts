@@ -376,9 +376,20 @@ export async function getStampAccountState(customerId: string, orgId: string): P
  * is actually charged — never at cart-pricing time, when the order could
  * still be abandoned before payment. `productSlug` is a convenience
  * snapshot; the order's own `order_items` row is the immutable record.
+ *
+ * The `status = 'AVAILABLE'` guard makes the write itself the check, so
+ * two orders that both captured the same reward id at checkout — a real
+ * possibility, since `getAvailableStampReward` only ever reads: it never
+ * claims, and a customer can have two unpaid orders open at once,
+ * especially for cash/COD, where settlement can be hours after either was
+ * placed — can never both flip it to REDEEMED. Returns whether *this* call
+ * was the one that actually landed, because the caller already committed
+ * the order with the discount priced in either way and has no way to
+ * charge for it again if it lost the race; the only thing left to do with
+ * a lost race is make sure it is never silent.
  */
-export async function redeemStampReward(input: { rewardId: string; orgId: string; orderId: string; productSlug: string }): Promise<void> {
-  await db()
+export async function redeemStampReward(input: { rewardId: string; orgId: string; orderId: string; productSlug: string }): Promise<{ redeemed: boolean }> {
+  const [row] = await db()
     .update(loyaltyRewards)
     .set({
       status: "REDEEMED",
@@ -387,7 +398,9 @@ export async function redeemStampReward(input: { rewardId: string; orgId: string
       redeemedProductSlug: input.productSlug,
       updatedAt: new Date(),
     })
-    .where(and(eq(loyaltyRewards.id, input.rewardId), eq(loyaltyRewards.orgId, input.orgId), eq(loyaltyRewards.status, "AVAILABLE")));
+    .where(and(eq(loyaltyRewards.id, input.rewardId), eq(loyaltyRewards.orgId, input.orgId), eq(loyaltyRewards.status, "AVAILABLE")))
+    .returning({ id: loyaltyRewards.id });
+  return { redeemed: row !== undefined };
 }
 
 /** What "qualifying spend" means for the stamp program: the same figure points earn on. */
