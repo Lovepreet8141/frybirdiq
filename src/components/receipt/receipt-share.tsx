@@ -3,7 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Download, Loader2, MessageCircle } from "lucide-react";
 import { whatsappOrderLink } from "@/lib/notifications/actions";
-import { canShareFile, describeError, isShareCancelled, renderElementToJpegFile } from "@/lib/receipt/share-image";
+import {
+  canShareFile,
+  describeError,
+  isShareCancelled,
+  makeSyntheticTestFile,
+  renderElementToImageFile,
+  renderElementToJpegFile,
+} from "@/lib/receipt/share-image";
+import { ShareExperiment } from "./share-experiment";
 
 interface ReceiptShareProps {
   readonly children: React.ReactNode;
@@ -321,6 +329,34 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
             <dt>User agent</dt>
             <dd className="break-all">{typeof navigator !== "undefined" ? navigator.userAgent : "—"}</dd>
           </dl>
+        </details>
+
+        <details className="mt-2 w-full max-w-[26rem] rounded-md border border-border-strong p-3 text-xs text-muted-foreground">
+          <summary className="cursor-pointer font-semibold text-foreground">
+            Capture experiments (temporary — press Run on each)
+          </summary>
+          <div className="mt-2 flex flex-col gap-2">
+            <ShareExperiment
+              label="B: this invoice, pixelRatio 1, JPEG"
+              generate={() => {
+                const node = captureRef.current;
+                if (!node) return Promise.reject(new Error("Receipt node not mounted."));
+                return renderElementToImageFile(node, `${filename}-b.jpg`, { pixelRatio: 1, format: "image/jpeg" });
+              }}
+            />
+            <ShareExperiment
+              label="C: this invoice, pixelRatio 2, PNG"
+              generate={() => {
+                const node = captureRef.current;
+                if (!node) return Promise.reject(new Error("Receipt node not mounted."));
+                return renderElementToImageFile(node, `${filename}-c.png`, { pixelRatio: 2, format: "image/png" });
+              }}
+            />
+            <ShareExperiment
+              label="D: tiny known-good synthetic image (control, same page)"
+              generate={() => makeSyntheticTestFile("image/jpeg", "control.jpg")}
+            />
+          </div>
         </details>
       </div>
     </>
