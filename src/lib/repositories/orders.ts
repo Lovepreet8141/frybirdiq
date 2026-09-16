@@ -1041,81 +1041,111 @@ export async function getKotOrder(orderId: string, orgId: string): Promise<KotOr
   };
 }
 
+type AdvanceTxOutcome = { ok: true; orderId: string; orderNumber: string; statusBefore: OrderStatus } | { ok: false; error: string };
+
 /**
  * Moves an order to the next status.
  *
  * The transition is validated by the domain state machine, not by whatever the
  * button happened to send — a stale screen must not be able to push an order
  * backwards. The actor is recorded on the event.
+ *
+ * The read, the transition check and the write are locked together with
+ * `SELECT ... FOR UPDATE` on the order row: without it, two concurrent
+ * transitions on the same order (a kitchen tablet marking READY at the same
+ * moment a manager cancels it — this is the one function every one of KDS,
+ * POS and the refund path above call to move an order) could both read the
+ * same starting status, both pass `assertTransition` against it, and both
+ * write — the order's final status would be whichever write landed last
+ * rather than either genuine transition, the event trail would show two
+ * different transitions forking from the same fromStatus, and — for a
+ * CANCELLED race in particular — `foodWasCooking` below would be fed a
+ * status that was already stale by the time it ran, misclassifying a
+ * cancellation as a credit-back when the kitchen had actually already
+ * started (or the reverse).
  */
 export async function advanceOrder(input: {
   orderId: string;
   to: OrderStatus;
   actorUserId: string;
   orgId: string;
+  /** The order_events row's own reason, when the caller has one (a rejection's reason, a refund's note). */
+  reason?: string;
+  /** Only meaningful alongside `to: "CANCELLED"` — stored on the order row itself, not just the event, so a rejection's reason survives on the order the way it always has. */
+  cancellationReason?: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const database = db();
-  const [order] = await database
-    .select()
-    .from(orders)
-    .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
-    .limit(1);
 
-  if (!order) return { ok: false, error: "That order does not exist." };
-
-  /*
-   * An order cannot be completed until it has been paid for.
-   *
-   * Cooking an unpaid order is normal — cash on collection and cash on
-   * delivery both take the money at the end. Handing it over unpaid is giving
-   * food away, and COMPLETED is the moment it leaves for good.
-   *
-   * The check reads the payments rather than the order's own status, because
-   * with cash the money can be recorded at any point up to handover.
-   */
-  if (input.to === "COMPLETED") {
-    const captured = await database
-      .select({ id: payments.id })
-      .from(payments)
-      .where(and(eq(payments.orderId, order.id), eq(payments.status, "CAPTURED")))
+  const outcome: AdvanceTxOutcome = await database.transaction(async (tx) => {
+    const [order] = await tx
+      .select()
+      .from(orders)
+      .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
+      .for("update")
       .limit(1);
 
-    if (captured.length === 0) {
-      return {
-        ok: false,
-        error:
-          order.fulfilment === "DELIVERY"
-            ? "Take the cash from the rider before closing this order."
-            : "Take payment before handing this over.",
-      };
+    if (!order) return { ok: false, error: "That order does not exist." };
+
+    /*
+     * An order cannot be completed until it has been paid for.
+     *
+     * Cooking an unpaid order is normal — cash on collection and cash on
+     * delivery both take the money at the end. Handing it over unpaid is giving
+     * food away, and COMPLETED is the moment it leaves for good.
+     *
+     * The check reads the payments rather than the order's own status, because
+     * with cash the money can be recorded at any point up to handover.
+     */
+    if (input.to === "COMPLETED") {
+      const captured = await tx
+        .select({ id: payments.id })
+        .from(payments)
+        .where(and(eq(payments.orderId, order.id), eq(payments.status, "CAPTURED")))
+        .limit(1);
+
+      if (captured.length === 0) {
+        return {
+          ok: false,
+          error:
+            order.fulfilment === "DELIVERY"
+              ? "Take the cash from the rider before closing this order."
+              : "Take payment before handing this over.",
+        };
+      }
     }
-  }
 
-  try {
-    assertTransition(order.status, input.to, order.fulfilment);
-  } catch {
-    return { ok: false, error: `An order that is ${order.status.toLowerCase()} cannot become ${input.to.toLowerCase()}.` };
-  }
+    try {
+      assertTransition(order.status, input.to, order.fulfilment);
+    } catch {
+      return { ok: false, error: `An order that is ${order.status.toLowerCase()} cannot become ${input.to.toLowerCase()}.` };
+    }
 
-  const now = new Date();
-  await database
-    .update(orders)
-    .set({
-      status: input.to,
-      updatedAt: now,
-      ...(input.to === "ACCEPTED" ? { acceptedAt: now } : {}),
-      ...(input.to === "READY" ? { readyAt: now } : {}),
-      ...(input.to === "COMPLETED" ? { completedAt: now } : {}),
-    })
-    .where(eq(orders.id, order.id));
+    const now = new Date();
+    await tx
+      .update(orders)
+      .set({
+        status: input.to,
+        updatedAt: now,
+        ...(input.to === "ACCEPTED" ? { acceptedAt: now } : {}),
+        ...(input.to === "READY" ? { readyAt: now } : {}),
+        ...(input.to === "COMPLETED" ? { completedAt: now } : {}),
+        ...(input.to === "CANCELLED" && input.cancellationReason ? { cancellationReason: input.cancellationReason } : {}),
+      })
+      .where(eq(orders.id, order.id));
 
-  await database.insert(orderEvents).values({
-    orgId: input.orgId,
-    orderId: order.id,
-    fromStatus: order.status,
-    toStatus: input.to,
-    actorUserId: input.actorUserId,
+    await tx.insert(orderEvents).values({
+      orgId: input.orgId,
+      orderId: order.id,
+      fromStatus: order.status,
+      toStatus: input.to,
+      actorUserId: input.actorUserId,
+      reason: input.reason,
+    });
+
+    return { ok: true, orderId: order.id, orderNumber: order.orderNumber, statusBefore: order.status };
   });
+
+  if (!outcome.ok) return outcome;
 
   /*
    * FRYBIRD REWARDS reverses automatically the moment an order is marked
@@ -1126,8 +1156,8 @@ export async function advanceOrder(input: {
    * either, or already had them reversed.
    */
   if (input.to === "REFUNDED") {
-    await reverseStampForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
-    await reversePointsForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
+    await reverseStampForOrder({ orgId: input.orgId, orderId: outcome.orderId, reason: `Order #${outcome.orderNumber} refunded` });
+    await reversePointsForOrder({ orgId: input.orgId, orderId: outcome.orderId, reason: `Order #${outcome.orderNumber} refunded` });
   }
 
   /*
@@ -1151,34 +1181,40 @@ export async function advanceOrder(input: {
       const lines = await database
         .select({ orderItemId: orderItems.id, productId: orderItems.productId, quantity: orderItems.quantity })
         .from(orderItems)
-        .where(eq(orderItems.orderId, order.id));
-      const consumed = await recordConsumption(input.orgId, input.actorUserId, { orderId: order.id, lines });
+        .where(eq(orderItems.orderId, outcome.orderId));
+      const consumed = await recordConsumption(input.orgId, input.actorUserId, { orderId: outcome.orderId, lines });
       if (!consumed.ok) {
-        console.error(`orders: stock consumption failed for order ${order.id}: ${consumed.error}`);
+        console.error(`orders: stock consumption failed for order ${outcome.orderId}: ${consumed.error}`);
       } else if (consumed.warnings.length > 0) {
-        console.warn(`orders: stock consumption warnings for order ${order.id}`, consumed.warnings);
+        console.warn(`orders: stock consumption warnings for order ${outcome.orderId}`, consumed.warnings);
       }
     } catch (error) {
-      console.error(`orders: stock consumption threw for order ${order.id}`, error);
+      console.error(`orders: stock consumption threw for order ${outcome.orderId}`, error);
     }
   }
 
   if (input.to === "CANCELLED") {
     try {
-      // `order.status` here is the status *before* this transition (fetched
-      // above, before the update) — the highest stage this order ever
-      // reached, since the state machine never moves backwards.
-      const wasCooking = foodWasCooking(order.status);
-      const reversed = await reverseConsumption(input.orgId, input.actorUserId, order.id, `Order #${order.orderNumber} cancelled`, wasCooking);
+      // `outcome.statusBefore` is the status *before* this transition,
+      // captured inside the same locked transaction that just wrote the
+      // new one — the highest stage this order ever reached, since the
+      // state machine never moves backwards.
+      const wasCooking = foodWasCooking(outcome.statusBefore);
+      // A caller with a specific reason (rejectOrder's own detail — "Sold
+      // out", say) gets it on the waste/return movement's own note, not a
+      // generic one — the reversal reads the same reason the order itself
+      // was cancelled for.
+      const reversalNote = input.cancellationReason ?? `Order #${outcome.orderNumber} cancelled`;
+      const reversed = await reverseConsumption(input.orgId, input.actorUserId, outcome.orderId, reversalNote, wasCooking);
       if (!reversed.ok) {
-        console.error(`orders: stock reversal failed for order ${order.id}: ${reversed.error}`);
+        console.error(`orders: stock reversal failed for order ${outcome.orderId}: ${reversed.error}`);
       } else if (reversed.movementsReversed > 0 || reversed.movementsWasted > 0) {
         // Worth a line in journalctl: which way a cancellation went matters
         // if someone later disputes a physical count or a waste figure.
-        console.log(`orders: order ${order.id} cancelled — ${reversed.movementsReversed} ingredient(s) credited back, ${reversed.movementsWasted} recorded as waste (kitchen had started: ${wasCooking})`);
+        console.log(`orders: order ${outcome.orderId} cancelled — ${reversed.movementsReversed} ingredient(s) credited back, ${reversed.movementsWasted} recorded as waste (kitchen had started: ${wasCooking})`);
       }
     } catch (error) {
-      console.error(`orders: stock reversal threw for order ${order.id}`, error);
+      console.error(`orders: stock reversal threw for order ${outcome.orderId}`, error);
     }
   }
 
@@ -1374,7 +1410,7 @@ export async function rejectOrder(input: {
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const database = db();
   const [order] = await database
-    .select()
+    .select({ id: orders.id })
     .from(orders)
     .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
     .limit(1);
@@ -1394,50 +1430,34 @@ export async function rejectOrder(input: {
     return { ok: false, error: "This order has been paid for. It needs a refund rather than a rejection." };
   }
 
-  try {
-    assertTransition(order.status, "CANCELLED", order.fulfilment);
-  } catch {
-    return { ok: false, error: `An order that is ${order.status.toLowerCase()} cannot be turned down.` };
-  }
-
   const detail = input.note?.trim() ? `${REJECTION_LABELS[input.reason]} — ${input.note.trim()}` : REJECTION_LABELS[input.reason];
 
-  await database
-    .update(orders)
-    .set({ status: "CANCELLED", cancellationReason: detail, updatedAt: new Date() })
-    .where(eq(orders.id, order.id));
-
-  await database.insert(orderEvents).values({
-    orgId: input.orgId,
-    orderId: order.id,
-    fromStatus: order.status,
-    toStatus: "CANCELLED",
+  /*
+   * Delegates the actual transition to `advanceOrder` — the CANCELLED path
+   * there already does everything a rejection needs (the locked read,
+   * `assertTransition`, the status + event write, and the same
+   * `foodWasCooking`-driven stock reversal a reject can trigger just as a
+   * cancellation can) — rather than reimplementing an unlocked copy of it.
+   * That used to be exactly what this function did: its own unlocked
+   * read-check-write, racing `advanceOrder`'s CANCELLED path or
+   * `refundPayment`'s REFUNDED path on the very same order with no lock
+   * between them.
+   */
+  const advanced = await advanceOrder({
+    orderId: input.orderId,
+    to: "CANCELLED",
     actorUserId: input.actorUserId,
+    orgId: input.orgId,
     reason: detail,
+    cancellationReason: detail,
   });
 
-  /*
-   * `rejectOrder` writes CANCELLED directly, bypassing `advanceOrder` — so
-   * its own reversal hook (see the `to === "CANCELLED"` branch there) never
-   * fires for a rejection. An order can be rejected after ACCEPTED (kitchen
-   * out of an ingredient mid-prep, say), so consumption may genuinely have
-   * happened; `reverseConsumption` is itself idempotent and a no-op when it
-   * has not. Same non-fatal handling as `advanceOrder`: an inventory problem
-   * must never block turning an order down.
-   */
-  try {
-    // Same reasoning as advanceOrder's CANCELLED branch: order.status here
-    // is still the pre-transition value, the highest stage this order ever
-    // reached.
-    const wasCooking = foodWasCooking(order.status);
-    const reversed = await reverseConsumption(input.orgId, input.actorUserId, order.id, detail, wasCooking);
-    if (!reversed.ok) {
-      console.error(`orders: stock reversal failed for order ${order.id}: ${reversed.error}`);
-    } else if (reversed.movementsReversed > 0 || reversed.movementsWasted > 0) {
-      console.log(`orders: order ${order.id} rejected — ${reversed.movementsReversed} ingredient(s) credited back, ${reversed.movementsWasted} recorded as waste (kitchen had started: ${wasCooking})`);
-    }
-  } catch (error) {
-    console.error(`orders: stock reversal threw for order ${order.id}`, error);
+  if (!advanced.ok) {
+    // advanceOrder's generic wording ("cannot become cancelled") only
+    // applies when it came from *this* transition attempt, not some other
+    // reason a locked transaction can fail for — but the only failure this
+    // input shape can hit is exactly that one, so the rewording is safe.
+    return { ok: false, error: advanced.error.replace(/cannot become cancelled\.?$/i, "cannot be turned down.") };
   }
 
   return { ok: true };
