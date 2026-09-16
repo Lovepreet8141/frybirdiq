@@ -225,6 +225,13 @@
       "when": 1789556774018,
       "tag": "0031_order_number_sequence",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1789600000000,
+      "tag": "0032_backfill_rls_gap",
+      "breakpoints": true
     }
   ]
 }
