@@ -37,8 +37,13 @@ export default async function CheckoutPage() {
   if (cart.lines.length === 0) redirect("/cart");
   const org = await requireOrg();
 
-  // Minted per render. Resubmitting the same page cannot create a second order.
-  const idempotencyKey = randomUUID();
+  // The cart's own durable key (src/lib/cart/index.ts's writeCart), not
+  // minted here — a *reload* of this page must resubmit the same key a
+  // lost-response first attempt already used, or that attempt's order
+  // becomes invisible to a customer who tries again after their connection
+  // dropped. Only falls back to minting one for a legacy cart cookie written
+  // before this field existed; every cart created from here on always has one.
+  const idempotencyKey = cart.idempotencyKey ?? randomUUID();
   // Computed here, not in the client, so "now" is the server's clock and
   // there is nothing for the browser to compute (or mis-hydrate) itself —
   // the picker just renders what it is given, and `placeOrder` re-derives

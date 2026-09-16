@@ -309,7 +309,17 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
         key: details.idempotencyKey,
         operation: "placeOrder",
         orgId: org.id,
-        request: { phone: details.phone, total: totals.gross.toString(), lines: cart.lines.length },
+        // Full line content, not just a count and a total — two different
+        // carts can share both (a same-price item swap) and a coarser
+        // fingerprint would let a stale key from a lost-response retry
+        // replay the *wrong* cart's order. Matches the precision
+        // `placeCounterOrder`'s own fingerprint already uses below.
+        request: {
+          phone: details.phone,
+          lines: cart.lines.map((line) => ({ slug: line.product.slug, quantity: line.quantity, modifiers: line.modifiers.map((modifier) => modifier.slug) })),
+          promoCode: cart.promotion?.code ?? null,
+          points: cart.points?.points ?? 0,
+        },
       },
       () => writeOrder(),
     );

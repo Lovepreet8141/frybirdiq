@@ -20,6 +20,7 @@
 import { useMemo, useRef, useState, useTransition } from "react";
 import { Banknote, CheckCircle2, Gift, Loader2, Printer, TriangleAlert } from "lucide-react";
 import { formatINR, paise, subtract } from "@/lib/money";
+import { STALE_DEPLOYMENT_MESSAGE, isStaleDeploymentError } from "@/lib/errors/stale-deployment";
 import type { CounterCheckoutResult, PriceDraftOk } from "@/lib/pos/actions";
 import { changeDue, parseTender, quickTenders } from "@/lib/pos/tender";
 import type { ReceiptData } from "@/lib/receipt/data";
@@ -110,6 +111,18 @@ export function PaymentSheet({
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const inputRef = useRef<HTMLInputElement>(null);
 
+  /**
+   * Consecutive *unreachable-server* failures on this one Confirm attempt —
+   * not business-rule refusals (a short tender, a permission error), which
+   * reset it. This app has no error monitoring (`docs/DEPLOY.md`): a network
+   * failure used to crash the whole till loudly enough that someone noticed;
+   * catching it quietly (below) is correct for the idempotency guarantee but
+   * would otherwise leave a genuinely broken server invisible, with the
+   * cashier told to keep tapping a button that will never work. After a few
+   * in a row, the message below stops suggesting a retry and says to stop.
+   */
+  const [networkFailures, setNetworkFailures] = useState(0);
+
   // Deliberately not auto-focused: on a touchscreen till, focusing this
   // field on mount immediately raises the OS numeric keyboard over the
   // payment sheet before the cashier has looked at it. The field is a
@@ -127,7 +140,36 @@ export function PaymentSheet({
     if (tendered === null || short) return;
     setError(null);
     startTransition(async () => {
-      const result = await onConfirm(cash.trim(), idempotencyKey);
+      let result: CounterCheckoutResult;
+      try {
+        result = await onConfirm(cash.trim(), idempotencyKey);
+      } catch (caught) {
+        // Unlike a form field losing its draft, an uncaught error here would
+        // unmount this sheet via the route's error boundary and take the
+        // idempotency key with it — the one piece of state that makes a
+        // retry after a dropped connection safe rather than a second charge.
+        // So every failure is caught here, not just the stale-deployment one
+        // other components special-case: this component never unmounts on a
+        // failed Confirm, full stop.
+        if (isStaleDeploymentError(caught)) {
+          setError(STALE_DEPLOYMENT_MESSAGE);
+          return;
+        }
+        // Genuinely unknown outcome — the request may have reached the
+        // server and completed, or may not have reached it at all. Either
+        // way the key in this sheet is untouched, so telling the cashier
+        // to press Confirm again is honest: it replays this exact attempt
+        // if it already went through, or completes it if it didn't. §17.
+        const attempt = networkFailures + 1;
+        setNetworkFailures(attempt);
+        setError(
+          attempt >= 3
+            ? "Still can't reach the server after several tries. This isn't your connection — stop and get the owner or manager before trying again."
+            : "Couldn't reach the server. Press Confirm again — it's safe, the same order can't be taken twice.",
+        );
+        return;
+      }
+      setNetworkFailures(0);
       if (!result.ok) {
         setError(result.error);
         return;

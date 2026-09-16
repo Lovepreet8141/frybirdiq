@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { EMPTY_CART, cartLineSchema, cartSchema, lineKey } from "./schema";
+import { EMPTY_CART, cartLineSchema, cartSchema, ensureCartIdempotencyKey, lineKey } from "./schema";
 
 describe("cartLineSchema — the trust boundary on a cookie the browser can edit", () => {
   it("accepts a well-formed line", () => {
@@ -130,5 +130,65 @@ describe("lineKey — identity for merging, not pricing", () => {
   it("is stable for the same input", () => {
     const line = { slug: "burger", modifiers: ["cheese", "bacon"] };
     expect(lineKey(line)).toBe(lineKey(line));
+  });
+});
+
+describe("ensureCartIdempotencyKey — checkout surviving a reload without risking a second order", () => {
+  const line = { slug: "wings-6pc", quantity: 1, modifiers: [], redeemStamp: false };
+
+  it("assigns a key to a cart that has a line but none yet", () => {
+    const result = ensureCartIdempotencyKey({ lines: [line] });
+    expect(result.idempotencyKey).toBeDefined();
+    expect(typeof result.idempotencyKey).toBe("string");
+  });
+
+  it("never assigns a key to an empty cart — writeCart deletes that cookie entirely", () => {
+    expect(ensureCartIdempotencyKey(EMPTY_CART).idempotencyKey).toBeUndefined();
+    expect(ensureCartIdempotencyKey({ lines: [] }).idempotencyKey).toBeUndefined();
+  });
+
+  it("is the regression test for the actual bug: the SAME key survives repeated calls, unlike a per-render randomUUID()", () => {
+    // This is the exact scenario a checkout-page reload used to fail: the old
+    // code minted `randomUUID()` fresh on every render, so a lost-response
+    // resubmission carried a *different* key than the attempt that may have
+    // already succeeded, and withIdempotency saw two unrelated requests
+    // instead of one replay.
+    const withKey = ensureCartIdempotencyKey({ lines: [line] });
+    const key = withKey.idempotencyKey;
+    // Every subsequent write (add another item, apply a promo code, change
+    // points to spend — anything that spreads the cart it read) must carry
+    // the identical key forward, not mint a new one.
+    expect(ensureCartIdempotencyKey(withKey).idempotencyKey).toBe(key);
+    expect(ensureCartIdempotencyKey({ ...withKey, promoCode: "WELCOME10" }).idempotencyKey).toBe(key);
+    expect(ensureCartIdempotencyKey({ ...withKey, lines: [line, { ...line, slug: "nashville-burger" }] }).idempotencyKey).toBe(key);
+  });
+
+  it("gives two different carts two different keys — this is per-cart durability, not a global constant", () => {
+    const a = ensureCartIdempotencyKey({ lines: [line] });
+    const b = ensureCartIdempotencyKey({ lines: [line] });
+    expect(a.idempotencyKey).not.toBe(b.idempotencyKey);
+  });
+
+  it("does not mutate its input", () => {
+    const cart = { lines: [line] };
+    ensureCartIdempotencyKey(cart);
+    expect(cart).toEqual({ lines: [line] });
+  });
+});
+
+describe("cartSchema — idempotencyKey", () => {
+  it("accepts a well-formed cart with a key", () => {
+    const result = cartSchema.safeParse({ lines: [{ slug: "wings-6pc", quantity: 1 }], idempotencyKey: "550e8400-e29b-41d4-a716-446655440000" });
+    expect(result.success).toBe(true);
+  });
+
+  it("treats a missing key as undefined — a legacy cart cookie predating this field must not fail to parse", () => {
+    const result = cartSchema.parse({ lines: [{ slug: "wings-6pc", quantity: 1 }] });
+    expect(result.idempotencyKey).toBeUndefined();
+  });
+
+  it("refuses a non-UUID key rather than silently accepting an arbitrary string a tampered cookie could set", () => {
+    const result = cartSchema.safeParse({ lines: [], idempotencyKey: "not-a-uuid" });
+    expect(result.success).toBe(false);
   });
 });

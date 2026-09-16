@@ -25,7 +25,7 @@ import { getOrg } from "@/lib/repositories/org";
 import { type PricedLine, type PricedOrder, priceLine, priceOrder } from "@/lib/pricing";
 import { resolvePricingContext } from "@/lib/repositories/org";
 import { type MenuModifier, type MenuProduct, getMenu, resolveLineModifiers } from "@/lib/repositories/menu";
-import { type Cart, EMPTY_CART, cartSchema, lineKey } from "./schema";
+import { type Cart, EMPTY_CART, cartSchema, ensureCartIdempotencyKey, lineKey } from "./schema";
 
 export const CART_COOKIE = "frybird_cart";
 
@@ -48,13 +48,26 @@ export async function readCart(): Promise<Cart> {
   }
 }
 
+/**
+ * Writes the cart cookie — and, the first time a cart has a line in it,
+ * assigns its `idempotencyKey`. Every mutation (`src/lib/cart/actions.ts`)
+ * spreads the cart it read and writes it back through here, so the key
+ * survives every add/remove/promo/points change untouched; only a Server
+ * Action can legally set a cookie, so this is also the *only* place it is
+ * ever safe to assign one — a page's own GET render cannot.
+ *
+ * This is what makes checkout survive a reload without risking a second
+ * order: a lost-response resubmission reads the *same* key back from this
+ * same cookie rather than a fresh one minted per render, and
+ * `withIdempotency` recognises the replay. See `checkout/page.tsx`.
+ */
 export async function writeCart(cart: Cart): Promise<void> {
   const store = await cookies();
   if (cart.lines.length === 0) {
     store.delete(CART_COOKIE);
     return;
   }
-  store.set(CART_COOKIE, JSON.stringify(cart), {
+  store.set(CART_COOKIE, JSON.stringify(ensureCartIdempotencyKey(cart)), {
     httpOnly: false, // read by the client only to show a count; never trusted.
     sameSite: "lax",
     path: "/",
@@ -101,6 +114,13 @@ export interface PricedCart {
   readonly lines: readonly PricedCartLine[];
   readonly totals: PricedOrder;
   readonly itemCount: number;
+  /**
+   * This cart's durable idempotency key — `undefined` only for a genuinely
+   * empty cart (or a legacy cart cookie written before this field existed,
+   * which the checkout page falls back to minting one for, matching the old
+   * behaviour exactly rather than crashing). See `writeCart`'s comment.
+   */
+  readonly idempotencyKey: string | undefined;
   /** The code that was accepted, if any. */
   readonly promotion: AppliedPromotion | null;
   /** Why a code was refused. Specific, so the customer knows what to do. */
@@ -291,6 +311,7 @@ export async function priceCart(cart: Cart): Promise<PricedCart> {
     lines: resolved.map((line, index) => ({ ...line, priced: totals.lines[index] ?? line.priced })),
     totals,
     itemCount: resolved.reduce((count, line) => count + line.quantity, 0),
+    idempotencyKey: cart.idempotencyKey,
     promotion,
     promotionError,
     points,

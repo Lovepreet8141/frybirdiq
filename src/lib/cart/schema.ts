@@ -7,8 +7,16 @@
  * put in it is a reference the server can price for itself.
  *
  * If a price ever appears in this schema, the cart has become forgeable.
+ *
+ * `idempotencyKey` is the one field here that isn't a customer choice — an
+ * opaque request-dedup token, not money. Tampering with it is harmless by
+ * construction: `withIdempotency` (`src/lib/repositories/idempotency.ts`)
+ * rejects a key reused against different order content as a conflict rather
+ * than trusting it, the same protection every other field here already
+ * relies on.
  */
 
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 /** One line. `modifiers` are modifier slugs within the product's own groups. */
@@ -39,6 +47,17 @@ export const cartSchema = z.object({
   promoCode: z.string().max(40).optional(),
   /** Points the customer asked to spend. Capped and priced on the server. */
   points: z.number().int().min(0).max(1_000_000).optional(),
+  /**
+   * This cart's own idempotency key — assigned once, by `writeCart`, the
+   * first time a cart gets a line, and carried unchanged by every mutation
+   * after that (see `writeCart`'s own comment). Checkout reads it back
+   * rather than minting its own, so a reloaded checkout page resubmits the
+   * *same* key a lost-response first attempt already used — `withIdempotency`
+   * then returns that attempt's real result instead of placing a second
+   * order. Cleared for free the moment the cart empties, since `writeCart`
+   * deletes the whole cookie rather than writing an empty cart.
+   */
+  idempotencyKey: z.uuid().optional(),
 });
 
 export type CartLine = z.infer<typeof cartLineSchema>;
@@ -72,4 +91,16 @@ export const EMPTY_CART: Cart = { lines: [] };
  */
 export function lineKey(line: Pick<CartLine, "slug" | "modifiers">): string {
   return JSON.stringify([line.slug, [...line.modifiers].sort()]);
+}
+
+/**
+ * Assigns a cart its `idempotencyKey` the first time it has a line in it —
+ * a no-op once it already has one. Pure and framework-free on purpose: the
+ * one place this durability rule lives, so it can be tested directly rather
+ * than only indirectly through `writeCart` (which needs a real Next.js
+ * request to call `cookies()` at all).
+ */
+export function ensureCartIdempotencyKey(cart: Cart): Cart {
+  if (cart.lines.length === 0 || cart.idempotencyKey) return cart;
+  return { ...cart, idempotencyKey: randomUUID() };
 }
