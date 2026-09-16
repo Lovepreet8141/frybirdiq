@@ -118,3 +118,18 @@ export function maxRedeemable(balance: number, orderTotal: Paise, config: Loyalt
 export function remainingAfterPoints(orderTotal: Paise, redemption: Redemption): Paise {
   return subtract(orderTotal, redemption.discount);
 }
+
+/**
+ * How many points a refund can actually claw back from a balance.
+ *
+ * Floors at zero rather than going negative: `pointsBalance` is a mutable
+ * cache, not a real count the way a stamp tally is, and a customer may
+ * already have spent some or all of what this order earned on a later
+ * order before this one was refunded. This account owing FRYBIRD points
+ * back is not a real state the program has, so the reversal takes what is
+ * there and no more — `src/lib/repositories/loyalty.ts`'s
+ * `reversePointsForOrder` still records the full amount in the ledger.
+ */
+export function pointsReclaimable(currentBalance: number, earnedByThisOrder: number): number {
+  return Math.max(Math.min(currentBalance, earnedByThisOrder), 0);
+}

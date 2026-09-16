@@ -6,6 +6,7 @@ import {
   isLoyaltyEnabled,
   maxRedeemable,
   pointsEarned,
+  pointsReclaimable,
   pointsValue,
   redeem,
   remainingAfterPoints,
@@ -115,5 +116,27 @@ describe("redeeming", () => {
   it("leaves the right amount to pay", () => {
     const result = redeem({ requestedPoints: 120, balance: 200, orderTotal: fromRupees("327"), config: CONFIG });
     expect(formatINR(remainingAfterPoints(fromRupees("327"), result))).toBe("₹207");
+  });
+});
+
+describe("pointsReclaimable — a refund clawing back what an order earned", () => {
+  it("reclaims the full amount when it's all still there", () => {
+    expect(pointsReclaimable(50, 15)).toBe(15);
+  });
+
+  it("floors at what's left, not what was originally earned — the customer spent some of it on a later order first", () => {
+    expect(pointsReclaimable(8, 15)).toBe(8);
+  });
+
+  it("reclaims nothing from an empty balance", () => {
+    expect(pointsReclaimable(0, 15)).toBe(0);
+  });
+
+  it("never goes negative even given a nonsensical negative balance", () => {
+    expect(pointsReclaimable(-5, 15)).toBe(0);
+  });
+
+  it("reclaims nothing when the order earned nothing", () => {
+    expect(pointsReclaimable(50, 0)).toBe(0);
   });
 });

@@ -17,9 +17,10 @@ import "server-only";
  * pure rules in `src/lib/loyalty/stamps.ts`, which do have full coverage.
  */
 
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, like, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { loyaltyAccounts, loyaltyRewards, loyaltyStampEvents, organizations } from "@/db/schema";
+import { loyaltyAccounts, loyaltyRewards, loyaltyStampEvents, loyaltyTransactions, orders, organizations } from "@/db/schema";
+import { pointsReclaimable } from "@/lib/loyalty";
 import { type StampConfig, isRewardUnlocked, qualifiesForStamp } from "@/lib/loyalty/stamps";
 import { type Paise, ZERO, paise, subtract } from "@/lib/money";
 
@@ -192,6 +193,96 @@ export async function reverseStampForOrder(input: { orgId: string; orderId: stri
     : { enabled: false, stampsRequired: 7, minOrderValue: ZERO, maxRewardValue: ZERO };
 
   await settleAccount(event.accountId, input.orgId, config);
+}
+
+/**
+ * Reverses the points a refunded order earned, if it earned any.
+ *
+ * Points and stamps are separate programs (see `src/lib/loyalty/index.ts`'s
+ * own header) that happened to share one gap: stamps were reversed on
+ * refund, points were not — a customer could pay, earn points, get a full
+ * refund, and keep the points, indefinitely. This closes that the same way
+ * `reverseStampForOrder` closes its own: on the `REFUNDED` transition,
+ * `advanceOrder` calls both.
+ *
+ * `orders.pointsEarned` is what this order actually earned — read once,
+ * from the order itself, never recomputed from `grandTotal` again, so a
+ * later change to the earn rate can never rewrite what a past order
+ * genuinely earned (the same §51 snapshot principle as a price).
+ *
+ * Idempotent on `orderId`: a reversal already recorded for this order is
+ * matched by its own distinctive `reason` prefix (there is no unique
+ * constraint to lean on here the way `loyalty_stamp_events.order_id` gives
+ * stamps one — points share one ledger table with every other kind of
+ * movement) and short-circuits. In practice `advanceOrder`'s own state
+ * machine already makes this unreachable twice for one order (`REFUNDED`
+ * has no further transitions), but this mirrors `reverseStampForOrder`'s
+ * own defence-in-depth rather than relying on that alone.
+ *
+ * The balance floors at zero rather than going negative, via
+ * `pointsReclaimable` (`src/lib/loyalty/index.ts`, pure and tested): unlike
+ * a stamp count (a real count of unconsumed events, incapable of going
+ * negative by construction), `loyaltyAccounts.pointsBalance` is a mutable
+ * cache, and a customer may have already spent some or all of these points
+ * on a later order before this one was refunded. Clawing back more than
+ * remains would show the account as owing FRYBIRD points, which is not a
+ * real state this program has. The ledger records exactly what was
+ * actually removed, not the order's original face value, so the ledger and
+ * the balance never disagree.
+ *
+ * The balance write itself is one atomic SQL statement (`greatest(...)`),
+ * not a read-then-write — matching the earn path's own increment
+ * (`payments.ts`), which already updates this exact column atomically.
+ * `reclaimed` still comes from a snapshot read, used to decide what the
+ * ledger entry says; the atomic `GREATEST` on the write is the actual
+ * safety net if the real balance had already moved by the time this runs,
+ * so the account can never be pushed negative regardless.
+ */
+export async function reversePointsForOrder(input: { orgId: string; orderId: string; reason: string }): Promise<void> {
+  const database = db();
+  const [order] = await database
+    .select({ pointsEarned: orders.pointsEarned, customerId: orders.customerId })
+    .from(orders)
+    .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
+    .limit(1);
+  if (!order || order.pointsEarned <= 0 || !order.customerId) return; // never earned any, or a guest order
+
+  const REVERSAL_PREFIX = "Reversed —";
+  const [already] = await database
+    .select({ id: loyaltyTransactions.id })
+    .from(loyaltyTransactions)
+    .where(and(eq(loyaltyTransactions.orgId, input.orgId), eq(loyaltyTransactions.orderId, input.orderId), like(loyaltyTransactions.reason, `${REVERSAL_PREFIX}%`)))
+    .limit(1);
+  if (already) return;
+
+  const [account] = await database
+    .select({ id: loyaltyAccounts.id, pointsBalance: loyaltyAccounts.pointsBalance })
+    .from(loyaltyAccounts)
+    .where(eq(loyaltyAccounts.customerId, order.customerId))
+    .limit(1);
+  if (!account) return;
+
+  const reclaimed = pointsReclaimable(account.pointsBalance, order.pointsEarned);
+  if (reclaimed <= 0) return; // nothing left on the account to take back
+
+  // The write itself is atomic — correct even if a concurrent spend or a
+  // second reversal races this exact account between the read above and
+  // this statement — matching how the earn path (payments.ts) already
+  // increments this same column, rather than trusting the snapshot read.
+  // `reclaimed` (from that snapshot) still decides the ledger entry below;
+  // GREATEST is the actual safety net if reality had already moved.
+  await database
+    .update(loyaltyAccounts)
+    .set({ pointsBalance: sql`greatest(${loyaltyAccounts.pointsBalance} - ${reclaimed}, 0)`, updatedAt: new Date() })
+    .where(eq(loyaltyAccounts.id, account.id));
+
+  await database.insert(loyaltyTransactions).values({
+    orgId: input.orgId,
+    accountId: account.id,
+    points: -reclaimed,
+    reason: `${REVERSAL_PREFIX} ${input.reason}`,
+    orderId: input.orderId,
+  });
 }
 
 /** The oldest reward still sitting available for a customer, if any. Redeem oldest first. */

@@ -38,7 +38,7 @@ import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
 import { createPendingPayment, recordCashPayment } from "./payments";
 import { CASH_PROVIDER, RAZORPAY_PROVIDER, availableMethods, codAllowed, getProvider, type PaymentMethod } from "@/lib/payments";
-import { reverseStampForOrder } from "./loyalty";
+import { reversePointsForOrder, reverseStampForOrder } from "./loyalty";
 import { recordConsumption, reverseConsumption } from "./stock";
 import { IdempotencyConflict, withIdempotency } from "./idempotency";
 
@@ -1131,13 +1131,15 @@ export async function advanceOrder(input: {
 
   /*
    * FRYBIRD REWARDS reverses automatically the moment an order is marked
-   * refunded — whatever stamp it earned (if any) is voided here, same
-   * transaction-adjacent moment as the status write, so there is no window
-   * where a refunded order still counts toward the next free item. A no-op
-   * if this order never earned a stamp, or already had one reversed.
+   * refunded — whatever stamp AND points it earned (if any) are voided
+   * here, same transaction-adjacent moment as the status write, so there
+   * is no window where a refunded order still counts toward the next free
+   * item or leaves points behind. A no-op if this order never earned
+   * either, or already had them reversed.
    */
   if (input.to === "REFUNDED") {
     await reverseStampForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
+    await reversePointsForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
   }
 
   /*
