@@ -17,7 +17,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { addresses, customers, locations, loyaltyAccounts, loyaltyStampEvents, loyaltyTransactions, memberships, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments, tables } from "@/db/schema";
 import { assertChannelFulfilment, fulfilmentsFor, type OrderChannel } from "@/domain/order-channel";
-import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition } from "@/domain/order-status";
+import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition, foodWasCooking } from "@/domain/order-status";
 import type { Role } from "@/domain/permissions";
 import { REJECTION_LABELS, type RejectionReason } from "@/domain/rejection";
 import { businessDate } from "@/lib/dates";
@@ -1175,9 +1175,17 @@ export async function advanceOrder(input: {
 
   if (input.to === "CANCELLED") {
     try {
-      const reversed = await reverseConsumption(input.orgId, input.actorUserId, order.id, `Order #${order.orderNumber} cancelled`);
+      // `order.status` here is the status *before* this transition (fetched
+      // above, before the update) — the highest stage this order ever
+      // reached, since the state machine never moves backwards.
+      const wasCooking = foodWasCooking(order.status);
+      const reversed = await reverseConsumption(input.orgId, input.actorUserId, order.id, `Order #${order.orderNumber} cancelled`, wasCooking);
       if (!reversed.ok) {
         console.error(`orders: stock reversal failed for order ${order.id}: ${reversed.error}`);
+      } else if (reversed.movementsReversed > 0 || reversed.movementsWasted > 0) {
+        // Worth a line in journalctl: which way a cancellation went matters
+        // if someone later disputes a physical count or a waste figure.
+        console.log(`orders: order ${order.id} cancelled — ${reversed.movementsReversed} ingredient(s) credited back, ${reversed.movementsWasted} recorded as waste (kitchen had started: ${wasCooking})`);
       }
     } catch (error) {
       console.error(`orders: stock reversal threw for order ${order.id}`, error);
@@ -1428,9 +1436,15 @@ export async function rejectOrder(input: {
    * must never block turning an order down.
    */
   try {
-    const reversed = await reverseConsumption(input.orgId, input.actorUserId, order.id, detail);
+    // Same reasoning as advanceOrder's CANCELLED branch: order.status here
+    // is still the pre-transition value, the highest stage this order ever
+    // reached.
+    const wasCooking = foodWasCooking(order.status);
+    const reversed = await reverseConsumption(input.orgId, input.actorUserId, order.id, detail, wasCooking);
     if (!reversed.ok) {
       console.error(`orders: stock reversal failed for order ${order.id}: ${reversed.error}`);
+    } else if (reversed.movementsReversed > 0 || reversed.movementsWasted > 0) {
+      console.log(`orders: order ${order.id} rejected — ${reversed.movementsReversed} ingredient(s) credited back, ${reversed.movementsWasted} recorded as waste (kitchen had started: ${wasCooking})`);
     }
   } catch (error) {
     console.error(`orders: stock reversal threw for order ${order.id}`, error);

@@ -116,3 +116,21 @@ export function assertTransition(
 export function isLiveInKitchen(status: OrderStatus): boolean {
   return status === "ACCEPTED" || status === "PREPARING" || status === "READY";
 }
+
+/**
+ * Whether an order reached the point cooking had genuinely started, given
+ * the status it was at right before a cancellation/rejection — the highest
+ * stage it ever reached, since the state machine never moves backwards
+ * (`TRANSITIONS` above).
+ *
+ * The one fact `reverseConsumption` (`src/lib/repositories/stock.ts`) needs
+ * to decide credit-back (nothing physically touched yet) from waste (food
+ * cooked, cannot un-leave the shelf) — deliberately not the same boundary
+ * as consumption's own trigger (ACCEPTED, "the moment the kitchen commits").
+ * `docs/INVENTORY-ARCHITECTURE.md` §7 draws this line at PREPARING; kept
+ * here, pure and tested, so the one place that decision is made can't drift
+ * from the one place it's read.
+ */
+export function foodWasCooking(statusBeforeCancelling: OrderStatus): boolean {
+  return statusBeforeCancelling === "PREPARING" || statusBeforeCancelling === "READY";
+}

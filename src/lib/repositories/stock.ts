@@ -165,14 +165,24 @@ export interface FoodCostComparison {
  * in neither number.
  *
  * RETURN (a SALE reversed because its order was rejected or cancelled
- * after ACCEPTED — `reverseConsumption` above) is deliberately excluded
- * from both sides too, rather than netted against SALE. A RETURN's
- * `totalCost` always equals the SALE it undoes, so including it in one
- * number and not the other would make a cancelled order look like a
+ * before the kitchen started — `reverseConsumption` above) is deliberately
+ * excluded from both sides too, rather than netted against SALE. A
+ * RETURN's `totalCost` always equals the SALE it undoes, so including it in
+ * one number and not the other would make a cancelled order look like a
  * saving, and netting it out of both would only matter across a period
  * boundary that a same-transaction reversal almost never crosses. Leaving
  * it out of both keeps `varianceCost` reading as exactly what it claims to
  * be: the cost of waste and shrinkage, nothing else.
+ *
+ * A cooked-then-cancelled order (`reverseConsumption`'s waste path, once
+ * the kitchen had genuinely started) writes no RETURN and no second
+ * cost-bearing movement — the original SALE simply stays counted in both
+ * `theoreticalCost` and `actualCost`, exactly as an ordinary sale would,
+ * contributing zero to `varianceCost`. That is deliberate, not a gap this
+ * function is meant to close: it keeps this comparison's job narrow
+ * ("did we use more than the recipe said, or exactly what it said") and
+ * leaves "was this cost recovered as revenue" to `getWasteWeekTotal`/the
+ * waste dashboard, which the `waste_entries` row this writes does surface.
  *
  * One real SQL aggregate with `filter`, not client-side summation of an
  * unbounded row set — the same shape as `getWasteWeekTotal` above.
@@ -873,6 +883,8 @@ export interface ReversalResult {
   readonly ok: true;
   /** RETURN movements actually written — excludes movements already reversed on a retry. */
   readonly movementsReversed: number;
+  /** Waste entries written instead, for a SALE whose food was already cooked. */
+  readonly movementsWasted: number;
 }
 
 /**
@@ -881,10 +893,36 @@ export interface ReversalResult {
  * after the food may already be cooked and handed over — the chicken was
  * genuinely used — while a rejection/cancellation means it never was).
  *
- * Writes a new RETURN movement per un-reversed SALE; never edits or deletes
- * the original (same immutability discipline as an order line or a recipe
- * version). There is no partial unique index on `reversalOfMovementId` the
- * way `inventory_movements_sale_line_unique` guards SALE, so this locks the
+ * Two different real-world outcomes share this one function, decided by
+ * `wasCooking` — whether the order had reached PREPARING or READY before
+ * this cancellation (its status right before the transition, which the
+ * caller already has and this function does not re-derive):
+ *
+ * - **Not yet cooking** (still ACCEPTED, or earlier): the ingredients were
+ *   logically committed at ACCEPTED but nothing has physically happened to
+ *   them, so they genuinely go back on the shelf — a RETURN movement,
+ *   crediting `inventory_items.quantityOnHand` back up. This was this
+ *   function's only behaviour before this distinction existed.
+ * - **Already cooking or cooked**: the ingredients physically left the
+ *   shelf and cannot un-leave it — crediting them back would make a
+ *   physical count wrong forever after. Nothing is credited; instead a
+ *   `waste_entries` row (reason `CANCELLED_ORDER`, already in the schema
+ *   for exactly this — `db/schema/inventory.ts`) links back to the SALE it
+ *   explains, purely for reporting (the waste dashboard, `getWasteWeekTotal`).
+ *   The original SALE movement is never touched — it already correctly
+ *   decremented on-hand once, and `getFoodCostComparison`'s `actualCost`
+ *   already counts every SALE unconditionally, so writing a second,
+ *   cost-bearing movement here would double it. See
+ *   docs/INVENTORY-ARCHITECTURE.md §7 (D2) for the approved design this
+ *   follows — written for a PREPARING-triggered consumption model; adapted
+ *   here to the ACCEPTED-triggered one actually shipped, so the "was it
+ *   physically touched" line falls at PREPARING regardless of which status
+ *   consumption itself fires at.
+ *
+ * Writes at most one row per un-reversed SALE; never edits or deletes the
+ * original (same immutability discipline as an order line or a recipe
+ * version). There is no partial unique index the way
+ * `inventory_movements_sale_line_unique` guards SALE, so this locks the
  * order's SALE rows with `SELECT … FOR UPDATE` first — two calls racing
  * past `advanceOrder`/`rejectOrder`'s `assertTransition` for the same order
  * (the same kind of race the SALE unique index guards against) serialize on
@@ -896,6 +934,7 @@ export async function reverseConsumption(
   actorUserId: string | null,
   orderId: string,
   reason: string | null,
+  wasCooking: boolean,
 ): Promise<ReversalResult | { ok: false; error: string }> {
   return db().transaction(async (tx) => {
     const saleMovements = await tx
@@ -913,31 +952,76 @@ export async function reverseConsumption(
       .for("update");
 
     if (saleMovements.length === 0) {
-      return { ok: true, movementsReversed: 0 };
+      return { ok: true, movementsReversed: 0, movementsWasted: 0 };
     }
 
     const saleIds = saleMovements.map((movement) => movement.id);
-    const existingReturns = await tx
-      .select({ reversalOfMovementId: inventoryMovements.reversalOfMovementId })
-      .from(inventoryMovements)
-      .where(
-        and(
-          eq(inventoryMovements.orgId, orgId),
-          eq(inventoryMovements.type, "RETURN"),
-          inArray(inventoryMovements.reversalOfMovementId, saleIds),
+    const [existingReturns, existingWaste] = await Promise.all([
+      tx
+        .select({ reversalOfMovementId: inventoryMovements.reversalOfMovementId })
+        .from(inventoryMovements)
+        .where(
+          and(
+            eq(inventoryMovements.orgId, orgId),
+            eq(inventoryMovements.type, "RETURN"),
+            inArray(inventoryMovements.reversalOfMovementId, saleIds),
+          ),
         ),
-      );
-    const alreadyReversed = new Set(
-      existingReturns.map((row) => row.reversalOfMovementId).filter((id): id is string => id !== null),
-    );
+      tx
+        .select({ movementId: wasteEntries.movementId })
+        .from(wasteEntries)
+        .where(and(eq(wasteEntries.orgId, orgId), inArray(wasteEntries.movementId, saleIds))),
+    ]);
+    const alreadyReversed = new Set([
+      ...existingReturns.map((row) => row.reversalOfMovementId).filter((id): id is string => id !== null),
+      ...existingWaste.map((row) => row.movementId).filter((id): id is string => id !== null),
+    ]);
 
     let movementsReversed = 0;
+    let movementsWasted = 0;
 
     for (const sale of saleMovements) {
       if (alreadyReversed.has(sale.id)) continue;
 
       const magnitude = Math.abs(sale.quantity);
       if (magnitude === 0) continue;
+
+      if (wasCooking) {
+        // Already cooked: no credit, no second cost-bearing movement — see
+        // this function's own doc comment. Only a reporting row, linked to
+        // the SALE it explains.
+        const ingredient = await loadIngredientForWrite(tx, orgId, sale.ingredientId);
+        if (!ingredient) continue; // Deleted since the sale — nothing to attribute the waste to.
+
+        const [entry] = await tx
+          .insert(wasteEntries)
+          .values({
+            orgId,
+            ingredientId: sale.ingredientId,
+            locationId: sale.locationId,
+            movementId: sale.id,
+            orderId,
+            quantity: magnitude,
+            unit: ingredient.baseUnit,
+            reason: "CANCELLED_ORDER",
+            cost: sale.totalCost,
+            actorUserId,
+            notes: reason,
+          })
+          .returning({ id: wasteEntries.id });
+        if (!entry) throw new Error("stock: waste entry insert returned no row");
+        movementsWasted++;
+
+        await tx.insert(auditLogs).values({
+          orgId,
+          actorUserId,
+          action: "stock_consumption_wasted",
+          entity: "waste_entries",
+          entityId: entry.id,
+          after: { orderId, movementId: sale.id, ingredientId: sale.ingredientId, magnitude, reason: "CANCELLED_ORDER" },
+        });
+        continue;
+      }
 
       const [movement] = await tx
         .insert(inventoryMovements)
@@ -974,6 +1058,6 @@ export async function reverseConsumption(
       });
     }
 
-    return { ok: true, movementsReversed };
+    return { ok: true, movementsReversed, movementsWasted };
   });
 }

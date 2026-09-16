@@ -4,6 +4,7 @@ import {
   ORDER_STATUSES,
   assertTransition,
   canTransition,
+  foodWasCooking,
   isLiveInKitchen,
   isTerminal,
   nextStatuses,
@@ -110,6 +111,26 @@ describe("order lifecycle", () => {
   it("shows the kitchen only what it is cooking", () => {
     const live = ORDER_STATUSES.filter(isLiveInKitchen);
     expect(live).toEqual(["ACCEPTED", "PREPARING", "READY"]);
+  });
+
+  describe("foodWasCooking — reverseConsumption's credit-back vs waste decision", () => {
+    it("is false for an order cancelled before or at ACCEPTED — nothing physically touched yet, even though ingredients were logically consumed at that status", () => {
+      expect(foodWasCooking("DRAFT")).toBe(false);
+      expect(foodWasCooking("PENDING_PAYMENT")).toBe(false);
+      expect(foodWasCooking("PAID")).toBe(false);
+      expect(foodWasCooking("ACCEPTED")).toBe(false);
+    });
+
+    it("is true once the kitchen has genuinely started or finished cooking", () => {
+      expect(foodWasCooking("PREPARING")).toBe(true);
+      expect(foodWasCooking("READY")).toBe(true);
+    });
+
+    it("is false for every terminal/other status — cancelling from one of these never reverses consumption at all (no SALE movements exist to reverse for these), but the predicate itself must not claim they were cooking", () => {
+      for (const status of ["OUT_FOR_DELIVERY", "COMPLETED", "CANCELLED", "FAILED", "REFUNDED"] as const) {
+        expect(foodWasCooking(status)).toBe(false);
+      }
+    });
   });
 
   it("never proposes a transition that is not allowed from that status", () => {
