@@ -10,20 +10,31 @@ import type { VegClass } from "@/db/menu-data";
  * forbid colour as the only signal, and roughly one man in twelve has some
  * colour vision deficiency.
  */
-export function VegMark({ veg, className }: { veg: VegClass; className?: string }) {
+export function VegMark({
+  veg,
+  className,
+  /** "stage" swaps the veg green for --stage-veg (5.19:1 on --stage-yellow) — the default green is tuned for cream and drops to 1.86:1 there. Non-veg's red already passes on yellow unchanged. */
+  tone = "default",
+}: {
+  veg: VegClass;
+  className?: string;
+  tone?: "default" | "stage";
+}) {
   const isVeg = veg === "VEG";
+  const vegColor = tone === "stage" ? "border-[var(--stage-veg)]" : "border-[#3F9D52]";
+  const vegDot = tone === "stage" ? "bg-[var(--stage-veg)]" : "bg-[#3F9D52]";
   return (
     <span
       className={cn(
         "inline-flex size-4 shrink-0 items-center justify-center border-2",
-        isVeg ? "border-[#3F9D52]" : "border-[#8E1409]",
+        isVeg ? vegColor : "border-[#8E1409]",
         className,
       )}
       role="img"
       aria-label={isVeg ? "Vegetarian" : "Non-vegetarian"}
       title={isVeg ? "Vegetarian" : "Non-vegetarian"}
     >
-      <span className={cn("size-2 rounded-full", isVeg ? "bg-[#3F9D52]" : "bg-[#8E1409]")} aria-hidden="true" />
+      <span className={cn("size-2 rounded-full", isVeg ? vegDot : "bg-[#8E1409]")} aria-hidden="true" />
     </span>
   );
 }

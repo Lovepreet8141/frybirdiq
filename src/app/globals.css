@@ -152,6 +152,21 @@
   /* Same yellow as the homepage hero's "stage" backdrop — see (home)/frybird-home.css's .fb-hero. Product-photo staging only, not a semantic token. */
   --stage-yellow: #f8b317;
   --stage-yellow-deep: #f2b120;
+  /*
+   * Text colours for content sitting directly on --stage-yellow (menu
+   * product cards). --ink itself already passes there (8.54:1) so the
+   * product name needs no override, but --muted-foreground (2.88:1) and
+   * --red (2.64:1) both fail against this specific yellow — measured, not
+   * eyeballed, same as the pairs in scripts/check-contrast.py:
+   *   --stage-ink-muted on --stage-yellow: 5.24:1 (description text)
+   *   --stage-red on --stage-yellow: 4.97:1 (price, "Choose options")
+   *   --stage-veg on --stage-yellow: 5.19:1 (VegMark's green dot only —
+   *     the existing #3F9D52 drops to 1.86:1 on this yellow; non-veg's
+   *     #8E1409 already passes at 5.08:1 and is unchanged)
+   */
+  --stage-ink-muted: #4f4335;
+  --stage-red: #8f1717;
+  --stage-veg: #155024;
 
   /* Semantic. The customer site is cream; staff screens override these
      wholesale in .surface-dark below — a counter display runs for eight hours
