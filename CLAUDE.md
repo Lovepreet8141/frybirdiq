@@ -177,14 +177,30 @@ imports. Every function there has a test. This is the part that must be right.
 ## Commands
 
 ```bash
-pnpm dev            # dev server
-pnpm typecheck      # tsc --noEmit
-pnpm lint           # eslint
-pnpm test           # vitest
-pnpm db:generate    # drizzle-kit generate, after a schema change
-pnpm db:migrate     # apply migrations
+pnpm dev              # dev server
+pnpm typecheck        # tsc --noEmit
+pnpm lint             # eslint
+pnpm test             # vitest — pure src/lib and src/domain, no database
+pnpm test:integration # vitest — the repository layer against a real, local database
+pnpm db:generate      # drizzle-kit generate, after a schema change
+pnpm db:migrate       # apply migrations
 python3 scripts/check-contrast.py   # after any colour change
 ```
+
+`pnpm test:integration` (`vitest.integration.config.mts`) runs `src/lib/
+repositories/**/*.integration.test.ts` against a real Postgres — the
+local, isolated stack `supabase start` runs in Docker, never production.
+One-time setup: `supabase init` (already done — `supabase/config.toml` is
+committed) then `supabase start`; copy the `DB_URL`/`ANON_KEY`/
+`SERVICE_ROLE_KEY` it prints into `.env.test.local` (gitignored, same
+shape as `.env.local`; `NEXT_PUBLIC_SUPABASE_URL` is its `API_URL`,
+`SITE_URL` can be anything local). `vitest.integration.setup.ts` refuses
+to run at all unless `DATABASE_URL` resolves to a local address — this
+suite creates and deletes real rows, on purpose, and must never be
+pointed at anything else. Fixtures live in `src/lib/repositories/
+__test-support__/fixtures.ts`; each test file creates its own org and
+deletes it (cascades) when done, so files never interfere with each
+other even though they run sequentially against one shared local database.
 
 Run `pnpm typecheck && pnpm lint && pnpm test` before considering work done. A
 change to a calculation without a change to its test is incomplete.
