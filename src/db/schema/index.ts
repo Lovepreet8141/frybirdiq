@@ -16,3 +16,4 @@ export * from "./platform";
 export * from "./expenses";
 export * from "./receipt";
 export * from "./hardware";
+export * from "./franchise";

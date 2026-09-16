@@ -1,0 +1,126 @@
+import type { Metadata } from "next";
+
+import { HomeNav } from "@/components/home/nav";
+import { Hero } from "@/components/home/hero";
+import { Marquee } from "@/components/home/marquee";
+import { Bestsellers, type HomeBestseller } from "@/components/home/bestsellers";
+import { Range } from "@/components/home/range";
+import { Story } from "@/components/home/story";
+import { Location } from "@/components/home/location";
+import { FranchiseForm } from "@/components/home/franchise-form";
+import { HomeFooter } from "@/components/home/footer";
+import { HomeOrderBar } from "@/components/home/order-bar";
+import { HomeMotion } from "@/components/home/motion";
+import { getAllProducts } from "@/lib/repositories/menu";
+import { getDeliverySettings } from "@/lib/repositories/delivery";
+import { getOrg, getStoreContact } from "@/lib/repositories/org";
+import { formatHoursRange, restaurantSchema } from "@/lib/seo/restaurant";
+import { summarizeDeliveryBands, summarizeFreeDelivery } from "@/lib/delivery/summary";
+
+export const metadata: Metadata = {
+  title: "FRYBIRD, Ambala City. Born crispy. Built bold.",
+  description:
+    "Hand-breaded fried chicken in Sector 9, Ambala City. Burgers, wraps, wings, loaded fries and party boxes, fried after you order. Pick-up or delivery.",
+};
+export const dynamic = "force-dynamic";
+
+/** Which six product slugs the front page features, and their commissioned clips — an editorial choice, same as this app's other curated picks (§33: not called "bestsellers" by an invented metric). FRYBIRD IQ has no "featured" flag to be authoritative over; the *content* behind each slot (name, price, description, whether it shows at all) is authoritative. */
+const BESTSELLER_SLUGS = [
+  { slug: "frybird-loaded-fries", tag: "Most ordered", video: "/home/video/frybird-loaded-fries.mp4", poster: "/home/video/frybird-loaded-fries.jpg" },
+  { slug: "thunder-burger", tag: "Triple garlic", video: "/home/video/thunder-burger.mp4", poster: "/home/video/thunder-burger.jpg" },
+  { slug: "nashville-bomb", tag: "Hottest", video: "/home/video/nashville-bomb.mp4", poster: "/home/video/nashville-bomb.jpg" },
+  { slug: "chicken-tenders", tag: "Dip it", video: "/home/video/tenders.mp4", poster: "/home/video/tenders.jpg" },
+  { slug: "popcorn-chicken", tag: "Share box", video: "/home/video/popcorn.mp4", poster: "/home/video/popcorn.jpg" },
+] as const;
+
+const CITY = "Ambala City";
+const ADDRESS_ONE_LINE = "Shop 31-B, Shopping Complex, Sector 9, Ambala City, Haryana 134003";
+const MAPS_PLACE_URL = "https://maps.google.com/?cid=16250293097084103835";
+const MAPS_DIRECTIONS_URL = "https://www.google.com/maps/dir/?api=1&destination=30.3618007%2C76.7808927";
+
+export default async function HomePage() {
+  const [org, contact, delivery, products] = await Promise.all([
+    getOrg(),
+    getStoreContact(),
+    getDeliverySettings(),
+    getAllProducts("ONLINE"),
+  ]);
+
+  const opens = org?.openingTime ?? "11:30";
+  const closes = org?.closingTime ?? "23:00";
+  const hoursValue = formatHoursRange(opens, closes);
+
+  const byslug = new Map(products.map((p) => [p.slug, p] as const));
+  const bestsellers: HomeBestseller[] = BESTSELLER_SLUGS.map((entry): HomeBestseller | null => {
+    const product = byslug.get(entry.slug);
+    if (!product || !product.availability.available) return null;
+    return {
+      slug: product.slug,
+      name: product.name,
+      tag: entry.tag,
+      note: product.description ?? "",
+      price: Number(product.price) / 100,
+      video: entry.video,
+      poster: entry.poster,
+    };
+  }).filter((item): item is HomeBestseller => item !== null);
+
+  const addressLines = contact
+    ? [contact.addressLine1, contact.addressLine2, [contact.city, contact.state].filter(Boolean).join(", "), "Haryana 134003"].filter(
+        (line): line is string => Boolean(line),
+      )
+    : ["Shop 31-B, Shopping Complex", "Sector 9, Ambala City", "Haryana 134003"];
+
+  const bandLines = delivery?.enabled ? summarizeDeliveryBands(delivery.rates) : [];
+  const freeLine = delivery?.enabled ? summarizeFreeDelivery(delivery.rates) : null;
+  const deliveryText = freeLine ?? bandLines[0] ?? "Delivery priced by distance at checkout.";
+  const maxDeliveryKm = delivery?.enabled && delivery.rates.bands.length > 0 ? delivery.rates.bands[delivery.rates.bands.length - 1]!.upToMetres / 1000 : null;
+  const deliveryChip = maxDeliveryKm ? `${Number.isInteger(maxDeliveryKm) ? maxDeliveryKm : maxDeliveryKm.toFixed(1)} km delivery` : "Pick-up or delivery";
+
+  const phoneDigits = contact?.phone?.replace(/[^\d]/g, "") ?? null;
+  const phoneDisplay = phoneDigits && contact?.phone ? contact.phone : null;
+  const phoneHref = phoneDigits ? `tel:+91${phoneDigits.length === 10 ? phoneDigits : phoneDigits.slice(-10)}` : null;
+
+  return (
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema({ opens, closes })) }}
+      />
+      <div className="fb">
+        <HomeNav />
+        <main>
+          <Hero
+            city={CITY}
+            stats={[
+              { label: "Kitchen hours", value: hoursValue },
+              { label: "Ready in", value: "About 15 minutes" },
+              { label: "Heat levels", value: "Classic, Grazy Bird, Nashville" },
+            ]}
+          />
+          <Marquee />
+          <Bestsellers items={bestsellers} />
+          <Range />
+          <Story />
+          <Location
+            addressLines={addressLines}
+            addressOneLine={contact ? addressLines.join(", ") : ADDRESS_ONE_LINE}
+            deliveryChip={deliveryChip}
+            deliveryText={deliveryText}
+            hoursLabel="Open daily"
+            hoursValue={hoursValue}
+            mapsDirectionsUrl={MAPS_DIRECTIONS_URL}
+            mapsPlaceUrl={MAPS_PLACE_URL}
+            phoneDisplay={phoneDisplay}
+            phoneHref={phoneHref}
+            prepTime="Fried to order — about fifteen minutes"
+          />
+          <FranchiseForm />
+        </main>
+        <HomeFooter addressLines={addressLines} city={CITY} hoursLabel="Open daily" hoursValue={hoursValue} />
+        <HomeOrderBar />
+        <HomeMotion />
+      </div>
+    </>
+  );
+}
