@@ -23,6 +23,7 @@ import { loyaltyAccounts, loyaltyRewards, loyaltyStampEvents, loyaltyTransaction
 import { pointsReclaimable } from "@/lib/loyalty";
 import { type StampConfig, isRewardUnlocked, qualifiesForStamp } from "@/lib/loyalty/stamps";
 import { type Paise, ZERO, paise, subtract } from "@/lib/money";
+import type { DbTx } from "./inventory";
 
 export interface StampAccountState {
   readonly accountId: string;
@@ -32,16 +33,15 @@ export interface StampAccountState {
   readonly availableRewards: readonly { readonly id: string; readonly unlockedAt: Date }[];
 }
 
-async function findOrCreateAccount(orgId: string, customerId: string): Promise<string> {
-  const database = db();
-  const [existing] = await database
+async function findOrCreateAccount(tx: DbTx, orgId: string, customerId: string): Promise<string> {
+  const [existing] = await tx
     .select({ id: loyaltyAccounts.id })
     .from(loyaltyAccounts)
     .where(eq(loyaltyAccounts.customerId, customerId))
     .limit(1);
   if (existing) return existing.id;
 
-  const [created] = await database
+  const [created] = await tx
     .insert(loyaltyAccounts)
     .values({ orgId, customerId })
     .onConflictDoNothing({ target: loyaltyAccounts.customerId })
@@ -49,7 +49,7 @@ async function findOrCreateAccount(orgId: string, customerId: string): Promise<s
   if (created) return created.id;
 
   // Lost the race to create it — read what the other writer just made.
-  const [row] = await database
+  const [row] = await tx
     .select({ id: loyaltyAccounts.id })
     .from(loyaltyAccounts)
     .where(eq(loyaltyAccounts.customerId, customerId))
@@ -66,11 +66,9 @@ async function findOrCreateAccount(orgId: string, customerId: string): Promise<s
  * other orders can itself complete a fresh cycle. A `while` rather than an
  * `if`: a reversal can hand back more than one cycle's worth at once.
  */
-async function settleAccount(accountId: string, orgId: string, config: StampConfig): Promise<number> {
-  const database = db();
-
+async function settleAccount(tx: DbTx, accountId: string, orgId: string, config: StampConfig): Promise<number> {
   for (;;) {
-    const unconsumed = await database
+    const unconsumed = await tx
       .select({ id: loyaltyStampEvents.id })
       .from(loyaltyStampEvents)
       .where(
@@ -83,7 +81,7 @@ async function settleAccount(accountId: string, orgId: string, config: StampConf
       .orderBy(asc(loyaltyStampEvents.createdAt));
 
     if (!isRewardUnlocked(unconsumed.length, config)) {
-      await database.update(loyaltyAccounts).set({ stampCount: unconsumed.length, updatedAt: new Date() }).where(eq(loyaltyAccounts.id, accountId));
+      await tx.update(loyaltyAccounts).set({ stampCount: unconsumed.length, updatedAt: new Date() }).where(eq(loyaltyAccounts.id, accountId));
       return unconsumed.length;
     }
 
@@ -91,11 +89,11 @@ async function settleAccount(accountId: string, orgId: string, config: StampConf
     // stay unconsumed and roll into whatever unlocks next.
     const forThisReward = unconsumed.slice(0, config.stampsRequired);
 
-    const [reward] = await database.insert(loyaltyRewards).values({ orgId, accountId }).returning({ id: loyaltyRewards.id });
+    const [reward] = await tx.insert(loyaltyRewards).values({ orgId, accountId }).returning({ id: loyaltyRewards.id });
     if (!reward) throw new Error("loyalty: could not create a reward row");
 
     for (const event of forThisReward) {
-      await database.update(loyaltyStampEvents).set({ rewardId: reward.id, updatedAt: new Date() }).where(eq(loyaltyStampEvents.id, event.id));
+      await tx.update(loyaltyStampEvents).set({ rewardId: reward.id, updatedAt: new Date() }).where(eq(loyaltyStampEvents.id, event.id));
     }
     // Loop again — a reversal can hand back enough stamps to complete more
     // than one cycle in a single settlement.
@@ -113,19 +111,30 @@ async function settleAccount(accountId: string, orgId: string, config: StampConf
  * `qualifyingSpend` is the order's own figure, computed by the caller from
  * columns already on the order row — this function trusts the database, not
  * the browser, because there is nothing here the browser ever sent.
+ *
+ * Takes an explicit transaction handle — its one caller, `settle()`
+ * (payments.ts), runs this as part of one atomic settlement (payment row,
+ * invoice number, order status, this award, the stamp reward below, the
+ * event and audit rows). A version of this that opened its own transaction
+ * would defeat that: a crash after this commits but before the rest of the
+ * settlement finishes would leave a stamp awarded for a payment that, from
+ * everywhere else in the system, never happened.
  */
-export async function awardStampForOrder(input: {
-  orgId: string;
-  customerId: string;
-  orderId: string;
-  qualifyingSpend: Paise;
-  config: StampConfig;
-}): Promise<{ awarded: boolean }> {
+export async function awardStampForOrderInTx(
+  tx: DbTx,
+  input: {
+    orgId: string;
+    customerId: string;
+    orderId: string;
+    qualifyingSpend: Paise;
+    config: StampConfig;
+  },
+): Promise<{ awarded: boolean }> {
   if (!qualifiesForStamp(input.qualifyingSpend, input.config)) return { awarded: false };
 
-  const accountId = await findOrCreateAccount(input.orgId, input.customerId);
+  const accountId = await findOrCreateAccount(tx, input.orgId, input.customerId);
 
-  const [inserted] = await db()
+  const [inserted] = await tx
     .insert(loyaltyStampEvents)
     .values({ orgId: input.orgId, accountId, orderId: input.orderId })
     .onConflictDoNothing({ target: loyaltyStampEvents.orderId })
@@ -133,7 +142,7 @@ export async function awardStampForOrder(input: {
 
   if (!inserted) return { awarded: false }; // already stamped — a retry, not a new visit.
 
-  await settleAccount(accountId, input.orgId, input.config);
+  await settleAccount(tx, accountId, input.orgId, input.config);
   return { awarded: true };
 }
 
@@ -215,7 +224,13 @@ export async function reverseStampForOrder(input: { orgId: string; orderId: stri
       }
     : { enabled: false, stampsRequired: 7, minOrderValue: ZERO, maxRewardValue: ZERO };
 
-  await settleAccount(event.accountId, input.orgId, config);
+  // `settleAccount` now requires a real transaction handle (it participates
+  // in settle()'s own atomicity there), and a plain `db()` connection isn't
+  // one — so this, the other caller, opens its own small transaction just
+  // for this step, rather than changing `reverseStampForOrder`'s own
+  // broader behavior, which is out of scope for the settle()-only fix this
+  // parameter exists for.
+  await database.transaction((tx) => settleAccount(tx, event.accountId, input.orgId, config));
 }
 
 /**
@@ -410,9 +425,14 @@ export async function getStampAccountState(customerId: string, orgId: string): P
  * the order with the discount priced in either way and has no way to
  * charge for it again if it lost the race; the only thing left to do with
  * a lost race is make sure it is never silent.
+ *
+ * Takes an explicit transaction handle for the same reason
+ * `awardStampForOrderInTx` does — its one caller, `settle()`, runs this as
+ * part of one atomic settlement, so a mid-settlement crash never leaves a
+ * reward marked spent for a payment nothing else in the system completed.
  */
-export async function redeemStampReward(input: { rewardId: string; orgId: string; orderId: string; productSlug: string }): Promise<{ redeemed: boolean }> {
-  const [row] = await db()
+export async function redeemStampRewardInTx(tx: DbTx, input: { rewardId: string; orgId: string; orderId: string; productSlug: string }): Promise<{ redeemed: boolean }> {
+  const [row] = await tx
     .update(loyaltyRewards)
     .set({
       status: "REDEEMED",

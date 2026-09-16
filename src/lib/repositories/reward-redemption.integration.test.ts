@@ -15,7 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { loyaltyAccounts, loyaltyRewards, loyaltyStampEvents } from "@/db/schema";
-import { redeemStampReward, reverseStampForOrder } from "./loyalty";
+import { redeemStampRewardInTx, reverseStampForOrder } from "./loyalty";
 import { createTestCustomer, createTestOrg, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
 
 async function seedAvailableReward(org: TestOrg, customerId: string) {
@@ -41,7 +41,7 @@ describe("redeemStampReward", () => {
     const customer = await createTestCustomer(org.orgId);
     const rewardId = await seedAvailableReward(org, customer.id);
 
-    const result = await redeemStampReward({ rewardId, orgId: org.orgId, orderId: randomUUID(), productSlug: "test-product" });
+    const result = await db().transaction((tx) => redeemStampRewardInTx(tx, { rewardId, orgId: org.orgId, orderId: randomUUID(), productSlug: "test-product" }));
     expect(result.redeemed).toBe(true);
 
     const [row] = await db().select({ status: loyaltyRewards.status }).from(loyaltyRewards).where(eq(loyaltyRewards.id, rewardId));
@@ -52,10 +52,10 @@ describe("redeemStampReward", () => {
     const customer = await createTestCustomer(org.orgId);
     const rewardId = await seedAvailableReward(org, customer.id);
 
-    const first = await redeemStampReward({ rewardId, orgId: org.orgId, orderId: randomUUID(), productSlug: "test-product" });
+    const first = await db().transaction((tx) => redeemStampRewardInTx(tx, { rewardId, orgId: org.orgId, orderId: randomUUID(), productSlug: "test-product" }));
     expect(first.redeemed).toBe(true);
 
-    const second = await redeemStampReward({ rewardId, orgId: org.orgId, orderId: randomUUID(), productSlug: "test-product" });
+    const second = await db().transaction((tx) => redeemStampRewardInTx(tx, { rewardId, orgId: org.orgId, orderId: randomUUID(), productSlug: "test-product" }));
     expect(second.redeemed).toBe(false);
 
     const [row] = await db().select({ redeemedOrderId: loyaltyRewards.redeemedOrderId }).from(loyaltyRewards).where(eq(loyaltyRewards.id, rewardId));
@@ -72,8 +72,8 @@ describe("redeemStampReward", () => {
     const orderA = randomUUID();
     const orderB = randomUUID();
     const [a, b] = await Promise.all([
-      redeemStampReward({ rewardId, orgId: org.orgId, orderId: orderA, productSlug: "test-product" }),
-      redeemStampReward({ rewardId, orgId: org.orgId, orderId: orderB, productSlug: "test-product" }),
+      db().transaction((tx) => redeemStampRewardInTx(tx, { rewardId, orgId: org.orgId, orderId: orderA, productSlug: "test-product" })),
+      db().transaction((tx) => redeemStampRewardInTx(tx, { rewardId, orgId: org.orgId, orderId: orderB, productSlug: "test-product" })),
     ]);
 
     const results = [a, b];
@@ -145,7 +145,7 @@ describe("reverseStampForOrder", () => {
     // not just the status write.
     await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: randomUUID(), rewardId: reward.id });
 
-    const redeemed = await redeemStampReward({ rewardId: reward.id, orgId: org.orgId, orderId: orderB, productSlug: "test-product" });
+    const redeemed = await db().transaction((tx) => redeemStampRewardInTx(tx, { rewardId: reward.id, orgId: org.orgId, orderId: orderB, productSlug: "test-product" }));
     expect(redeemed.redeemed).toBe(true);
 
     await reverseStampForOrder({ orgId: org.orgId, orderId: orderA, reason: "test refund, too late" });
@@ -203,7 +203,7 @@ describe("reverseStampForOrder", () => {
 
       await Promise.all([
         reverseStampForOrder({ orgId: org.orgId, orderId: orderA, reason: "test refund" }),
-        redeemStampReward({ rewardId: reward.id, orgId: org.orgId, orderId: orderB, productSlug: "test-product" }),
+        db().transaction((tx) => redeemStampRewardInTx(tx, { rewardId: reward.id, orgId: org.orgId, orderId: orderB, productSlug: "test-product" })),
       ]);
 
       const [row] = await db()

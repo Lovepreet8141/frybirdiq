@@ -20,7 +20,7 @@ import { type Role, authorize } from "@/domain/permissions";
 import { type Paise, ZERO, add, formatINR, paise, subtract } from "@/lib/money";
 import { pointsEarned } from "@/lib/loyalty";
 import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
-import { awardStampForOrder, qualifyingStampSpend, redeemStampReward } from "./loyalty";
+import { awardStampForOrderInTx, qualifyingStampSpend, redeemStampRewardInTx } from "./loyalty";
 import { financialYear, invoiceNumber, parseInvoiceNumber } from "@/lib/invoice";
 import { CASH_PROVIDER, type PaymentMethod, type PaymentResult, RAZORPAY_PROVIDER, getProvider } from "@/lib/payments";
 import { withIdempotency } from "./idempotency";
@@ -255,18 +255,38 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
     .limit(1);
   if (!order) return { ok: false, error: "That order does not exist." };
 
-  // Already settled. For a gateway, the same payment id arriving twice (the
-  // Checkout handler and then the webhook) is the normal case and is success;
-  // anything else against a paid order is refused.
+  /*
+   * Already settled. For a gateway, the same payment id arriving twice (the
+   * Checkout handler and then the webhook) is the normal case and is
+   * success; a genuinely different attempt against a paid order is refused.
+   *
+   * Cash has no provider payment id at all (cashProvider.capture always
+   * returns `providerPaymentId: null`), so a captured payment with none is
+   * itself the cash case — and this order is only ever settled once, by
+   * design (`recordCashPayment`'s own doc comment: "pressing 'taken' twice
+   * ... reports that it was already settled"). Requiring an exact id match
+   * only for the provider that actually has one, rather than requiring
+   * `settlement.providerPaymentId` to be truthy at all, means a cashier's
+   * double-tap after a *successful* settlement gets the success reply that
+   * comment promises, not a confusing failure — the two are provably the
+   * same settlement precisely because cash is captured once per order.
+   *
+   * This check being reliable at all — "captured" implies "the full
+   * settlement below actually finished" — depends on everything from the
+   * payment row onward being one atomic transaction (see below). Before
+   * that was true, this same check was the bug: a captured-but-incomplete
+   * settlement (a crash between the payment row committing and the rest
+   * finishing) would hit this and report success without ever completing
+   * the invoice, the status, or the loyalty awards it skipped.
+   */
   const [captured] = await database
     .select({ id: payments.id, providerPaymentId: payments.providerPaymentId })
     .from(payments)
     .where(and(eq(payments.orderId, order.id), eq(payments.status, "CAPTURED")))
     .limit(1);
   if (captured) {
-    if (settlement.providerPaymentId && captured.providerPaymentId === settlement.providerPaymentId) {
-      return { ok: true, paymentId: captured.id, replayed: true };
-    }
+    const sameSettlement = settlement.providerPaymentId ? captured.providerPaymentId === settlement.providerPaymentId : !captured.providerPaymentId;
+    if (sameSettlement) return { ok: true, paymentId: captured.id, replayed: true };
     return { ok: false, error: "That order has already been paid." };
   }
   if (order.status === "PAID" || order.status === "COMPLETED") {
@@ -301,242 +321,272 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
       const capturedResult = await settlement.capture(order, amount);
       if (!capturedResult.ok) return { ok: false as const, error: capturedResult.error ?? "The payment could not be recorded." };
 
-      const method = settlement.methodFor(capturedResult);
-      const feeAmount = typeof capturedResult.payload?.fee === "number" ? paise(capturedResult.payload.fee) : paise(0);
-      const now = new Date();
-
-      const [existing] = await database
-        .select()
-        .from(payments)
-        .where(and(eq(payments.orderId, order.id), eq(payments.provider, settlement.provider), eq(payments.status, "PENDING")))
-        .orderBy(desc(payments.createdAt))
-        .limit(1);
-
-      const paymentId = existing
-        ? (
-            await database
-              .update(payments)
-              .set({
-                status: "CAPTURED",
-                method,
-                amount: capturedResult.capturedAmount,
-                feeAmount,
-                capturedAt: now,
-                providerPaymentId: capturedResult.providerPaymentId ?? existing.providerPaymentId,
-                providerOrderId: settlement.providerOrderId ?? existing.providerOrderId,
-                providerPayload: capturedResult.payload,
-                failureReason: null,
-                updatedAt: now,
-              })
-              .where(eq(payments.id, existing.id))
-              .returning()
-          )[0]?.id
-        : (
-            await database
-              .insert(payments)
-              .values({
-                orgId: order.orgId,
-                orderId: order.id,
-                status: "CAPTURED",
-                method,
-                amount: capturedResult.capturedAmount,
-                feeAmount,
-                provider: settlement.provider,
-                providerPaymentId: capturedResult.providerPaymentId,
-                providerOrderId: settlement.providerOrderId ?? null,
-                capturedAt: now,
-                providerPayload: capturedResult.payload,
-              })
-              .returning()
-          )[0]?.id;
+      // Reads only, unaffected by anything the transaction below writes —
+      // fetched before it opens rather than inside it on purpose.
+      const loyaltyConfig = order.customerId ? await getLoyaltyConfig() : null;
+      const stampConfig = order.customerId ? await getStampConfig() : null;
 
       /*
-       * Issue the tax invoice number.
+       * Everything from here on — the payment row, the invoice number, the
+       * PAID transition, the loyalty award, the stamp reward, the event and
+       * audit rows — is one atomic unit. `settlement.capture` above is the
+       * one thing that must NOT be in here: it is a real network call for
+       * Razorpay (or a pure, side-effect-free check for cash), and a DB
+       * transaction has no business holding a connection and locks open
+       * across one. Confirmed idempotent to repeat on a retry either way —
+       * cash's capture writes nothing at all, and Razorpay's only ever
+       * fetches and re-verifies an already-captured payment, never charges.
        *
-       * On payment, not on placement: an invoice records a completed sale, and
-       * numbering unpaid orders would leave gaps in a sequence that GST
-       * requires to have none.
-       *
-       * The sequence is per financial year and per organization, found by
-       * counting what has already been issued this year — a real database
-       * sequence would be cleaner, but would need one per (org, financial
-       * year), created on demand, for a single-column figure that only
-       * needs to be right, not fast. The unique constraint on (org_id,
-       * invoice_number) turns two simultaneous settlements reading the
-       * same count into a failed write, not a duplicate invoice — but a
-       * failed write on its own would crash a settlement whose payment had
-       * *already* captured moments earlier as a separate statement: real
-       * money taken, and then an unrelated numbering collision throwing an
-       * unhandled error back at the cashier, with the order stuck unpaid
-       * despite the till already being short the cash. Retried on that
-       * specific conflict — recomputing the count fresh each attempt — the
-       * same way `insertOrder`'s own order-number collision already is,
-       * just below in this same file's sibling `orders.ts`.
+       * Before this was one transaction, a crash after the payment row
+       * committed but before the rest finished (the invoice number was the
+       * one actually observed to do this, but anything after the payment
+       * row could) left a CAPTURED payment on an order that was otherwise
+       * never invoiced, never marked PAID, and never given its loyalty
+       * award — and the "already captured" check above would then report
+       * that half-finished settlement as a success forever after, since it
+       * had no way to tell "captured" from "captured and everything else
+       * finished too." Wrapping it all together makes those the same
+       * thing: either this whole block commits, or none of it does, and a
+       * retry after a rollback starts from a genuinely clean slate.
        */
-      const issuedAt = now;
-      const year = financialYear(issuedAt);
-      const settlingOrder = order; // rebound so the nested closure below keeps TS's non-undefined narrowing
+      return database.transaction(async (tx) => {
+        const method = settlement.methodFor(capturedResult);
+        const feeAmount = typeof capturedResult.payload?.fee === "number" ? paise(capturedResult.payload.fee) : paise(0);
+        const now = new Date();
 
-      async function issueInvoiceNumber(): Promise<void> {
-        const issuedThisYear = await database
-          .select({ invoiceNumber: orders.invoiceNumber })
-          .from(orders)
-          .where(and(eq(orders.orgId, settlingOrder.orgId), like(orders.invoiceNumber, `${year}/%`)));
+        const [existing] = await tx
+          .select()
+          .from(payments)
+          .where(and(eq(payments.orderId, order.id), eq(payments.provider, settlement.provider), eq(payments.status, "PENDING")))
+          .orderBy(desc(payments.createdAt))
+          .limit(1);
 
-        const highest = issuedThisYear.reduce((max, row) => {
-          const parsed = row.invoiceNumber ? parseInvoiceNumber(row.invoiceNumber) : null;
-          return parsed && parsed.sequence > max ? parsed.sequence : max;
-        }, 0);
+        const paymentId = existing
+          ? (
+              await tx
+                .update(payments)
+                .set({
+                  status: "CAPTURED",
+                  method,
+                  amount: capturedResult.capturedAmount,
+                  feeAmount,
+                  capturedAt: now,
+                  providerPaymentId: capturedResult.providerPaymentId ?? existing.providerPaymentId,
+                  providerOrderId: settlement.providerOrderId ?? existing.providerOrderId,
+                  providerPayload: capturedResult.payload,
+                  failureReason: null,
+                  updatedAt: now,
+                })
+                .where(eq(payments.id, existing.id))
+                .returning()
+            )[0]?.id
+          : (
+              await tx
+                .insert(payments)
+                .values({
+                  orgId: order.orgId,
+                  orderId: order.id,
+                  status: "CAPTURED",
+                  method,
+                  amount: capturedResult.capturedAmount,
+                  feeAmount,
+                  provider: settlement.provider,
+                  providerPaymentId: capturedResult.providerPaymentId,
+                  providerOrderId: settlement.providerOrderId ?? null,
+                  capturedAt: now,
+                  providerPayload: capturedResult.payload,
+                })
+                .returning()
+            )[0]?.id;
 
-        await database
-          .update(orders)
-          .set({
-            ...(movesToPaid ? { status: "PAID" as const } : {}),
-            invoiceNumber: settlingOrder.invoiceNumber ?? invoiceNumber(issuedAt, highest + 1),
-            invoicedAt: settlingOrder.invoicedAt ?? issuedAt,
-            updatedAt: issuedAt,
-          })
-          .where(eq(orders.id, settlingOrder.id));
-      }
+        /*
+         * Issue the tax invoice number.
+         *
+         * On payment, not on placement: an invoice records a completed sale, and
+         * numbering unpaid orders would leave gaps in a sequence that GST
+         * requires to have none.
+         *
+         * The sequence is per financial year and per organization, found by
+         * counting what has already been issued this year — a real database
+         * sequence would be cleaner, but would need one per (org, financial
+         * year), created on demand, for a single-column figure that only
+         * needs to be right, not fast (tracked as a follow-up, not done here).
+         * The unique constraint on (org_id, invoice_number) turns two
+         * simultaneous settlements reading the same count into a failed
+         * write, not a duplicate invoice, and retrying on that specific
+         * conflict — recomputing the count fresh each attempt — is the same
+         * idiom `insertOrder`'s own order-number collision already uses,
+         * just below in this same file's sibling `orders.ts`.
+         *
+         * Run as a nested transaction (a real Postgres SAVEPOINT under
+         * Drizzle's postgres-js driver) rather than directly against `tx`:
+         * a failed statement aborts a transaction until it is rolled back,
+         * so retrying the same statement again on `tx` itself after a
+         * 23505 would just fail again with "current transaction is
+         * aborted" — the savepoint gives each attempt its own rollback
+         * point without discarding the payment row already written above.
+         */
+        const issuedAt = now;
+        const year = financialYear(issuedAt);
+        const settlingOrder = order; // rebound so the nested closures below keep TS's non-undefined narrowing
 
-      // Recount-and-increment means a fully adversarial burst of N
-      // concurrent settlements can force the unluckiest one through up to
-      // N-1 retries — every round only the single writer that lands first
-      // survives, and everyone else recomputes the same next number and
-      // collides again together. 10 attempts comfortably covers a busier
-      // burst than "single owner-operator, one location" will ever produce
-      // at the counter; each retry is one cheap select+update, not
-      // something worth being stingy about.
-      const MAX_INVOICE_NUMBER_ATTEMPTS = 10;
-      for (let attempt = 0; attempt < MAX_INVOICE_NUMBER_ATTEMPTS; attempt += 1) {
-        try {
-          await issueInvoiceNumber();
-          break;
-        } catch (error) {
-          // 23505 is unique_violation — another settlement claimed the
-          // same invoice number in between the read above and this write.
-          // Anything else is a real failure.
-          const code = (error as { cause?: { code?: string }; code?: string }).cause?.code ?? (error as { code?: string }).code;
-          if (code !== "23505" || attempt === MAX_INVOICE_NUMBER_ATTEMPTS - 1) throw error;
-        }
-      }
+        // Recount-and-increment means a fully adversarial burst of N
+        // concurrent settlements can force the unluckiest one through up to
+        // N-1 retries — every round only the single writer that lands first
+        // survives, and everyone else recomputes the same next number and
+        // collides again together. 10 attempts comfortably covers a busier
+        // burst than "single owner-operator, one location" will ever produce
+        // at the counter; each retry is one cheap select+update, not
+        // something worth being stingy about.
+        const MAX_INVOICE_NUMBER_ATTEMPTS = 10;
+        for (let attempt = 0; attempt < MAX_INVOICE_NUMBER_ATTEMPTS; attempt += 1) {
+          try {
+            await tx.transaction(async (tx2) => {
+              const issuedThisYear = await tx2
+                .select({ invoiceNumber: orders.invoiceNumber })
+                .from(orders)
+                .where(and(eq(orders.orgId, settlingOrder.orgId), like(orders.invoiceNumber, `${year}/%`)));
 
-      /*
-       * Points are awarded when the money actually arrives, not when the order
-       * is placed.
-       *
-       * An order that is never paid for — abandoned at the counter, refused at
-       * the door — must not leave points behind. Awarding on payment means the
-       * balance only ever reflects money that came in.
-       *
-       * Earned on the food, not the delivery fee: paying 5% back on a rider's
-       * petrol is giving away money on a cost rather than rewarding a purchase.
-       */
-      if (order.customerId) {
-        const config = await getLoyaltyConfig();
-        const qualifying = subtract(paise(order.grandTotal), paise(order.deliveryFee));
-        const earned = pointsEarned(qualifying, config);
+              const highest = issuedThisYear.reduce((max, row) => {
+                const parsed = row.invoiceNumber ? parseInvoiceNumber(row.invoiceNumber) : null;
+                return parsed && parsed.sequence > max ? parsed.sequence : max;
+              }, 0);
 
-        if (earned > 0) {
-          const [account] = await database
-            .insert(loyaltyAccounts)
-            .values({ orgId: order.orgId, customerId: order.customerId, pointsBalance: earned })
-            .onConflictDoUpdate({
-              target: loyaltyAccounts.customerId,
-              set: { pointsBalance: sql`${loyaltyAccounts.pointsBalance} + ${earned}`, updatedAt: new Date() },
-            })
-            .returning();
-
-          // Every movement is recorded, never a bare balance update — the same
-          // principle as inventory in §24. A disputed balance can be explained.
-          if (account) {
-            await database.insert(loyaltyTransactions).values({
-              orgId: order.orgId,
-              accountId: account.id,
-              points: earned,
-              reason: `Order #${order.orderNumber}`,
-              orderId: order.id,
+              await tx2
+                .update(orders)
+                .set({
+                  ...(movesToPaid ? { status: "PAID" as const } : {}),
+                  invoiceNumber: settlingOrder.invoiceNumber ?? invoiceNumber(issuedAt, highest + 1),
+                  invoicedAt: settlingOrder.invoicedAt ?? issuedAt,
+                  updatedAt: issuedAt,
+                })
+                .where(eq(orders.id, settlingOrder.id));
             });
+            break;
+          } catch (error) {
+            // 23505 is unique_violation — another settlement claimed the
+            // same invoice number in between the read above and this write.
+            // Anything else is a real failure.
+            const code = (error as { cause?: { code?: string }; code?: string }).cause?.code ?? (error as { code?: string }).code;
+            if (code !== "23505" || attempt === MAX_INVOICE_NUMBER_ATTEMPTS - 1) throw error;
           }
-
-          await database.update(orders).set({ pointsEarned: earned }).where(eq(orders.id, order.id));
         }
-      }
 
-      /*
-       * FRYBIRD REWARDS — the stamp moves when the money actually arrives,
-       * same as points and for the same reason: an order abandoned at the
-       * counter must not leave a stamp behind.
-       *
-       * `awardStampForOrder` is idempotent on the order id by itself (a
-       * unique constraint in the ledger), so a retried capture cannot mint
-       * a second stamp even without this function's own idempotency
-       * wrapper — belt and braces on the exact failure mode webhooks are
-       * prone to.
-       *
-       * If this order carried a redeemed reward — chosen and priced at
-       * checkout, see src/lib/cart — that reward is marked spent here,
-       * at the same moment the discount it granted is actually charged.
-       */
-      if (order.customerId) {
-        const stampConfig = await getStampConfig();
-        const qualifying = qualifyingStampSpend(paise(order.grandTotal), paise(order.deliveryFee));
-        await awardStampForOrder({
+        /*
+         * Points are awarded when the money actually arrives, not when the order
+         * is placed.
+         *
+         * An order that is never paid for — abandoned at the counter, refused at
+         * the door — must not leave points behind. Awarding on payment means the
+         * balance only ever reflects money that came in.
+         *
+         * Earned on the food, not the delivery fee: paying 5% back on a rider's
+         * petrol is giving away money on a cost rather than rewarding a purchase.
+         */
+        if (order.customerId && loyaltyConfig) {
+          const qualifying = subtract(paise(order.grandTotal), paise(order.deliveryFee));
+          const earned = pointsEarned(qualifying, loyaltyConfig);
+
+          if (earned > 0) {
+            const [account] = await tx
+              .insert(loyaltyAccounts)
+              .values({ orgId: order.orgId, customerId: order.customerId, pointsBalance: earned })
+              .onConflictDoUpdate({
+                target: loyaltyAccounts.customerId,
+                set: { pointsBalance: sql`${loyaltyAccounts.pointsBalance} + ${earned}`, updatedAt: new Date() },
+              })
+              .returning();
+
+            // Every movement is recorded, never a bare balance update — the same
+            // principle as inventory in §24. A disputed balance can be explained.
+            if (account) {
+              await tx.insert(loyaltyTransactions).values({
+                orgId: order.orgId,
+                accountId: account.id,
+                points: earned,
+                reason: `Order #${order.orderNumber}`,
+                orderId: order.id,
+              });
+            }
+
+            await tx.update(orders).set({ pointsEarned: earned }).where(eq(orders.id, order.id));
+          }
+        }
+
+        /*
+         * FRYBIRD REWARDS — the stamp moves when the money actually arrives,
+         * same as points and for the same reason: an order abandoned at the
+         * counter must not leave a stamp behind.
+         *
+         * `awardStampForOrderInTx` is idempotent on the order id by itself (a
+         * unique constraint in the ledger), so a retried capture cannot mint
+         * a second stamp even without this function's own idempotency
+         * wrapper — belt and braces on the exact failure mode webhooks are
+         * prone to.
+         *
+         * If this order carried a redeemed reward — chosen and priced at
+         * checkout, see src/lib/cart — that reward is marked spent here,
+         * at the same moment the discount it granted is actually charged.
+         */
+        if (order.customerId && stampConfig) {
+          const qualifying = qualifyingStampSpend(paise(order.grandTotal), paise(order.deliveryFee));
+          await awardStampForOrderInTx(tx, {
+            orgId: order.orgId,
+            customerId: order.customerId,
+            orderId: order.id,
+            qualifyingSpend: qualifying,
+            config: stampConfig,
+          });
+
+          if (order.stampRewardId && order.stampRewardProductSlug) {
+            const { redeemed } = await redeemStampRewardInTx(tx, {
+              rewardId: order.stampRewardId,
+              orgId: order.orgId,
+              orderId: order.id,
+              productSlug: order.stampRewardProductSlug,
+            });
+            if (!redeemed) {
+              // The order is already committed with the free item priced in —
+              // nothing here can charge for it a second time. This is the
+              // one thing left to do: make it loud rather than silent, since
+              // the reward itself is still sitting AVAILABLE for whichever
+              // order actually claimed it.
+              console.error(`loyalty reward: order #${order.orderNumber} was priced with reward ${order.stampRewardId} but it was already redeemed by another order by settlement time (two unpaid orders selecting the same reward?) — free item given, no matching redemption recorded, customer ${order.customerId}`);
+            }
+          }
+        }
+
+        // The event is written either way: money changing hands is a fact about
+        // the order whether or not it also moved the status.
+        await tx.insert(orderEvents).values({
           orgId: order.orgId,
-          customerId: order.customerId,
           orderId: order.id,
-          qualifyingSpend: qualifying,
-          config: stampConfig,
+          fromStatus: order.status,
+          toStatus: movesToPaid ? "PAID" : order.status,
+          actorUserId: settlement.actorUserId,
+          reason: settlement.reasonFor(capturedResult.capturedAmount, method),
         });
 
-        if (order.stampRewardId && order.stampRewardProductSlug) {
-          const { redeemed } = await redeemStampReward({
-            rewardId: order.stampRewardId,
-            orgId: order.orgId,
-            orderId: order.id,
-            productSlug: order.stampRewardProductSlug,
-          });
-          if (!redeemed) {
-            // The order is already committed with the free item priced in —
-            // nothing here can charge for it a second time. This is the
-            // one thing left to do: make it loud rather than silent, since
-            // the reward itself is still sitting AVAILABLE for whichever
-            // order actually claimed it.
-            console.error(`loyalty reward: order #${order.orderNumber} was priced with reward ${order.stampRewardId} but it was already redeemed by another order by settlement time (two unpaid orders selecting the same reward?) — free item given, no matching redemption recorded, customer ${order.customerId}`);
-          }
-        }
-      }
+        // §52: money changing hands is a critical operation.
+        await tx.insert(auditLogs).values({
+          orgId: order.orgId,
+          locationId: order.locationId,
+          actorUserId: settlement.actorUserId,
+          action: "payment_captured",
+          entity: "orders",
+          entityId: order.id,
+          before: { status: order.status },
+          after: {
+            status: movesToPaid ? "PAID" : order.status,
+            method,
+            provider: settlement.provider,
+            amount: capturedResult.capturedAmount.toString(),
+            providerPaymentId: capturedResult.providerPaymentId,
+          },
+        });
 
-      // The event is written either way: money changing hands is a fact about
-      // the order whether or not it also moved the status.
-      await database.insert(orderEvents).values({
-        orgId: order.orgId,
-        orderId: order.id,
-        fromStatus: order.status,
-        toStatus: movesToPaid ? "PAID" : order.status,
-        actorUserId: settlement.actorUserId,
-        reason: settlement.reasonFor(capturedResult.capturedAmount, method),
+        return { ok: true as const, paymentId: paymentId ?? "" };
       });
-
-      // §52: money changing hands is a critical operation.
-      await database.insert(auditLogs).values({
-        orgId: order.orgId,
-        locationId: order.locationId,
-        actorUserId: settlement.actorUserId,
-        action: "payment_captured",
-        entity: "orders",
-        entityId: order.id,
-        before: { status: order.status },
-        after: {
-          status: movesToPaid ? "PAID" : order.status,
-          method,
-          provider: settlement.provider,
-          amount: capturedResult.capturedAmount.toString(),
-          providerPaymentId: capturedResult.providerPaymentId,
-        },
-      });
-
-      return { ok: true as const, paymentId: paymentId ?? "" };
     },
   );
 

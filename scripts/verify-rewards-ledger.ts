@@ -23,7 +23,7 @@ import { eq } from "drizzle-orm";
 import { closeDb, db } from "../src/db/connection";
 import { customers, loyaltyAccounts, loyaltyRewards, loyaltyStampEvents, locations, orderEvents, orders, organizations, payments } from "../src/db/schema";
 import { fromRupees } from "../src/lib/money";
-import { awardStampForOrder, getAvailableStampReward, getStampAccountState, redeemStampReward, reverseStampForOrder, qualifyingStampSpend } from "../src/lib/repositories/loyalty";
+import { awardStampForOrderInTx, getAvailableStampReward, getStampAccountState, redeemStampRewardInTx, reverseStampForOrder, qualifyingStampSpend } from "../src/lib/repositories/loyalty";
 import { recordCashPayment } from "../src/lib/repositories/payments";
 import type { StampConfig } from "../src/lib/loyalty/stamps";
 
@@ -86,8 +86,8 @@ async function main() {
 
     console.log("\n--- Duplicate payment webhook: same order, awarded twice ---");
     const order1 = await makeOrder();
-    const first = await awardStampForOrder({ orgId: org.id, customerId: customer.id, orderId: order1, qualifyingSpend: qualifying300, config: CONFIG });
-    const second = await awardStampForOrder({ orgId: org.id, customerId: customer.id, orderId: order1, qualifyingSpend: qualifying300, config: CONFIG });
+    const first = await database.transaction((tx) => awardStampForOrderInTx(tx, { orgId: org.id, customerId: customer.id, orderId: order1, qualifyingSpend: qualifying300, config: CONFIG }));
+    const second = await database.transaction((tx) => awardStampForOrderInTx(tx, { orgId: org.id, customerId: customer.id, orderId: order1, qualifyingSpend: qualifying300, config: CONFIG }));
     assert("first call awards a stamp", first.awarded === true);
     assert("retried call (same order id) does not award a second stamp", second.awarded === false);
 
@@ -96,26 +96,28 @@ async function main() {
 
     console.log("\n--- Cancelled order: never even attempted, but verify a below-threshold spend earns nothing ---");
     const orderLow = await makeOrder();
-    const lowResult = await awardStampForOrder({
-      orgId: org.id,
-      customerId: customer.id,
-      orderId: orderLow,
-      qualifyingSpend: fromRupees("200"), // exactly the threshold — must NOT qualify
-      config: CONFIG,
-    });
+    const lowResult = await database.transaction((tx) =>
+      awardStampForOrderInTx(tx, {
+        orgId: org.id,
+        customerId: customer.id,
+        orderId: orderLow,
+        qualifyingSpend: fromRupees("200"), // exactly the threshold — must NOT qualify
+        config: CONFIG,
+      }),
+    );
     assert("₹200 exactly does not earn a stamp", lowResult.awarded === false);
 
     console.log("\n--- Unlocking a reward: six more qualifying orders (seven total including order1) ---");
     for (let i = 0; i < 5; i++) {
       const id = await makeOrder();
-      const result = await awardStampForOrder({ orgId: org.id, customerId: customer.id, orderId: id, qualifyingSpend: qualifying300, config: CONFIG });
+      const result = await database.transaction((tx) => awardStampForOrderInTx(tx, { orgId: org.id, customerId: customer.id, orderId: id, qualifyingSpend: qualifying300, config: CONFIG }));
       assert(`stamp ${i + 2} awarded`, result.awarded === true);
     }
     let state = await getStampAccountState(customer.id, org.id);
     assert("six stamps banked, no reward yet", state?.stampCount === 6 && state.availableRewards.length === 0);
 
     const order7 = await makeOrder();
-    const seventh = await awardStampForOrder({ orgId: org.id, customerId: customer.id, orderId: order7, qualifyingSpend: qualifying300, config: CONFIG });
+    const seventh = await database.transaction((tx) => awardStampForOrderInTx(tx, { orgId: org.id, customerId: customer.id, orderId: order7, qualifyingSpend: qualifying300, config: CONFIG }));
     assert("seventh stamp awarded", seventh.awarded === true);
 
     state = await getStampAccountState(customer.id, org.id);
@@ -126,7 +128,7 @@ async function main() {
     assert("an available reward can be looked up", available !== null);
     const redemptionOrder = await makeOrder();
     if (available) {
-      await redeemStampReward({ rewardId: available.id, orgId: org.id, orderId: redemptionOrder, productSlug: "test-product" });
+      await database.transaction((tx) => redeemStampRewardInTx(tx, { rewardId: available.id, orgId: org.id, orderId: redemptionOrder, productSlug: "test-product" }));
     }
     const [rewardRow] = await database.select().from(loyaltyRewards).where(eq(loyaltyRewards.id, available?.id ?? "")).limit(1);
     assert("reward is marked REDEEMED", rewardRow?.status === "REDEEMED");
@@ -147,7 +149,7 @@ async function main() {
     for (let i = 0; i < 7; i++) {
       const id = await makeOrder();
       secondCycleOrders.push(id);
-      await awardStampForOrder({ orgId: org.id, customerId: customer.id, orderId: id, qualifyingSpend: qualifying300, config: CONFIG });
+      await database.transaction((tx) => awardStampForOrderInTx(tx, { orgId: org.id, customerId: customer.id, orderId: id, qualifyingSpend: qualifying300, config: CONFIG }));
     }
     state = await getStampAccountState(customer.id, org.id);
     assert("second reward unlocked", state?.availableRewards.length === 1);
