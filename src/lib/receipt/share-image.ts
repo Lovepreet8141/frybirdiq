@@ -1,4 +1,5 @@
 import { toCanvas } from "html-to-image";
+import { bytesToBase64 } from "@/lib/hardware/printer/escpos";
 
 export interface RenderedImage {
   readonly file: File;
@@ -69,6 +70,11 @@ export async function makeSyntheticTestFile(format: "image/jpeg" | "image/png", 
     canvas.toBlob((result) => (result ? resolve(result) : reject(new Error("canvas.toBlob returned null."))), format, 0.92);
   });
   return { file: new File([blob], filename, { type: format }), canvasWidth: canvas.width, canvasHeight: canvas.height };
+}
+
+/** For handing a `File` to the FRYPOS native share bridge, which speaks base64 — same encoder the printer bridge already uses for ESC/POS bytes, not a second one. */
+export async function fileToBase64(file: File): Promise<string> {
+  return bytesToBase64(new Uint8Array(await file.arrayBuffer()));
 }
 
 /** Whether this browser can actually share this file via the native share sheet — never assumed from device/UA. */

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Scopes the FileProvider to exactly one narrow directory: the app's own
+    private cache, under a "shared/" subfolder used only for the WhatsApp
+    image-share flow. Nothing else in the app's cache or files directory is
+    exposed through the provider, and this is a private cache path — never
+    externally readable except through the short-lived, scoped grant the
+    share Intent itself carries.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="shared_images" path="shared/" />
+</paths>

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { getPrinterClient } from "@/lib/printer/client";
-import { BridgeTransport, type NativeChannel, createNativePrinterProvider, ensureBridge } from "./bridge";
+import { BridgeTransport, type NativeChannel, createNativePrinterProvider, createNativeShareProvider, ensureBridge, ensureShareBridge } from "./bridge";
 import { BRIDGE_OPS } from "./types";
 
 /** A native side that answers the protocol the way the Android bridge does. */
@@ -154,6 +154,51 @@ describe("bridge shim", () => {
     const timedOut = silent.getStatus();
     await vi.waitFor(() => undefined);
     expect((await Promise.race([timedOut, new Promise((resolve) => setTimeout(() => resolve({ status: "pending" }), 50))])) as { status: string }).toEqual({ status: "pending" });
+  });
+});
+
+describe("share bridge", () => {
+  it("sends the image as base64 with its mime type, filename and text, and reports the chooser was launched", async () => {
+    const { channel, seen } = fakeNative({ SHARE: () => ({ shared: true }) });
+    const provider = createNativeShareProvider(new BridgeTransport(channel));
+    const outcome = await provider.share({ data: "AQID", mimeType: "image/jpeg", filename: "FRYBIRD-Order-1226-Invoice.jpg", text: "Thanks for choosing FRYBIRD!" });
+    expect(outcome).toEqual({ shared: true });
+    expect(seen[0]).toEqual({ op: "SHARE", payload: { data: "AQID", mimeType: "image/jpeg", filename: "FRYBIRD-Order-1226-Invoice.jpg", text: "Thanks for choosing FRYBIRD!" } });
+  });
+
+  it("turns a native share failure into a value, never a throw", async () => {
+    const { channel } = fakeNative({
+      SHARE: () => {
+        throw new Error("Only JPEG or PNG images can be shared.");
+      },
+    });
+    const provider = createNativeShareProvider(new BridgeTransport(channel));
+    const outcome = await provider.share({ data: "AQID", mimeType: "image/jpeg", filename: "x.jpg" });
+    expect(outcome).toEqual({ shared: false, error: "Only JPEG or PNG images can be shared.", code: "PRINTER_UNREACHABLE" });
+  });
+
+  it("an app version without the SHARE operation fails the same way any unknown op does", async () => {
+    const { channel } = fakeNative({}); // no SHARE handler — matches an older installed app
+    const provider = createNativeShareProvider(new BridgeTransport(channel));
+    const outcome = await provider.share({ data: "AQID", mimeType: "image/jpeg", filename: "x.jpg" });
+    expect(outcome.shared).toBe(false);
+  });
+
+  it("ensureShareBridge installs window.FRYPOS.share over the same channel ensureBridge uses for printing", () => {
+    const { channel } = fakeNative({ CAPABILITIES: () => ({}), SHARE: () => ({ shared: true }) });
+    const win = { FRYPOS_NATIVE: channel } as unknown as Window;
+    const printer = ensureBridge(win);
+    const share = ensureShareBridge(win);
+    expect(printer).not.toBeNull();
+    expect(share).not.toBeNull();
+    expect(win.FRYPOS?.printer).toBe(printer);
+    expect(win.FRYPOS?.share).toBe(share);
+    // Same object on a second call — installed once, not re-created.
+    expect(ensureShareBridge(win)).toBe(share);
+  });
+
+  it("is null in a plain browser, same as the printer bridge", () => {
+    expect(ensureShareBridge({} as Window)).toBeNull();
   });
 });
 

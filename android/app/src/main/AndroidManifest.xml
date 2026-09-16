@@ -48,5 +48,22 @@
                 <data android:scheme="https" android:host="frybirdiq.tech" android:pathPrefix="/app/pos" />
             </intent-filter>
         </activity>
+
+        <!--
+            Lets the invoice-image share flow hand WhatsApp a content:// URI
+            for a file in this app's own private cache, instead of a
+            world-readable file:// path. exported=false: only an app this
+            provider explicitly grants a URI to (via the share Intent's
+            FLAG_GRANT_READ_URI_PERMISSION) can read anything through it.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

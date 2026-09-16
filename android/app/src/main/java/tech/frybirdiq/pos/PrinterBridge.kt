@@ -1,20 +1,25 @@
 package tech.frybirdiq.pos
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
 import android.provider.Settings
 import android.util.Base64
+import androidx.core.content.FileProvider
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * The printer bridge: the only native capability the web POS can reach.
+ * The native bridge: the only native capability the web POS can reach —
+ * printing, and (since SHARE) handing the OS share sheet a generated
+ * invoice image.
  *
- * Every message is JSON `{ v: 1, id, op, payload }`. Eleven operations are
+ * Every message is JSON `{ v: 1, id, op, payload }`. Twelve operations are
  * known; anything else is refused with INVALID_REQUEST. A printer address
  * is either a private IPv4 address with a sane port (Wi-Fi / LAN, TCP
  * 9100) or the Bluetooth address of a device the person picked on this
@@ -23,9 +28,13 @@ import java.util.concurrent.Executors
  * is not printed again — the reply says `duplicate: true` — so a retried
  * network call cannot produce two bills.
  *
- * No shell, no filesystem, no arbitrary sockets or devices: the only
- * sockets this class ever opens are a TCP connection to the validated LAN
- * address and an RFCOMM connection to the validated Bluetooth address.
+ * SHARE writes a base64-decoded image to this app's own private cache
+ * (nowhere else — no shell, no arbitrary filesystem access) and hands it
+ * to `Intent.ACTION_SEND` through `FileProvider`, the same narrowly-scoped,
+ * origin-restricted channel as every other operation here. No sockets are
+ * opened for it; the only sockets this class ever opens are a TCP
+ * connection to the validated LAN address and an RFCOMM connection to the
+ * validated Bluetooth address, for printing.
  */
 class PrinterBridge(private val context: Context, host: BluetoothPrinter.BridgeHost) {
 
@@ -91,6 +100,7 @@ class PrinterBridge(private val context: Context, host: BluetoothPrinter.BridgeH
         "TEST_PRINT" -> print(payload, jobId = null)
         "PRINT_RECEIPT" -> print(payload, jobId = requireJobId(payload))
         "LAST_ERROR" -> JSONObject().put("error", lastError)
+        "SHARE" -> share(payload)
         else -> throw BridgeException("INVALID_REQUEST", "Unknown operation.")
     }
 
@@ -250,6 +260,71 @@ class PrinterBridge(private val context: Context, host: BluetoothPrinter.BridgeH
         return JSONObject().put("printed", true).put("duplicate", false).put("bytes", data.size)
     }
 
+    /**
+     * Hands a generated invoice image to Android's own share sheet.
+     *
+     * The image never touches a public URL or a world-readable path: it is
+     * written only to `context.cacheDir/shared/`, the one directory
+     * `file_paths.xml` exposes through the FileProvider, and the share
+     * Intent carries a single-use, revocable read grant for that one file
+     * — never broader provider access. The previous share's file is
+     * deleted before the new one is written, so nothing accumulates beyond
+     * "the most recent share, until the next one or an app restart" —
+     * `shutdown()` below also clears the directory when the app closes.
+     *
+     * No completion callback exists for this: ACTION_SEND hands off to
+     * whatever app is chosen (or to nothing, if the person backs out of
+     * the chooser) and Android does not report that choice back to the
+     * caller. `{ shared: true }` means "the chooser was launched", not
+     * "WhatsApp definitely sent it" — the same honest boundary
+     * `navigator.share()`'s own resolved promise already has on the web
+     * side.
+     */
+    private fun share(payload: JSONObject): JSONObject {
+        val mimeType = payload.optString("mimeType", "")
+        if (mimeType != "image/jpeg" && mimeType != "image/png") {
+            throw BridgeException("INVALID_REQUEST", "Only JPEG or PNG images can be shared.")
+        }
+        val filename = sanitizeFilename(payload.optString("filename", "invoice.jpg"))
+        val text = payload.optString("text", "").take(MAX_SHARE_TEXT_CHARS)
+        val encoded = payload.optString("data", "")
+        if (encoded.isEmpty() || encoded.length > MAX_SHARE_BASE64) {
+            throw BridgeException("INVALID_REQUEST", "Nothing to share, or the image is too large.")
+        }
+        val bytes = try {
+            Base64.decode(encoded, Base64.DEFAULT)
+        } catch (error: IllegalArgumentException) {
+            throw BridgeException("INVALID_REQUEST", "Image data is not base64.")
+        }
+
+        val dir = File(context.cacheDir, "shared").apply { mkdirs() }
+        dir.listFiles()?.forEach { it.delete() }
+        val file = File(dir, filename)
+        file.writeBytes(bytes)
+
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = mimeType
+            putExtra(Intent.EXTRA_STREAM, uri)
+            if (text.isNotEmpty()) putExtra(Intent.EXTRA_TEXT, text)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = Intent.createChooser(send, null).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            context.startActivity(chooser)
+        } catch (error: Exception) {
+            throw BridgeException("BRIDGE_ERROR", "Could not open the share sheet.")
+        }
+        return JSONObject().put("shared", true)
+    }
+
+    private fun sanitizeFilename(name: String): String {
+        val cleaned = name.replace(Regex("[^A-Za-z0-9._-]"), "_").trim('.', '_')
+        return cleaned.ifEmpty { "invoice.jpg" }.take(120)
+    }
+
     /* ---- helpers ------------------------------------------------------ */
 
     private fun probe(target: PrinterAddress): StatusReport {
@@ -310,6 +385,9 @@ class PrinterBridge(private val context: Context, host: BluetoothPrinter.BridgeH
     fun shutdown() {
         bluetooth.disconnect()
         executor.shutdownNow()
+        // The one thing SHARE writes outside memory — nothing should
+        // outlive the app closing.
+        runCatching { File(context.cacheDir, "shared").deleteRecursively() }
     }
 
     @Volatile private var permissionAsked = false
@@ -318,6 +396,9 @@ class PrinterBridge(private val context: Context, host: BluetoothPrinter.BridgeH
         private const val STATUS_CACHE_MS = 10_000L
         /** 2 MB of ESC/POS is a very long receipt with a large logo. */
         private const val MAX_DATA_BASE64 = 2 * 1024 * 1024 * 4 / 3
+        /** A pixelRatio-2 JPEG of even a very long receipt comfortably fits in a few MB; this is a generous but bounded ceiling, not a real-world size. */
+        private const val MAX_SHARE_BASE64 = 8 * 1024 * 1024 * 4 / 3
+        private const val MAX_SHARE_TEXT_CHARS = 4_000
 
         private val IPV4 = Regex("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$")
         private val MAC = Regex("^([0-9A-F]{2})(:[0-9A-F]{2}){5}$")

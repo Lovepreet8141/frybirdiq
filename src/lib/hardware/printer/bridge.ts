@@ -3,8 +3,10 @@
  *
  * Android exposes one origin-restricted object, `window.FRYPOS_NATIVE`
  * (WebViewCompat.addWebMessageListener), with a `postMessage(string)` and a
- * message event back. This file turns that into `window.FRYPOS.printer`, the
- * promise-based `PrinterProvider` the rest of the app feature-detects.
+ * message event back. This file turns that into `window.FRYPOS.printer` and
+ * `window.FRYPOS.share`, the promise-based providers the rest of the app
+ * feature-detects — one transport, two providers built over it, since
+ * there is only ever the one native channel.
  *
  * Every request carries an id and a timeout; every reply is matched to its
  * request; anything malformed is dropped. Only the operations in
@@ -14,7 +16,7 @@
 
 import { normaliseMac, validatePrinterAddress } from "../net";
 import { bytesToBase64 } from "./escpos";
-import { BRIDGE_OPS, BRIDGE_PROTOCOL_VERSION, type BluetoothState, type BridgeCapabilities, type BridgeErrorCode, type BridgeOp, type BridgeRequest, type BridgeResponse, type DiscoveredPrinter, type PrintOutcome, type PrinterConnection, type PrinterJob, type PrinterProvider, type StatusReport } from "./types";
+import { BRIDGE_OPS, BRIDGE_PROTOCOL_VERSION, type BluetoothState, type BridgeCapabilities, type BridgeErrorCode, type BridgeOp, type BridgeRequest, type BridgeResponse, type DiscoveredPrinter, type PrintOutcome, type PrinterConnection, type PrinterJob, type PrinterProvider, type ShareImageInput, type ShareOutcome, type ShareProvider, type StatusReport } from "./types";
 
 export interface NativeChannel {
   postMessage(message: string): void;
@@ -275,6 +277,46 @@ export function createNativePrinterProvider(transport: BridgeTransport): Printer
   };
 }
 
+const SHARE_TIMEOUT_MS = 15_000;
+
+function failedShare(error: unknown): ShareOutcome {
+  if (error instanceof BridgeError) return { shared: false, error: error.message, code: error.code };
+  return { shared: false, error: error instanceof Error ? error.message : "Sharing failed.", code: "BRIDGE_ERROR" };
+}
+
+/**
+ * `window.FRYPOS.share`, built over the same transport as the printer
+ * provider. A resolved request means the native side already reported
+ * `ok: true` (`{ shared: true }`, the only shape SHARE ever resolves
+ * with) — anything else arrives as a rejection, same as every other op.
+ */
+export function createNativeShareProvider(transport: BridgeTransport): ShareProvider {
+  return {
+    isAvailable: () => true,
+    async share(input: ShareImageInput): Promise<ShareOutcome> {
+      try {
+        await transport.request("SHARE", { data: input.data, mimeType: input.mimeType, filename: input.filename, text: input.text ?? "" }, SHARE_TIMEOUT_MS);
+        return { shared: true };
+      } catch (error) {
+        return failedShare(error);
+      }
+    },
+  };
+}
+
+/** One transport per window, shared by every provider built over the native channel — not a new listener per capability. */
+const transports = new WeakMap<Window, BridgeTransport>();
+
+function ensureTransport(win: Window): BridgeTransport | null {
+  const cached = transports.get(win);
+  if (cached) return cached;
+  const channel = win.FRYPOS_NATIVE;
+  if (!channel || typeof channel.postMessage !== "function") return null;
+  const transport = new BridgeTransport(channel);
+  transports.set(win, transport);
+  return transport;
+}
+
 /**
  * Installs `window.FRYPOS.printer` when the native channel is present and
  * nothing has installed it yet. Idempotent. Returns the provider, or null
@@ -282,9 +324,19 @@ export function createNativePrinterProvider(transport: BridgeTransport): Printer
  */
 export function ensureBridge(win: Window = window): PrinterProvider | null {
   if (win.FRYPOS?.printer) return win.FRYPOS.printer;
-  const channel = win.FRYPOS_NATIVE;
-  if (!channel || typeof channel.postMessage !== "function") return null;
-  const provider = createNativePrinterProvider(new BridgeTransport(channel));
+  const transport = ensureTransport(win);
+  if (!transport) return null;
+  const provider = createNativePrinterProvider(transport);
   win.FRYPOS = { ...(win.FRYPOS ?? {}), printer: provider };
+  return provider;
+}
+
+/** Same as `ensureBridge`, for `window.FRYPOS.share` — null on a device/app version without the native SHARE operation. */
+export function ensureShareBridge(win: Window = window): ShareProvider | null {
+  if (win.FRYPOS?.share) return win.FRYPOS.share;
+  const transport = ensureTransport(win);
+  if (!transport) return null;
+  const provider = createNativeShareProvider(transport);
+  win.FRYPOS = { ...(win.FRYPOS ?? {}), share: provider };
   return provider;
 }

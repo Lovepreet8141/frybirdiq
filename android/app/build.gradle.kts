@@ -11,13 +11,13 @@ android {
         applicationId = "tech.frybirdiq.pos"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.3.0"
 
         // The only origin the printer bridge is exposed to. Change it here and nowhere else.
         buildConfigField("String", "POS_ORIGIN", "\"https://frybirdiq.tech\"")
         buildConfigField("String", "POS_PATH", "\"/app/pos\"")
-        buildConfigField("String", "BRIDGE_VERSION", "\"1.2.0\"")
+        buildConfigField("String", "BRIDGE_VERSION", "\"1.3.0\"")
     }
 
     buildTypes {

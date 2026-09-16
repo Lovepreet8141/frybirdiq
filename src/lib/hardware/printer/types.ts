@@ -135,12 +135,40 @@ export interface PrinterProvider {
   getLastError(): Promise<string | null>;
 }
 
+/**
+ * A generated image handed to the native share sheet — the invoice image,
+ * always; never a URL, never anything fetched server-side. `data` is
+ * base64, decoded and written only to the native app's own private cache,
+ * same as `PrinterJob.data` is bytes the bridge never interprets.
+ */
+export interface ShareImageInput {
+  readonly data: string;
+  readonly mimeType: "image/jpeg" | "image/png";
+  readonly filename: string;
+  readonly text?: string;
+}
+
+/**
+ * `shared: true` means the native chooser was launched — not that the
+ * person actually picked WhatsApp, or that it was delivered. ACTION_SEND
+ * hands off to whatever the person picks (or to nothing) with no
+ * completion callback to the caller; this is the same honest boundary
+ * `navigator.share()`'s own resolved promise already has.
+ */
+export type ShareOutcome = { readonly shared: true } | { readonly shared: false; readonly error: string; readonly code: BridgeErrorCode };
+
+/** `window.FRYPOS.share` — present only inside the FRYBIRD POS app, where `navigator.share` is not. */
+export interface ShareProvider {
+  isAvailable(): boolean;
+  share(input: ShareImageInput): Promise<ShareOutcome>;
+}
+
 /* ------------------------------------------------------------------ */
 /* Wire protocol between the shim and the native bridge                */
 /* ------------------------------------------------------------------ */
 
 /** The only operations the native side accepts. Anything else is refused. */
-export const BRIDGE_OPS = ["CAPABILITIES", "STATUS", "DISCOVER", "CONNECT", "DISCONNECT", "TEST_CONNECTION", "TEST_PRINT", "PRINT_RECEIPT", "LAST_ERROR", "BT_STATE", "BT_ENABLE"] as const;
+export const BRIDGE_OPS = ["CAPABILITIES", "STATUS", "DISCOVER", "CONNECT", "DISCONNECT", "TEST_CONNECTION", "TEST_PRINT", "PRINT_RECEIPT", "LAST_ERROR", "BT_STATE", "BT_ENABLE", "SHARE"] as const;
 export type BridgeOp = (typeof BRIDGE_OPS)[number];
 
 export interface BridgeRequest {
@@ -157,7 +185,7 @@ export const BRIDGE_PROTOCOL_VERSION = 1 as const;
 declare global {
   interface Window {
     /** Installed by the shim when a native bridge is present. Absent in a plain browser. */
-    FRYPOS?: { printer?: PrinterProvider; bridgeVersion?: string };
+    FRYPOS?: { printer?: PrinterProvider; share?: ShareProvider; bridgeVersion?: string };
     /** Injected by the Android WebView for the trusted origin only (WebViewCompat.addWebMessageListener). */
     FRYPOS_NATIVE?: { postMessage(message: string): void; onmessage: ((event: { data: string }) => void) | null; addEventListener?(type: "message", listener: (event: { data: string }) => void): void };
   }

@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Download, Loader2, MessageCircle } from "lucide-react";
 import { whatsappOrderLink } from "@/lib/notifications/actions";
+import { ensureShareBridge } from "@/lib/hardware/printer/bridge";
 import {
   canShareFile,
   describeError,
+  fileToBase64,
   isShareCancelled,
   makeSyntheticTestFile,
   renderElementToImageFile,
@@ -27,7 +29,9 @@ interface ShareDiagnostics {
   readonly fileSizeBytes: number | null;
   readonly canvasWidth: number | null;
   readonly canvasHeight: number | null;
+  readonly bridgeAvailable: boolean | null;
   readonly canShareResult: boolean | null;
+  readonly sharePath: "bridge" | "web-share" | null;
   readonly shareInvoked: boolean;
   readonly sharePayloadKeys: readonly string[] | null;
   readonly shareOutcome: "pending" | "resolved" | "cancelled" | "rejected" | null;
@@ -41,7 +45,9 @@ const EMPTY_DIAG: ShareDiagnostics = {
   fileSizeBytes: null,
   canvasWidth: null,
   canvasHeight: null,
+  bridgeAvailable: null,
   canShareResult: null,
+  sharePath: null,
   shareInvoked: false,
   sharePayloadKeys: null,
   shareOutcome: null,
@@ -50,24 +56,36 @@ const EMPTY_DIAG: ShareDiagnostics = {
 };
 
 /**
- * TEMPORARY: this component carries a "Diagnostic info" panel (collapsed by
- * default) added specifically for the Web Share investigation — real facts
- * about the generated file and the actual share() call, read off the real
- * device, since nothing in this environment can open a phone. Meant to come
- * back out once the investigation concludes; it changes no default-visible
- * behaviour for an ordinary customer.
- *
  * Wraps the (unmodified, server-rendered) invoice with the native-share
- * flow: press Send on WhatsApp → the OS/browser share sheet opens with the
- * invoice already attached as an image → pick WhatsApp → pick a contact →
- * send. No WhatsApp Business API, no server upload — the image is rendered
- * from this exact DOM, client-side, and handed to `navigator.share`.
+ * flow: press Send on WhatsApp → the invoice, already generated as an
+ * image, is handed off natively → pick WhatsApp → pick a contact → send.
+ * No WhatsApp Business API, no server upload — the image is rendered from
+ * this exact DOM, client-side, always.
  *
- * The image is generated as soon as this mounts, not on click: `navigator
- * .share` must run inside the click's own user-activation window, and
- * rendering the DOM to a canvas is the one genuinely slow step here. By the
- * time a person has read the receipt and reached for the button, `file` is
- * already sitting in state — the click handler itself is synchronous.
+ * Two ways that hand-off happens, tried in this order:
+ *  1. `window.FRYPOS.share` — the FRYBIRD POS Android app's own native
+ *     bridge (same origin-restricted channel already used for printing).
+ *     Standard Android WebView has never implemented the Web Share API at
+ *     all, which is why the POS app needs this path; `navigator.share` is
+ *     simply undefined inside it, not failing.
+ *  2. `navigator.share({ title: "", files: [file] })` — real browsers
+ *     (the customer site, staff on a normal browser). `title` deliberately
+ *     blank, no `text`: documented iOS/WhatsApp behaviour drops the file
+ *     when text rides in the same call.
+ * Neither reaching neither: the download/wa.me-link fallback below.
+ *
+ * Still carries a collapsed "Diagnostic info" panel (added for the Web
+ * Share investigation, kept for now to confirm which path a real device
+ * actually takes) — real facts about the generated file and the actual
+ * share attempt, since nothing in this environment can open a phone.
+ *
+ * The image is generated as soon as this mounts, not on click:
+ * `navigator.share` must run inside the click's own user-activation
+ * window (the bridge path has no such constraint, but generating once
+ * up front keeps one code path for both), and rendering the DOM to a
+ * canvas is the one genuinely slow step here. By the time a person has
+ * read the receipt and reached for the button, `file` is already sitting
+ * in state.
  */
 export function ReceiptShare({ children, filename, message, orderId, phone }: ReceiptShareProps) {
   const captureRef = useRef<HTMLDivElement>(null);
@@ -88,7 +106,8 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
     renderElementToJpegFile(node, filename)
       .then(({ file: generated, canvasWidth, canvasHeight }) => {
         if (cancelled) return;
-        const shareable = canShareFile(generated);
+        const bridgeAvailable = !!ensureShareBridge();
+        const webShareAvailable = canShareFile(generated);
         setFile(generated);
         setDiag((prev) => ({
           ...prev,
@@ -97,9 +116,10 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
           fileSizeBytes: generated.size,
           canvasWidth,
           canvasHeight,
-          canShareResult: shareable,
+          bridgeAvailable,
+          canShareResult: webShareAvailable,
         }));
-        setStatus(shareable ? "ready" : "unsupported");
+        setStatus(bridgeAvailable || webShareAvailable ? "ready" : "unsupported");
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -122,19 +142,45 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
     };
   }, [objectUrl]);
 
-  // Deliberately synchronous: called directly from onClick, no await before
-  // navigator.share, so the browser still sees this as the same user
-  // gesture that started the click.
+  // The FRYBIRD POS app's native bridge first — the only path that works
+  // inside its WebView, where navigator.share is simply undefined. Falls
+  // through to navigator.share for every real browser (customer site,
+  // staff elsewhere), unchanged from before this bridge existed.
   //
-  // files only, title explicitly blank — no `text`. Every step of this call
-  // is now recorded into `diag` (payload shape, resolve/reject, exact
-  // error) rather than assumed from silence — see the diagnostic panel.
+  // navigator.share is still called directly from onClick with no await
+  // ahead of it, so the browser sees it as the same user gesture that
+  // started the click — the bridge path has no such constraint (it is not
+  // a Web Share API call at all, just a message to native code), so
+  // base64-encoding the file first is safe there.
   function handleShare() {
     if (!file) return;
     setShareError(null);
+
+    const bridge = ensureShareBridge();
+    if (bridge) {
+      setDiag((prev) => ({ ...prev, sharePath: "bridge", shareInvoked: true, shareOutcome: "pending", shareErrorName: null, shareErrorMessage: null }));
+      fileToBase64(file)
+        .then((data) => bridge.share({ data, mimeType: "image/jpeg", filename: file.name, text: message }))
+        .then((outcome) => {
+          if (outcome.shared) {
+            setDiag((prev) => ({ ...prev, shareOutcome: "resolved" }));
+            return;
+          }
+          setDiag((prev) => ({ ...prev, shareOutcome: "rejected", shareErrorName: outcome.code, shareErrorMessage: outcome.error }));
+          setShareError(`Couldn't share the invoice (${outcome.error}). Try downloading the image instead.`);
+        })
+        .catch((error: unknown) => {
+          const msg = describeError(error);
+          setDiag((prev) => ({ ...prev, shareOutcome: "rejected", shareErrorName: "BRIDGE_ERROR", shareErrorMessage: msg }));
+          setShareError(`Couldn't share the invoice (${msg}). Try downloading the image instead.`);
+        });
+      return;
+    }
+
     const payload = { title: "", files: [file] };
     setDiag((prev) => ({
       ...prev,
+      sharePath: "web-share",
       shareInvoked: true,
       sharePayloadKeys: Object.keys(payload),
       shareOutcome: "pending",
@@ -195,9 +241,11 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
           <p className="text-xs font-semibold text-muted-foreground">
             Native image share:{" "}
             {status === "ready"
-              ? "SUPPORTED (native share sheet will open)"
+              ? diag.bridgeAvailable
+                ? "SUPPORTED via the FRYBIRD POS app's native bridge"
+                : "SUPPORTED (native browser share sheet will open)"
               : status === "unsupported"
-                ? "NOT SUPPORTED on this browser (canShare returned false — fallback shown below)"
+                ? "NOT SUPPORTED on this browser (fallback shown below)"
                 : "FAILED to prepare image (fallback shown below)"}
           </p>
         )}
@@ -314,8 +362,12 @@ export function ReceiptShare({ children, filename, message, orderId, phone }: Re
             <dd>{diag.fileSizeBytes !== null ? `${diag.fileSizeBytes.toLocaleString()} bytes` : "—"}</dd>
             <dt>Canvas size</dt>
             <dd>{diag.canvasWidth !== null ? `${diag.canvasWidth} × ${diag.canvasHeight}px` : "—"}</dd>
+            <dt>FRYPOS.share bridge</dt>
+            <dd>{diag.bridgeAvailable === null ? "—" : diag.bridgeAvailable ? "available" : "not available"}</dd>
             <dt>{"canShare({files})"}</dt>
             <dd>{diag.canShareResult === null ? "—" : String(diag.canShareResult)}</dd>
+            <dt>Share path used</dt>
+            <dd>{diag.sharePath ?? "—"}</dd>
             <dt>share() called</dt>
             <dd>{diag.shareInvoked ? "yes" : "no"}</dd>
             <dt>Payload keys</dt>
