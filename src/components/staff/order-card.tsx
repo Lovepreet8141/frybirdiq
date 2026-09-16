@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Check, Clock, FileText, Loader2, Printer } from "lucide-react";
+import { Check, Clock, FileText, Loader2, MessageCircle, Printer } from "lucide-react";
 import { type Paise, formatINR } from "@/lib/money";
 import { advanceOrderAction, markPaidAction } from "@/lib/auth/staff-actions";
 import type { OrderStatus } from "@/domain/order-status";
@@ -15,7 +15,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DeliveryPanel } from "./delivery-panel";
 import { openKotWindow } from "./print-kot";
-import { WhatsAppButton } from "@/components/order/whatsapp-button";
 
 /**
  * The five order-status tints (MASTER.md §5 "Order tints"). Mirrors
@@ -298,7 +297,26 @@ export function OrderCard({
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <WhatsAppButton orderId={order.id} phone={order.customerPhone} />
+          {/*
+            Opens the customer invoice page in a new tab rather than
+            reimplementing image sharing here — that page's ReceiptShare
+            already renders the same invoice DOM and calls
+            navigator.share({ title: "", files: [file] }), the one real
+            (proven-working) image-share path. This card used to hold its
+            own WhatsAppButton (a wa.me text-only link) for this; it never
+            attached the invoice image, so it's gone rather than kept as a
+            second, weaker way to do the same thing. Authorization is
+            unchanged — the order id is the same unguessable UUID either
+            page already treats as access.
+          */}
+          {order.customerPhone && (
+            <Button asChild variant="outline" className="min-h-11 gap-2 text-sm">
+              <Link href={`/order/${order.id}/invoice`} target="_blank" rel="noopener noreferrer">
+                <MessageCircle className="size-4" aria-hidden="true" />
+                Send on WhatsApp
+              </Link>
+            </Button>
+          )}
           <Button asChild variant="outline" className="min-h-11 gap-2 text-sm">
             <Link href={`/order/${order.id}/invoice`}>
               <FileText className="size-4" aria-hidden="true" />
