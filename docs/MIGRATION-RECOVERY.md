@@ -354,6 +354,25 @@ decision `dec-2`; production backfill of facts is a separate approved step.
   DISTINCT), as for 0034.
 - **Journal (FACT):** `when` set by hand to 1790000000000, above 0035.
 
+### `iq_intraday_facts` retention: 35 → 63 days (IQ-2 S8, R2.8, RELIABILITY C7)
+- **FACT:** no schema change. Retention is not in the database: the job deletes
+  rows. IQ-1 B7 specified 35 days; `9e05721` (iq2-s8, ANALYTICS-DATA) adds the
+  writer and the purge at 63 days: `purgeIntradayFacts` deletes
+  `business_date < today − 62` (IST) per org, every definition version
+  (`src/lib/repositories/iq-facts.ts:737-741`,
+  `src/lib/iq/metrics/intraday.ts:34`). The 8-week backfill rebuilds D−56 … D−1
+  from the same IST date, so the purge never removes a day the backfill has just
+  written.
+- **Recovery:** intraday rows are derived from `orders` (sale set by
+  `created_at`, tickets by `ready_at`). Rows lost to a purge or a drop are
+  rebuilt by the backfill for the last 56 days; older buckets are not rebuilt
+  and are not needed by any reader. Reverting the job to 35 days deletes days
+  36–63 on its next run; no down SQL is involved.
+- **Unit note (FACT):** `ticket_ready_seconds_total` is stored with unit
+  `count` (a count of seconds). 0036's unit CHECK allows only `paise` and
+  `count`; a dedicated `seconds` unit would need a migration widening
+  `iq_intraday_facts_unit_check` and `iq_daily_facts_unit_check`.
+
 ---
 
 ## 5. Rollback files 0022–0026: the known-safe procedure
