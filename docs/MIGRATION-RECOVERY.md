@@ -289,6 +289,30 @@ triggers, RLS, policies and grants are hand-written SQL. None of them is in
 recreate them either. The trigger's open-status list duplicates
 `IQ_OPEN_ACTION_STATUSES`; the integration test covers it.
 
+## 4b. 0035 `iq_job_runs_failures` (not deployed; `agent/database-iq0-s6c`, card iq0-s6c)
+
+Added 2026-09-17. Requires 0034. 0034 was already merged into
+`kit-radix-nova` (`e116c6f`), so the column ships as its own migration.
+
+### Classification — **Reversible while no job relies on the count; forward-fix after**
+- **What it does (FACT):** `ALTER TABLE iq_job_runs ADD COLUMN failures integer
+  DEFAULT 0 NOT NULL` and CHECK `failures >= 0`. Existing rows get 0. No
+  grant changes: `iq_job_runs` stays server-only (`anon`/`authenticated` have
+  no column privilege, checked locally).
+- **Why (FACT):** `src/lib/jobs` (`d19f296`) counts failed attempts apart from
+  `attempt`, the fencing generation; RELIABILITY J3 requires the column.
+- **Down file (FACT):** `supabase/rollback/0035_iq_job_runs_failures.down.sql`,
+  one `BEGIN`/`COMMIT`, drops the CHECK and the column. Journal-row delete is a
+  manual step outside the transaction.
+- **Tested locally (FACT, 2026-09-17, local Postgres 17.6):** applied with
+  `supabase migration up --local` → `iq-foundations.integration.test.ts` 26/26 →
+  down + journal row deleted → column gone, 2 failed / 24 passed → re-applied →
+  26/26. Drizzle migrator path not tested (CLI-managed local stack).
+- **Data at risk:** each run's failure count. Losing it resets retry budgets, so
+  a failing job gets fresh attempts; no business data. Once jobs run in
+  production and alerts read the count, fix forward instead.
+- **Journal (FACT):** `when` set by hand to 1789900000000, above 0034.
+
 ---
 
 ## 5. Rollback files 0022–0026: the known-safe procedure
