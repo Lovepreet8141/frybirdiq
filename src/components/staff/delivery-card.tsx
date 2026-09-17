@@ -8,6 +8,7 @@ import { type Paise, formatINR } from "@/lib/money";
 import { formatDistance } from "@/lib/delivery";
 import { completeDeliveryAction } from "@/lib/auth/staff-actions";
 import type { OrderStatus } from "@/domain/order-status";
+import { classifyCloseResult, type CloseOutcome } from "./delivery-close";
 
 export interface RiderDelivery {
   id: string;
@@ -38,14 +39,22 @@ export interface RiderDelivery {
 export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<CloseOutcome | null>(null);
 
   const close = (cashCollected: boolean) =>
     startTransition(async () => {
-      setError(null);
-      const result = await completeDeliveryAction({ orderId: delivery.id, cashCollected });
-      if (!result.ok) setError(result.error ?? "That didn't work.");
-      router.refresh();
+      setOutcome(null);
+      let result: CloseOutcome;
+      try {
+        result = classifyCloseResult({ thrown: false, result: await completeDeliveryAction({ orderId: delivery.id, cashCollected }) });
+      } catch {
+        result = classifyCloseResult({ thrown: true });
+      }
+      setOutcome(result);
+      // Offline: nothing changed, so there is nothing to refresh yet — the
+      // button just re-enables (via `pending`) for another try. Every other
+      // outcome, including "closed elsewhere", reflects real server state.
+      if (result.kind !== "offline") router.refresh();
     });
 
   const onTheRoad = delivery.status === "OUT_FOR_DELIVERY";
@@ -114,9 +123,11 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
 
       {delivery.notes && <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">{delivery.notes}</p>}
 
-      {error && (
+      {outcome && outcome.kind !== "ok" && (
         <p role="alert" className="rounded-md border-l-2 border-loss bg-loss-soft/60 px-4 py-3 text-sm">
-          {error}
+          {outcome.kind === "offline" && "No connection — try again."}
+          {outcome.kind === "closed-elsewhere" && "Already closed by someone else."}
+          {outcome.kind === "error" && outcome.message}
         </p>
       )}
 
