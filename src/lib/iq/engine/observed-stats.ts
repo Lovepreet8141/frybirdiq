@@ -57,3 +57,24 @@ export function observedMedian(points: readonly Observed[]): Observed {
 export function observedShare(q: Observed, bps: bigint): Observed {
   return observed(withValue(q.unit, divRoundHalfAway(magnitudeOf(q) * bps, 10000n)));
 }
+
+/** Σ of Observed figures of one unit (an empty list sums to zero in `unit`). */
+export function observedSum(unit: Quantity["unit"], points: readonly Observed[]): Observed {
+  let total = 0n;
+  for (const p of points) {
+    if (p.unit !== unit) throw new RangeError(`observed-stats: cannot add ${p.unit} to ${unit}`);
+    total += magnitudeOf(p);
+  }
+  return observed(withValue(unit, total));
+}
+
+/**
+ * `total ÷ count`, half away from zero, stated in `unit` — e.g. seconds of
+ * prep over tickets ready gives a mean prep time in seconds. Both inputs are
+ * Observed counts from stored rows; `count` must be positive.
+ */
+export function observedMean(total: Observed, count: Observed, unit: Quantity["unit"]): Observed {
+  const n = magnitudeOf(count);
+  if (n <= 0n) throw new RangeError("observed-stats: mean over zero items");
+  return observed(withValue(unit, divRoundHalfAway(magnitudeOf(total), n)));
+}
