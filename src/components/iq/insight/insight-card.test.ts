@@ -56,10 +56,10 @@ describe("forPresentation", () => {
     expect(shape.impactLabel).toBe("80% interval, next 1d");
   });
 
-  it("EXPLANATION: the total as the impact, the residual named as an estimate", () => {
+  it("EXPLANATION: the total as the impact, every driver plus the residual in the evidence", () => {
     const shape = forPresentation(present(parse(RAW_BY_CLAIM.EXPLANATION())));
     expect(shape.impact).toBe("-₹5,000");
-    expect(shape.evidence).toContain("≈");
+    expect(shape.evidence).toBe("Orders count: -₹4,000 · Ticket average: -₹800 · Residual ≈ -₹200");
   });
 
   it("RECOMMENDATION: gain tone, the impact range labelled as an estimate", () => {

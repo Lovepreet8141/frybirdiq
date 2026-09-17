@@ -43,7 +43,15 @@ export function forPresentation(p: Presentation): CardShape {
     case "FORECAST":
       return { tone: "neutral", title: humanize(p.copy.templateId), impact: p.range.text, impactLabel: `${p.range.coverage}, next ${p.horizonDays}d` };
     case "EXPLANATION":
-      return { tone: "neutral", title: humanize(p.copy.templateId), impact: p.total.text, evidence: `Estimated residual ${p.residual}` };
+      // Drivers summing to the total, with the residual, is what makes this
+      // an explanation rather than a repeat of the total (UX-ARCHITECTURE,
+      // DESIGN.md line 40): every driver renders, never just the residual.
+      return {
+        tone: "neutral",
+        title: humanize(p.copy.templateId),
+        impact: p.total.text,
+        evidence: [...p.drivers.map((driver) => `${humanize(driver.driverId)}: ${driver.contribution.text}`), `Residual ${p.residual}`].join(" · "),
+      };
     case "RECOMMENDATION":
       return { tone: "gain", title: humanize(p.copy.templateId), impact: `${p.impact.low} – ${p.impact.high}`, impactLabel: "Estimated impact" };
     case "AUTOMATION":
