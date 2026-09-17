@@ -6,9 +6,12 @@ import { formatINR } from "@/lib/money";
 import { type Paise, paise } from "@/lib/money";
 import { getOrder } from "@/lib/repositories/orders";
 import { getRating } from "@/lib/ratings";
+import { getCustomer } from "@/lib/customer";
+import { readRememberedContact } from "@/lib/cart/remembered-contact";
 import { OrderRating } from "@/components/order/rating";
 import { PayOnline } from "@/components/order/pay-online";
 import { OrderLive } from "@/components/order/order-live";
+import { viewerOwnsOrder } from "@/components/order/viewer-owns-order";
 import { RAZORPAY_PROVIDER, razorpayConfig } from "@/lib/payments";
 import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
 
@@ -63,8 +66,9 @@ function stepsFor(fulfilment: FulfilmentType) {
 
 export default async function OrderPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ pay?: string }> }) {
   const [{ id }, { pay }] = await Promise.all([params, searchParams]);
-  const order = await getOrder(id);
+  const [order, customer, remembered] = await Promise.all([getOrder(id), getCustomer(), readRememberedContact()]);
   if (!order) notFound();
+  const isOwner = viewerOwnsOrder(order, customer, remembered);
 
   /*
    * Online payment states. Roadmap 1.5: a pending Razorpay payment shows the
@@ -126,7 +130,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           providerOrderId={online.providerOrderId}
           amountPaise={Number(online.amount)}
           amountLabel={formatINR(paise(online.amount))}
-          prefill={{ name: order.customerName, email: order.customerEmail, contact: order.customerPhone }}
+          prefill={isOwner ? { name: order.customerName, email: order.customerEmail, contact: order.customerPhone } : { name: null, email: null, contact: null }}
           autoOpen={pay === "1"}
           failureReason={online.failureReason}
         />
