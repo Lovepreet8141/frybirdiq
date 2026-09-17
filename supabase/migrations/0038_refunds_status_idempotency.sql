@@ -13,15 +13,20 @@
 --
 -- Number 0038 (next free after 0037; the design's "0036" was taken). Journal
 -- `when` set by hand to 1790300000000, above 0037's 1790200000000.
--- status: added with DEFAULT 'SUCCEEDED' only so existing rows get it (design
--- S3), then the default is dropped: new code must always write status.
+-- Expand phase (RELIABILITY, ref-b1 review): the migration runs before the
+-- deploy, so the code already live keeps inserting refunds with neither status
+-- nor finalized_at. status DEFAULT 'SUCCEEDED' and finalized_at DEFAULT now()
+-- let those inserts pass refunds_finalized_check; they are what that code
+-- means (it records a refund only after the provider confirmed). A later
+-- contract migration, carded once the refund redesign is live, drops both
+-- defaults. Until then a RESERVED or FAILED insert must set finalized_at to
+-- NULL explicitly.
 ALTER TABLE "refunds" ADD COLUMN "status" text DEFAULT 'SUCCEEDED' NOT NULL;--> statement-breakpoint
-ALTER TABLE "refunds" ALTER COLUMN "status" DROP DEFAULT;--> statement-breakpoint
 ALTER TABLE "refunds" ADD COLUMN "idempotency_key" text;--> statement-breakpoint
-ALTER TABLE "refunds" ADD COLUMN "finalized_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "refunds" ADD COLUMN "finalized_at" timestamp with time zone DEFAULT now();--> statement-breakpoint
 -- Existing rows completed synchronously: created_at is when the money left
--- (design S6). Must run before refunds_finalized_check below.
-UPDATE "refunds" SET "finalized_at" = "created_at" WHERE "finalized_at" IS NULL;--> statement-breakpoint
+-- (design S6), not the migration time the default just filled in.
+UPDATE "refunds" SET "finalized_at" = "created_at";--> statement-breakpoint
 CREATE INDEX "refunds_payment_idx" ON "refunds" USING btree ("payment_id");--> statement-breakpoint
 CREATE INDEX "refunds_reserved_idx" ON "refunds" USING btree ("org_id","created_at") WHERE "refunds"."status" = 'RESERVED';--> statement-breakpoint
 ALTER TABLE "refunds" ADD CONSTRAINT "refunds_org_idempotency_unique" UNIQUE("org_id","idempotency_key");--> statement-breakpoint
