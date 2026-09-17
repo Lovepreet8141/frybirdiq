@@ -24,6 +24,8 @@ import { awardStampForOrderInTx, qualifyingStampSpend, redeemStampRewardInTx } f
 import { financialYear, invoiceNumber, parseInvoiceNumber } from "@/lib/invoice";
 import { CASH_PROVIDER, type PaymentMethod, type PaymentResult, RAZORPAY_PROVIDER, getProvider } from "@/lib/payments";
 import { withIdempotency } from "./idempotency";
+import { type FactsRefreshSteps, refreshFactsForDays } from "./expenses";
+import { businessDate } from "@/lib/dates";
 import { getOrg } from "./org";
 import { canTransition, isTerminal } from "@/domain/order-status";
 import { advanceOrder } from "./orders";
@@ -855,7 +857,7 @@ type RefundTxOutcome =
   // refundedAmount travels as a string, not a Paise/bigint: withIdempotency
   // stores this whole object as a jsonb responseSnapshot for a replay to
   // return later, and JSON has no bigint representation.
-  | { ok: true; refundId: string; orderId: string; fullyRefunded: boolean; orderStatusBefore: OrderRow["status"]; orderFulfilment: OrderRow["fulfilment"]; refundedAmount: string; reason: string }
+  | { ok: true; refundId: string; orderId: string; fullyRefunded: boolean; orderStatusBefore: OrderRow["status"]; orderFulfilment: OrderRow["fulfilment"]; refundedAmount: string; reason: string; orderCreatedAt: string; refundCreatedAt: string }
   | { ok: false; error: string };
 
 /**
@@ -887,7 +889,7 @@ export async function refundPayment(input: {
   actorRoles: readonly Role[];
   orgId: string;
   idempotencyKey: string;
-}): Promise<RefundPaymentResult> {
+}, opts: { readonly factsRefresh?: FactsRefreshSteps } = {}): Promise<RefundPaymentResult> {
   try {
     authorize(input.actorRoles, "orders.refund");
   } catch {
@@ -946,7 +948,7 @@ export async function refundPayment(input: {
             provider: payment.provider,
             providerRefundId: refunded.providerRefundId,
           })
-          .returning({ id: refunds.id });
+          .returning({ id: refunds.id, createdAt: refunds.createdAt });
         if (!row) return { ok: false, error: "The refund was made but could not be recorded. Tell the owner." };
 
         const fullyRefunded = add(alreadyRefunded, refunded.refundedAmount) >= paise(payment.amount);
@@ -973,7 +975,7 @@ export async function refundPayment(input: {
           },
         });
 
-        return { ok: true, refundId: row.id, orderId: order.id, fullyRefunded, orderStatusBefore: order.status, orderFulfilment: order.fulfilment, refundedAmount: refunded.refundedAmount.toString(), reason };
+        return { ok: true, refundId: row.id, orderId: order.id, fullyRefunded, orderStatusBefore: order.status, orderFulfilment: order.fulfilment, refundedAmount: refunded.refundedAmount.toString(), reason, orderCreatedAt: order.createdAt.toISOString(), refundCreatedAt: row.createdAt.toISOString() };
       }),
   );
 
@@ -1008,6 +1010,25 @@ export async function refundPayment(input: {
       actorUserId: input.actorUserId,
       reason: `${outcome.fullyRefunded ? "Refunded" : "Part refunded"} ${formatINR(refundedAmount)} — ${outcome.reason}`,
     });
+  }
+
+  /*
+   * Refresh the IQ daily facts the refund changed, after everything above
+   * has committed — including the REFUNDED transition, which takes the order
+   * out of its day's sale set. A closed period's P&L reads facts, so without
+   * this a refund of an older order stays invisible there until the nightly
+   * recompute. Two IST days move: the order's own (sales, statuses, part
+   * refunds are keyed on orders.created_at) and the refund's (refunds_amount
+   * is keyed on refunds.created_at); the helper dedupes when they coincide.
+   *
+   * Same helper, budget and quiet skips as the expense refresh: no facts
+   * tables, a busy day or a timed-out statement skip, anything else logs
+   * name and code only. It never fails the refund — the money has moved.
+   */
+  try {
+    await refreshFactsForDays(input.orgId, [businessDate(new Date(outcome.orderCreatedAt)), businessDate(new Date(outcome.refundCreatedAt))], opts.factsRefresh);
+  } catch (error) {
+    console.warn(`payments: facts refresh after refund failed (${error instanceof Error ? error.name : "unknown"}); the nightly recompute will heal it`);
   }
 
   return { ok: true, refundId: outcome.refundId, orderId: outcome.orderId, fullyRefunded: outcome.fullyRefunded };
