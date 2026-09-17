@@ -35,6 +35,7 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
   /** Output committed through the fence, in order. */
   readonly committed: string[] = [];
   heartbeats = 0;
+  readonly codeVersion = "test-code-version";
   heavyLive = false;
   private nextId = 1;
 
@@ -207,6 +208,9 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
     };
     return {
       factsHistoryStart: unavailable,
+      factsReadyFor: unavailable,
+      readDetectDays: unavailable,
+      readFoodCostTarget: unavailable,
       checkFactsParity: unavailable,
       listInsights: unavailable,
       getInsight: unavailable,

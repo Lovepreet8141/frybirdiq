@@ -102,6 +102,8 @@ export interface JobRunStore<W = unknown> extends Fence<W> {
   finish(token: LeaseToken, outcome: FinishOutcome): Promise<void>;
   /** Whether a heavy job other than `job` holds a live lease. */
   heavyRunLive(job: string): Promise<boolean>;
+  /** The deployed commit every run of this store records. */
+  readonly codeVersion: string;
   /** Read repositories bound to the org this store claimed `token`'s run for. Throws `LeaseLostError` for a run it never claimed. */
   readRepos(token: LeaseToken): JobReadRepos;
 }
@@ -305,6 +307,7 @@ async function runUnit<W>(
     trigger,
     runId: row.id,
     attempt: row.attempt,
+    codeVersion: store.codeVersion,
     resumeCursor: startCursor,
     repos: store.readRepos(token),
     commit: async (write, options) => {

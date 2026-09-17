@@ -15,6 +15,9 @@ import { addDays } from "@/lib/iq/metrics";
 
 export const TRAILING_DAYS = 35;
 
+/** The nightly facts job, whose SUCCEEDED runs gate the jobs that read facts (IQ-2 R2.8, RELIABILITY U1). */
+export const FACTS_NIGHTLY_JOB = "iq-facts-nightly";
+
 const firstOfMonth = (date: string) => `${date.slice(0, 7)}-01`;
 const previousMonthFirst = (date: string) => firstOfMonth(addDays(firstOfMonth(date), -1));
 

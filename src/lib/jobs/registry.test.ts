@@ -4,14 +4,16 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { intradayBackfillDates, intradayRetentionFirstDate } from "@/lib/iq/metrics/intraday";
+
 import { DEFAULT_TIMING, HEAVY_JOB_NAMES, JOB_NAMES, JOB_REGISTRY, heavyJobNames, isJobName, type JobDefinition } from "./registry";
 
 const JOBS_DIR = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = join(JOBS_DIR, "..", "..", "..");
 
 describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
-  it("ships heartbeat (IQ-0) and the three IQ-1 facts jobs", () => {
-    expect(JOB_NAMES).toEqual(["heartbeat", "iq-facts-nightly", "iq-facts-intraday", "iq-facts-backfill"]);
+  it("ships heartbeat (IQ-0), the three IQ-1 facts jobs and the IQ-2 detect and intraday backfill jobs", () => {
+    expect(JOB_NAMES).toEqual(["heartbeat", "iq-facts-nightly", "iq-facts-intraday", "iq-facts-backfill", "iq-detect-daily", "iq-intraday-backfill"]);
     expect(isJobName("heartbeat")).toBe(true);
     expect(isJobName("constructor")).toBe(false);
   });
@@ -26,21 +28,46 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
     expect(heavyJobNames({ a: fake("a", "heavy"), b: fake("b", "light"), c: fake("c", "heavy") })).toEqual(["a", "c"]);
   });
 
-  it("keeps every heavy job, with all its systemd retries, clear of the 22:00-22:45 UTC backup window", () => {
+  it("keeps every heavy job and every daily job, with all their systemd retries, clear of 21:45-23:00 UTC (backup)", () => {
     // deploy (S10): curl -m 290 per attempt, Restart=on-failure, RestartSec=360, 3 restarts.
+    // One attempt lasts at most its deadline plus the commit grace, and never more than curl allows.
     const CURL_MAX_SECONDS = 290;
+    const COMMIT_GRACE = 30;
     const RESTART_SEC = 360;
     const RESTARTS = 3;
-    const BACKUP_START_MINUTE = 22 * 60;
-    const BACKUP_END_MINUTE = 22 * 60 + 45;
-    for (const name of HEAVY_JOB_NAMES) {
-      const calendar = JOB_REGISTRY[name as keyof typeof JOB_REGISTRY].onCalendarUtc;
-      const match = /^\*-\*-\* (\d{2}):(\d{2}):00 UTC$/.exec(calendar ?? "");
+    const WINDOW_START_MINUTE = 21 * 60 + 45;
+    const WINDOW_END_MINUTE = 23 * 60;
+    const daily = JOB_NAMES.filter((name) => /^\*-\*-\* \d{2}:\d{2}:00 UTC$/.test(JOB_REGISTRY[name].onCalendarUtc ?? ""));
+    expect(daily).toEqual(expect.arrayContaining(["iq-facts-nightly", "iq-detect-daily"]));
+    for (const name of new Set([...HEAVY_JOB_NAMES, ...daily])) {
+      const def = JOB_REGISTRY[name as keyof typeof JOB_REGISTRY];
+      const match = /^\*-\*-\* (\d{2}):(\d{2}):00 UTC$/.exec(def.onCalendarUtc ?? "");
       expect(match, `${name} needs a fixed daily UTC start`).not.toBeNull();
       const startMinute = Number(match![1]) * 60 + Number(match![2]);
-      const worstCaseEndMinute = startMinute + ((RESTARTS + 1) * CURL_MAX_SECONDS + RESTARTS * RESTART_SEC) / 60;
-      const overlaps = startMinute < BACKUP_END_MINUTE && worstCaseEndMinute > BACKUP_START_MINUTE;
-      expect(overlaps, `${name} ${calendar} could run until minute ${worstCaseEndMinute}`).toBe(false);
+      const attemptSeconds = Math.min(CURL_MAX_SECONDS, def.deadlineSeconds + COMMIT_GRACE);
+      const worstCaseEndMinute = startMinute + ((RESTARTS + 1) * attemptSeconds + RESTARTS * RESTART_SEC) / 60;
+      const overlaps = startMinute < WINDOW_END_MINUTE && worstCaseEndMinute > WINDOW_START_MINUTE;
+      expect(overlaps, `${name} ${def.onCalendarUtc} could run until minute ${worstCaseEndMinute}`).toBe(false);
+    }
+  });
+
+  it("registers the IQ-2 jobs as designed (R2.8): detect after facts with a facts gate and catch-up 1, intraday backfill by hand", () => {
+    expect(JOB_REGISTRY["iq-detect-daily"]).toMatchObject({
+      periodKind: "day",
+      target: "previous",
+      onCalendarUtc: "*-*-* 21:15:00 UTC",
+      deadlineSeconds: 60,
+      catchUpPeriods: 1,
+      concurrency: "light",
+    });
+    expect(JOB_REGISTRY["iq-intraday-backfill"]).toMatchObject({ periodKind: "day", target: "previous", onCalendarUtc: null, catchUpPeriods: 0, concurrency: "light" });
+  });
+
+  it("starts the intraday backfill inside the 63-day retention it is purged by (RELIABILITY C7)", () => {
+    for (const today of ["2026-09-17", "2026-03-01", "2027-01-01"]) {
+      const dates = intradayBackfillDates(today);
+      expect(dates[0]! >= intradayRetentionFirstDate(today)).toBe(true);
+      expect(dates.at(-1)! < today).toBe(true);
     }
   });
 

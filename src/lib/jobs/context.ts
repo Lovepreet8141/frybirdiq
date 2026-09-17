@@ -17,6 +17,8 @@ export type JobContext<W = JobWriteRepos> = {
   readonly trigger: JobTrigger;
   readonly runId: string;
   readonly attempt: number;
+  /** The deployed commit this run records (iq_job_runs.code_version, insight producedBy). */
+  readonly codeVersion: string;
   /** Where an earlier attempt stopped at its deadline, or null to start from the beginning. */
   readonly resumeCursor: string | null;
   /** Reads, bound to this run's org. */
