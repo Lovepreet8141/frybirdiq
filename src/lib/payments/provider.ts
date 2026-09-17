@@ -37,12 +37,35 @@ export interface PaymentResult {
   readonly payload?: Record<string, unknown>;
 }
 
+/**
+ * What a provider says happened to a refund — a closed set, because each one
+ * leads the service layer somewhere different (refund design Revision 2, S5):
+ *
+ * - `succeeded`: the money has gone back. The refund row becomes SUCCEEDED.
+ * - `pending`: the provider accepted the refund but has not finished it
+ *   (Razorpay's refund status "pending"). The row stays RESERVED; a retry
+ *   looks it up again.
+ * - `refused`: the provider definitively did not move money (a 4xx with an
+ *   error body, a refund it reports as failed). The row becomes FAILED and
+ *   its amount is released.
+ * - `ambiguous`: nobody knows — a timeout, a network error, a 5xx, a 409, an
+ *   amount that does not match. The row stays RESERVED, holding its amount,
+ *   and nothing is booked until a retry finds out.
+ */
+export type RefundOutcome = "succeeded" | "pending" | "refused" | "ambiguous";
+
 export interface RefundResult {
-  readonly ok: boolean;
+  readonly outcome: RefundOutcome;
   readonly providerRefundId: string | null;
+  /** What the provider says it refunded; ZERO when it did not say. */
   readonly refundedAmount: Paise;
+  /** The HTTP status behind the outcome, for the audit row; null for cash, a network error or a timeout. */
+  readonly httpStatus: number | null;
   readonly error?: string;
 }
+
+/** The provider's record of an earlier refund, found without asking it to refund again. */
+export type RefundLookup = { readonly found: true; readonly result: RefundResult } | { readonly found: false } | { readonly found: "unknown"; readonly error: string };
 
 export interface WebhookVerification {
   readonly ok: boolean;
@@ -84,7 +107,20 @@ export interface PaymentProvider {
     signature?: string;
   }): Promise<PaymentResult>;
 
-  refund(input: { providerPaymentId: string | null; amount: Paise; reason: string }): Promise<RefundResult>;
+  /**
+   * Asks for money back. `refundId` is our refund row's id: a gateway sends it
+   * as its idempotency key and records it on the refund, so repeating this
+   * call for the same row can never refund twice. Every input must be read
+   * from that row, so a repeat sends a byte-identical request.
+   */
+  refund(input: { providerPaymentId: string | null; amount: Paise; reason: string; refundId: string }): Promise<RefundResult>;
+
+  /**
+   * Finds a refund an earlier attempt already asked for, by our refund row
+   * id — before a resumed refund asks again. Absent for a provider with
+   * nothing external to look up (cash).
+   */
+  findRefund?(input: { providerPaymentId: string | null; refundId: string }): Promise<RefundLookup>;
 
   /** Verifies an inbound webhook. §45. */
   verifyWebhook(input: { body: string; signature: string | null }): Promise<WebhookVerification>;

@@ -55,8 +55,10 @@ export type JobRunResult =
        * without progress does). UPSTREAM_NOT_READY never does: the input
        * this run depends on is not final yet, and the next scheduled catch-up
        * must still be able to take the period over (RELIABILITY iq2-s7).
+       * REFUNDS_STILL_OPEN is an alert (stuck refund follow-ups, state-based)
+       * and counts, so systemd's OnFailure fires.
        */
-      readonly reason?: "DEADLINE" | "DAY_LOCK_BUSY" | "UPSTREAM_NOT_READY";
+      readonly reason?: "DEADLINE" | "DAY_LOCK_BUSY" | "UPSTREAM_NOT_READY" | "REFUNDS_STILL_OPEN";
       readonly rowsWritten: number;
       readonly summary: Readonly<Record<string, number>>;
     };

@@ -63,7 +63,7 @@ export type FinishOutcome =
   | {
       /** Stored as status FAILED with this error_code; `cursor` is the one already committed (unchanged). */
       readonly status: "DEADLINE";
-      readonly errorCode: "DEADLINE" | "DAY_LOCK_BUSY" | "UPSTREAM_NOT_READY";
+      readonly errorCode: "DEADLINE" | "DAY_LOCK_BUSY" | "UPSTREAM_NOT_READY" | "REFUNDS_STILL_OPEN";
       readonly rowsWritten: number;
       readonly summary: Summary;
       readonly cursor: string | null;
