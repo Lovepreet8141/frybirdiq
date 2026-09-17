@@ -34,7 +34,21 @@ export type ClaimRequest = {
   readonly trigger: JobTrigger;
   readonly leaseOwner: string;
   readonly leaseSeconds: number;
+  readonly deadlineSeconds: number;
 };
+
+/** How long after the deadline a commit already on its way is still accepted (review J2). */
+export const COMMIT_GRACE_SECONDS = 30;
+
+/** Thrown by ctx.commit once the deadline and its grace have passed: the job ignored shouldStop. */
+export class DeadlineExceededError extends Error {
+  readonly code = "DEADLINE_EXCEEDED";
+
+  constructor() {
+    super("job committed after its deadline");
+    this.name = "DeadlineExceededError";
+  }
+}
 
 type Summary = Readonly<Record<string, number>>;
 
@@ -46,11 +60,11 @@ type Summary = Readonly<Record<string, number>>;
 export type FinishOutcome =
   | { readonly status: "SUCCEEDED"; readonly rowsWritten: number; readonly summary: Summary }
   | {
-      /** Stored as status FAILED, error_code DEADLINE, with this cursor. */
+      /** Stored as status FAILED, error_code DEADLINE; `cursor` is the one already committed (unchanged). */
       readonly status: "DEADLINE";
       readonly rowsWritten: number;
       readonly summary: Summary;
-      readonly cursor: string;
+      readonly cursor: string | null;
       readonly failures: number;
     }
   | {
@@ -77,6 +91,7 @@ export interface JobRunStore<Tx = unknown> extends Fence<Tx> {
       readonly leaseOwner: string;
       readonly trigger: JobTrigger;
       readonly leaseSeconds: number;
+      readonly deadlineSeconds: number;
     },
   ): Promise<JobRunRow | null>;
   /** CAS on `expected`; marks a dead RUNNING row at the limit FAILED LEASE_EXPIRED. */
@@ -227,7 +242,15 @@ async function runUnit<Tx>(
 
   const dbNow = await store.dbNow();
   const leaseOwner = deps.newLeaseOwner();
-  const read = await store.claim({ job: def.name, orgId, periodKey, trigger, leaseOwner, leaseSeconds: def.leaseSeconds });
+  const read = await store.claim({
+    job: def.name,
+    orgId,
+    periodKey,
+    trigger,
+    leaseOwner,
+    leaseSeconds: def.leaseSeconds,
+    deadlineSeconds: def.deadlineSeconds,
+  });
   const decision = decideClaim(read, def.maxAttempts, dbNow);
 
   let row: JobRunRow;
@@ -246,6 +269,7 @@ async function runUnit<Tx>(
         leaseOwner,
         trigger,
         leaseSeconds: def.leaseSeconds,
+        deadlineSeconds: def.deadlineSeconds,
       });
       if (taken === null) return "BUSY";
       row = taken;
@@ -260,6 +284,8 @@ async function runUnit<Tx>(
 
   const token: LeaseToken = { runId: row.id, attempt: row.attempt, leaseOwner };
   const startCursor = row.cursor;
+  // The cursor of the last chunk that actually committed (review J1).
+  let committedCursor = startCursor;
   let leaseLost = false;
   const markLost = (error: unknown) => {
     if (isLeaseLost(error)) leaseLost = true;
@@ -276,8 +302,12 @@ async function runUnit<Tx>(
     resumeCursor: startCursor,
     commit: async (write, options) => {
       if (leaseLost) throw new LeaseLostError(token);
+      // A job that ignores shouldStop must not keep extending its lease (review J2).
+      if (deps.monotonicMs() >= deadlineMs + COMMIT_GRACE_SECONDS * 1000) throw new DeadlineExceededError();
       try {
-        return await store.commit(token, def.leaseSeconds, write, options?.cursor);
+        const value = await store.commit(token, def.leaseSeconds, write, options?.cursor);
+        if (options?.cursor !== undefined) committedCursor = options.cursor;
+        return value;
       } catch (error) {
         markLost(error);
         throw error;
@@ -322,13 +352,13 @@ async function runUnit<Tx>(
     };
     reported = "FAILED";
   } else if (result.status === "PARTIAL") {
-    // A deadline cut that moved the cursor is progress, not a failure (review M2).
-    const progressed = result.cursor !== startCursor;
+    // A deadline cut whose committed cursor moved is progress, not a failure (reviews M2, J1).
+    const progressed = committedCursor !== startCursor;
     outcome = {
       status: "DEADLINE",
       rowsWritten: result.rowsWritten,
       summary: result.summary,
-      cursor: result.cursor,
+      cursor: committedCursor,
       failures: progressed ? row.failures : row.failures + 1,
     };
     reported = "PARTIAL";

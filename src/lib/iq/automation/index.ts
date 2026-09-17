@@ -64,3 +64,12 @@ export {
 } from "./policy";
 export { COOLDOWN_MS, mayPropose, type CooldownReason, type ProposalCheck, type ProposalHistory } from "./cooldown";
 export type { ActionExecutor, ExecutionInput, ExecutionEffect } from "./executor";
+export {
+  classifyDecisionMiss,
+  isPersonDecided,
+  type Decision,
+  type DecisionMiss,
+  type DecisionOutcome,
+  type DecisionRequest,
+  type DecisionRowView,
+} from "./approval";
