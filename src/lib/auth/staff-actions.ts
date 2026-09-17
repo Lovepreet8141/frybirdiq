@@ -1,9 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
-import { acceptOrder, advanceOrder, completeDelivery, rejectOrder } from "@/lib/repositories/orders";
+import { type CompleteDeliveryCode, acceptOrder, advanceOrder, completeDelivery, rejectOrder } from "@/lib/repositories/orders";
 import { recordCashPayment } from "@/lib/repositories/payments";
 import { staffMayAdvanceTo } from "@/lib/orders/staff-advance";
 import { ORDER_STATUSES } from "@/domain/order-status";
@@ -92,6 +93,20 @@ const deliverySchema = z.object({
 });
 
 /**
+ * `completeDeliveryAction`'s result. Branch on `code`; `error` is for display.
+ *
+ * - `INVALID_INPUT`: the request did not parse.
+ * - `SIGNED_OUT` / `NOT_PERMITTED`: the auth refusals `explain` covers.
+ * - `SERVER_ERROR`: something unexpected threw on the server. The action
+ *   resolves with this instead of rejecting, so a client that sees the
+ *   promise reject knows the request never completed (offline, stale tab).
+ * - everything else: `completeDelivery`'s own refusals (`CompleteDeliveryCode`).
+ */
+export type CompleteDeliveryActionCode = CompleteDeliveryCode | "INVALID_INPUT" | "SIGNED_OUT" | "NOT_PERMITTED" | "SERVER_ERROR";
+
+export type CompleteDeliveryActionResult = { ok: true } | { ok: false; code: CompleteDeliveryActionCode; error: string };
+
+/**
  * Closes a delivery from a rider's phone.
  *
  * `delivery.complete` rather than `orders.update` — the narrowest permission
@@ -100,9 +115,9 @@ const deliverySchema = z.object({
  * this same permission, but only for a delivery that is out for delivery —
  * `completeDelivery` passes that authorization explicitly (card ord-4).
  */
-export async function completeDeliveryAction(input: unknown): Promise<StaffActionResult> {
+export async function completeDeliveryAction(input: unknown): Promise<CompleteDeliveryActionResult> {
   const parsed = deliverySchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: "That delivery could not be closed." };
+  if (!parsed.success) return { ok: false, code: "INVALID_INPUT", error: "That delivery could not be closed." };
 
   try {
     const staff = await requirePermission("delivery.complete");
@@ -115,9 +130,15 @@ export async function completeDeliveryAction(input: unknown): Promise<StaffActio
     });
     revalidatePath("/app/deliveries");
     revalidatePath("/app/orders");
-    return result.ok ? { ok: true } : { ok: false, error: result.error };
+    return result.ok ? { ok: true } : { ok: false, code: result.code, error: result.error };
   } catch (error) {
-    return explain(error);
+    // Let Next's own control-flow throws (redirect, notFound) through.
+    unstable_rethrow(error);
+    if (error instanceof NotSignedIn) return { ok: false, code: "SIGNED_OUT", error: "You've been signed out. Sign in again." };
+    if (error instanceof NotPermitted) return { ok: false, code: "NOT_PERMITTED", error: "You don't have permission to do that." };
+    // The detail stays in the server log; the rider gets a plain message.
+    console.error("completeDeliveryAction failed", error);
+    return { ok: false, code: "SERVER_ERROR", error: "Something went wrong closing that delivery. Try again." };
   }
 }
 

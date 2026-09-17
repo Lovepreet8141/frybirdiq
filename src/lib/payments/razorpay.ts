@@ -233,8 +233,15 @@ export const razorpayProvider: PaymentProvider = {
     if (!fetched.ok) return { ok: false, providerPaymentId, capturedAmount: ZERO, error: fetched.error };
     const payment = fetched.payment;
 
+    /*
+     * From here on, every refusal is a statement Razorpay's API made about a
+     * real payment — marked `gatewayVerified` so the service layer can tell
+     * these apart from refusals manufactured before the fetch (a forged
+     * signature, a missing reference), which anyone holding an order UUID
+     * can produce and which must never be written anywhere (pay-58b, R2).
+     */
     if (providerOrderId && payment.order_id !== providerOrderId) {
-      return { ok: false, providerPaymentId, capturedAmount: ZERO, error: "That payment belongs to a different order." };
+      return { ok: false, providerPaymentId, capturedAmount: ZERO, error: "That payment belongs to a different order.", payload: { gatewayVerified: true } };
     }
     if (payment.status !== "captured") {
       return {
@@ -242,10 +249,11 @@ export const razorpayProvider: PaymentProvider = {
         providerPaymentId,
         capturedAmount: ZERO,
         error: payment.status === "failed" ? (payment.error_description ?? "The payment failed.") : `The payment is ${payment.status}, not captured.`,
+        payload: { gatewayVerified: true },
       };
     }
     if (payment.currency !== "INR" || BigInt(payment.amount) !== amount) {
-      return { ok: false, providerPaymentId, capturedAmount: ZERO, error: "The amount Razorpay captured does not match the order." };
+      return { ok: false, providerPaymentId, capturedAmount: ZERO, error: "The amount Razorpay captured does not match the order.", payload: { gatewayVerified: true } };
     }
 
     return {

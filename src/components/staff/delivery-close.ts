@@ -1,11 +1,4 @@
-/**
- * `completeDelivery` (src/lib/repositories/orders.ts) returns this exact
- * string when the order was already COMPLETED by the time it re-read the
- * row — the lost-race case where another device closed it first. It is the
- * only literal the server guarantees for that case, so this is the one
- * place that couples to it; treat it as "closed elsewhere", not a failure.
- */
-const ALREADY_CLOSED_ERROR = "That delivery is already closed.";
+import type { CompleteDeliveryActionResult } from "@/lib/auth/staff-actions";
 
 export type CloseOutcome =
   | { kind: "ok" }
@@ -14,29 +7,25 @@ export type CloseOutcome =
   | { kind: "error"; message: string };
 
 /**
- * The shape `classifyCloseResult` needs from `completeDeliveryAction`'s
- * result — spelled out structurally, not imported from `staff-actions.ts`,
- * so this file (and its test) never pulls in that "use server" module
- * graph. Importing it would fail outside Next's own runtime: server actions
- * transitively import `server-only`-guarded code that only resolves under
- * Next's "react-server" condition, which plain `vitest run` does not have.
+ * `CompleteDeliveryActionResult` is a type-only import — erased at compile
+ * time, so it adds no runtime import of `staff-actions.ts` (a "use server"
+ * module whose graph is `server-only`-guarded and only resolves under
+ * Next's own runtime). A value import of that module would break this file
+ * and its test under plain `vitest run`.
+ *
+ * `completeDeliveryAction` now always resolves, even on a server exception
+ * (code `SERVER_ERROR`, logged server-side) — a rejected promise here means
+ * the request never reached or returned from the server at all: offline, or
+ * a stale tab. `ALREADY_CLOSED` is `completeDelivery`'s own code for the
+ * lost race, another device closing the order first; every other code is a
+ * real refusal, shown as-is.
  */
-export interface CloseActionResult {
-  readonly ok: boolean;
-  readonly error?: string;
-}
-
-/**
- * Turns what `completeDeliveryAction` gave back — or the fact that calling
- * it threw at all — into one of the states the delivery card can show. A
- * thrown error only ever means the request never reached (or returned
- * from) the server, since the action itself catches every server-side
- * failure and always resolves normally.
- */
-export function classifyCloseResult(outcome: { thrown: true } | { thrown: false; result: CloseActionResult }): CloseOutcome {
+export function classifyCloseResult(
+  outcome: { thrown: true } | { thrown: false; result: CompleteDeliveryActionResult },
+): CloseOutcome {
   if (outcome.thrown) return { kind: "offline" };
   const { result } = outcome;
   if (result.ok) return { kind: "ok" };
-  if (result.error === ALREADY_CLOSED_ERROR) return { kind: "closed-elsewhere" };
-  return { kind: "error", message: result.error ?? "That didn't work." };
+  if (result.code === "ALREADY_CLOSED") return { kind: "closed-elsewhere" };
+  return { kind: "error", message: result.error };
 }

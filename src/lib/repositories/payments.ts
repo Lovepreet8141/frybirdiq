@@ -24,6 +24,9 @@ import { awardStampForOrderInTx, qualifyingStampSpend, redeemStampRewardInTx } f
 import { financialYear, invoiceNumber, parseInvoiceNumber } from "@/lib/invoice";
 import { CASH_PROVIDER, type PaymentMethod, type PaymentResult, RAZORPAY_PROVIDER, getProvider } from "@/lib/payments";
 import { withIdempotency } from "./idempotency";
+import { type FactsRefreshSteps, refreshFactsForDays } from "./expenses";
+import { businessDate } from "@/lib/dates";
+import { getOrg } from "./org";
 import { canTransition, isTerminal } from "@/domain/order-status";
 import { advanceOrder } from "./orders";
 
@@ -175,62 +178,158 @@ export async function recordOnlinePayment(input: {
   signature?: string;
 }): Promise<RecordPaymentResult> {
   const database = db();
+
+  // This path has no staff session and no customer identity, so every read
+  // it makes is bound to the app's own organization (pay-58b, SEC c) — an
+  // order UUID from any other org answers exactly like an unknown one.
+  const org = await getOrg();
+  if (!org) return { ok: false, error: "That order does not exist." };
+
   const [pending] = await database
     .select()
     .from(payments)
-    .where(and(eq(payments.orderId, input.orderId), eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.status, "PENDING")))
+    .where(and(eq(payments.orderId, input.orderId), eq(payments.orgId, org.id), eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.status, "PENDING")))
     .orderBy(desc(payments.createdAt))
     .limit(1);
 
-  const providerOrderId = input.providerOrderId ?? pending?.providerOrderId ?? undefined;
+  /*
+   * The Razorpay order the caller names must be the one THIS order's pending
+   * payment was opened for (pay-8). Without this, a caller holding a valid
+   * signature for their own Razorpay order could aim it at any other order's
+   * UUID: the signature verifies (it is genuine, just for a different
+   * purchase), Razorpay confirms the money (again, for the other purchase),
+   * and a payment for order A settles order B. The signature proves the
+   * caller paid a Razorpay order; only this row says which of OUR orders that
+   * Razorpay order belongs to.
+   */
+  if (input.providerOrderId !== undefined && pending?.providerOrderId && input.providerOrderId !== pending.providerOrderId) {
+    return { ok: false, error: "That payment does not belong to this order." };
+  }
+
+  /*
+   * Verification always uses the pending row's own reference, never the
+   * caller's: with no pending row to anchor to there is nothing to verify a
+   * signature against, and the provider then refuses — the replay of an
+   * already-settled payment never gets this far (settle's captured fast path
+   * answers first).
+   */
+  const providerOrderId = pending?.providerOrderId ?? undefined;
+
+  // Only a failure Razorpay itself confirmed — the payment fetched from its
+  // API and found failed, wrong, or short — is worth recording. A refusal
+  // manufactured before that point (a fake signature, a missing reference)
+  // is attacker-reachable with nothing but an order UUID, and writing it
+  // would let anyone flag a stranger's order as failed (pay-58b, RED R2).
+  let gatewayFailure: string | null = null;
 
   const result = await settle({
     orderId: input.orderId,
+    // The same org binding as the reads above: this path's only authority is
+    // the gateway's cryptography, so the order lookup stays inside our org.
+    orgId: org.id,
     provider: RAZORPAY_PROVIDER,
     actorUserId: null,
     idempotencyKey: () => `razorpay-payment:${input.providerPaymentId}`,
     amountDue: (order) => (pending ? paise(pending.amount) : paise(order.grandTotal)),
-    capture: (order, amount) =>
-      getProvider(RAZORPAY_PROVIDER).capture({
+    capture: async (order, amount) => {
+      const captured = await getProvider(RAZORPAY_PROVIDER).capture({
         orderId: order.id,
         amount,
         actorUserId: null,
         providerPaymentId: input.providerPaymentId,
         providerOrderId,
         signature: input.signature,
-      }),
+      });
+      if (!captured.ok && captured.payload?.gatewayVerified === true) gatewayFailure = captured.error ?? "The payment failed.";
+      return captured;
+    },
     providerPaymentId: input.providerPaymentId,
     providerOrderId: providerOrderId ?? null,
     methodFor: (captured) => (typeof captured.payload?.method === "string" ? (captured.payload.method as PaymentMethod) : "OTHER"),
     reasonFor: (amount, method) => `Paid online (${METHOD_WORD[method]}) — ${formatINR(amount)}`,
   });
 
-  // A refused capture is recorded on the pending row so the order page can say
-  // "payment failed — retry" rather than sitting on a spinner. The order stays
-  // PENDING_PAYMENT; nothing here can move it to PAID.
-  if (!result.ok && pending) {
+  // A gateway-confirmed failure is recorded on the pending row so the order
+  // page can say "payment failed — retry" rather than sitting on a spinner.
+  // The order stays PENDING_PAYMENT; nothing here can move it to PAID.
+  if (!result.ok && pending && gatewayFailure !== null) {
     await database
       .update(payments)
-      .set({ failureReason: result.error, updatedAt: new Date() })
+      .set({ failureReason: gatewayFailure, updatedAt: new Date() })
       .where(and(eq(payments.id, pending.id), eq(payments.status, "PENDING")));
   }
   return result;
 }
 
-/** Notes a failure Razorpay reported (Checkout's payment.failed, or the webhook) against the pending payment, without touching the order. */
-export async function markOnlinePaymentFailed(input: { orderId: string; reason: string }): Promise<void> {
+/** Who is asking to note a payment failure — see `markOnlinePaymentFailed`. */
+export type PaymentFailureReporter =
+  /** The Razorpay webhook, after its body signature verified. Its reason is the gateway's own words from that verified body. */
+  | { readonly kind: "webhook"; readonly reason: string }
+  /**
+   * The customer's browser: whoever the session or this device's checkout
+   * cookie says they are. Nulls mean "nothing known" and never match. No
+   * reason field on purpose (pay-58b, RED R1): the contact cookie is
+   * unsigned and the order page shows the customer's phone, so "matches by
+   * phone" is not proof enough to let a caller author text the real
+   * customer will read on our page. A customer report stores a fixed,
+   * server-chosen line; the gateway's actual words arrive via the webhook.
+   */
+  | { readonly kind: "customer"; readonly customerId: string | null; readonly phone: string | null };
+
+const CUSTOMER_REPORTED_FAILURE = "Payment failed";
+
+/**
+ * Notes a failure Razorpay reported (Checkout's payment.failed, or the
+ * webhook) against the pending payment, without touching the order.
+ *
+ * The write is bound to the order's own customer (pay-5). This is reachable
+ * with no staff session and no signature, so before this check anyone who
+ * learned an order UUID could stamp arbitrary text onto its payment row —
+ * text the order page then shows to whoever is watching that order. A
+ * customer reporter must match the order by signed-in customer id or by the
+ * phone the order was placed under; the webhook's proof is its verified body
+ * signature, checked by the route before this is called. Only a PENDING row
+ * is ever touched — enforced in the UPDATE itself, not just the read, so a
+ * capture landing in between cannot be scribbled over.
+ */
+export async function markOnlinePaymentFailed(input: { orderId: string; via: PaymentFailureReporter }): Promise<{ ok: boolean }> {
   const database = db();
+
+  // Same rule as recordOnlinePayment: no session here, so the order lookup
+  // is bound to the app's own organization (pay-58b, SEC c).
+  const org = await getOrg();
+  if (!org) return { ok: false };
+
+  const [order] = await database
+    .select({ id: orders.id, orgId: orders.orgId, customerId: orders.customerId, customerPhone: orders.customerPhone })
+    .from(orders)
+    .where(and(eq(orders.id, input.orderId), eq(orders.orgId, org.id)))
+    .limit(1);
+  if (!order) return { ok: false };
+
+  if (input.via.kind === "customer") {
+    const ownsById = input.via.customerId !== null && order.customerId !== null && input.via.customerId === order.customerId;
+    const ownsByPhone = input.via.phone !== null && order.customerPhone !== null && input.via.phone === order.customerPhone;
+    if (!ownsById && !ownsByPhone) return { ok: false };
+  }
+
+  // Never the caller's words. A customer report records the fact of failure;
+  // the wording is the server's (see `PaymentFailureReporter`).
+  const reason = input.via.kind === "webhook" ? input.via.reason : CUSTOMER_REPORTED_FAILURE;
+
   const [pending] = await database
     .select({ id: payments.id })
     .from(payments)
-    .where(and(eq(payments.orderId, input.orderId), eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.status, "PENDING")))
+    .where(and(eq(payments.orderId, order.id), eq(payments.orgId, order.orgId), eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.status, "PENDING")))
     .orderBy(desc(payments.createdAt))
     .limit(1);
-  if (!pending) return;
-  await database
+  if (!pending) return { ok: false };
+  const written = await database
     .update(payments)
-    .set({ failureReason: input.reason.slice(0, 250), updatedAt: new Date() })
-    .where(eq(payments.id, pending.id));
+    .set({ failureReason: reason.slice(0, 250), updatedAt: new Date() })
+    .where(and(eq(payments.id, pending.id), eq(payments.status, "PENDING")))
+    .returning({ id: payments.id });
+  return { ok: written.length > 0 };
 }
 
 /* ------------------------------------------------------------------ */
@@ -251,11 +350,12 @@ interface Settlement {
   readonly providerPaymentId?: string;
   readonly providerOrderId?: string | null;
   /**
-   * The caller's own org, when there is a staff session to check it against
-   * — cash at the counter or the door. Omitted for the Razorpay/webhook path,
-   * which has no staff session at all; that path's boundary is the
-   * provider's cryptographic signature over a specific payment id, not org
-   * membership, so there is nothing meaningful to compare it against.
+   * The org the order must belong to. For cash it is the acting staff
+   * member's own org. The Razorpay/webhook path has no staff session — its
+   * boundary is the provider's cryptographic signature over a specific
+   * payment id — but since pay-58b it passes the app's own org (`getOrg()`)
+   * anyway, so an anonymous caller probing with a foreign or invented order
+   * UUID gets the same "does not exist" either way.
    *
    * When present, this is enforced on the very first read: every other
    * order-mutating function in this codebase (`refundPayment`,
@@ -757,7 +857,7 @@ type RefundTxOutcome =
   // refundedAmount travels as a string, not a Paise/bigint: withIdempotency
   // stores this whole object as a jsonb responseSnapshot for a replay to
   // return later, and JSON has no bigint representation.
-  | { ok: true; refundId: string; orderId: string; fullyRefunded: boolean; orderStatusBefore: OrderRow["status"]; orderFulfilment: OrderRow["fulfilment"]; refundedAmount: string; reason: string }
+  | { ok: true; refundId: string; orderId: string; fullyRefunded: boolean; orderStatusBefore: OrderRow["status"]; orderFulfilment: OrderRow["fulfilment"]; refundedAmount: string; reason: string; orderCreatedAt: string; refundCreatedAt: string }
   | { ok: false; error: string };
 
 /**
@@ -789,7 +889,7 @@ export async function refundPayment(input: {
   actorRoles: readonly Role[];
   orgId: string;
   idempotencyKey: string;
-}): Promise<RefundPaymentResult> {
+}, opts: { readonly factsRefresh?: FactsRefreshSteps } = {}): Promise<RefundPaymentResult> {
   try {
     authorize(input.actorRoles, "orders.refund");
   } catch {
@@ -852,7 +952,7 @@ export async function refundPayment(input: {
             status: "SUCCEEDED",
             finalizedAt: sql`now()`,
           })
-          .returning({ id: refunds.id });
+          .returning({ id: refunds.id, createdAt: refunds.createdAt });
         if (!row) return { ok: false, error: "The refund was made but could not be recorded. Tell the owner." };
 
         const fullyRefunded = add(alreadyRefunded, refunded.refundedAmount) >= paise(payment.amount);
@@ -879,7 +979,7 @@ export async function refundPayment(input: {
           },
         });
 
-        return { ok: true, refundId: row.id, orderId: order.id, fullyRefunded, orderStatusBefore: order.status, orderFulfilment: order.fulfilment, refundedAmount: refunded.refundedAmount.toString(), reason };
+        return { ok: true, refundId: row.id, orderId: order.id, fullyRefunded, orderStatusBefore: order.status, orderFulfilment: order.fulfilment, refundedAmount: refunded.refundedAmount.toString(), reason, orderCreatedAt: order.createdAt.toISOString(), refundCreatedAt: row.createdAt.toISOString() };
       }),
   );
 
@@ -914,6 +1014,25 @@ export async function refundPayment(input: {
       actorUserId: input.actorUserId,
       reason: `${outcome.fullyRefunded ? "Refunded" : "Part refunded"} ${formatINR(refundedAmount)} — ${outcome.reason}`,
     });
+  }
+
+  /*
+   * Refresh the IQ daily facts the refund changed, after everything above
+   * has committed — including the REFUNDED transition, which takes the order
+   * out of its day's sale set. A closed period's P&L reads facts, so without
+   * this a refund of an older order stays invisible there until the nightly
+   * recompute. Two IST days move: the order's own (sales, statuses, part
+   * refunds are keyed on orders.created_at) and the refund's (refunds_amount
+   * is keyed on refunds.created_at); the helper dedupes when they coincide.
+   *
+   * Same helper, budget and quiet skips as the expense refresh: no facts
+   * tables, a busy day or a timed-out statement skip, anything else logs
+   * name and code only. It never fails the refund — the money has moved.
+   */
+  try {
+    await refreshFactsForDays(input.orgId, [businessDate(new Date(outcome.orderCreatedAt)), businessDate(new Date(outcome.refundCreatedAt))], opts.factsRefresh);
+  } catch (error) {
+    console.warn(`payments: facts refresh after refund failed (${error instanceof Error ? error.name : "unknown"}); the nightly recompute will heal it`);
   }
 
   return { ok: true, refundId: outcome.refundId, orderId: outcome.orderId, fullyRefunded: outcome.fullyRefunded };

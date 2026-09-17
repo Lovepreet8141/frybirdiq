@@ -11,12 +11,17 @@
  *     checks its own amount against what is left.
  */
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { payments, refunds } from "@/db/schema";
 import { refundPayment } from "./payments";
 import { createTestOrg, createTestProduct, createTestTaxRate, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
+import { istInstant, seedSale } from "./__test-support__/iq-fixtures";
+import { getProfitAndLoss, getProfitAndLossReport } from "./expenses";
+import { readDailyFacts, recomputeDay } from "./iq-facts";
+import { computeTrustDay } from "./iq-trust";
+import { businessDate, endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
 import { fromRupees } from "@/lib/money";
 import { CASH_PROVIDER } from "@/lib/payments";
 
@@ -187,5 +192,108 @@ describe("refundPayment", () => {
     });
 
     expect(result.ok).toBe(false);
+  });
+});
+
+/**
+ * iq1-rfh: a refund refreshes the IQ daily facts it changed, once it has
+ * committed. A closed period's P&L reads facts, so without this a refund of
+ * an older order stayed invisible there until the nightly recompute.
+ */
+describe("refundPayment — facts refresh after commit (iq1-rfh)", () => {
+  let org: TestOrg;
+  const DAY = "2026-08-14";
+
+  beforeAll(async () => {
+    org = await createTestOrg();
+  });
+
+  afterAll(async () => {
+    await deleteTestOrg(org.orgId);
+  });
+
+  async function computedSale(at: string) {
+    const product = await createTestProduct(org.orgId, { name: `Refresh burger ${randomUUID().slice(0, 6)}` });
+    const sale = await seedSale(org, { at: istInstant(at, "13:00"), lines: [{ productId: product.id, unitPricePaise: 24_900n }] });
+    await recomputeDay(org.orgId, at);
+    await computeTrustDay(org.orgId, at);
+    return sale;
+  }
+
+  it("shows a refund of last month's order at once on the facts path — on the order's day and the refund's day", async () => {
+    const sale = await computedSale(DAY);
+    const payment = sale.payments[0]!;
+    const period = { from: startOfBusinessDay(DAY), to: endOfBusinessDay(DAY), label: DAY };
+
+    const before = await readDailyFacts(org.orgId, DAY, DAY);
+    expect(before.totals.orders_paid ?? 0n).toBe(1n);
+    const reportBefore = await getProfitAndLossReport(org.orgId, period);
+    expect(reportBefore.source).toBe("facts");
+    expect(reportBefore.pnl.revenue).toBeGreaterThan(0n);
+
+    const result = await refundPayment({
+      paymentId: payment.id,
+      amount: payment.amount,
+      reason: "cold fries, refunded a month later",
+      actorUserId: randomUUID(),
+      actorRoles: ["OWNER"],
+      orgId: org.orgId,
+      idempotencyKey: randomUUID(),
+    });
+    expect(result.ok).toBe(true);
+
+    // The order's own day: REFUNDED takes it out of the sale set.
+    const after = await readDailyFacts(org.orgId, DAY, DAY);
+    expect(after.missingDates).toEqual([]);
+    expect(after.totals.orders_paid ?? 0n).toBe(0n);
+    expect(after.totals.orders_refunded ?? 0n).toBe(1n);
+
+    // The closed period's P&L, still read from facts, already agrees with live.
+    const reportAfter = await getProfitAndLossReport(org.orgId, period);
+    expect(reportAfter.source).toBe("facts");
+    expect(reportAfter.pnl).toEqual(await getProfitAndLoss(org.orgId, period));
+    expect(reportAfter.pnl.revenue).toBe(0n);
+
+    // The refund's own day (today, IST) carries the money that went back.
+    const today = businessDate(new Date());
+    const refundDay = await readDailyFacts(org.orgId, today, today);
+    expect(refundDay.totals.refunds_amount ?? 0n).toBe(BigInt(payment.amount));
+  });
+
+  it("computes nothing and logs nothing on a database without the facts tables, and the refund still lands", async () => {
+    const sale = await computedSale("2026-08-15");
+    const payment = sale.payments[0]!;
+    const compute = vi.fn(async () => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await refundPayment(
+        { paymentId: payment.id, amount: payment.amount, reason: "no facts tables here", actorUserId: randomUUID(), actorRoles: ["OWNER"], orgId: org.orgId, idempotencyKey: randomUUID() },
+        { factsRefresh: { tablesExist: async () => false, recompute: compute, scoreTrust: compute } },
+      );
+      expect(result.ok).toBe(true);
+      expect(compute).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(await db().select().from(refunds).where(eq(refunds.paymentId, payment.id))).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("never fails the refund when the refresh itself throws", async () => {
+    const sale = await computedSale("2026-08-16");
+    const payment = sale.payments[0]!;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await refundPayment(
+        { paymentId: payment.id, amount: payment.amount, reason: "refresh blows up", actorUserId: randomUUID(), actorRoles: ["OWNER"], orgId: org.orgId, idempotencyKey: randomUUID() },
+        { factsRefresh: { tablesExist: () => Promise.reject(new Error("boom")), recompute: async () => undefined, scoreTrust: async () => undefined } },
+      );
+      expect(result.ok).toBe(true);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const [row] = await db().select({ status: payments.status }).from(payments).where(eq(payments.id, payment.id));
+      expect(row?.status).toBe("REFUNDED");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
