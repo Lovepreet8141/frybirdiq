@@ -5,6 +5,7 @@ import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
 import { acceptOrder, advanceOrder, completeDelivery, rejectOrder } from "@/lib/repositories/orders";
 import { recordCashPayment } from "@/lib/repositories/payments";
+import { staffMayAdvanceTo } from "@/lib/orders/staff-advance";
 import { ORDER_STATUSES } from "@/domain/order-status";
 import { REJECTION_REASONS } from "@/domain/rejection";
 
@@ -59,6 +60,14 @@ const advanceSchema = z.object({
 export async function advanceOrderAction(input: unknown): Promise<StaffActionResult> {
   const parsed = advanceSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "That change could not be applied." };
+
+  // Money-derived statuses are not kitchen work. PAID is set only by a
+  // recorded payment and REFUNDED only by `refundPayment`; without this, a
+  // cashier or kitchen user holding `kitchen.update` could mark a paid or
+  // completed order refunded with no money moving, reversing its loyalty.
+  if (!staffMayAdvanceTo(parsed.data.to)) {
+    return { ok: false, error: "That change could not be applied." };
+  }
 
   try {
     // Moving a ticket through the kitchen is kitchen work; cancelling is not.
