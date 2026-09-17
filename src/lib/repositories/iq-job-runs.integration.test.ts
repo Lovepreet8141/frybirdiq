@@ -29,9 +29,14 @@ import { periodKeyAt, shiftPeriod } from "@/lib/jobs/period";
 import { iqDailyFacts, iqDailyTrust, organizations } from "@/db/schema";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 import { seedExpense } from "./__test-support__/iq-fixtures";
-import { factDayLockKey, readDailyFacts } from "./iq-facts";
+import { factDayLockKey, intradayDayLockKey, readDailyFacts } from "./iq-facts";
+import { history } from "@/lib/iq/detect/__test-support__/days";
+import { detectionInsight, istDayStart, istTimestamp } from "@/lib/iq/detect/detect-job";
+import { evaluateDetectDay, type RuleOutcome } from "@/lib/iq/detect/rules";
+import { addDays, startOfBusinessDay } from "@/lib/iq/metrics";
+import { JOB_REGISTRY } from "@/lib/jobs/registry";
 import type { JobWriteRepos } from "@/lib/jobs/repos";
-import { createJobRunStore } from "./iq-job-runs";
+import { createJobRunStore, iqRepos } from "./iq-job-runs";
 import { jobRouteDeps } from "@/app/api/jobs/[job]/deps";
 import { POST } from "@/app/api/jobs/[job]/route";
 
@@ -104,7 +109,8 @@ async function factFor(target: TestOrg, token: LeaseToken, dedupeKey: string): P
 
 /** A chunk write through the job's own writers: one FACT insight keyed by `marker`, so a rollback is visible. */
 const insightWrite = (marker: string, token: LeaseToken, target: () => TestOrg = () => org) => async (repos: JobWriteRepos) => {
-  await repos.writeInsight(await factFor(target(), token, marker));
+  const insight = await factFor(target(), token, marker);
+  await repos.writeInsight(insight, { asOf: insight.period.end });
 };
 const insightCount = async (marker: string) =>
   (await db().select({ id: iqInsights.id }).from(iqInsights).where(eq(iqInsights.dedupeKey, marker))).length;
@@ -456,7 +462,7 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
       const { row } = await s.claim(request);
       const token = tokenOf(row, request.leaseOwner);
       const insight = await factFor(target, token, `seed-${target.orgId}-${randomUUID()}`);
-      await s.commit(token, 300, (repos) => repos.writeInsight(insight));
+      await s.commit(token, 300, (repos) => repos.writeInsight(insight, { asOf: insight.period.end }));
       return insight.id;
     };
     const aInsightId = await seed(org);
@@ -483,12 +489,14 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
         seen.writeKeys = Object.keys(repos).sort();
       });
       try {
-        await ctx.commit(async (repos) => repos.writeInsight(await factFor(otherOrg, token, `cross-${randomUUID()}`)));
+        const cross = await factFor(otherOrg, token, `cross-${randomUUID()}`);
+        await ctx.commit(async (repos) => repos.writeInsight(cross, { asOf: cross.period.end }));
         seen.crossWrite = "written";
       } catch (error) {
         seen.crossWrite = (error as Error).message;
       }
-      const own = await ctx.commit(async (repos) => repos.writeInsight(await factFor(org, token, `own-${randomUUID()}`)));
+      const ownInsight = await factFor(org, token, `own-${randomUUID()}`);
+      const own = await ctx.commit(async (repos) => repos.writeInsight(ownInsight, { asOf: ownInsight.period.end }));
       seen.ownWrite = own.outcome;
       return { status: "COMPLETE", rowsWritten: 1, summary: {} };
     };
@@ -525,9 +533,27 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
 
     expect(response).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
     expect(seen).toMatchObject({
-      ctxKeys: ["attempt", "commit", "orgId", "period", "periodKey", "remainingMs", "repos", "resumeCursor", "runId", "shouldStop", "trigger"],
-      readKeys: ["checkFactsParity", "factsHistoryStart", "getInsight", "listInsights", "listOpenRecommendations", "readFactFigures"],
-      writeKeys: ["computeTrustDay", "proposeRecommendation", "recomputeDay", "writeInsight"],
+      ctxKeys: ["attempt", "codeVersion", "commit", "orgId", "period", "periodKey", "remainingMs", "repos", "resumeCursor", "runId", "shouldStop", "trigger"],
+      readKeys: [
+        "checkFactsParity",
+        "factsHistoryStart",
+        "factsReadyFor",
+        "getInsight",
+        "listInsights",
+        "listOpenRecommendations",
+        "readDetectDays",
+        "readFactFigures",
+        "readFoodCostTarget",
+      ],
+      writeKeys: [
+        "computeTrustDay",
+        "expireInsights",
+        "proposeRecommendation",
+        "purgeIntradayFacts",
+        "rebuildIntradayDay",
+        "recomputeDay",
+        "writeInsight",
+      ],
       listedOrgs: [org.orgId],
       listedHasA: true,
       listedHasB: false,
@@ -709,4 +735,245 @@ describe("IQ-1 facts jobs through the runner (iq1-s8) on the local stack", () =>
     expect(intraday.body!.periods[0]!.slice(0, 10)).toBe(today);
     expect((await readDailyFacts(d.orgId, today, today)).computedDates).toEqual([today]);
   }, 120_000);
+});
+
+describe("IQ-2 jobs through the runner (iq2-s7) on the local stack", () => {
+  const SECRET = "d".repeat(40);
+  const orgs: TestOrg[] = [];
+  const freshOrg = async () => {
+    const created = await createTestOrg();
+    orgs.push(created);
+    return created;
+  };
+  afterAll(async () => {
+    for (const created of orgs) await deleteTestOrg(created.orgId);
+  });
+
+  let yesterday: string;
+  let today: string;
+  beforeAll(async () => {
+    today = periodKeyAt("day", await store().dbNow());
+    yesterday = shiftPeriod("day", today, -1);
+  });
+
+  async function run(
+    job: string,
+    orgIds: string[],
+    options: { period?: string; clock?: () => number; registry?: Record<string, JobDefinition> } = {},
+  ) {
+    // Insights record producedBy.codeVersion, which must be a git sha.
+    const runStore = createJobRunStore({ codeVersion: "abc1234", heavyJobs: [] });
+    runStore.listOrgIds = async () => orgIds;
+    const headers: Record<string, string> = { "x-forwarded-for": "127.0.0.1", host: JOB_HOST, authorization: `Bearer ${SECRET}` };
+    return handleJobRequest(
+      { jobParam: job, body: options.period === undefined ? undefined : { period: options.period }, headers: { get: (n) => headers[n.toLowerCase()] ?? null } },
+      {
+        secrets: { current: SECRET, previous: undefined },
+        store: runStore,
+        newLeaseOwner: () => randomUUID(),
+        monotonicMs: options.clock ?? (() => performance.now()),
+        every: () => () => {},
+        registry: options.registry,
+      },
+    );
+  }
+
+  const runRow = async (job: string, orgId: string, periodKey: string) =>
+    (await db().select().from(iqJobRuns).where(and(eq(iqJobRuns.job, job), eq(iqJobRuns.orgId, orgId), eq(iqJobRuns.periodKey, periodKey))))[0];
+
+  /** A SUCCEEDED nightly facts run row, as the U1 gate reads it. */
+  const factsRunRow = (target: TestOrg, periodKey: string, finishedAt: Date) =>
+    db()
+      .insert(iqJobRuns)
+      .values({
+        orgId: target.orgId,
+        job: "iq-facts-nightly",
+        periodKey,
+        status: "SUCCEEDED",
+        trigger: "TIMER",
+        attempt: 1,
+        leaseOwner: randomUUID(),
+        leaseExpiresAt: finishedAt,
+        deadlineAt: finishedAt,
+        finishedAt,
+        codeVersion: "test",
+      });
+
+  it("detect fails closed with UPSTREAM_NOT_READY until facts are final, then succeeds and a re-run is a no-op", async () => {
+    const g = await freshOrg();
+    const other = await freshOrg();
+
+    expect(await run("iq-detect-daily", [g.orgId], { period: yesterday })).toMatchObject({ status: 500, body: { counts: { PARTIAL: 1 } } });
+    expect(await runRow("iq-detect-daily", g.orgId, yesterday)).toMatchObject({ status: "FAILED", errorCode: "UPSTREAM_NOT_READY", failures: 0 });
+
+    expect(await run("iq-facts-nightly", [g.orgId], { period: yesterday })).toMatchObject({ status: 200 });
+    const detected = await run("iq-detect-daily", [g.orgId], { period: yesterday });
+    expect(detected).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
+    expect(await runRow("iq-detect-daily", g.orgId, yesterday)).toMatchObject({ status: "SUCCEEDED", attempt: 2, errorCode: null });
+    expect(await run("iq-detect-daily", [g.orgId], { period: yesterday })).toMatchObject({ status: 200, body: { counts: { NOOP: 1 } } });
+
+    // The reader behind it: this org's day has facts and trust; another org's does not.
+    const [mine] = await iqRepos(g.orgId).readDetectDays([yesterday]);
+    expect(mine).toMatchObject({ date: yesterday, hasFacts: true, parityFlagged: false });
+    expect(mine!.figures.revenue_net).toEqual({ unit: "paise", value: "0" });
+    expect(mine!.figures.aov_net).toBeUndefined(); // no orders: undefined, not zero
+    expect(Object.keys(mine!.trust).length).toBeGreaterThan(0);
+    const [theirs] = await iqRepos(other.orgId).readDetectDays([yesterday]);
+    expect(theirs).toMatchObject({ hasFacts: false, figures: {}, trust: {} });
+  }, 120_000);
+
+  it("the facts gate passes on any later SUCCEEDED nightly run that planned the day and finished after it closed (U1)", async () => {
+    const d2 = shiftPeriod("day", yesterday, -1);
+    const covered = await freshOrg();
+    await factsRunRow(covered, yesterday, new Date());
+    expect(await iqRepos(covered.orgId).factsReadyFor(d2)).toBe(true);
+    expect(await run("iq-detect-daily", [covered.orgId], { period: d2 })).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
+
+    const early = await freshOrg();
+    await factsRunRow(early, d2, new Date(startOfBusinessDay(d2).getTime() + 3_600_000));
+    expect(await iqRepos(early.orgId).factsReadyFor(d2)).toBe(false);
+    expect(await run("iq-detect-daily", [early.orgId], { period: d2 })).toMatchObject({ status: 500 });
+    expect(await runRow("iq-detect-daily", early.orgId, d2)).toMatchObject({ errorCode: "UPSTREAM_NOT_READY" });
+  });
+
+  it("three not-ready attempts, then facts succeed, then the next night's scheduled catch-up evaluates D-1 (RELIABILITY iq2-s7 blocker)", async () => {
+    const n = await freshOrg();
+    const dMinus1 = shiftPeriod("day", yesterday, -1);
+
+    // Night of D-1: facts are late, so systemd's run and its retries all find them not ready.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect(await run("iq-detect-daily", [n.orgId], { period: dMinus1 })).toMatchObject({ status: 500, body: { counts: { PARTIAL: 1 } } });
+    }
+    expect(await runRow("iq-detect-daily", n.orgId, dMinus1)).toMatchObject({ status: "FAILED", errorCode: "UPSTREAM_NOT_READY", attempt: 3, failures: 0 });
+
+    // Facts then succeed: the next night's facts run covers D-1 as well.
+    await factsRunRow(n, yesterday, new Date());
+
+    // Next night's timer run: catch-up unit D-1 first, then yesterday.
+    const scheduled = await run("iq-detect-daily", [n.orgId]);
+    expect(scheduled.body!.periods).toEqual([dMinus1, yesterday]);
+    expect(scheduled).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 2, EXHAUSTED: 0 } } });
+    expect(await runRow("iq-detect-daily", n.orgId, dMinus1)).toMatchObject({ status: "SUCCEEDED", attempt: 4, failures: 0, errorCode: null });
+  });
+
+  /** A fired detection from the detect fixtures, re-keyed, produced by this run. */
+  async function probeInsight(ctx: JobContext, dedupeKey: string) {
+    const fired = evaluateDetectDay({ date: "2026-09-11", days: history({ values: { revenue_net: 100000n } }), excludedDates: [], foodCostTarget: null })
+      .outcomes.find((o): o is Extract<RuleOutcome, { status: "FIRED" }> => o.status === "FIRED");
+    if (!fired) throw new Error("fixture no longer fires");
+    const insight = await detectionInsight(fired, {
+      orgId: ctx.orgId,
+      runId: ctx.runId,
+      attempt: ctx.attempt,
+      codeVersion: ctx.codeVersion,
+      newId: randomUUID,
+      date: "2026-09-11",
+      createdAt: istTimestamp(new Date()),
+    });
+    return { ...insight, dedupeKey };
+  }
+  const asOfFor = (periodKey: string) => istDayStart(addDays(periodKey, 1));
+  const probeJob = (name: string, run: JobDefinition["run"]): Record<string, JobDefinition> => ({
+    [name]: { ...JOB_REGISTRY["iq-detect-daily"], name, catchUpPeriods: 0, deadlineSeconds: 240, run },
+  });
+  const insightRow = async (orgId: string, dedupeKey: string) =>
+    (await db().select().from(iqInsights).where(and(eq(iqInsights.orgId, orgId), eq(iqInsights.dedupeKey, dedupeKey))).orderBy(iqInsights.createdAt)).at(-1);
+
+  it("an older overlapping run gets STALE_WRITE on write and expire; the newer finding stays (C5)", async () => {
+    const s = await freshOrg();
+    const key = `probe:stale:${randomUUID()}`;
+    const writer = probeJob("probe_write", async (ctx) => {
+      const insight = await probeInsight(ctx, key);
+      const { outcome } = await ctx.commit((repos) => repos.writeInsight(insight, { asOf: asOfFor(ctx.periodKey) }));
+      return { status: "COMPLETE", rowsWritten: 1, summary: { [`write_${outcome.toLowerCase()}`]: 1 } };
+    });
+    const expirer = probeJob("probe_expire", async (ctx) => {
+      const result = await ctx.commit((repos) => repos.expireInsights([{ dedupeKey: key, asOf: asOfFor(ctx.periodKey), reason: "CLEARED" }]));
+      return { status: "COMPLETE", rowsWritten: result.expired, summary: { expired: result.expired, stale_writes: result.staleWrites } };
+    });
+
+    await run("probe_write", [s.orgId], { period: yesterday, registry: writer });
+    expect((await runRow("probe_write", s.orgId, yesterday))!.summary).toEqual({ write_inserted: 1 });
+    await run("probe_write", [s.orgId], { period: shiftPeriod("day", yesterday, -2), registry: writer });
+    expect((await runRow("probe_write", s.orgId, shiftPeriod("day", yesterday, -2)))!.summary).toEqual({ write_stale_write: 1 });
+    await run("probe_expire", [s.orgId], { period: shiftPeriod("day", yesterday, -3), registry: expirer });
+    expect((await runRow("probe_expire", s.orgId, shiftPeriod("day", yesterday, -3)))!.summary).toEqual({ expired: 0, stale_writes: 1 });
+    expect(await insightRow(s.orgId, key)).toMatchObject({ status: "ACTIVE" });
+
+    await run("probe_expire", [s.orgId], { period: yesterday, registry: expirer });
+    expect(await insightRow(s.orgId, key)).toMatchObject({ status: "EXPIRED" });
+  });
+
+  it("a PARTIAL run never expires past its cursor; the retry finishes the rest (C6)", async () => {
+    const p = await freshOrg();
+    const keys = [0, 1, 2].map((i) => `probe:partial:${i}:${randomUUID()}`);
+    const seed = probeJob("probe_seed", async (ctx) => {
+      await ctx.commit(async (repos) => {
+        for (const key of keys) await repos.writeInsight(await probeInsight(ctx, key), { asOf: asOfFor(shiftPeriod("day", ctx.periodKey, -1)) });
+      });
+      return { status: "COMPLETE", rowsWritten: keys.length, summary: {} };
+    });
+    const expireEach = probeJob("probe_expire_each", async (ctx) => {
+      let expired = 0;
+      for (const [index, key] of keys.entries()) {
+        if (ctx.resumeCursor !== null && index <= Number(ctx.resumeCursor)) continue;
+        if (ctx.shouldStop()) return { status: "PARTIAL", reason: "DEADLINE", rowsWritten: expired, summary: { expired } };
+        const result = await ctx.commit((repos) => repos.expireInsights([{ dedupeKey: key, asOf: asOfFor(ctx.periodKey), reason: "CLEARED" }]), {
+          cursor: String(index),
+        });
+        expired += result.expired;
+      }
+      return { status: "COMPLETE", rowsWritten: expired, summary: { expired } };
+    });
+
+    await run("probe_seed", [p.orgId], { period: yesterday, registry: seed });
+    // Deadline reached right after the first key's chunk.
+    let calls = 0;
+    const clock = () => (++calls >= 5 ? 250_000 : 0);
+    expect(await run("probe_expire_each", [p.orgId], { period: yesterday, registry: expireEach, clock })).toMatchObject({
+      status: 500,
+      body: { counts: { PARTIAL: 1 } },
+    });
+    expect(await runRow("probe_expire_each", p.orgId, yesterday)).toMatchObject({ errorCode: "DEADLINE", cursor: "0" });
+    expect((await insightRow(p.orgId, keys[0]!))?.status).toBe("EXPIRED");
+    expect((await insightRow(p.orgId, keys[1]!))?.status).toBe("ACTIVE");
+    expect((await insightRow(p.orgId, keys[2]!))?.status).toBe("ACTIVE");
+
+    expect(await run("probe_expire_each", [p.orgId], { period: yesterday, registry: expireEach })).toMatchObject({ status: 200 });
+    for (const key of keys) expect((await insightRow(p.orgId, key))?.status).toBe("EXPIRED");
+  });
+
+  it("intraday stops PARTIAL DAY_LOCK_BUSY when today's buckets are locked, keeping today's facts, and the retry rebuilds them", async () => {
+    const i = await freshOrg();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const holding = new Promise<void>((resolve) => (locked = resolve));
+    const holder = db().transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${intradayDayLockKey(i.orgId, today)}, 0))`);
+      locked();
+      await released;
+    });
+    await holding;
+
+    // 48 s left: enough for today's facts and trust, then the rebuild waits 3 × 3 s and gives up.
+    let calls = 0;
+    const lateClock = () => (calls++ === 0 ? 0 : 192_000);
+    let busy;
+    try {
+      busy = await run("iq-facts-intraday", [i.orgId], { clock: lateClock });
+    } finally {
+      release();
+      await holder;
+    }
+    expect(busy).toMatchObject({ status: 500, body: { counts: { PARTIAL: 1 } } });
+    const period = busy!.body!.periods[0]!;
+    const partialRow = await runRow("iq-facts-intraday", i.orgId, period);
+    expect(partialRow).toMatchObject({ status: "FAILED", errorCode: "DAY_LOCK_BUSY", failures: 0 });
+    expect(partialRow!.summary).toMatchObject({ days_recomputed: 1, intraday_lock_busy_days: 1 });
+    expect((await readDailyFacts(i.orgId, today, today)).computedDates).toEqual([today]);
+
+    expect(await run("iq-facts-intraday", [i.orgId], { period })).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
+    expect((await runRow("iq-facts-intraday", i.orgId, period))!.summary).toMatchObject({ intraday_days_rebuilt: 1, intraday_lock_busy_days: 0 });
+  }, 60_000);
 });

@@ -15,39 +15,48 @@ import "server-only";
  *
  * **What a decision rests on is never rewritten.** `writeInsight` compares
  * content hashes on the org's ACTIVE row with the same dedupe key:
- *   - same hash → nothing to write (NOOP);
+ *   - same hash → copy and trust are brought up to date (copy only while
+ *     unreferenced; a referenced row's changed copy supersedes), else NOOP;
  *   - different hash, nothing references the row yet → update it in place;
  *   - different hash (or a re-proposal after cooldown), referenced → the old
- *     row becomes SUPERSEDED, a new row
- *     supersedes it, and every still-PROPOSED recommendation that cited the
- *     old row (as its own insight or as evidence) is SUPERSEDED with it.
- * The database backs this up: a referenced insight's content is frozen by a
- * trigger in 0034, so a bug here fails loudly instead of editing history.
+ *     row becomes SUPERSEDED, a new row supersedes it, and every still-PROPOSED
+ *     recommendation that cited the old row is SUPERSEDED with it.
+ * The database backs this up: a referenced insight's content and copy are
+ * frozen by the 0034/0037 trigger, so a bug here fails loudly.
+ *
+ * **Time only moves forward** (IQ-2 RELIABILITY C5, U2). Every write and every
+ * expiry carries `asOf`, the end of the period or bucket the rule evaluated.
+ * It is required — there is no default — and a write or expiry older than the
+ * stored as_of is refused with STALE_WRITE, so a slow run can neither
+ * overwrite nor expire what a newer run found. A write is also checked
+ * against the key's latest row in any status, so it cannot re-fire a finding
+ * a newer run already expired.
+ *
+ * **Payment-ledger findings are finance data** (IQ-2 R2.2). `loadInsightsFor`
+ * leaves `recon.*` and `sig.*` producers out of the query unless the viewer
+ * holds finance.view — the same producer prefixes 0037's RLS policy uses.
  *
  * Every query filters on org_id itself. The app connects as `postgres`,
  * which bypasses row-level security.
  */
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { z } from "zod";
+import { and, desc, eq, inArray, notLike, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { iqInsights } from "@/db/schema";
+import { iqInsights, iqJobRuns } from "@/db/schema";
 import {
-  AutomationPayloadSchema,
-  DetectionPayloadSchema,
-  EvidenceSchema,
-  ExplanationPayloadSchema,
-  FactPayloadSchema,
-  ForecastPayloadSchema,
   InsightSchema,
-  RecommendationPayloadSchema,
-  findPersonalData,
+  IstDateTimeSchema,
+  LEDGER_PRODUCER_PREFIXES,
+  canonicalJson,
   hasValidContentHash,
+  presentFor,
   type ClaimType,
-  type Evidence,
   type Insight,
+  type InsightViewer,
   type Observed,
+  type Presentation,
   type Quantity,
+  type TrustRef,
 } from "@/lib/iq/engine";
 import { observed } from "@/lib/iq/engine/observed-factory";
 import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
@@ -76,11 +85,11 @@ export async function assertLease(tx: IqTx, lease: IqWriteLease): Promise<void> 
   if (rows.length !== 1) throw new LeaseLostError(lease);
 }
 
-export type WriteInsightOutcome = "INSERTED" | "NOOP" | "UPDATED" | "SUPERSEDED";
+export type WriteInsightOutcome = "INSERTED" | "NOOP" | "UPDATED" | "SUPERSEDED" | "STALE_WRITE";
 
 export type WriteInsightResult = {
   readonly outcome: WriteInsightOutcome;
-  /** The stored row that now carries this claim. On UPDATED and NOOP it is the existing row's id. */
+  /** The stored row that now carries this claim. On UPDATED, NOOP and STALE_WRITE it is the existing row's id. */
   readonly insightId: string;
   /** On SUPERSEDED: the row that was replaced, and the recommendations closed with it. */
   readonly supersededInsightId?: string;
@@ -99,7 +108,17 @@ async function checkWritable(insight: Insight, lease: IqWriteLease): Promise<Ins
   return parsed;
 }
 
-function contentColumns(insight: Insight, lease: IqWriteLease) {
+function trustColumns(trust: TrustRef) {
+  return {
+    trustState: trust.state,
+    trustScore: trust.state === "MEASURED" ? trust.score : null,
+    trustAsOf: trust.state === "MEASURED" ? new Date(trust.asOf) : null,
+    trustMetricIds: trust.state === "MEASURED" ? [...trust.metricIds] : [],
+    trustReasons: trust.state === "NOT_MEASURED" ? [] : [...trust.reasons],
+  };
+}
+
+function contentColumns(insight: Insight, lease: IqWriteLease, asOf: Date) {
   return {
     locationId: insight.locationId,
     claimType: insight.claimType,
@@ -112,20 +131,38 @@ function contentColumns(insight: Insight, lease: IqWriteLease) {
     severity: insight.claimType === "DETECTION" ? insight.payload.severity : null,
     payload: insight.payload as unknown as Record<string, unknown>,
     evidence: insight.evidence as unknown[],
-    trustState: insight.trust.state,
-    trustScore: insight.trust.state === "MEASURED" ? insight.trust.score : null,
-    trustAsOf: insight.trust.state === "MEASURED" ? new Date(insight.trust.asOf) : null,
-    // Migration 0037 columns. as_of = the period end until S2 adds an explicit asOf (RELIABILITY C5).
-    trustMetricIds: insight.trust.state === "MEASURED" ? [...insight.trust.metricIds] : [],
-    trustReasons: insight.trust.state === "NOT_MEASURED" ? [] : [...insight.trust.reasons],
+    ...trustColumns(insight.trust),
     copy: insight.copy,
-    asOf: new Date(insight.period.end),
+    asOf,
     jobRunId: lease.runId,
     jobAttempt: lease.attempt,
     codeVersion: insight.producedBy.codeVersion,
     contentHash: insight.contentHash,
     expiresAt: insight.expiresAt === null ? null : new Date(insight.expiresAt),
   };
+}
+
+/** `asOf` is an IST timestamp with an explicit +05:30 offset: the end of what the rule evaluated. */
+function parseAsOf(asOf: string): Date {
+  return new Date(IstDateTimeSchema.parse(asOf));
+}
+
+type TrustColumns = {
+  readonly trustState: string;
+  readonly trustScore: number | null;
+  readonly trustAsOf: Date | null;
+  readonly trustMetricIds: readonly string[];
+  readonly trustReasons: readonly string[];
+};
+
+function sameTrust(a: TrustColumns, b: TrustColumns): boolean {
+  return (
+    a.trustState === b.trustState &&
+    a.trustScore === b.trustScore &&
+    (a.trustAsOf?.getTime() ?? null) === (b.trustAsOf?.getTime() ?? null) &&
+    canonicalJson(a.trustMetricIds) === canonicalJson(b.trustMetricIds) &&
+    canonicalJson(a.trustReasons) === canonicalJson(b.trustReasons)
+  );
 }
 
 /**
@@ -170,6 +207,18 @@ async function supersedeRecommendationsCiting(tx: IqTx, orgId: string, insightId
   return rows.map((r) => r.id);
 }
 
+export type WriteInsightOptions = {
+  /** End of the period or bucket the rule evaluated (IST, +05:30). Required: there is no default (RELIABILITY U2). */
+  readonly asOf: string;
+  /**
+   * Supersede a referenced row even when the content is unchanged. Used only
+   * to re-propose a recommendation after its dismissal or expiry cooldown:
+   * the closed recommendation holds the old row, so the new one needs a row
+   * of its own (RELIABILITY M2).
+   */
+  readonly replaceIfReferenced?: boolean;
+};
+
 /**
  * Stores one claim under the rules in the header. Run it inside a transaction
  * — the job runner's fenced commit — so the claim, any supersede and the
@@ -179,50 +228,80 @@ async function supersedeRecommendationsCiting(tx: IqTx, orgId: string, insightId
  * the partial unique index (23505) and its transaction rolls back; chunks are
  * idempotent, so the retry lands as NOOP or UPDATED.
  */
-export async function writeInsight(
-  tx: IqTx,
-  lease: IqWriteLease,
-  insight: Insight,
-  options: {
-    /**
-     * Supersede a referenced row even when the content is unchanged. Used only
-     * to re-propose a recommendation after its dismissal or expiry cooldown:
-     * the closed recommendation holds the old row, so the new one needs a row
-     * of its own (RELIABILITY M2).
-     */
-    readonly replaceIfReferenced?: boolean;
-  } = {},
-): Promise<WriteInsightResult> {
+export async function writeInsight(tx: IqTx, lease: IqWriteLease, insight: Insight, options: WriteInsightOptions): Promise<WriteInsightResult> {
   await assertLease(tx, lease);
   const claim = await checkWritable(insight, lease);
+  const asOf = parseAsOf(options.asOf);
   const orgId = lease.orgId;
 
   const [active] = await tx
-    .select({ id: iqInsights.id, contentHash: iqInsights.contentHash, referencedAt: iqInsights.referencedAt })
+    .select({
+      id: iqInsights.id,
+      contentHash: iqInsights.contentHash,
+      referencedAt: iqInsights.referencedAt,
+      asOf: iqInsights.asOf,
+      copy: iqInsights.copy,
+      trustState: iqInsights.trustState,
+      trustScore: iqInsights.trustScore,
+      trustAsOf: iqInsights.trustAsOf,
+      trustMetricIds: iqInsights.trustMetricIds,
+      trustReasons: iqInsights.trustReasons,
+    })
     .from(iqInsights)
     .where(and(eq(iqInsights.orgId, orgId), eq(iqInsights.dedupeKey, claim.dedupeKey), eq(iqInsights.status, "ACTIVE")))
     .for("update");
 
   if (!active) {
+    // No ACTIVE row may mean a newer run already EXPIRED (or superseded) this key.
+    // An older run must not re-fire it: compare with the key's latest as_of in any
+    // status (RELIABILITY iq2-s2-rel). Under READ COMMITTED a concurrent expire holds
+    // the row lock, so once it commits this statement sees the EXPIRED row.
+    const [latest] = await tx
+      .select({ id: iqInsights.id, asOf: iqInsights.asOf })
+      .from(iqInsights)
+      .where(and(eq(iqInsights.orgId, orgId), eq(iqInsights.dedupeKey, claim.dedupeKey)))
+      .orderBy(desc(iqInsights.asOf))
+      .limit(1);
+    if (latest && asOf.getTime() < latest.asOf.getTime()) return { outcome: "STALE_WRITE", insightId: latest.id };
+
     await tx.insert(iqInsights).values({
       id: claim.id,
       orgId,
       dedupeKey: claim.dedupeKey,
       status: "ACTIVE",
       supersedes: null,
-      ...contentColumns(claim, lease),
+      ...contentColumns(claim, lease, asOf),
     });
     return { outcome: "INSERTED", insightId: claim.id };
   }
 
+  // A run that evaluated older data never overwrites what a newer run stored (C5).
+  if (asOf.getTime() < active.asOf.getTime()) return { outcome: "STALE_WRITE", insightId: active.id };
+
   const replace = options.replaceIfReferenced === true && active.referencedAt !== null;
-  if (active.contentHash === claim.contentHash && !replace) return { outcome: "NOOP", insightId: active.id };
   if (replace && claim.id === active.id) throw new Error("iq-insights: a replacement needs a new insight id");
 
-  if (active.referencedAt === null) {
+  if (active.contentHash === claim.contentHash && !replace) {
+    const trust = trustColumns(claim.trust);
+    const trustChanged = !sameTrust(trust, active);
+    const copyChanged = canonicalJson(active.copy) !== canonicalJson(claim.copy);
+    const asOfChanged = asOf.getTime() !== active.asOf.getTime();
+    const referenced = active.referencedAt !== null;
+
+    // A referenced row's wording is frozen with its claim: a new wording is a new row (R2.4).
+    if (!(referenced && copyChanged)) {
+      if (!trustChanged && !copyChanged && !asOfChanged) return { outcome: "NOOP", insightId: active.id };
+      await tx
+        .update(iqInsights)
+        .set({ ...trust, ...(referenced ? {} : { copy: claim.copy }), asOf, updatedAt: sql`now()` })
+        .where(and(eq(iqInsights.id, active.id), eq(iqInsights.orgId, orgId)));
+      return { outcome: "UPDATED", insightId: active.id };
+    }
+    if (claim.id === active.id) throw new Error("iq-insights: a new wording on a referenced insight needs a new insight id");
+  } else if (active.referencedAt === null) {
     await tx
       .update(iqInsights)
-      .set({ ...contentColumns(claim, lease), updatedAt: sql`now()` })
+      .set({ ...contentColumns(claim, lease, asOf), updatedAt: sql`now()` })
       .where(and(eq(iqInsights.id, active.id), eq(iqInsights.orgId, orgId)));
     return { outcome: "UPDATED", insightId: active.id };
   }
@@ -233,7 +312,7 @@ export async function writeInsight(
   const supersededRecommendationIds = await supersedeRecommendationsCiting(tx, orgId, active.id);
   await tx
     .update(iqInsights)
-    .set({ status: "SUPERSEDED", supersededBy: claim.id, updatedAt: sql`now()` })
+    .set({ status: "SUPERSEDED", statusReason: "SUPERSEDED", supersededBy: claim.id, updatedAt: sql`now()` })
     .where(and(eq(iqInsights.id, active.id), eq(iqInsights.orgId, orgId)));
   await tx.insert(iqInsights).values({
     id: claim.id,
@@ -241,44 +320,97 @@ export async function writeInsight(
     dedupeKey: claim.dedupeKey,
     status: "ACTIVE",
     supersedes: active.id,
-    ...contentColumns(claim, lease),
+    ...contentColumns(claim, lease, asOf),
   });
   return { outcome: "SUPERSEDED", insightId: claim.id, supersededInsightId: active.id, supersededRecommendationIds };
 }
 
-// ── Reading ────────────────────────────────────────────────────────────────
+export type ExpireRequest = {
+  readonly dedupeKey: string;
+  /** End of the period or bucket whose evaluation found the rule clear (IST, +05:30). */
+  readonly asOf: string;
+  readonly reason: "CLEARED" | "CLOSING_TIME";
+};
 
-const StoredClaimSchema = z.discriminatedUnion("claimType", [
-  z.object({ claimType: z.literal("FACT"), payload: FactPayloadSchema }),
-  z.object({ claimType: z.literal("DETECTION"), payload: DetectionPayloadSchema }),
-  z.object({ claimType: z.literal("FORECAST"), payload: ForecastPayloadSchema }),
-  z.object({ claimType: z.literal("EXPLANATION"), payload: ExplanationPayloadSchema }),
-  z.object({ claimType: z.literal("RECOMMENDATION"), payload: RecommendationPayloadSchema }),
-  z.object({ claimType: z.literal("AUTOMATION"), payload: AutomationPayloadSchema }),
-]);
+export type ExpireInsightsResult = {
+  readonly expired: number;
+  readonly expiredIds: readonly string[];
+  /** Keys whose stored as_of is newer than the request: left ACTIVE (C5). */
+  readonly staleWrites: number;
+  /** Keys with no ACTIVE row. */
+  readonly absent: number;
+  readonly supersededRecommendationIds: readonly string[];
+};
 
 /**
- * An insight as the table holds it. The table has no column for the copy
- * template or for trust's metric ids and reasons, so a stored insight is not
- * a full engine `Insight`; its payload and evidence are re-validated against
- * the engine contract on every read.
+ * Expires the org's ACTIVE insights for keys a committed chunk evaluated and
+ * found clear. Pass only those keys: a rule that did not evaluate (not enough
+ * history, low trust, stale input, a timeout, or a date past a PARTIAL run's
+ * cursor) must never be expired (RELIABILITY C6).
+ *
+ * Each expiry is a compare-and-set on (id, as_of) inside the caller's fenced
+ * chunk: an older request than the stored as_of is refused as a stale write.
+ * A referenced insight takes the supersede path first — the PROPOSED
+ * recommendations resting on it are closed — then expires.
  */
-export type StoredInsight = z.output<typeof StoredClaimSchema> & {
-  readonly id: string;
-  readonly orgId: string;
-  readonly locationId: string | null;
-  readonly status: string;
-  readonly subject: { readonly kind: string; readonly ref: string };
-  readonly period: { readonly start: Date; readonly end: Date };
-  readonly dedupeKey: string;
-  readonly evidence: readonly Evidence[];
-  readonly trust: { readonly state: string; readonly score: number | null; readonly asOf: Date | null };
-  readonly contentHash: string;
-  readonly supersedes: string | null;
-  readonly supersededBy: string | null;
+export async function expireInsights(tx: IqTx, lease: IqWriteLease, requests: readonly ExpireRequest[]): Promise<ExpireInsightsResult> {
+  await assertLease(tx, lease);
+  const orgId = lease.orgId;
+  const result = { expired: 0, expiredIds: [] as string[], staleWrites: 0, absent: 0, supersededRecommendationIds: [] as string[] };
+
+  for (const request of requests) {
+    const asOf = parseAsOf(request.asOf);
+    const [active] = await tx
+      .select({ id: iqInsights.id, asOf: iqInsights.asOf, referencedAt: iqInsights.referencedAt })
+      .from(iqInsights)
+      .where(and(eq(iqInsights.orgId, orgId), eq(iqInsights.dedupeKey, request.dedupeKey), eq(iqInsights.status, "ACTIVE")))
+      .for("update");
+    if (!active) {
+      result.absent += 1;
+      continue;
+    }
+    if (asOf.getTime() < active.asOf.getTime()) {
+      result.staleWrites += 1;
+      continue;
+    }
+    if (active.referencedAt !== null) {
+      result.supersededRecommendationIds.push(...(await supersedeRecommendationsCiting(tx, orgId, active.id)));
+    }
+    const updated = await tx
+      .update(iqInsights)
+      .set({ status: "EXPIRED", statusReason: request.reason, asOf, updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(iqInsights.id, active.id),
+          eq(iqInsights.orgId, orgId),
+          eq(iqInsights.status, "ACTIVE"),
+          sql`${iqInsights.asOf} <= ${asOf.toISOString()}::timestamptz`,
+        ),
+      )
+      .returning({ id: iqInsights.id });
+    if (updated.length === 1) {
+      result.expired += 1;
+      result.expiredIds.push(active.id);
+    } else {
+      result.staleWrites += 1;
+    }
+  }
+  return result;
+}
+
+// ── Reading ────────────────────────────────────────────────────────────────
+
+/**
+ * An engine `Insight` read back from its row, with the storage facts the
+ * brief and the expiry guard need. The insight part re-parses through
+ * `InsightSchema` (strict shapes, content rules, personal-data ban) on every
+ * read, so it can go straight to `present()`.
+ */
+export type StoredInsight = Insight & {
+  readonly asOf: Date;
+  readonly statusReason: string | null;
   readonly referencedAt: Date | null;
-  readonly expiresAt: Date | null;
-  readonly createdAt: Date;
+  readonly supersededBy: string | null;
 };
 
 export type StoredInsightsRead = {
@@ -289,70 +421,153 @@ export type StoredInsightsRead = {
 
 type InsightRow = typeof iqInsights.$inferSelect;
 
-function toStoredInsight(row: InsightRow): StoredInsight | null {
-  const claim = StoredClaimSchema.safeParse({ claimType: row.claimType, payload: row.payload });
-  const evidence = z.array(EvidenceSchema).min(1).safeParse(row.evidence);
-  if (!claim.success || !evidence.success) return null;
-  if (findPersonalData({ payload: row.payload, evidence: row.evidence }).length > 0) return null;
-  return {
-    ...claim.data,
+/** A stored instant as the engine's IST timestamp: `2026-09-11T00:00:00+05:30`, milliseconds only when present. */
+export function istTimestamp(at: Date): string {
+  const shifted = new Date(at.getTime() + 330 * 60_000).toISOString();
+  const withoutZone = shifted.endsWith(".000Z") ? shifted.slice(0, 19) : shifted.slice(0, 23);
+  return `${withoutZone}+05:30`;
+}
+
+function trustRefOf(row: InsightRow): unknown {
+  switch (row.trustState) {
+    case "MEASURED":
+      return {
+        state: "MEASURED",
+        score: row.trustScore,
+        asOf: row.trustAsOf ? istTimestamp(row.trustAsOf) : null,
+        metricIds: row.trustMetricIds,
+        reasons: row.trustReasons,
+      };
+    case "INSUFFICIENT_DATA":
+      return { state: "INSUFFICIENT_DATA", reasons: row.trustReasons };
+    default:
+      return { state: row.trustState };
+  }
+}
+
+/**
+ * Rebuilds the Insight. `producedBy.job` is not a column: it is the job of
+ * the run that wrote the row. A row whose run was pruned has no job to name
+ * and fails the contract — dropped and counted, never guessed.
+ */
+function toStoredInsight(row: InsightRow, job: string | null): StoredInsight | null {
+  const parsed = InsightSchema.safeParse({
     id: row.id,
     orgId: row.orgId,
     locationId: row.locationId,
-    status: row.status,
+    schemaVersion: row.schemaVersion,
+    producer: row.producer,
     subject: { kind: row.subjectKind, ref: row.subjectRef },
-    period: { start: row.periodStart, end: row.periodEnd },
+    period: { start: istTimestamp(row.periodStart), end: istTimestamp(row.periodEnd) },
     dedupeKey: row.dedupeKey,
-    evidence: evidence.data,
-    trust: { state: row.trustState, score: row.trustScore, asOf: row.trustAsOf },
+    evidence: row.evidence,
+    trust: trustRefOf(row),
+    copy: row.copy,
+    status: row.status,
+    producedBy: { job, runId: row.jobRunId, attempt: row.jobAttempt, codeVersion: row.codeVersion },
     contentHash: row.contentHash,
     supersedes: row.supersedes,
-    supersededBy: row.supersededBy,
-    referencedAt: row.referencedAt,
-    expiresAt: row.expiresAt,
-    createdAt: row.createdAt,
-  };
+    createdAt: istTimestamp(row.createdAt),
+    expiresAt: row.expiresAt ? istTimestamp(row.expiresAt) : null,
+    claimType: row.claimType,
+    payload: row.payload,
+  });
+  if (!parsed.success) return null;
+  return { ...parsed.data, asOf: row.asOf, statusReason: row.statusReason, referencedAt: row.referencedAt, supersededBy: row.supersededBy };
 }
 
-/** The org's insights, newest first. ACTIVE only unless statuses say otherwise. */
-export async function listInsights(
+type Statuses = readonly ("ACTIVE" | "SUPERSEDED" | "EXPIRED" | "RETRACTED")[];
+
+async function readRows(
   orgId: string,
-  options: {
-    readonly claimTypes?: readonly ClaimType[];
-    readonly statuses?: readonly ("ACTIVE" | "SUPERSEDED" | "EXPIRED" | "RETRACTED")[];
-    readonly limit?: number;
-  } = {},
+  options: { readonly claimTypes?: readonly ClaimType[]; readonly statuses?: Statuses; readonly limit?: number; readonly includeLedger: boolean },
 ): Promise<StoredInsightsRead> {
   const statuses = options.statuses ?? ["ACTIVE"];
   const limit = Math.min(Math.max(options.limit ?? 100, 1), 500);
   const rows = await db()
-    .select()
+    .select({ row: iqInsights, job: iqJobRuns.job })
     .from(iqInsights)
+    .leftJoin(iqJobRuns, and(eq(iqJobRuns.id, iqInsights.jobRunId), eq(iqJobRuns.orgId, iqInsights.orgId)))
     .where(
       and(
         eq(iqInsights.orgId, orgId),
         inArray(iqInsights.status, [...statuses]),
         options.claimTypes ? inArray(iqInsights.claimType, [...options.claimTypes]) : undefined,
+        ...(options.includeLedger ? [] : LEDGER_PRODUCER_PREFIXES.map((prefix) => notLike(iqInsights.producer, `${prefix}%`))),
       ),
     )
     .orderBy(desc(iqInsights.createdAt))
     .limit(limit);
 
   const insights: StoredInsight[] = [];
-  for (const row of rows) {
-    const stored = toStoredInsight(row);
+  for (const { row, job } of rows) {
+    const stored = toStoredInsight(row, job);
     if (stored) insights.push(stored);
   }
   return { insights, dropped: rows.length - insights.length };
 }
 
+/**
+ * The org's insights, newest first, ACTIVE only unless statuses say otherwise.
+ * For jobs and internal reads: it includes payment-ledger findings. Anything
+ * that renders for a person goes through `loadInsightsFor`.
+ */
+export async function listInsights(
+  orgId: string,
+  options: { readonly claimTypes?: readonly ClaimType[]; readonly statuses?: Statuses; readonly limit?: number } = {},
+): Promise<StoredInsightsRead> {
+  return readRows(orgId, { ...options, includeLedger: true });
+}
+
 /** One org-scoped insight by id, or null when it is absent, another org's, or fails the contract. */
 export async function getInsight(orgId: string, insightId: string): Promise<StoredInsight | null> {
-  const [row] = await db()
-    .select()
+  const [found] = await db()
+    .select({ row: iqInsights, job: iqJobRuns.job })
     .from(iqInsights)
+    .leftJoin(iqJobRuns, and(eq(iqJobRuns.id, iqInsights.jobRunId), eq(iqJobRuns.orgId, iqInsights.orgId)))
     .where(and(eq(iqInsights.orgId, orgId), eq(iqInsights.id, insightId)));
-  return row ? toStoredInsight(row) : null;
+  return found ? toStoredInsight(found.row, found.job) : null;
+}
+
+export type PresentedInsight = {
+  readonly presentation: Presentation;
+  readonly status: StoredInsight["status"];
+  readonly statusReason: string | null;
+  readonly asOf: Date;
+};
+
+export type InsightsForViewer = {
+  readonly items: readonly PresentedInsight[];
+  /**
+   * True whenever the viewer lacks finance.view — whether or not any
+   * payment-ledger finding exists — so the page can say "restricted" without
+   * revealing a count, or even that there is something to hide (R2.2).
+   */
+  readonly restricted: boolean;
+  readonly dropped: number;
+};
+
+/**
+ * What a person may see: payment-ledger findings (`recon.*`, `sig.*`) are
+ * left out of the query itself without finance.view, then every row is
+ * rendered through `presentFor`, which applies the same rule again.
+ */
+export async function loadInsightsFor(
+  orgId: string,
+  viewer: InsightViewer,
+  options: { readonly claimTypes?: readonly ClaimType[]; readonly statuses?: Statuses; readonly limit?: number } = {},
+): Promise<InsightsForViewer> {
+  const read = await readRows(orgId, { ...options, includeLedger: viewer.financeView });
+  const presented = presentFor(read.insights, viewer);
+  const byId = new Map(read.insights.map((i) => [i.id, i]));
+  return {
+    items: presented.items.map((presentation) => {
+      const stored = byId.get(presentation.insightId)!;
+      return { presentation, status: stored.status, statusReason: stored.statusReason, asOf: stored.asOf };
+    }),
+    restricted: presented.restricted,
+    dropped: read.dropped,
+  };
 }
 
 export type FactFigureRow = {

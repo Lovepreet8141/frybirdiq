@@ -78,6 +78,16 @@ const ENGINE_MINTING_NAMES = [
   "RecommendationPayloadSchema",
   "AutomationPayloadSchema",
 ];
+// ARCHITECT review of c27fbd1 (iq2-s2-arch P2): these iq-insights functions
+// take no viewer, so they would show payment-ledger findings (recon.*, sig.*)
+// to anyone. Code outside the repositories and jobs gets insights only
+// through loadInsightsFor, which applies the finance.view gate. Added to the
+// existing global block (same rule key: a separate block would override the
+// minting ban for the same files).
+const UNGATED_INSIGHT_READERS = ["listInsights", "getInsight", "writeInsight", "expireInsights", "readFactFigures"];
+const UNGATED_INSIGHT_MESSAGE =
+  "Read insights for a person through loadInsightsFor (finance.view gate); listInsights/getInsight/readFactFigures and the writers are for repositories and jobs only (ARCHITECT review of c27fbd1, iq2-s2-arch P2).";
+
 const ENGINE_MINTING_MODULES = [
   "@/lib/iq/engine/observed-factory",
   "@/lib/iq/engine/insight",
@@ -139,8 +149,14 @@ const eslintConfig = defineConfig([
       "no-restricted-imports": [
         "error",
         {
-          paths: [{ name: "@/lib/iq/engine", importNames: ENGINE_MINTING_NAMES, message: ENGINE_MINTING_MESSAGE }],
-          patterns: [{ group: ENGINE_MINTING_MODULES, message: ENGINE_MINTING_MESSAGE }],
+          paths: [
+            { name: "@/lib/iq/engine", importNames: ENGINE_MINTING_NAMES, message: ENGINE_MINTING_MESSAGE },
+            { name: "@/lib/repositories/iq-insights", importNames: UNGATED_INSIGHT_READERS, message: UNGATED_INSIGHT_MESSAGE },
+          ],
+          patterns: [
+            { group: ENGINE_MINTING_MODULES, message: ENGINE_MINTING_MESSAGE },
+            { group: ["**/repositories/iq-insights"], importNames: UNGATED_INSIGHT_READERS, message: UNGATED_INSIGHT_MESSAGE },
+          ],
         },
       ],
     },
