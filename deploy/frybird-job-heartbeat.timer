@@ -1,0 +1,22 @@
+# Starts frybird-job@heartbeat.service once an hour. OnCalendar must stay
+# byte-for-byte the JOB_REGISTRY["heartbeat"].onCalendarUtc string in
+# src/lib/jobs/registry.ts — src/lib/jobs/registry.test.ts reads this file
+# and fails the build the moment the two drift.
+#
+#   cp deploy/frybird-job-heartbeat.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now frybird-job-heartbeat.timer
+#   systemctl list-timers frybird-job-heartbeat.timer
+
+[Unit]
+Description=Run the FRYBIRD heartbeat job hourly
+
+[Timer]
+# Default systemd naming would look for frybird-job-heartbeat.service (this
+# timer's own base name); the actual target is the templated instance.
+Unit=frybird-job@heartbeat.service
+OnCalendar=*-*-* *:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

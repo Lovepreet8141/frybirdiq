@@ -275,6 +275,34 @@ certbot --nginx -d frybirdiq.tech -d www.frybirdiq.tech
 certbot rewrites the server blocks to add TLS and redirect port 80. Renewal is
 automatic; check it with `certbot renew --dry-run`.
 
+### 5a. Keeping the 443 block in step with the repo
+
+certbot does not keep reading `deploy/nginx-frybird.conf` after the first run
+— it forks the matched server block once, in place on the VPS, into a 443
+block with TLS added and rewrites the 80 block to redirect. From that point
+the 443 block lives **only** on the server; `git diff` against this repo will
+never show it.
+
+Run certbot fresh (TLS not yet issued) and every `location` in this file,
+including `location ^~ /api/jobs/ { return 404; }`, is copied into the new
+443 block automatically — nothing else to do.
+
+**If TLS is already issued** and you are only updating this file (e.g. this
+slice's job-route block, or any future location), the change never reaches
+the 443 block by itself:
+
+```bash
+ssh root@194.238.16.200
+diff <(sudo nginx -T 2>/dev/null | awk '/listen 443/,/^}/') /dev/stdin <<'EOF'
+    location ^~ /api/jobs/ { return 404; }
+EOF
+```
+
+and hand-edit `/etc/nginx/sites-available/frybird`'s 443 block to match this
+file's 80 block, then `nginx -t && systemctl reload nginx`. Verify both
+listeners refuse the job route (§9's smoke test works over both `http://` and
+`https://`).
+
 ---
 
 ## 6. Migrations
@@ -328,6 +356,111 @@ to discover cannot be restored:
 ```bash
 apt install -y postgresql                  # a scratch server the app never touches
 bash deploy/restore-check.sh               # restores the newest dump, counts rows, drops the scratch db
+```
+
+## 9. Scheduled jobs (IQ-0, S10)
+
+Owner decision `dec-1` (job runner on the VPS) has not been made — **do not
+install anything in this section until god says that decision has landed.**
+Everything here is the repo-file side only; it ships dormant (`JOB_SECRET`
+unset) either way, so committing it carries no production risk by itself.
+
+The route (`src/app/api/jobs/[job]/route.ts`) is already live in the app —
+it answers 404 to everything until `JOB_SECRET` is set. nginx also refuses
+`/api/jobs/` outright (§5), so a public request never reaches the app's own
+check at all; the two are independent layers on purpose (RED-TEAM, T1/T2).
+
+### 9.1 The secret — created, never printed
+
+```bash
+mkdir -p /etc/frybird
+umask 077
+head -c48 /dev/urandom | base64 > /tmp/frybird-job-secret   # >=32 chars, never echoed
+printf 'Authorization: Bearer %s' "$(cat /tmp/frybird-job-secret)" > /etc/frybird/jobs.header
+shred -u /tmp/frybird-job-secret
+chown root:root /etc/frybird/jobs.header
+chmod 600 /etc/frybird/jobs.header
+```
+
+Then add the same value as `JOB_SECRET=` in `/etc/frybird/env` (§2) and
+`systemctl restart frybird`. Nothing above prints the secret to the terminal,
+a log, or a command's argv (`head`/`base64`/`printf` never appear in
+`journalctl` with the value; `ps` cannot see inside a shell builtin's
+argument list from a file redirect the way it can a literal CLI argument —
+even so, avoid retyping the secret on any command line).
+
+`jobs.header` holds the literal header line the unit sends
+(`LoadCredential=job-header:/etc/frybird/jobs.header` in
+`deploy/frybird-job@.service` — systemd reads this as root and hands the
+service a private copy; the file itself stays unreadable to the `frybird`
+user or anything else with DynamicUser). It never goes through `deploy.sh`
+and is never rsynced — it lives outside `/var/www` exactly like
+`/etc/frybird/env`.
+
+### 9.2 Install
+
+```bash
+cp deploy/frybird-job@.service deploy/frybird-job-failed@.service /etc/systemd/system/
+cp deploy/frybird-job-heartbeat.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now frybird-job-heartbeat.timer
+systemctl list-timers frybird-job-heartbeat.timer
+systemctl start frybird-job@heartbeat   # run one now, don't wait for the hour
+journalctl -u frybird-job@heartbeat -n 20
+```
+
+One timer per job (`deploy/frybird-job-<name>.timer`); IQ-0 ships only
+`heartbeat`. `src/lib/jobs/registry.test.ts` fails the build if a timer's
+`OnCalendar=` and the registry's `onCalendarUtc` for that job ever drift —
+adding a job means adding both together.
+
+### 9.3 Rotation
+
+```bash
+# 1. Move the current secret to JOB_SECRET_PREVIOUS in /etc/frybird/env,
+#    generate a new one for JOB_SECRET (9.1), restart the app:
+systemctl restart frybird
+# 2. Rewrite /etc/frybird/jobs.header with the NEW secret (9.1) — the timer
+#    unit must present the new value, not the one the app now calls "previous":
+systemctl daemon-reload   # only if unit files changed; usually not needed here
+# 3. Once you've seen a job run succeed on the new secret (journalctl -u
+#    frybird-job@heartbeat), clear JOB_SECRET_PREVIOUS from /etc/frybird/env
+#    and restart frybird again.
+```
+
+The app accepts both `JOB_SECRET` and `JOB_SECRET_PREVIOUS` for exactly this
+window (`src/lib/jobs/auth.ts`), so step 1 and step 2 do not have to land in
+the same instant — a job that fires between them still authorizes on
+whichever secret it was carrying.
+
+### 9.4 Disable / rollback
+
+```bash
+systemctl disable --now frybird-job-heartbeat.timer
+```
+
+stops future runs; a run already in flight finishes on its own (it's a
+plain `curl`, nothing tracks the timer after it starts). To go back to fully
+dormant instead of just paused, unset `JOB_SECRET` and `JOB_SECRET_PREVIOUS`
+in `/etc/frybird/env` and restart `frybird` — every job route then answers
+404 again regardless of whether any timer is still enabled. To remove the
+units entirely:
+
+```bash
+systemctl disable --now frybird-job-heartbeat.timer
+rm /etc/systemd/system/frybird-job@.service /etc/systemd/system/frybird-job-failed@.service /etc/systemd/system/frybird-job-heartbeat.timer
+systemctl daemon-reload
+```
+
+No migration or data is touched by any of this — `iq_job_runs` rows from
+past runs are just history.
+
+### 9.5 Verify (read-only)
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://frybirdiq.tech/api/jobs/heartbeat   # expect 404
+systemctl is-active frybird-job-heartbeat.timer
+journalctl -u frybird-job@heartbeat -u frybird-job-failed@heartbeat --since -1d -p warning
 ```
 
 ## What this does not have yet
