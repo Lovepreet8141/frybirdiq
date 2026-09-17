@@ -182,7 +182,28 @@ export async function recordOnlinePayment(input: {
     .orderBy(desc(payments.createdAt))
     .limit(1);
 
-  const providerOrderId = input.providerOrderId ?? pending?.providerOrderId ?? undefined;
+  /*
+   * The Razorpay order the caller names must be the one THIS order's pending
+   * payment was opened for (pay-8). Without this, a caller holding a valid
+   * signature for their own Razorpay order could aim it at any other order's
+   * UUID: the signature verifies (it is genuine, just for a different
+   * purchase), Razorpay confirms the money (again, for the other purchase),
+   * and a payment for order A settles order B. The signature proves the
+   * caller paid a Razorpay order; only this row says which of OUR orders that
+   * Razorpay order belongs to.
+   */
+  if (input.providerOrderId !== undefined && pending?.providerOrderId && input.providerOrderId !== pending.providerOrderId) {
+    return { ok: false, error: "That payment does not belong to this order." };
+  }
+
+  /*
+   * Verification always uses the pending row's own reference, never the
+   * caller's: with no pending row to anchor to there is nothing to verify a
+   * signature against, and the provider then refuses — the replay of an
+   * already-settled payment never gets this far (settle's captured fast path
+   * answers first).
+   */
+  const providerOrderId = pending?.providerOrderId ?? undefined;
 
   const result = await settle({
     orderId: input.orderId,
@@ -217,20 +238,55 @@ export async function recordOnlinePayment(input: {
   return result;
 }
 
-/** Notes a failure Razorpay reported (Checkout's payment.failed, or the webhook) against the pending payment, without touching the order. */
-export async function markOnlinePaymentFailed(input: { orderId: string; reason: string }): Promise<void> {
+/** Who is asking to note a payment failure — see `markOnlinePaymentFailed`. */
+export type PaymentFailureReporter =
+  /** The Razorpay webhook, after its body signature verified. */
+  | { readonly kind: "webhook" }
+  /** The customer's browser: whoever the session or this device's checkout cookie says they are. Nulls mean "nothing known" and never match. */
+  | { readonly kind: "customer"; readonly customerId: string | null; readonly phone: string | null };
+
+/**
+ * Notes a failure Razorpay reported (Checkout's payment.failed, or the
+ * webhook) against the pending payment, without touching the order.
+ *
+ * The write is bound to the order's own customer (pay-5). This is reachable
+ * with no staff session and no signature, so before this check anyone who
+ * learned an order UUID could stamp arbitrary text onto its payment row —
+ * text the order page then shows to whoever is watching that order. A
+ * customer reporter must match the order by signed-in customer id or by the
+ * phone the order was placed under; the webhook's proof is its verified body
+ * signature, checked by the route before this is called. Only a PENDING row
+ * is ever touched — enforced in the UPDATE itself, not just the read, so a
+ * capture landing in between cannot be scribbled over.
+ */
+export async function markOnlinePaymentFailed(input: { orderId: string; reason: string; via: PaymentFailureReporter }): Promise<{ ok: boolean }> {
   const database = db();
+  const [order] = await database
+    .select({ id: orders.id, orgId: orders.orgId, customerId: orders.customerId, customerPhone: orders.customerPhone })
+    .from(orders)
+    .where(eq(orders.id, input.orderId))
+    .limit(1);
+  if (!order) return { ok: false };
+
+  if (input.via.kind === "customer") {
+    const ownsById = input.via.customerId !== null && order.customerId !== null && input.via.customerId === order.customerId;
+    const ownsByPhone = input.via.phone !== null && order.customerPhone !== null && input.via.phone === order.customerPhone;
+    if (!ownsById && !ownsByPhone) return { ok: false };
+  }
+
   const [pending] = await database
     .select({ id: payments.id })
     .from(payments)
-    .where(and(eq(payments.orderId, input.orderId), eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.status, "PENDING")))
+    .where(and(eq(payments.orderId, order.id), eq(payments.orgId, order.orgId), eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.status, "PENDING")))
     .orderBy(desc(payments.createdAt))
     .limit(1);
-  if (!pending) return;
-  await database
+  if (!pending) return { ok: false };
+  const written = await database
     .update(payments)
     .set({ failureReason: input.reason.slice(0, 250), updatedAt: new Date() })
-    .where(eq(payments.id, pending.id));
+    .where(and(eq(payments.id, pending.id), eq(payments.status, "PENDING")))
+    .returning({ id: payments.id });
+  return { ok: written.length > 0 };
 }
 
 /* ------------------------------------------------------------------ */

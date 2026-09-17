@@ -135,7 +135,8 @@ async function handle(eventType: string, body: RazorpayWebhookBody): Promise<Out
     case "payment.failed": {
       const orderId = await orderIdForProviderOrder(payment?.order_id);
       if (!orderId) return { ok: true };
-      await markOnlinePaymentFailed({ orderId, reason: payment?.error_description ?? "Payment failed" });
+      // The proof here is the webhook body signature, verified above.
+      await markOnlinePaymentFailed({ orderId, reason: payment?.error_description ?? "Payment failed", via: { kind: "webhook" } });
       return { ok: true };
     }
     default:
