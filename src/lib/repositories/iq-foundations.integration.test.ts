@@ -36,6 +36,14 @@ import {
 } from "@/db/schema";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 
+/**
+ * GoTrue and PostgREST serve only the shared `postgres` database. On a
+ * per-worktree test database (hive/tools/test-db.sh sets FRYBIRD_TEST_DB) the
+ * users and rows these suites create would land in different databases, so
+ * they skip; run them on the shared stack with merged migrations only.
+ */
+const sharedStackOnly = describe.skipIf(Boolean(process.env.FRYBIRD_TEST_DB));
+
 const IQ_TABLES = [
   "iq_job_runs",
   "iq_insights",
@@ -93,6 +101,7 @@ async function insertInsight(org: TestOrg, overrides: InsightOverrides = {}): Pr
       subjectRef: "food_cost_pct",
       periodStart: new Date(now.getTime() - HOUR),
       periodEnd: now,
+      asOf: now,
       dedupeKey: `test:${randomUUID()}`,
       payload: { ruleId: "test_rule" },
       evidence: [{ kind: "metric", metricId: "food_cost_pct" }],
@@ -187,7 +196,7 @@ describe("0034 — grants and row-level security", () => {
   });
 });
 
-describe("0034 — what staff sessions can read through PostgREST", () => {
+sharedStackOnly("0034 — what staff sessions can read through PostgREST", () => {
   let admin: SupabaseClient;
   let manager: SupabaseClient;
   let cashier: SupabaseClient;
@@ -319,6 +328,7 @@ describe("0034 — referenced insights are frozen", () => {
         subjectRef: "food_cost_pct",
         periodStart: new Date(Date.now() - HOUR),
         periodEnd: new Date(),
+        asOf: new Date(),
         dedupeKey,
         payload: { ruleId: "revised" },
         evidence: [{ kind: "metric", metricId: "food_cost_pct" }],

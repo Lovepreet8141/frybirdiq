@@ -106,7 +106,11 @@ export const iqIntradayFacts = pgTable(
   "iq_intraday_facts",
   {
     ...factColumns(),
-    /** Start of the 15-minute bucket; the row holds that bucket's increment. Kept 35 days (B7). */
+    /**
+     * Start of the 15-minute bucket; the row holds that bucket's increment.
+     * Kept 63 days by the job's purge (IQ-1 B7 said 35; IQ-2 R2.8 raised it
+     * for an 8-week baseline). No database-side retention.
+     */
     bucketStart: timestamp("bucket_start", { withTimezone: true }).notNull(),
   },
   (table) => [

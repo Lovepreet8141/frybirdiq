@@ -435,6 +435,7 @@ describe("readers are org-scoped", () => {
           subjectRef: "revenue.net",
           periodStart: new Date(Date.now() - HOUR),
           periodEnd: new Date(),
+          asOf: new Date(),
           dedupeKey: `raw:${randomUUID()}`,
           evidence: [{ kind: "insight", insightId: randomUUID() }],
           codeVersion: CODE_VERSION,
