@@ -36,8 +36,8 @@ describe("every baseline rule: fires at its boundary and is silent one step insi
     ["aov.shift", "aov_net", 57500n, 1, 57499n],
     ["aov.shift", "aov_net", 42500n, 1, 42501n],
     ["discount.spike", "discount_share", 800n, 2, 799n],
-    ["cancellations.spike", "orders_cancelled_failed", 10n, 2, 9n],
-    ["waste.spike", "waste_cost", 350000n, 2, 349999n],
+    ["cancellations.spike", "orders_cancelled_failed", 4n, 2, 3n],
+    ["waste.spike", "waste_cost", 300000n, 2, 299999n],
     ["food_cost.above_baseline", "food_cost_pct_theoretical", 3450n, 2, 3449n],
     ["channel_mix.shift", "online_share", 3500n, 1, 3499n],
     ["channel_mix.shift", "online_share", 500n, 1, 501n],
@@ -94,8 +94,9 @@ describe("every baseline rule: fires at its boundary and is silent one step insi
   });
 });
 
-describe("refunds.spike (threshold)", () => {
-  it("fires above 2% of net sales and is clear at exactly 2%", () => {
+describe("refunds.spike (threshold, gross basis)", () => {
+  it("fires at severity 2 above 2% of gross sales and is clear at or below it (amount arm only)", () => {
+    // sales_gross 1,000,000 paise → 2% = 20,000
     expect(find(evaluate(history({ values: { refunds_amount: 20001n } })).outcomes, "refunds.spike")).toMatchObject({
       status: "FIRED",
       severity: 2,
@@ -103,11 +104,44 @@ describe("refunds.spike (threshold)", () => {
       baseline: { method: "threshold", value: { unit: "paise", value: "20000" }, windowWeeks: 0 },
     });
     expect(find(evaluate(history({ values: { refunds_amount: 20000n } })).outcomes, "refunds.spike").status).toBe("CLEAR");
+    expect(find(evaluate(history({ values: { refunds_amount: 0n } })).outcomes, "refunds.spike").status).toBe("CLEAR");
   });
 
-  it("fires on 2 refunded orders and is clear on 1", () => {
-    expect(find(evaluate(history({ values: { refunds_count: 2n } })).outcomes, "refunds.spike").status).toBe("FIRED");
-    expect(find(evaluate(history({ values: { refunds_count: 1n } })).outcomes, "refunds.spike").status).toBe("CLEAR");
+  it("compares with gross sales, not net sales (refunds include GST)", () => {
+    // 2% of net sales (revenue_net 900,000) would be 18,000, so 19,000 would fire on net; on gross (2% = 20,000) it is clear.
+    const days = history({ values: { revenue_net: 900000n, sales_gross: 1000000n, refunds_amount: 19000n } });
+    expect(find(evaluate(days).outcomes, "refunds.spike").status).toBe("CLEAR");
+  });
+
+  it("has no refund-count arm", () => {
+    expect(DETECT_FIGURES).not.toContain("refunds_count");
+  });
+
+  it("is not evaluated without gross sales", () => {
+    expect(find(evaluate(history({ values: { sales_gross: null, refunds_amount: 50000n } })).outcomes, "refunds.spike")).toMatchObject({
+      status: "NOT_EVALUATED",
+      reason: "figure_missing",
+    });
+  });
+});
+
+describe("per-figure σ floors (RESTAURANT-OPS iq2-s3r-ops)", () => {
+  it("a zero-median cancellations weekday fires at 3 and stays silent at 2", () => {
+    const zeroBase = (value: bigint) => history({ values: { orders_cancelled_failed: value } }, () => ({ values: { orders_cancelled_failed: 0n } }));
+    expect(find(evaluate(zeroBase(3n)).outcomes, "cancellations.spike")).toMatchObject({ status: "FIRED", severity: 2 });
+    for (const n of [4n, 5n, 6n, 7n, 8n]) expect(find(evaluate(zeroBase(n)).outcomes, "cancellations.spike").status).toBe("FIRED");
+    expect(find(evaluate(zeroBase(2n)).outcomes, "cancellations.spike").status).toBe("CLEAR");
+  });
+
+  it("the waste ₹1,000 rule floor binds: +₹999.99 over a flat ₹2,000 is silent even though z ≥ 3", () => {
+    expect(find(evaluate(withValue("waste_cost", 299999n)).outcomes, "waste.spike").status).toBe("CLEAR");
+    expect(find(evaluate(withValue("waste_cost", 300000n)).outcomes, "waste.spike").status).toBe("FIRED");
+  });
+
+  it("the orders drop ≥ 5 rule floor binds on a quiet weekday", () => {
+    const quiet = (value: bigint) => history({ values: { orders_paid: value } }, () => ({ values: { orders_paid: 16n } }));
+    expect(find(evaluate(quiet(11n)).outcomes, "orders.below_weekday_baseline").status).toBe("FIRED");
+    expect(find(evaluate(quiet(12n)).outcomes, "orders.below_weekday_baseline").status).toBe("CLEAR");
   });
 });
 
@@ -247,5 +281,19 @@ describe("one outcome per key", () => {
     expect(outcomes).toHaveLength(BASELINE_RULES.length + 2 + DETECT_FIGURES.length);
     expect(new Set(outcomes.map((o) => o.dedupeKey)).size).toBe(outcomes.length);
     expect(summary.rules_fired! + summary.rules_clear! + summary.rules_not_evaluated!).toBe(outcomes.length);
+  });
+});
+
+describe("summary names each skipped check (BUSINESS-INTELLIGENCE iq2-s3r-bi)", () => {
+  it("counts not_evaluated:<ruleId>:<reason> beside the per-reason totals", () => {
+    const { summary } = evaluate(history({ grades: { waste_cost: "LOW" } }));
+    expect(summary["not_evaluated:waste.spike:low_trust"]).toBe(1);
+    expect(summary["not_evaluated:food_cost.above_target:no_target"]).toBe(1);
+    expect(summary.not_evaluated_low_trust).toBe(1);
+  });
+
+  it("adds up per rule across figures for trust.grade_dropped", () => {
+    const { summary } = evaluate(history().filter((d) => d.date !== PREVIOUS));
+    expect(summary["not_evaluated:trust.grade_dropped:previous_trust_unknown"]).toBe(DETECT_FIGURES.length);
   });
 });

@@ -13,7 +13,13 @@
  * 2. reads D, D-1 and the 8 same-weekday baseline days through the reader;
  * 3. evaluates every rule (`rules.ts`);
  * 4. in one fenced chunk, writes each FIRED detection and expires only the
- *    keys that evaluated CLEAR. NOT_EVALUATED keys are never touched.
+ *    keys that evaluated CLEAR. NOT_EVALUATED keys are never touched. *
+ * TODO(S7, AUTOMATION-ARCHITECT with ANALYTICS-DATA; notes from iq2-s3r-ad, not code here):
+ * - `parityFlagged`: facts parity is checked per MONTH (checkFactsParity), there is no per-day
+ *   flag. The reader must say how it sets it; flagging every day of a mismatched month would
+ *   remove a whole month of baseline points.
+ * - UNKNOWN-trust days, including days with no trust rows, stay baseline points (only LOW is
+ *   skipped). Fine while trust scoring is wired; add a summary count of such points.
  */
 import { addDays } from "@/lib/dates";
 import { computeContentHash, trustRefFor, type Evidence, type InsightOf, type Observed } from "@/lib/iq/engine";

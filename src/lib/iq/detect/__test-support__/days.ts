@@ -16,7 +16,7 @@ export const BASE: Readonly<Record<DetectFigureId, bigint>> = {
   discount_share: 300n,
   orders_cancelled_failed: 1n,
   refunds_amount: 0n,
-  refunds_count: 0n,
+  sales_gross: 1000000n,
   waste_cost: 200000n,
   food_cost_pct_theoretical: 3000n,
   online_share: 2000n,

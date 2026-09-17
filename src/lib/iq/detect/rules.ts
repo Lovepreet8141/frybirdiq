@@ -38,7 +38,7 @@ export const DETECT_FIGURES = [
   "discount_share",
   "orders_cancelled_failed",
   "refunds_amount",
-  "refunds_count",
+  "sales_gross",
   "waste_cost",
   "food_cost_pct_theoretical",
   "online_share",
@@ -52,27 +52,30 @@ export const FIGURE_UNITS: Readonly<Record<DetectFigureId, FigureUnit>> = {
   discount_share: "bps",
   orders_cancelled_failed: "count",
   refunds_amount: "paise",
-  refunds_count: "count",
+  sales_gross: "paise",
   waste_cost: "paise",
   food_cost_pct_theoretical: "bps",
   online_share: "bps",
 };
 
 /**
- * The σ floor per figure. By unit (§2): ₹500, 3 orders, 100 bps. Average order
- * value is the one exception, ₹10: with a ₹500 floor on a ~₹500 average, z ≥ 3
- * would need a +300% change and aov.shift could never fire. For reviewer
- * confirmation (RESTAURANT-OPS, BUSINESS-INTELLIGENCE).
+ * The σ floor per figure (RESTAURANT-OPS iq2-s3r-ops, god's fix batch iq2-s3b).
+ * Floors are set per metric so the rule-level floors actually bind:
+ * - revenue ₹500: the right noise scale for a single QSR's daily sales;
+ * - average order ₹10: the 15% deviation bound, not the floor, gates aov.shift;
+ * - waste ₹150: 3σ = ₹450, below the ₹1,000 rule floor, so that floor decides;
+ * - order counts 1: 3σ = 3 orders, so orders' "drop ≥ 5" and cancellations' "+3" decide.
+ * 5% of the median still applies when it is larger.
  */
 export const FIGURE_SIGMA_FLOOR: Readonly<Record<DetectFigureId, bigint>> = {
   revenue_net: UNIT_FLOOR.paise,
-  orders_paid: UNIT_FLOOR.count,
+  orders_paid: 1n,
   aov_net: 1000n,
   discount_share: UNIT_FLOOR.bps,
-  orders_cancelled_failed: UNIT_FLOOR.count,
+  orders_cancelled_failed: 1n,
   refunds_amount: UNIT_FLOOR.paise,
-  refunds_count: UNIT_FLOOR.count,
-  waste_cost: UNIT_FLOOR.paise,
+  sales_gross: UNIT_FLOOR.paise,
+  waste_cost: 15000n,
   food_cost_pct_theoretical: UNIT_FLOOR.bps,
   online_share: UNIT_FLOOR.bps,
 };
@@ -82,10 +85,12 @@ export const FIGURE_INPUTS: Readonly<Record<DetectFigureId, string>> = {
   revenue_net: "revenue_net",
   orders_paid: "orders_paid",
   aov_net: "aovNetV2(revenue_net, orders_paid); absent when orders_paid = 0",
+  // ANALYTICS-DATA iq2-s3r-ad (c): discount_total is before tax, sales_gross is after discount and points incl. GST —
+  // this is the discount as a share of what customers paid, not of the list price.
   discount_share: "ratioBpsOrNull(discount_total, sales_gross); absent when sales_gross ≤ 0",
   orders_cancelled_failed: "orders_cancelled + orders_failed",
   refunds_amount: "refunds_amount",
-  refunds_count: "orders_refunded + orders_part_refunded",
+  sales_gross: "sales_gross (GST-inclusive, the basis refunds_amount is on)",
   waste_cost: "waste_cost",
   food_cost_pct_theoretical: "foodCostPctTheoretical(food_cost_theoretical, revenue_net); absent when revenue_net ≤ 0",
   online_share: "channelShare(revenue_net[channel=ONLINE], revenue_net); absent when revenue_net ≤ 0",
@@ -230,9 +235,16 @@ export const BASELINE_RULES: readonly BaselineRule[] = [
 
 /** ₹1,000 — god's decision on RESTAURANT-OPS O1 (R2.9). */
 export const WASTE_FLOOR_PAISE = 100000n;
-/** refunds.spike: refunds above 2% of net sales, or at least 2 refunded orders. */
+/**
+ * refunds.spike: refunds above 2% of gross sales, severity 2 (god's ruling on iq2-s3b).
+ * Gross against gross: refunds_amount includes GST, so it is compared with sales_gross, not
+ * revenue_net (ANALYTICS-DATA iq2-s3r-ad C1).
+ *
+ * TODO(an-1): add the count arm, severity 1 for 2+ refunds on the day, once ANALYTICS-DATA adds a
+ * refunds_count fact anchored on the refund's day. The existing refunded-order counts are anchored
+ * on the order's day and count a refunded double capture, so they cannot be used (C2).
+ */
 export const REFUND_SHARE_BPS = 200n;
-export const REFUND_COUNT_MIN = 2n;
 /** food_cost.above_target: at or above the owner's target + 2 percentage points (dec-7). */
 export const FOOD_COST_TARGET_MARGIN_BPS = 200n;
 
@@ -378,20 +390,18 @@ function evaluateRefunds(date: string, today: DetectDay | undefined, todayGate: 
   const skip = (reason: NotEvaluatedReason) => outcomes.push({ status: "NOT_EVALUATED", ruleId, figure, dedupeKey, reason });
   if (todayGate) return void skip(todayGate);
   const amount = today!.figures.refunds_amount;
-  const count = today!.figures.refunds_count;
-  const revenue = today!.figures.revenue_net;
+  const gross = today!.figures.sales_gross;
   const trust = today!.trust.refunds_amount;
-  if (!amount || !count || !revenue) return void skip("figure_missing");
+  if (!amount || !gross) return void skip("figure_missing");
   checkUnit("refunds_amount", amount);
-  checkUnit("refunds_count", count);
-  checkUnit("revenue_net", revenue);
+  checkUnit("sales_gross", gross);
   if (!trust) return void skip("no_trust");
 
-  const threshold = observedShare(revenue, REFUND_SHARE_BPS);
+  const threshold = observedShare(gross, REFUND_SHARE_BPS);
   const a = magnitudeOf(amount);
   const t = magnitudeOf(threshold);
-  const fires = (a > 0n && a * 10000n > REFUND_SHARE_BPS * magnitudeOf(revenue)) || magnitudeOf(count) >= REFUND_COUNT_MIN;
-  const g = gated(fires ? 2 : 0, trust);
+  const severity: Severity = a > 0n && a * 10000n > REFUND_SHARE_BPS * magnitudeOf(gross) ? 2 : 0;
+  const g = gated(severity, trust);
   if (g.severity === 0) {
     if (g.silentReason) skip(g.silentReason);
     else outcomes.push({ status: "CLEAR", ruleId, figure, dedupeKey });
@@ -516,8 +526,11 @@ function summarize(outcomes: readonly RuleOutcome[]): Record<string, number> {
       summary.rules_clear! += 1;
     } else {
       summary.rules_not_evaluated! += 1;
-      const key = `not_evaluated_${o.reason}`;
-      summary[key] = (summary[key] ?? 0) + 1;
+      const byReason = `not_evaluated_${o.reason}`;
+      summary[byReason] = (summary[byReason] ?? 0) + 1;
+      // Per rule, so "Treat with care" can say which check was skipped and why (BUSINESS-INTELLIGENCE iq2-s3r-bi).
+      const byRule = `not_evaluated:${o.ruleId}:${o.reason}`;
+      summary[byRule] = (summary[byRule] ?? 0) + 1;
     }
   }
   return summary;
