@@ -329,6 +329,18 @@ Deploy the code **after** the migration when a change is additive, and
 Restarting drops in-flight requests. At a QSR that means doing it between
 services, not during one.
 
+`deploy.sh` stamps `DEPLOY_COMMIT=$(git rev-parse HEAD)` into
+`/etc/frybird/env` on every run, in place, before restarting — that value is
+what `iq_job_runs.code_version` and every insight's `producedBy.codeVersion`
+read (`src/lib/env/index.ts`), so a job run or an insight can be traced back
+to the code that produced it. It refuses to deploy if `git rev-parse HEAD`
+doesn't return a 40-character lowercase SHA, and never prints or forwards
+anything else already in that file (`JOB_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`,
+`RAZORPAY_*`, `DATABASE_URL`) — only that one line is rewritten, remotely,
+without it passing back through this script's own output. This needs
+`/etc/frybird/env` to already exist (§2); `deploy.sh` refuses rather than
+create one.
+
 ---
 
 ## 8. Backups (roadmap 0.7)
@@ -360,10 +372,10 @@ bash deploy/restore-check.sh               # restores the newest dump, counts ro
 
 ## 9. Scheduled jobs (IQ-0, S10)
 
-Owner decision `dec-1` (job runner on the VPS) has not been made — **do not
-install anything in this section until god says that decision has landed.**
-Everything here is the repo-file side only; it ships dormant (`JOB_SECRET`
-unset) either way, so committing it carries no production risk by itself.
+Owner decisions `dec-1` (job runner on the VPS) and `dec-2` (production
+`iq_*` migration) are **approved** — see card `dv-1` and §10 for this
+release's install order. Ships dormant until `JOB_SECRET` is set either way
+(§9.1), so nothing here is live just from being deployed.
 
 The route (`src/app/api/jobs/[job]/route.ts`) is already live in the app —
 it answers 404 to everything until `JOB_SECRET` is set. nginx also refuses
@@ -512,6 +524,90 @@ itself): 0 means it's missing from the 443 server entirely; hand-copy it in
 block, which isn't wrong, just unnecessary. Confirm which server block(s)
 hold it with `nginx -T | grep -B5 'location \^~ /api/jobs/'` before assuming
 either way.
+
+## 10. This release: migrations 0033–0036 + the job runner (card `dv-1`)
+
+Owner-approved (`dec-1`, `dec-2`). One-page order for this install — each
+step links back to its full detail section. Do not reorder: migrations
+before the job runner's own migration-dependent tables exist, `deploy.sh`
+before the job unit is installed (systemd has nothing to start yet
+otherwise), **nginx's own block verified live before `JOB_SECRET` is ever
+set** (SECURITY-TENANCY, dv-1r-sec — otherwise there's a window where the
+job route is non-dormant and the only thing refusing a public request is
+the app's own header check, not nginx's), the job secret before enabling
+the timer (a timer with no secret just spins on 404s), verification last.
+
+1. **Pre-checks (read-only, §8 allowlist).** `systemctl is-active frybird`;
+   record the current `drizzle.__drizzle_migrations` head before migrating —
+   this release adds exactly `0033_rls_write_lockdown` through
+   `0036_iq_facts`, so the head afterwards must be `0036` and nothing else
+   should have moved it in between.
+2. **Migrate.** `pnpm db:migrate` (§6) — applies those four, from your Mac,
+   against Supabase. Confirm the new head is `0036` before moving on.
+
+   **Stop-safety between here and step 3 (RELIABILITY, dv-1r-rel):** the
+   currently-running (old) code is safe against all four. `0033` only
+   revokes `anon`/`authenticated` Postgres-role write grants and narrows
+   three tables' RLS policies to `SELECT`; the app — old code and new code
+   alike — has never written through those roles, only through Drizzle as
+   `postgres`, which owns every table and bypasses RLS entirely (see
+   `0033_rls_write_lockdown.sql`'s own header comment for the full
+   reasoning; CLAUDE.md's non-negotiable that the app connects as
+   `postgres`). `0034`–`0036` are additive-only (`iq_*` tables old code
+   never references). So a gap between migrating and deploying — even an
+   unplanned one — is not an outage. To roll back the schema alone, run the
+   down files in reverse: `0036_iq_facts.down.sql`,
+   `0035_iq_job_runs_failures.down.sql`, `0034_iq_foundations.down.sql`,
+   `0033_rls_write_lockdown.down.sql` (`supabase/rollback/`). To roll back
+   the code alone, `deploy.sh` at the previous commit.
+3. **Deploy the code.** `./deploy/deploy.sh root@194.238.16.200` (§7) —
+   builds, ships, stamps `DEPLOY_COMMIT`, restarts `frybird`, smoke-tests
+   `/`. The job route exists in the running app now but stays dormant
+   (`JOB_SECRET` unset), so it answers 404 on its own even before the next
+   step.
+4. **Apply and verify the nginx change (§5a).** Back up the live config
+   (`cp /etc/nginx/sites-available/frybird
+   /etc/nginx/sites-available/frybird.bak-$(date +%s)`), copy in
+   `deploy/nginx-frybird.conf`'s `location ^~ /api/jobs/` 404 and the
+   server-level proxy headers — both the 80 and 443 blocks, since certbot
+   forked the 443 one and a repo edit never reaches it by itself (§5a) —
+   `nginx -t && systemctl reload nginx`. Then immediately check: `nginx -T |
+   grep -c 'location \^~ /api/jobs/'` must be **1**, `curl` to
+   `https://frybirdiq.tech/api/jobs/heartbeat` must be **404**. Do not move
+   on until both hold — this is the step SECURITY-TENANCY required happen
+   before the secret exists, not after.
+5. **Create the job secret.** §9.1's block, run once: writes
+   `/etc/frybird/jobs.header` (0600) and appends `JOB_SECRET=` to
+   `/etc/frybird/env`, neither ever printed, then `systemctl restart
+   frybird` (already the last line of that block).
+6. **Install the job units.** §9.2's `cp`/`daemon-reload` steps for
+   `frybird-job@.service`, `frybird-job-failed@.service`,
+   `frybird-job-heartbeat.timer` — **do not `enable --now` the timer yet.**
+7. **Run one heartbeat by hand.** `systemctl start frybird-job@heartbeat`,
+   then `journalctl -u frybird-job@heartbeat -n 20` — confirm **200 and
+   SUCCEEDED** before anything is on a schedule. This is the first real
+   exercise of `LoadCredential`/`%d` end to end (nothing in the local proof
+   used systemd at all — `docs/releases/iq-0-local-proof.md`'s own "not run
+   here" list) and of this VPS's actual systemd version (open question V1,
+   never resolved locally either).
+8. **Enable the timer.** `systemctl enable --now frybird-job-heartbeat.timer`
+   (§9.2) — now it's on a schedule.
+9. **Verify nginx and the route again.** Same two checks as step 4 —
+   `nginx -T` count still **1**, https still **404**. Confirms nothing
+   later in the install (a reload, a cert renewal) undid step 4.
+10. **Smoke.** The public site (`docs/RELEASES.md`'s usual signed-out check)
+    plus `systemctl is-active frybird-job-heartbeat.timer`.
+
+**If step 7 doesn't show SUCCEEDED, do not go on to step 8.** The manual
+`systemctl start` already put the unit under `Restart=on-failure` — it keeps
+auto-retrying on its own `RestartSec=360` schedule whether or not the timer
+was ever enabled, so a plain "stop" is not enough on its own. Run §9.4's
+`systemctl stop 'frybird-job@*.service'` then `systemctl reset-failed
+'frybird-job@*.service'` before doing anything else, so no attempt is left
+retrying in the background while the failure is investigated. §9.4 has the
+rest of the disable/rollback steps if you need to back out after step 6; to
+roll back step 4 alone, restore the newest `frybird.bak-*` file and
+`nginx -t && systemctl reload nginx` again (§5a).
 
 ## What this does not have yet
 

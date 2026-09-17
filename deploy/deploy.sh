@@ -24,6 +24,35 @@ fi
 
 cd "$(dirname "$0")/.."
 
+# Stamped into /etc/frybird/env below and read at runtime as
+# src/lib/env/index.ts's DEPLOY_COMMIT — the app records it on
+# iq_job_runs.code_version and every insight's producedBy.codeVersion, so a
+# job run or an insight can be traced back to the code that produced it.
+# Validated here, before anything else runs, against the exact pattern that
+# side reads (DEPLOY_COMMIT_PATTERN) — a value that doesn't match makes the
+# app fall back to "unversioned" with one non-fatal console.warn, not fail to
+# boot (fixed in 49cb953 after an earlier version validated it inside
+# serverSchema alongside JOB_SECRET and could crash serverEnv() on a bad
+# value; DEPLOY_COMMIT is informational, not a security boundary, so it
+# can't be allowed to do that). Shipping a bad value would still make every
+# run of this release untraceable even though nothing crashes, so deploy.sh
+# refuses instead of letting that happen silently.
+DEPLOY_COMMIT="$(git rev-parse HEAD)"
+if [[ ! "$DEPLOY_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "refusing: git rev-parse HEAD did not return a 40-character lowercase SHA (\"$DEPLOY_COMMIT\")" >&2
+  exit 1
+fi
+
+# RELIABILITY (dv-1r-rel): deploy.sh builds and ships the WORKING TREE, but
+# DEPLOY_COMMIT stamps HEAD. A dirty tree means those two disagree — the
+# running code is not what that SHA describes, and code_version lies about
+# it on every job run and insight from this deploy onward.
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "refusing: working tree is not clean — commit or stash before deploying, so DEPLOY_COMMIT matches what's actually built" >&2
+  git status --short >&2
+  exit 1
+fi
+
 echo "==> Gates"
 pnpm typecheck
 pnpm lint
@@ -61,12 +90,50 @@ echo "==> Restart"
 # `sudo` only when the target is not already root, so this works either way.
 ssh "$TARGET" '
   set -e
+  # pipefail matters below: without it, a failing `grep` mid-pipeline (env
+  # file unreadable, sudo prompt, anything) would not stop the script — tee
+  # would just write an empty file from the failed grep'"'"'s empty stdout, and
+  # the DEPLOY_COMMIT-only file that follows would silently replace every
+  # secret in /etc/frybird/env. dash (some distros'"'"' /bin/sh) has no
+  # pipefail, so this only works because the remote command runs under the
+  # login shell ssh invokes, and every distro this deploys to is bash.
+  set -o pipefail
   if [ "$(id -u)" -ne 0 ]; then SUDO=sudo; else SUDO=""; fi
   $SUDO chown -R frybird:frybird '"'$REMOTE_DIR'"'
   # Next writes its image cache here and the unit lists it as its only
   # writable path. Recreated rather than assumed: the first deploy to a fresh
   # box has never had one.
   $SUDO install -d -o frybird -g frybird '"'$REMOTE_DIR'"'/.next/cache
+
+  # Stamp DEPLOY_COMMIT into /etc/frybird/env in place. The file must already
+  # exist (docs/DEPLOY.md §2 creates it before the first deploy) — refuse
+  # rather than let the mv below create a fresh, wrongly-permissioned one out
+  # of a missing file. Every step here is grep/tee/mv on that one line; the
+  # rest of the file (JOB_SECRET, SUPABASE_SERVICE_ROLE_KEY, RAZORPAY_*,
+  # DATABASE_URL) is carried through untouched and never sent back to this
+  # script'"'"'s stdout, this terminal, or a log — piped straight from one
+  # root-only file to another, both ends of the pipe run as $SUDO so a
+  # non-root deploy user is never asked to read or write it directly.
+  $SUDO test -f /etc/frybird/env || { echo "refusing: /etc/frybird/env is missing" >&2; exit 1; }
+  # Created inside /etc/frybird itself, as root, from the start (SECURITY-TENANCY
+  # dv-1r-sec, RELIABILITY dv-1r-rel): a plain `mktemp` defaults to /tmp, which
+  # on some boxes is a different filesystem (tmpfs) than /etc — the final `mv`
+  # would then be a copy-then-unlink, not an atomic rename: ENOSPC or a crash
+  # mid-copy could truncate the live /etc/frybird/env, and the secret-bearing
+  # temp file would sit in /tmp, owned by the deploy user, in the meantime.
+  # Same directory + $SUDO from creation closes both. Permissions are set
+  # immediately after, before any content is written — not as an afterthought
+  # once the file already holds secrets — and `sync` runs before the rename
+  # so a crash right after does not leave a renamed file whose data was
+  # still only in the page cache, never actually reached disk.
+  NEW_ENV="$($SUDO mktemp /etc/frybird/env.XXXXXX)"
+  $SUDO chown root:frybird "$NEW_ENV"
+  $SUDO chmod 640 "$NEW_ENV"
+  $SUDO grep -v "^DEPLOY_COMMIT=" /etc/frybird/env | $SUDO tee "$NEW_ENV" > /dev/null
+  printf "DEPLOY_COMMIT=%s\n" '"'$DEPLOY_COMMIT'"' | $SUDO tee -a "$NEW_ENV" > /dev/null
+  sync
+  $SUDO mv "$NEW_ENV" /etc/frybird/env
+
   $SUDO systemctl restart frybird
   sleep 2
   $SUDO systemctl is-active frybird
