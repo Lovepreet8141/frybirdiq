@@ -455,7 +455,7 @@ export async function createExpense(orgId: string, input: NewExpense): Promise<{
     }
     const [inserted] = await tx
       .insert(expenses)
-      .values({ orgId, ...input })
+      .values({ ...input, orgId })
       .returning({ id: expenses.id });
     if (!inserted) throw new Error("expenses: insert returned no row");
     return inserted;
