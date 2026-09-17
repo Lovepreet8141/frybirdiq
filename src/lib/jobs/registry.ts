@@ -67,3 +67,12 @@ export function isJobName(value: string): value is JobName {
 export function jobDefinition(name: JobName): JobDefinition {
   return JOB_REGISTRY[name];
 }
+
+/** Names of jobs that must never run at the same time as another heavy job. */
+export function heavyJobNames(registry: Readonly<Record<string, JobDefinition>>): string[] {
+  return Object.values(registry)
+    .filter((job) => job.concurrency === "heavy")
+    .map((job) => job.name);
+}
+
+export const HEAVY_JOB_NAMES: readonly string[] = heavyJobNames(JOB_REGISTRY);
