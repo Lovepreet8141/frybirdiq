@@ -2,7 +2,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ESLint } from "eslint";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// Vitest's default 5s test timeout is tuned for a plain assertion, not the
+// first call in this file: ESLint's Node API loads eslint-config-next and
+// resolves the whole typescript-eslint project program from a cold start,
+// which can outrun 5s on a loaded machine or CI runner even though every
+// individual lintText call after that is fast (qa-1, FRONTEND report).
+vi.setConfig({ testTimeout: 20_000 });
 
 /**
  * Runs the real eslint.config.mjs against one small violating fixture per
