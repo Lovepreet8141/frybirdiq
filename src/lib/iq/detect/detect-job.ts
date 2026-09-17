@@ -44,7 +44,7 @@ export type ExpireRequest = { readonly dedupeKey: string; readonly asOf: string;
 
 /** Writers inside the fenced chunk. */
 export type DetectWriter = {
-  readonly writeInsight: (insight: InsightOf<"DETECTION">) => Promise<{ readonly outcome: string }>;
+  readonly writeInsight: (insight: InsightOf<"DETECTION">, options: { readonly asOf: string }) => Promise<{ readonly outcome: string }>;
   readonly expireInsights: (requests: readonly ExpireRequest[]) => Promise<{ readonly expired: number }>;
 };
 
@@ -144,7 +144,7 @@ export async function runDetectDaily(ports: DetectJobPorts): Promise<JobRunResul
   const summary: Record<string, number> = { ...evaluation.summary };
   const { writes, expired } = await ports.commit(async (writer) => {
     const results: string[] = [];
-    for (const insight of insights) results.push((await writer.writeInsight(insight)).outcome);
+    for (const insight of insights) results.push((await writer.writeInsight(insight, { asOf })).outcome);
     const expiredResult = clears.length > 0 ? await writer.expireInsights(clears) : { expired: 0 };
     return { writes: results, expired: expiredResult.expired };
   });

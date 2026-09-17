@@ -373,6 +373,87 @@ decision `dec-2`; production backfill of facts is a separate approved step.
   `count`; a dedicated `seconds` unit would need a migration widening
   `iq_intraday_facts_unit_check` and `iq_daily_facts_unit_check`.
 
+
+## 4d. 0037 `iq_insights_copy_trust` (not deployed; `agent/database-iq2-s1`, cards iq2-s1, iq2-s1b)
+
+Added 2026-09-17. Requires 0034. IQ-2 slice S1 (hive `reviews/iq-2/DESIGN.md`
+S1 + Revision 2 R2.2, R2.3, R2.11). Production run is owner gate 1 and
+decision `dec-2`.
+
+### Numbering (FACT)
+First committed as 0038, leaving 0037 for the refund release. ARCHITECT
+refused that (iq2-s1r): drizzle applies an entry only when its `when` is
+above the last applied `created_at`, so a 0037 merged later with a lower
+`when` would be skipped in production without an error. It is now **0037**,
+the next free number, with journal `when` 1790200000000. The refund release
+takes the next free number when it merges, with a `when` above every applied
+entry. `src/db/schema/iq.test.ts` fails on a journal tag whose number is not
+its `idx` (a gap) and on a `when` that does not increase.
+
+### Classification — **Reversible while insights are derived; forward-fix once IQ-2 writes production rows**
+- **What it does (FACT):** on `iq_insights` adds
+  - `copy jsonb NOT NULL DEFAULT '{"templateId":"none","slots":{}}'` with a
+    strict shape CHECK (exactly `templateId` + `slots`; identifier template id,
+    identifier slot names, dotted payload-path values; the patterns are
+    unit-tested against the engine's Zod schemas);
+  - `trust_metric_ids text[]`, `trust_reasons text[]` (`NOT NULL DEFAULT
+    '{}'`) with a CHECK: MEASURED ≥ 1 metric id; INSUFFICIENT_DATA ≥ 1 reason
+    and no metric ids; NOT_MEASURED neither; elements match the engine
+    identifier / code patterns, no empty or comma-carrying element, ≤ 50 each;
+  - `as_of timestamptz NOT NULL` with **no default** (RELIABILITY U2); existing
+    rows take `period_end`;
+  - `status_reason text` in CLEARED | CLOSING_TIME (EXPIRED) | SUPERSEDED |
+    RETRACTED (their own status), null while ACTIVE;
+  - CHECK `dedupe_key LIKE 'recon:%'` ⇔ `producer LIKE 'recon.%'`, same for
+    `sig:` / `sig.` (ARCHITECT P3);
+  - `CREATE OR REPLACE` of 0034's `iq_insights_freeze_referenced()` adding
+    `copy`; trust, `as_of`, status and `status_reason` stay writable;
+  - the `iq_insights_staff_read` policy narrowed: OWNER or MANAGER, or ADMIN
+    for any producer not starting `recon.` or `sig.` (R2.2).
+- **Existing rows (FACT, drilled locally):** the migration first refuses (SQLSTATE
+  55000, nothing applied) when any row is MEASURED or INSUFFICIENT_DATA, since
+  their metric ids / reasons cannot be recovered. Such rows are derived:
+  delete them, apply, and let the jobs rewrite them. NOT_MEASURED rows,
+  referenced ones included, get the placeholder copy, empty trust arrays and
+  `as_of = period_end`. Drill: two seeded NOT_MEASURED rows (one cited by a
+  recommendation) plus one MEASURED row → refused, schema unchanged → MEASURED
+  row deleted → applied → both rows backfilled; a later copy change on the
+  referenced row is refused by the freeze trigger. Production has no
+  `iq_insights` rows (dec-2).
+- **Cross-owner touch (FACT):** `as_of` has no default, so every insert must
+  set it. `src/lib/repositories/iq-insights.ts` (IQ-ENGINE) now writes `copy`,
+  the trust arrays and `as_of = period.end`, and three integration fixtures set
+  `asOf`. S2 replaces `as_of = period.end` with the writer's explicit `asOf`.
+- **Down file (FACT):** `supabase/rollback/0037_iq_insights_copy_trust.down.sql`,
+  one `BEGIN`/`COMMIT`: restores 0034's policy and 0034's freeze function body
+  verbatim, drops the four constraints and five columns. Journal-row delete is
+  a manual step outside the transaction.
+- **Tested locally (FACT, 2026-09-17, local Postgres 17.6):** as 0038
+  (`bd9885e`): `supabase migration up --local` → the insights integration test
+  10/10 → down + journal row deleted → 0 new columns, 0034 policy and function
+  restored, 6 failed / 4 skipped → re-applied → 10/10. After the renumber
+  (SQL unchanged except comments and the refusal message), on a per-worktree
+  database (`hive/tools/test-db.sh`): built from 0000–0037 →
+  `iq-insights-0037.integration.test.ts` 6 passed / 4 skipped (the PostgREST
+  suite needs the shared stack) → down + `0037` row deleted → 6 failed →
+  `test-db.sh migrate` → 6 passed. Drizzle migrator path not tested
+  (CLI-managed local stack).
+- **Data at risk:** each insight's copy, trust detail, `as_of` and
+  `status_reason`. Insights are derived today; once IQ-2 writes production
+  insights that recommendations cite, fix forward.
+- **Down is one-way once S2 writes MEASURED insights (FACT, RELIABILITY
+  iq2-s1r):** the down file drops the trust arrays, and re-applying 0037 then
+  refuses while any MEASURED or INSUFFICIENT_DATA row exists. "Delete them"
+  does not work for an insight a recommendation cites
+  (`iq_recommendations_insight_fk`, ON DELETE NO ACTION, 0034) and would erase
+  decision history anyway. RECOMMENDATION: after S2 writes such rows, do not
+  run the down file; fix forward. If it was run, re-apply only on a table with
+  no MEASURED or INSUFFICIENT_DATA row cited by a recommendation.
+
+### Intraday facts retention
+Recorded with the table it applies to, in §4c (35 → 63 days, iq2-s8). 0037
+does not touch `iq_intraday_facts`.
+
 ---
 
 ## 5. Rollback files 0022–0026: the known-safe procedure

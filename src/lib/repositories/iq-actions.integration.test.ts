@@ -64,6 +64,7 @@ async function insertRecommendation(target: TestOrg, paramsHash: string) {
         subjectRef: "stock",
         periodStart: new Date(now.getTime() - HOUR),
         periodEnd: now,
+        asOf: now,
         dedupeKey: `test:${randomUUID()}`,
         payload,
         evidence: [{ kind: "metric", metricId: "stock" }],
