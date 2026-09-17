@@ -70,6 +70,21 @@ export const PERMISSIONS = [
    * ("may this person change what the P&L says") are different questions.
    */
   "finance.manage",
+  /**
+   * Approving an IQ action the engine proposed but may not run on its own
+   * (tier A2) — the human "yes" an AUTOMATION record carries as its
+   * approvalRef. OWNER only (hive/reviews/iq-0/DESIGN-v2-DELTA.md §4): an
+   * approval acts on the business as a whole, so it sits with the person who
+   * answers for it, not with whoever holds the most other permissions.
+   */
+  "iq.approve",
+  /**
+   * Turning an IQ auto policy on or off, or changing its limits — deciding
+   * which actions run with no human approval at all. Strictly wider than
+   * `iq.approve`, since a policy approves every future action of its kind in
+   * advance. OWNER only, for the same reason.
+   */
+  "iq.autopolicy.manage",
   "staff.manage",
   "settings.manage",
   "integrations.manage",
@@ -108,8 +123,17 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
   // promotions.manage is excluded here on purpose, unlike finance.manage above
   // — decided 2026-09-15 to sit with OWNER/MANAGER (see the permission's own
   // doc comment), not the OWNER/ADMIN tier menu.price and menu.publish use.
+  //
+  // iq.approve and iq.autopolicy.manage are excluded because both are OWNER
+  // only (hive/reviews/iq-0/DESIGN-v2-DELTA.md §4). Without this line they
+  // would fall through to ADMIN like every other new permission does.
   ADMIN: PERMISSIONS.filter(
-    (permission) => permission !== "settings.manage" && permission !== "finance.view" && permission !== "promotions.manage",
+    (permission) =>
+      permission !== "settings.manage" &&
+      permission !== "finance.view" &&
+      permission !== "promotions.manage" &&
+      permission !== "iq.approve" &&
+      permission !== "iq.autopolicy.manage",
   ),
 
   MANAGER: [
