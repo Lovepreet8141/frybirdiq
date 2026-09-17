@@ -10,23 +10,24 @@ describe("classifyCloseResult", () => {
     expect(classifyCloseResult({ thrown: true })).toEqual({ kind: "offline" });
   });
 
-  it("is closed-elsewhere on the server's exact lost-race message, not a generic error", () => {
-    expect(classifyCloseResult({ thrown: false, result: { ok: false, error: "That delivery is already closed." } })).toEqual({
-      kind: "closed-elsewhere",
-    });
+  it("is closed-elsewhere on the ALREADY_CLOSED code, the server's lost-race signal", () => {
+    expect(
+      classifyCloseResult({ thrown: false, result: { ok: false, code: "ALREADY_CLOSED", error: "That delivery is already closed." } }),
+    ).toEqual({ kind: "closed-elsewhere" });
   });
 
-  it("falls back to a plain error for any other server message", () => {
-    expect(classifyCloseResult({ thrown: false, result: { ok: false, error: "That order has not left the shop yet." } })).toEqual({
-      kind: "error",
-      message: "That order has not left the shop yet.",
-    });
+  it("falls back to a plain error, showing the message, for any other code", () => {
+    expect(
+      classifyCloseResult({ thrown: false, result: { ok: false, code: "NOT_OUT_FOR_DELIVERY", error: "That order has not left the shop yet." } }),
+    ).toEqual({ kind: "error", message: "That order has not left the shop yet." });
   });
 
-  it("falls back to a generic message when the server gave none", () => {
-    expect(classifyCloseResult({ thrown: false, result: { ok: false } })).toEqual({
-      kind: "error",
-      message: "That didn't work.",
-    });
+  it("shows the message as-is for a server exception (SERVER_ERROR) too — it never rejects", () => {
+    expect(
+      classifyCloseResult({
+        thrown: false,
+        result: { ok: false, code: "SERVER_ERROR", error: "Something went wrong closing that delivery. Try again." },
+      }),
+    ).toEqual({ kind: "error", message: "Something went wrong closing that delivery. Try again." });
   });
 });
