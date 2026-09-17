@@ -18,7 +18,7 @@ Written 14 September 2026 from the status report of the same date (`kit-radix-no
 - Money stays in integer paise, computed on the server. No UI ever calculates an authoritative total.
 - One source of truth per domain. No second pricing, payment, order or menu system.
 - No schema change without a migration and a reason in the commit message. No demo data in production.
-- Commit and deploy after each verified slice. Ask before pushing.
+- Commit after each verified slice. Pushing `kit-radix-nova` and `agent/*` follows the standing authorization in hive `ORG.md` §7; deploy only after the owner approves.
 
 **Production safety — how a Done-when is proven**
 
@@ -39,11 +39,11 @@ Nothing else is safe until this is done. Most of it is configuration, not code.
 |---|---|---|---|
 | 0.1 | Push `kit-radix-nova` and fast-forward `main` | PARTIAL — done once on 14 Sep (`main` → `3bc9b46`); `kit-radix-nova` is now 100+ commits ahead of `origin/main` | `git status` shows no "ahead"; GitHub `main` = deployed commit |
 | 0.2 | Error monitoring — Sentry (free tier) via `instrumentation.ts`, DSN in `.env`, source maps uploaded by `deploy.sh` | NOT STARTED — no Sentry code or dependency in `86de133` | A deliberate `throw` on a staff route appears in Sentry within a minute, with the stack trace mapped to source |
-| 0.3 | Supabase Auth: Site URL → `https://frybirdiq.tech`, Redirect URLs → `https://frybirdiq.tech/**` | UNKNOWN — Supabase dashboard setting; no record in the repo or progress log | **Owner-run + read-only:** the owner's screenshot of Supabase Auth URL settings shows both values; the next real signup or staff invite the owner makes opens frybirdiq.tech. **Local proof:** auth email links are built from the request origin, never a build-time URL. No test signup in production |
-| 0.4 | Custom SMTP in Supabase (Resend or Brevo) — the built-in sender already hit its rate limit | UNKNOWN — Supabase dashboard setting; no record | **Read-only:** Supabase Auth settings show a custom sender (screenshot, no secrets), and the auth email log shows zero rate-limit errors across the first 7 days of real signups after the switch. No test signups |
+| 0.3 | Supabase Auth: Site URL → `https://frybirdiq.tech`, Redirect URLs → `https://frybirdiq.tech/**` | UNKNOWN — Supabase dashboard setting; no record in the repo or progress log | **Owner-run + read-only:** the owner's screenshot of Supabase Auth URL settings shows both values; the next real signup or staff invite the owner makes opens frybirdiq.tech. **Local proof:** auth email links are built from the runtime `SITE_URL` setting, never a `NEXT_PUBLIC_*` build-time value (`src/lib/customer/actions.ts:20`, `src/lib/repositories/staff.ts:65`); with `SITE_URL` unset, Supabase falls back to its dashboard Site URL. No test signup in production |
+| 0.4 | Custom SMTP in Supabase (Resend or Brevo) — the built-in sender already hit its rate limit | UNKNOWN — Supabase dashboard setting; no record | **Read-only:** Supabase Auth settings show a custom sender (screenshot, no secrets), and the auth email log shows zero rate-limit errors across the first 7 days of real signups after the switch, with at least 10 real signups in that window (fewer: extend the window). No test signups |
 | 0.5 | Close the two dormant-permission leaks: promotion writes on `settings.manage` (not `orders.discount`); expense writes on `finance.view` (not `analytics.view`) | LIVE — `18cd4e0` (expenses on `finance.view`); promotions got their own `promotions.manage` (`src/domain/permissions.ts:61`) | A CASHIER login cannot create a promotion; an ANALYST cannot record an expense |
 | 0.6 | Drop dead dependencies (`@base-ui/react`, `react-hook-form`, `@hookform/resolvers`, `date-fns`); update `FRYBIRD-COMPONENT-MIGRATION.md` to radix-nova | LIVE — `903a6fd`; none of the four in `package.json` | `pnpm build` green, lockfile smaller |
-| 0.7 | Backups: nightly `pg_dump` from the VPS to Supabase-external storage (or Supabase PITR on the paid tier) | PARTIAL — nightly timer and restore check shipped (`6bbde8a`, `3bc9b46`); dumps live only on the VPS, no offsite copy (`blk-4`, `dec-8`). The progress log records a restore on 14 Sep; `blk-5` records no evidence of one — unresolved | **Read-only:** the backup timer is active and 7 consecutive nightly dumps are listed; an offsite copy exists for each. **Owner-approved:** one run of the restore check into the VPS scratch database (never the production database), output recorded in `docs/RELEASES.md` |
+| 0.7 | Backups: nightly `pg_dump` from the VPS to Supabase-external storage (or Supabase PITR on the paid tier) | PARTIAL — nightly timer and restore check shipped (`6bbde8a`, `3bc9b46`); dumps live only on the VPS, no offsite copy (`blk-4`, `dec-8`). The progress log records a restore on 14 Sep; `blk-5` records no evidence of one — unresolved | **Read-only (`ORG.md` §8):** the existing restore-check result files show a successful restore (this also settles the progress log vs `blk-5` conflict); the backup timer is active and 7 consecutive nightly dumps are listed; an offsite copy exists for each. **Owner gate, only if no result file exists:** one owner-approved run of the restore check into the VPS scratch database (never the production database), output recorded in `docs/RELEASES.md` |
 
 **Decisions needed:** offsite backup storage and its credentials (`dec-8`).
 
@@ -58,10 +58,10 @@ The only hole in the customer loop. Also the first refund write path, which fina
 | # | Slice | Status (17 Sep) | Done when |
 |---|---|---|---|
 | 1.1 | `razorpayProvider` behind the existing `PaymentProvider` interface — `createIntent` makes a Razorpay Order for the order's `grandTotal`; `capture` verifies the signature | LIVE — `b5c1933` | Unit tests for signature verification pass with a recorded fixture |
-| 1.2 | Checkout: UPI / card / netbanking via Razorpay Checkout; cash-on-delivery stays; `availableMethods()` returns both | PARTIAL — code live (`276d2aa`); no keys in production, so only cash/COD are offered | **Local proof:** on the local stack with mocks (or Razorpay test-mode keys, owner-provided), a UPI payment moves the order to PAID end to end. **Live, read-only** (after the owner sets live keys): for 7 days, every captured online payment has exactly one PAID order and one `payments` row, and no PAID online order lacks a captured payment. No test order |
+| 1.2 | Checkout: UPI / card / netbanking via Razorpay Checkout; cash-on-delivery stays; `availableMethods()` returns both | PARTIAL — code live (`276d2aa`); no keys in production, so only cash/COD are offered | **Local proof:** on the local stack with mocks (or Razorpay test-mode keys, owner-provided), a UPI payment moves the order to PAID end to end. **Live, read-only** (after the owner sets live keys): for 7 days, every captured online payment has exactly one PAID order and one `payments` row, and no PAID online order lacks a captured payment, with at least 20 real online payments in the window (fewer: extend it; until then the local proof is the only proof). No test order |
 | 1.3 | Webhook `/api/payments/razorpay/webhook` — verified, idempotent on `webhook_events` (table exists, unused), calls the same `recordPayment` path cash uses | PARTIAL — `8d062a9`; route live (`src/app/api/payments/razorpay/webhook/route.ts`), answers 503 without keys | Replaying the same webhook twice records one payment (local proof, recorded fixture) |
 | 1.4 | Refund write path — `refunds` row, provider refund call for online, cash-refund record for counter; gated on `orders.refund`; audit row | PARTIAL — `65bfead`; Refund dialog on `/app/finance` live (`src/components/finance/payments-table.tsx:403`); online refunds unreachable without keys; P1 audit findings open (unified refund design pending, `dec-9`, `dec-10`) | **Local proof:** a refund from `/app/finance` against a mocked provider writes one `refunds` row, one ledger entry and one audit row; a double submit writes one refund. **Owner-run + read-only:** each real refund the owner issues in the course of business shows its `refunds` row, audit row and (online) provider refund id, and matches Razorpay's dashboard. No test refund |
-| 1.5 | Order status page: "Paid" / "Payment failed — retry" states; failed payment never leaves a phantom PAID order | PARTIAL — retry UI live (`src/components/order/pay-online.tsx:172`), unreachable without keys | **Local proof:** abandoning or failing checkout (mock or test mode) leaves the order PENDING with a retry button. **Live, read-only:** a daily query finds zero PAID orders without a captured payment. No test order |
+| 1.5 | Order status page: "Paid" / "Payment failed — retry" states; failed payment never leaves a phantom PAID order | PARTIAL — retry UI live (`src/components/order/pay-online.tsx:172`), unreachable without keys | **Local proof:** abandoning or failing checkout (mock or test mode) leaves the order PENDING with a retry button. **Live, read-only:** a daily query finds zero PAID orders without a captured payment, counted only once at least 20 real online payments exist (until then the local proof is the only proof). No test order |
 
 **Decisions needed:** Razorpay live keys (you); whether COD stays available for online orders (default: yes, under a per-order cap set in restaurant settings).
 
@@ -171,8 +171,6 @@ No dependencies. Slot single screens between phases rather than as a block.
 
 Still on the old style (as of 14 Sep): Deliveries page and card · Expenses list and new-expense form · every Menu sub-page (categories, combos, media, modifiers, product new/edit, review) · Rewards page · Restaurant settings · POS payment sheet and rewards keypad · order card and new-order alert · old `overview-kpis`.
 
-Then: IQ dark theme (staff area default per the visual reference; light stays the toggle), amber accent not magenta.
-
 **Done when** `grep` finds no old heading/back-link pattern and every staff route renders in both themes with the contrast check passing.
 
 ---
@@ -211,7 +209,7 @@ Customer analytics (cohorts, inactive customers), waste and variance analytics, 
 
 Runs beside Phases 0–11 and replaces none of them. Source: `hive/org/IQ-GAPS-AND-ROADMAP.md` (proposed by the orchestrator, 17 Sep). Every Done-when is proven on frybirdiq.tech read-only, or on the local stack — never with test orders or payments. Every output is labelled FACT, DETECTION, FORECAST, EXPLANATION, RECOMMENDATION or AUTOMATION; a forecast is never shown as a fact.
 
-**Status (17 Sep): NOT STARTED** for every IQ phase below.
+**Status (17 Sep):** IQ-0 is **IN DESIGN** — v2 design under review (`hive/reviews/iq-0/DESIGN-v2-DELTA.md`); it builds more than the row lists (migration `0034`, which requires `sec-1`'s `0033`; the job runner; an nginx block; `iq_auto_policies`; `iq.approve` and `iq.autopolicy.manage` permissions). Every other IQ phase is **NOT STARTED**.
 
 ### Gaps, ranked by business value ÷ effort
 
