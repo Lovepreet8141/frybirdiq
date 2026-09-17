@@ -5,12 +5,53 @@
  */
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, like } from "drizzle-orm";
+import { and, eq, like, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { loyaltyAccounts, loyaltyTransactions, orders } from "@/db/schema";
 import { reversePointsForOrder } from "./loyalty";
 import { createTestCustomer, createTestOrg, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
 import { fromRupees } from "@/lib/money";
+
+/**
+ * Runs `start()` while a separate transaction holds the order row FOR
+ * UPDATE; releases it only once `waiters` backends are waiting on a lock,
+ * then resolves with the started calls' results. Same technique as
+ * `settle-atomicity.integration.test.ts`'s `withOrderRowHeld` — forces the
+ * two reversal calls to genuinely overlap at the lock, rather than relying
+ * on `Promise.all` scheduling them close enough by luck (RELIABILITY's
+ * note on the earlier version of this test).
+ */
+type Tx = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
+async function withOrderRowHeld<T>(orderId: string, waiters: number, start: () => Promise<T>[]): Promise<T[]> {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let locked!: () => void;
+  const lockTaken = new Promise<void>((resolve) => (locked = resolve));
+
+  const holder = db().transaction(async (tx: Tx) => {
+    await tx.select({ id: orders.id }).from(orders).where(eq(orders.id, orderId)).for("update");
+    locked();
+    await released;
+  });
+  await lockTaken;
+
+  const calls = start();
+  try {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const [row] = await db().execute<{ waiting: number }>(
+        sql`SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`,
+      );
+      if ((row?.waiting ?? 0) >= waiters) break;
+      if (Date.now() > deadline) throw new Error(`test: only ${row?.waiting ?? 0} of ${waiters} calls reached the order-row lock`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  } finally {
+    release();
+    await holder;
+  }
+  return Promise.all(calls);
+}
 
 /** A minimal, directly-inserted order row — reversePointsForOrder only ever reads pointsEarned/customerId off it. */
 async function createTestOrderWithPointsEarned(org: TestOrg, customerId: string, pointsEarned: number) {
@@ -109,7 +150,7 @@ describe("reversePointsForOrder", () => {
 
     await warmPool();
 
-    await Promise.all([
+    await withOrderRowHeld(orderId, 2, () => [
       reversePointsForOrder({ orgId: org.orgId, orderId, reason: "concurrent caller A" }),
       reversePointsForOrder({ orgId: org.orgId, orderId, reason: "concurrent caller B" }),
     ]);

@@ -65,8 +65,29 @@ async function findOrCreateAccount(tx: DbTx, orgId: string, customerId: string):
  * only after an award, because giving stamps back to a reversed reward's
  * other orders can itself complete a fresh cycle. A `while` rather than an
  * `if`: a reversal can hand back more than one cycle's worth at once.
+ *
+ * Locks the account row FOR UPDATE first, before reading anything else —
+ * this is the one place two entirely different order-locked transactions
+ * (an award, from `settle()` settling a *different* order of the same
+ * customer, and a reversal, from `reverseStampForOrder` voiding *this*
+ * order) both ultimately land, and an order-row lock alone cannot
+ * serialize them, since they hold locks on two different order rows. Two
+ * concurrent settlements for the same account used to each read the same
+ * "unconsumed" snapshot and each insert a reward once it looked complete —
+ * both really could look complete at once, e.g. one reversal handing back
+ * some stamps and a second, concurrent reversal (or award) handing back or
+ * adding the rest — producing two AVAILABLE rewards, one of them backed by
+ * no stamps at all: a free item the business never actually earned. The
+ * account lock makes the loser wait for the winner's whole transaction to
+ * commit and then read the genuinely current pool, so at most one of them
+ * ever crosses the threshold for the same cycle. Lock order stays
+ * order-row-first everywhere this is reachable (`settle()`,
+ * `reverseStampForOrder`), so this never introduces a cycle: nothing here
+ * locks an order row after taking this account lock.
  */
 async function settleAccount(tx: DbTx, accountId: string, orgId: string, config: StampConfig): Promise<number> {
+  await tx.select({ id: loyaltyAccounts.id }).from(loyaltyAccounts).where(eq(loyaltyAccounts.id, accountId)).for("update");
+
   for (;;) {
     const unconsumed = await tx
       .select({ id: loyaltyStampEvents.id })
@@ -93,7 +114,16 @@ async function settleAccount(tx: DbTx, accountId: string, orgId: string, config:
     if (!reward) throw new Error("loyalty: could not create a reward row");
 
     for (const event of forThisReward) {
-      await tx.update(loyaltyStampEvents).set({ rewardId: reward.id, updatedAt: new Date() }).where(eq(loyaltyStampEvents.id, event.id));
+      // `rewardId IS NULL` makes this the same kind of write-is-the-check
+      // guard as the reward status flip below it: under the account lock
+      // above this should never matter (nothing else can be concurrently
+      // re-assigning this account's events), but it costs nothing and means
+      // this can never silently steal an event a *different*, already-
+      // committed cycle claimed off a stale `unconsumed` list.
+      await tx
+        .update(loyaltyStampEvents)
+        .set({ rewardId: reward.id, updatedAt: new Date() })
+        .where(and(eq(loyaltyStampEvents.id, event.id), isNull(loyaltyStampEvents.rewardId)));
     }
     // Loop again — a reversal can hand back enough stamps to complete more
     // than one cycle in a single settlement.
@@ -175,28 +205,35 @@ export async function awardStampForOrderInTx(
  * IS NULL` before either committed and both walk the whole body,
  * including a second, concurrent `settleAccount` for the same account
  * (each unaware of the other's in-flight stamp changes). Fixed by locking
- * the stamp event row itself — `loyalty_stamp_events.order_id` is unique,
- * so there is exactly one row per order to lock, and every code path here
- * still works against `event.id`/`event.accountId`/`event.rewardId` off
- * that same locked row. The loser blocks until the winner's transaction
- * commits, then sees `reversedAt` already set and no-ops before touching
- * the reward, the pool, or `settleAccount` at all. No schema change —
- * locking the event row (rather than the order row, as
- * `reversePointsForOrder` does) also works with orders that only exist as
- * an id, since `loyalty_stamp_events.order_id` carries no foreign key to
- * `orders.id`.
+ * the order row first, then doing the stamp read and every write inside
+ * that same transaction — the same lock, and the same lock-order-first
+ * rule, `reversePointsForOrder` and every other order mutation
+ * (`advanceOrder`, `settle()`) already use. The loser blocks until the
+ * winner's transaction commits, then re-reads under the lock and sees
+ * `reversedAt` already set, so it no-ops before touching the reward, the
+ * pool, or `settleAccount` at all. `settleAccount` additionally takes its
+ * own account-row lock (see its own doc comment) for the race this order
+ * lock alone cannot reach: a reversal on this order racing an *award* on a
+ * genuinely different order of the same customer. No schema change.
  */
 export async function reverseStampForOrder(input: { orgId: string; orderId: string; reason: string }): Promise<void> {
   const database = db();
   await database.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({ id: orders.id })
+      .from(orders)
+      .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
+      .for("update")
+      .limit(1);
+    if (!locked) return; // no such order in this org
+
     const [event] = await tx
       .select()
       .from(loyaltyStampEvents)
       .where(and(eq(loyaltyStampEvents.orderId, input.orderId), eq(loyaltyStampEvents.orgId, input.orgId)))
-      .for("update")
       .limit(1);
 
-    if (!event || event.reversedAt) return; // never earned a stamp, or already reversed — checked under the lock, not a stale read.
+    if (!event || event.reversedAt) return; // never earned a stamp, or already reversed — checked under the order lock, not a stale read.
 
     await tx
       .update(loyaltyStampEvents)

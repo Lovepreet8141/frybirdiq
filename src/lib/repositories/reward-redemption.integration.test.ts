@@ -12,9 +12,9 @@
  */
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { loyaltyAccounts, loyaltyRewards, loyaltyStampEvents } from "@/db/schema";
+import { loyaltyAccounts, loyaltyRewards, loyaltyStampEvents, orders } from "@/db/schema";
 import { redeemStampRewardInTx, reverseStampForOrder } from "./loyalty";
 import { createTestCustomer, createTestOrg, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
 
@@ -24,6 +24,70 @@ async function seedAvailableReward(org: TestOrg, customerId: string) {
   const [reward] = await db().insert(loyaltyRewards).values({ orgId: org.orgId, accountId: account.id, status: "AVAILABLE" }).returning({ id: loyaltyRewards.id });
   if (!reward) throw new Error("fixture: loyalty reward insert returned no row");
   return reward.id;
+}
+
+/**
+ * A minimal, directly-inserted order row. `reverseStampForOrder` now locks
+ * the order row first (loy-1b), so every order id it's called with here
+ * needs a real backing row — `loyalty_stamp_events.order_id` itself carries
+ * no foreign key, but the function's own lock requires the order to exist.
+ */
+async function createTestOrder(org: TestOrg) {
+  const [order] = await db()
+    .insert(orders)
+    .values({
+      orgId: org.orgId,
+      locationId: org.locationId,
+      orderNumber: `TEST-${randomUUID().slice(0, 8)}`,
+      businessDate: new Date().toISOString().slice(0, 10),
+      status: "PAID",
+      channel: "DINE_IN",
+      fulfilment: "DINE_IN",
+    })
+    .returning({ id: orders.id });
+  if (!order) throw new Error("fixture: order insert returned no row");
+  return order.id;
+}
+
+/**
+ * Runs `start()` while a separate transaction holds `lock`'s row FOR
+ * UPDATE; releases it only once `waiters` backends are waiting on a lock,
+ * then resolves with the started calls' results. Same technique as
+ * `settle-atomicity.integration.test.ts`'s `withOrderRowHeld`, generalised
+ * to whatever row the caller wants held — here, an order row (same-order
+ * races) or a loyalty account row (cross-order races that only collide
+ * inside `settleAccount`) — so overlap is forced rather than hoped for.
+ */
+type Tx = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
+async function withRowHeld<T>(lock: (tx: Tx) => Promise<unknown>, waiters: number, start: () => Promise<T>[]): Promise<T[]> {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let locked!: () => void;
+  const lockTaken = new Promise<void>((resolve) => (locked = resolve));
+
+  const holder = db().transaction(async (tx) => {
+    await lock(tx);
+    locked();
+    await released;
+  });
+  await lockTaken;
+
+  const calls = start();
+  try {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const [row] = await db().execute<{ waiting: number }>(
+        sql`SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`,
+      );
+      if ((row?.waiting ?? 0) >= waiters) break;
+      if (Date.now() > deadline) throw new Error(`test: only ${row?.waiting ?? 0} of ${waiters} calls reached the row lock`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  } finally {
+    release();
+    await holder;
+  }
+  return Promise.all(calls);
 }
 
 describe("redeemStampReward", () => {
@@ -108,7 +172,7 @@ describe("reverseStampForOrder", () => {
     const accountId = await seedAccount(customer.id);
     const [reward] = await db().insert(loyaltyRewards).values({ orgId: org.orgId, accountId, status: "AVAILABLE" }).returning({ id: loyaltyRewards.id });
     if (!reward) throw new Error("fixture");
-    const orderId = randomUUID();
+    const orderId = await createTestOrder(org);
     await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId, rewardId: reward.id });
 
     await reverseStampForOrder({ orgId: org.orgId, orderId, reason: "test refund" });
@@ -117,26 +181,86 @@ describe("reverseStampForOrder", () => {
     expect(row?.status).toBe("REVERSED");
   });
 
-  it("loy-1: two concurrent reversals of the same order reverse the reward exactly once, with no phantom reward created", async () => {
+  it("loy-1b: two concurrent reversals of DIFFERENT orders whose combined pooled-back stamps complete a new cycle create exactly one new reward", async () => {
+    const customer = await createTestCustomer(org.orgId);
+    const accountId = await seedAccount(customer.id);
+
+    // The org's default stampsRequired is 7. Reward A carries 4 events
+    // (order A + 3 others); reward B carries 5 (order B + 4 others).
+    // Reversing either order ALONE frees fewer than 7 stamps — 3, or 4 —
+    // so neither alone completes a cycle. Only the combined 3 + 4 = 7
+    // does, and that must produce exactly one new reward, not two (the
+    // POS-ORDERS-reported bug: two concurrent `settleAccount` runs each
+    // reading the same "not quite enough yet" pool and each inserting
+    // one) and not zero (each call, missing the other's contribution,
+    // wrongly deciding on its own that nothing unlocked).
+    const [rewardA] = await db().insert(loyaltyRewards).values({ orgId: org.orgId, accountId, status: "AVAILABLE" }).returning({ id: loyaltyRewards.id });
+    const [rewardB] = await db().insert(loyaltyRewards).values({ orgId: org.orgId, accountId, status: "AVAILABLE" }).returning({ id: loyaltyRewards.id });
+    if (!rewardA || !rewardB) throw new Error("fixture");
+
+    const orderA = await createTestOrder(org);
+    const orderB = await createTestOrder(org);
+    await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: orderA, rewardId: rewardA.id });
+    for (let i = 0; i < 3; i++) {
+      await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: randomUUID(), rewardId: rewardA.id });
+    }
+    await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: orderB, rewardId: rewardB.id });
+    for (let i = 0; i < 4; i++) {
+      await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: randomUUID(), rewardId: rewardB.id });
+    }
+
+    await warmPool();
+
+    // The account row is the actual point of contention: both reversals
+    // lock their own, different order rows without conflict, and only
+    // collide inside `settleAccount`'s account-row lock. Holding that row
+    // externally until both calls are genuinely blocked on it — rather
+    // than hoping `Promise.all` schedules them close enough — is the
+    // deterministic-overlap barrier RELIABILITY asked for.
+    await withRowHeld(
+      async (tx) => tx.select({ id: loyaltyAccounts.id }).from(loyaltyAccounts).where(eq(loyaltyAccounts.id, accountId)).for("update"),
+      2,
+      () => [
+        reverseStampForOrder({ orgId: org.orgId, orderId: orderA, reason: "concurrent refund A" }),
+        reverseStampForOrder({ orgId: org.orgId, orderId: orderB, reason: "concurrent refund B" }),
+      ],
+    );
+
+    const [rowA] = await db().select({ status: loyaltyRewards.status }).from(loyaltyRewards).where(eq(loyaltyRewards.id, rewardA.id));
+    const [rowB] = await db().select({ status: loyaltyRewards.status }).from(loyaltyRewards).where(eq(loyaltyRewards.id, rewardB.id));
+    expect(rowA?.status).toBe("REVERSED");
+    expect(rowB?.status).toBe("REVERSED");
+
+    const allRewards = await db().select({ id: loyaltyRewards.id }).from(loyaltyRewards).where(eq(loyaltyRewards.accountId, accountId));
+    const newRewards = allRewards.filter((r) => r.id !== rewardA.id && r.id !== rewardB.id);
+    expect(newRewards).toHaveLength(1); // exactly one new reward from the combined 7 pooled stamps
+
+    const [account] = await db().select({ stampCount: loyaltyAccounts.stampCount }).from(loyaltyAccounts).where(eq(loyaltyAccounts.id, accountId));
+    expect(account?.stampCount).toBe(0); // all 7 pooled stamps consumed into the one new reward, none left dangling
+  });
+
+  it("loy-1b: two concurrent reversals of the SAME order reverse the reward exactly once, deterministically", async () => {
     const customer = await createTestCustomer(org.orgId);
     const accountId = await seedAccount(customer.id);
     const [reward] = await db().insert(loyaltyRewards).values({ orgId: org.orgId, accountId, status: "AVAILABLE" }).returning({ id: loyaltyRewards.id });
     if (!reward) throw new Error("fixture");
-    const orderId = randomUUID();
+    const orderId = await createTestOrder(org);
     await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId, rewardId: reward.id });
-    // Two more stamps riding on the same reward — the org's default
-    // stampsRequired is 7, so handing these back to the pool must not
-    // unlock a fresh reward on its own; a duplicate, concurrent
-    // `settleAccount` run for this account is what would corrupt that.
-    await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: randomUUID(), rewardId: reward.id });
     await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: randomUUID(), rewardId: reward.id });
 
     await warmPool();
 
-    await Promise.all([
-      reverseStampForOrder({ orgId: org.orgId, orderId, reason: "concurrent caller A" }),
-      reverseStampForOrder({ orgId: org.orgId, orderId, reason: "concurrent caller B" }),
-    ]);
+    // Both callers race for the SAME order row, so holding that row
+    // externally — rather than the account row — is what forces the
+    // genuine overlap here.
+    await withRowHeld(
+      async (tx) => tx.select({ id: orders.id }).from(orders).where(eq(orders.id, orderId)).for("update"),
+      2,
+      () => [
+        reverseStampForOrder({ orgId: org.orgId, orderId, reason: "concurrent caller A" }),
+        reverseStampForOrder({ orgId: org.orgId, orderId, reason: "concurrent caller B" }),
+      ],
+    );
 
     const [row] = await db().select({ status: loyaltyRewards.status }).from(loyaltyRewards).where(eq(loyaltyRewards.id, reward.id));
     expect(row?.status).toBe("REVERSED");
@@ -145,7 +269,7 @@ describe("reverseStampForOrder", () => {
     expect(allRewards).toHaveLength(1); // still just the one — no phantom reward from a doubled settleAccount
 
     const [account] = await db().select({ stampCount: loyaltyAccounts.stampCount }).from(loyaltyAccounts).where(eq(loyaltyAccounts.id, accountId));
-    expect(account?.stampCount).toBe(2); // the two pooled-back stamps, counted once
+    expect(account?.stampCount).toBe(1); // the one pooled-back stamp, counted once
   });
 
   it("a reversal that reads a reward already redeemed by a different order never touches it", async () => {
@@ -168,7 +292,7 @@ describe("reverseStampForOrder", () => {
     const accountId = await seedAccount(customer.id);
     const [reward] = await db().insert(loyaltyRewards).values({ orgId: org.orgId, accountId, status: "AVAILABLE" }).returning({ id: loyaltyRewards.id });
     if (!reward) throw new Error("fixture");
-    const orderA = randomUUID(); // the one about to be refunded
+    const orderA = await createTestOrder(org); // the one about to be refunded
     const orderB = randomUUID(); // the one that already, genuinely redeemed this reward
     await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: orderA, rewardId: reward.id });
     // A second, unrelated unconsumed stamp on the same account+reward, to
@@ -228,7 +352,7 @@ describe("reverseStampForOrder", () => {
     for (let trial = 0; trial < 25; trial++) {
       const [reward] = await db().insert(loyaltyRewards).values({ orgId: org.orgId, accountId, status: "AVAILABLE" }).returning({ id: loyaltyRewards.id });
       if (!reward) throw new Error("fixture");
-      const orderA = randomUUID();
+      const orderA = await createTestOrder(org);
       const orderB = randomUUID();
       await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: orderA, rewardId: reward.id });
 
