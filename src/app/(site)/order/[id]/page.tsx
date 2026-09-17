@@ -11,7 +11,7 @@ import { readRememberedContact } from "@/lib/cart/remembered-contact";
 import { OrderRating } from "@/components/order/rating";
 import { PayOnline } from "@/components/order/pay-online";
 import { OrderLive } from "@/components/order/order-live";
-import { viewerOwnsOrder } from "@/components/order/viewer-owns-order";
+import { greetingName, viewerOwnsOrder } from "@/components/order/viewer-owns-order";
 import { RAZORPAY_PROVIDER, razorpayConfig } from "@/lib/payments";
 import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
 
@@ -69,6 +69,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   const [order, customer, remembered] = await Promise.all([getOrder(id), getCustomer(), readRememberedContact()]);
   if (!order) notFound();
   const isOwner = viewerOwnsOrder(order, customer, remembered);
+  const greetedName = greetingName(order.customerName, isOwner);
 
   /*
    * Online payment states. Roadmap 1.5: a pending Razorpay payment shows the
@@ -114,7 +115,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
         <span className="tabular">#{order.orderNumber}</span>
       </h1>
       <p className="mt-3 text-lg leading-relaxed text-muted-foreground">
-        Thanks{order.customerName ? `, ${order.customerName}` : ""}.{" "}
+        Thanks{greetedName ? `, ${greetedName}` : ""}.{" "}
         {awaitingOnline
           ? "Pay below and the kitchen gets your order straight away."
           : isDelivery

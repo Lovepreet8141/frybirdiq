@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { viewerOwnsOrder } from "./viewer-owns-order";
+import { greetingName, redactReceiptCustomerForViewer, viewerOwnsOrder } from "./viewer-owns-order";
 
 const order = { customerPhone: "9876543210", customerEmail: "real@customer.test" };
 
@@ -34,5 +34,31 @@ describe("viewerOwnsOrder", () => {
 
   it("never matches on an empty-string cookie phone against an order with no phone on file", () => {
     expect(viewerOwnsOrder({ customerPhone: null, customerEmail: null }, null, { phone: "" })).toBe(false);
+  });
+});
+
+describe("greetingName", () => {
+  it("greets the owner by name", () => {
+    expect(greetingName("Priya", true)).toBe("Priya");
+  });
+
+  it("gives a stranger with the order link no name at all", () => {
+    expect(greetingName("Priya", false)).toBe(null);
+  });
+
+  it("has nothing to withhold when the order has no name on file", () => {
+    expect(greetingName(null, true)).toBe(null);
+  });
+});
+
+describe("redactReceiptCustomerForViewer", () => {
+  const customer = { name: "Priya", phone: "9876543210", address: "12 MG Road" };
+
+  it("passes the owner's receipt through untouched", () => {
+    expect(redactReceiptCustomerForViewer(customer, true)).toEqual(customer);
+  });
+
+  it("withholds a stranger's name and phone but keeps every other field", () => {
+    expect(redactReceiptCustomerForViewer(customer, false)).toEqual({ ...customer, name: null, phone: null });
   });
 });

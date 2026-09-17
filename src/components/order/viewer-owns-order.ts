@@ -34,3 +34,24 @@ export function viewerOwnsOrder(
   if (order.customerPhone && remembered?.phone === order.customerPhone) return true;
   return false;
 }
+
+/** The name to greet a viewer by on `/order/[id]` — null unless they own the order. */
+export function greetingName(customerName: string | null, isOwner: boolean): string | null {
+  return isOwner ? customerName : null;
+}
+
+interface ReceiptCustomerContact {
+  readonly name: string | null;
+  readonly phone: string | null;
+}
+
+/**
+ * The receipt's "Billed to" name and phone, for a viewer who may not be the
+ * customer. A stranger with the order link gets `name: null` — `FrybirdReceipt`
+ * already renders that as "Guest" — and `phone: null`, which already hides
+ * the phone row and the WhatsApp-to-customer share option. Every other field
+ * on the receipt (line items, totals, delivery address) is unaffected.
+ */
+export function redactReceiptCustomerForViewer<T extends ReceiptCustomerContact>(customer: T, isOwner: boolean): T {
+  return isOwner ? customer : { ...customer, name: null, phone: null };
+}
