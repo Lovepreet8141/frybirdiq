@@ -42,7 +42,8 @@ export async function confirmOnlinePaymentAction(input: unknown): Promise<Online
 
 const failureSchema = z.object({
   orderId: z.uuid(),
-  reason: z.string().trim().max(250).default("Payment failed"),
+  /** Accepted for shape compatibility and deliberately ignored — see below. */
+  reason: z.string().trim().max(250).optional(),
 });
 
 /**
@@ -60,10 +61,13 @@ export async function reportOnlinePaymentFailureAction(input: unknown): Promise<
   const parsed = failureSchema.safeParse(input);
   if (!parsed.success) return { ok: false };
 
+  // The client's `reason` is parsed and thrown away (pay-58b, RED R1): the
+  // order page shows this text to the real customer, and phone-plus-UUID is
+  // not authorship. The repository stores a fixed server-chosen line; the
+  // gateway's own words only ever arrive through the verified webhook.
   const [customer, contact] = await Promise.all([getCustomer(), readRememberedContact()]);
   const { ok } = await markOnlinePaymentFailed({
     orderId: parsed.data.orderId,
-    reason: parsed.data.reason || "Payment failed",
     via: { kind: "customer", customerId: customer?.id ?? null, phone: contact?.phone ?? customer?.phone ?? null },
   });
 

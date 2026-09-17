@@ -280,10 +280,12 @@ describe("settle() concurrent double-capture (baseline P2-2)", () => {
   const realFetch = globalThis.fetch;
 
   beforeAll(async () => {
-    // Its own random-slug org: these orders carry no customer, so settle()
-    // never resolves loyalty config through the shared ORG_SLUG lookup and
-    // this block needs no claim on that contended fixture slug.
-    org = await createTestOrg();
+    // ORG_SLUG, not a random slug: since pay-58b, recordOnlinePayment binds
+    // every read to getOrg() — the app's own org by its fixed slug — so the
+    // online half of the race only exists for that org. Sequential suites
+    // and per-suite cleanup make borrowing the slug safe, exactly as the
+    // describe above already does.
+    org = await createTestOrg({ slug: ORG_SLUG });
     process.env.RAZORPAY_KEY_ID = "rzp_test_integration";
     process.env.RAZORPAY_KEY_SECRET = "integration-test-secret";
   });

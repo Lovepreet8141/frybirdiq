@@ -14,6 +14,7 @@ import { orders, payments } from "@/db/schema";
 import { markOnlinePaymentFailed, recordCashPayment, recordOnlinePayment } from "./payments";
 import { paymentSignature } from "@/lib/payments/razorpay";
 import { createTestCustomer, createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
+import { ORG_SLUG } from "./org";
 import { fromRupees } from "@/lib/money";
 
 async function createTestOrder(org: TestOrg) {
@@ -139,7 +140,9 @@ describe("recordOnlinePayment — pending-row binding (pay-8)", () => {
   const realFetch = globalThis.fetch;
 
   beforeAll(async () => {
-    org = await createTestOrg();
+    // ORG_SLUG because recordOnlinePayment binds its reads to getOrg() —
+    // see the pay-5 describe's note on why borrowing the slug is safe here.
+    org = await createTestOrg({ slug: ORG_SLUG });
     process.env.RAZORPAY_KEY_ID = "rzp_test_integration";
     process.env.RAZORPAY_KEY_SECRET = KEY_SECRET;
   });
@@ -225,6 +228,49 @@ describe("recordOnlinePayment — pending-row binding (pay-8)", () => {
     expect(captured).toHaveLength(1);
   });
 
+  it("a forged signature is refused without writing a failure note onto the victim's row (pay-58b, R2)", async () => {
+    const own = await createOnlineOrder();
+    const providerPaymentId = `pay_test_${randomUUID().slice(0, 12)}`;
+    // Correct razorpayOrderId (it is visible on the order page), fake 64-hex
+    // signature — exactly what a link holder can produce.
+    const result = await recordOnlinePayment({ orderId: own.orderId, providerPaymentId, providerOrderId: own.providerOrderId, signature: "ab".repeat(32) });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.error).toMatch(/signature did not verify/);
+    // The refusal was manufactured before Razorpay was ever consulted, so
+    // nothing may be recorded: the page must not tell the real customer
+    // their payment failed because a stranger poked the endpoint.
+    const [row] = await db().select({ failureReason: payments.failureReason, status: payments.status }).from(payments).where(eq(payments.orderId, own.orderId));
+    expect(row?.status).toBe("PENDING");
+    expect(row?.failureReason).toBeNull();
+  });
+
+  it("a failure Razorpay itself confirms is still recorded, so a genuine decline keeps its retry note", async () => {
+    const own = await createOnlineOrder();
+    const providerPaymentId = `pay_test_${randomUUID().slice(0, 12)}`;
+    // The gateway, asked about a real payment, says it failed.
+    vi.stubGlobal("fetch", (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("https://api.razorpay.com/")) {
+        return new Response(
+          JSON.stringify({ id: providerPaymentId, order_id: own.providerOrderId, amount: 30000, currency: "INR", status: "failed", method: "upi", fee: null, tax: null, error_description: "Bank declined the transaction" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return realFetch(input as Parameters<typeof fetch>[0], init);
+    }) as typeof fetch);
+    const signature = paymentSignature({ providerOrderId: own.providerOrderId, providerPaymentId, keySecret: KEY_SECRET });
+
+    const result = await recordOnlinePayment({ orderId: own.orderId, providerPaymentId, providerOrderId: own.providerOrderId, signature });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.error).toBe("Bank declined the transaction");
+    const [row] = await db().select({ failureReason: payments.failureReason, status: payments.status }).from(payments).where(eq(payments.orderId, own.orderId));
+    expect(row?.status).toBe("PENDING");
+    expect(row?.failureReason).toBe("Bank declined the transaction");
+  });
+
   it("with no pending row there is nothing to verify against, and a signed confirm is refused", async () => {
     const orderId = await createTestOrder(org); // no razorpay pending row at all
     const providerPaymentId = `pay_test_${randomUUID().slice(0, 12)}`;
@@ -247,12 +293,16 @@ describe("recordOnlinePayment — pending-row binding (pay-8)", () => {
  * the repository enforces the match, which is what these tests prove — the
  * cookie itself needs a request context vitest does not have.
  */
-describe("markOnlinePaymentFailed — ownership binding (pay-5)", () => {
+describe("markOnlinePaymentFailed — ownership binding (pay-5, hardened by pay-58b)", () => {
   let orgA: TestOrg;
   let orgB: TestOrg;
 
   beforeAll(async () => {
-    orgA = await createTestOrg();
+    // The anonymous paths bind every read to getOrg() — the app's own org by
+    // its fixed slug — so the org under test must BE that org. Safe for the
+    // same reason settle-atomicity borrows the slug: one local database,
+    // files and suites run sequentially, and each cleans up after itself.
+    orgA = await createTestOrg({ slug: ORG_SLUG });
     orgB = await createTestOrg();
   });
 
@@ -299,34 +349,43 @@ describe("markOnlinePaymentFailed — ownership binding (pay-5)", () => {
     const customer = await createTestCustomer(orgA.orgId);
     const orderId = await createOnlineOrderWithCustomer(orgA, { customerId: customer.id, phone: customer.phone });
 
-    const stranger = await markOnlinePaymentFailed({ orderId, reason: "strange", via: { kind: "customer", customerId: null, phone: "9000000001" } });
+    const stranger = await markOnlinePaymentFailed({ orderId, via: { kind: "customer", customerId: null, phone: "9000000001" } });
     expect(stranger.ok).toBe(false);
-    const empty = await markOnlinePaymentFailed({ orderId, reason: "empty", via: { kind: "customer", customerId: null, phone: null } });
+    const empty = await markOnlinePaymentFailed({ orderId, via: { kind: "customer", customerId: null, phone: null } });
     expect(empty.ok).toBe(false);
-    const wrongId = await markOnlinePaymentFailed({ orderId, reason: "wrong id", via: { kind: "customer", customerId: randomUUID(), phone: null } });
+    const wrongId = await markOnlinePaymentFailed({ orderId, via: { kind: "customer", customerId: randomUUID(), phone: null } });
     expect(wrongId.ok).toBe(false);
     expect(await failureReasonOf(orderId)).toBeNull();
 
-    const owner = await markOnlinePaymentFailed({ orderId, reason: "UPI app timed out", via: { kind: "customer", customerId: null, phone: customer.phone } });
+    // pay-58b, RED R1: even the rightful owner cannot author the text —
+    // there is no reason parameter for a customer at all; the stored line
+    // is the server's fixed wording.
+    const owner = await markOnlinePaymentFailed({ orderId, via: { kind: "customer", customerId: null, phone: customer.phone } });
     expect(owner.ok).toBe(true);
-    expect(await failureReasonOf(orderId)).toBe("UPI app timed out");
+    expect(await failureReasonOf(orderId)).toBe("Payment failed");
 
-    const byId = await markOnlinePaymentFailed({ orderId, reason: "second try failed too", via: { kind: "customer", customerId: customer.id, phone: null } });
+    const byId = await markOnlinePaymentFailed({ orderId, via: { kind: "customer", customerId: customer.id, phone: null } });
     expect(byId.ok).toBe(true);
-    expect(await failureReasonOf(orderId)).toBe("second try failed too");
+    expect(await failureReasonOf(orderId)).toBe("Payment failed");
   });
 
-  it("the verified webhook may always write; an org-A customer id gets nothing on an org-B order", async () => {
+  it("only the verified webhook carries the gateway's words; a foreign-org order is unreachable even for it", async () => {
     const customerA = await createTestCustomer(orgA.orgId);
+    const orderInA = await createOnlineOrderWithCustomer(orgA, { customerId: null, phone: "9000000003" });
     const orderInB = await createOnlineOrderWithCustomer(orgB, { customerId: null, phone: "9000000002" });
 
-    const crossOrg = await markOnlinePaymentFailed({ orderId: orderInB, reason: "cross-org probe", via: { kind: "customer", customerId: customerA.id, phone: null } });
+    // pay-58b, SEC c: the anonymous read is bound to the app's own org, so an
+    // org-B order UUID answers exactly like an unknown one — for a customer
+    // claim and for the webhook alike.
+    const crossOrg = await markOnlinePaymentFailed({ orderId: orderInB, via: { kind: "customer", customerId: customerA.id, phone: null } });
     expect(crossOrg.ok).toBe(false);
+    const crossOrgWebhook = await markOnlinePaymentFailed({ orderId: orderInB, via: { kind: "webhook", reason: "Bank declined" } });
+    expect(crossOrgWebhook.ok).toBe(false);
     expect(await failureReasonOf(orderInB)).toBeNull();
 
-    const webhook = await markOnlinePaymentFailed({ orderId: orderInB, reason: "Bank declined", via: { kind: "webhook" } });
+    const webhook = await markOnlinePaymentFailed({ orderId: orderInA, via: { kind: "webhook", reason: "Bank declined" } });
     expect(webhook.ok).toBe(true);
-    expect(await failureReasonOf(orderInB)).toBe("Bank declined");
+    expect(await failureReasonOf(orderInA)).toBe("Bank declined");
   });
 
   it("never touches a non-PENDING payment, even for the rightful owner", async () => {
@@ -334,7 +393,7 @@ describe("markOnlinePaymentFailed — ownership binding (pay-5)", () => {
     const orderId = await createOnlineOrderWithCustomer(orgA, { customerId: customer.id, phone: customer.phone });
     await db().update(payments).set({ status: "CAPTURED", capturedAt: new Date() }).where(eq(payments.orderId, orderId));
 
-    const result = await markOnlinePaymentFailed({ orderId, reason: "too late", via: { kind: "customer", customerId: customer.id, phone: customer.phone } });
+    const result = await markOnlinePaymentFailed({ orderId, via: { kind: "customer", customerId: customer.id, phone: customer.phone } });
     expect(result.ok).toBe(false);
     expect(await failureReasonOf(orderId)).toBeNull();
   });
