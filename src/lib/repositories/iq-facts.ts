@@ -27,6 +27,7 @@ import {
   expenseCategories,
   expenses,
   iqDailyFacts,
+  iqIntradayFacts,
   inventoryMovements,
   locations,
   orderItems,
@@ -41,7 +42,10 @@ import {
   METRIC_CATALOG,
   type MetricDimension,
   type MetricId,
+  INTRADAY_METRICS,
+  type IntradayMetricId,
   V1_COMPUTED_METRIC_IDS,
+  intradayRetentionFirstDate,
   productDimensionValue,
 } from "@/lib/iq/metrics";
 import { type DateRange, addDays, businessDate, endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
@@ -602,4 +606,162 @@ export async function readDailyFacts(orgId: string, from: string, to: string): P
     totals,
     breakdowns,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Intraday facts: 15-minute buckets (IQ-2 S8)                          */
+/* ------------------------------------------------------------------ */
+
+export interface IntradayFactRow {
+  readonly locationId: string;
+  readonly bucketStart: Date;
+  readonly metricId: IntradayMetricId;
+  readonly value: bigint;
+  readonly sourceRowCount: number;
+}
+
+/** 15-minute bucket start of a timestamptz column, as timestamptz. IST buckets = UTC buckets (offset is a multiple of 15 min). */
+const bucketOf = (column: unknown) => sql`to_timestamp(floor(extract(epoch FROM ${column}) / 900) * 900)`;
+
+/**
+ * One org's intraday facts for one IST business day, only buckets with
+ * something in them. Sales use the daily sale set, so a day's buckets sum to
+ * its daily orders_paid and revenue_net; tickets use ready_at. Pure reads.
+ */
+export async function computeIntradayFacts(orgId: string, date: string, tx: Pick<ReturnType<typeof db>, "select"> = db()): Promise<IntradayFactRow[]> {
+  assertBusinessDate(date);
+  const day = { from: startOfBusinessDay(date), to: endOfBusinessDay(date) };
+  const salesBucket = bucketOf(orders.createdAt);
+  const readyBucket = bucketOf(orders.readyAt);
+
+  const [sales, tickets] = await Promise.all([
+    tx
+      .select({
+        locationId: orders.locationId,
+        bucket: sql<string>`${salesBucket}::text`,
+        count: sql<number>`count(*)::int`,
+        taxable: sql<string>`coalesce(sum(${orders.taxableTotal}), 0)::text`,
+      })
+      .from(orders)
+      .where(saleSetWhere(orgId, day))
+      .groupBy(orders.locationId, salesBucket),
+    tx
+      .select({
+        locationId: orders.locationId,
+        bucket: sql<string>`${readyBucket}::text`,
+        count: sql<number>`count(*)::int`,
+        seconds: sql<string>`coalesce(sum(floor(extract(epoch FROM ${orders.readyAt} - ${orders.acceptedAt}))), 0)::bigint::text`,
+      })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.orgId, orgId),
+          // created_at bound first, for orders_org_created_idx: a ticket is ready within a day of its order.
+          gte(orders.createdAt, new Date(day.from.getTime() - 24 * 60 * 60 * 1000)),
+          lt(orders.createdAt, day.to),
+          gte(orders.readyAt, day.from),
+          lt(orders.readyAt, day.to),
+          sql`${orders.acceptedAt} IS NOT NULL AND ${orders.acceptedAt} <= ${orders.readyAt}`,
+        ),
+      )
+      .groupBy(orders.locationId, readyBucket),
+  ]);
+
+  const rows: IntradayFactRow[] = [];
+  for (const row of sales) {
+    const bucketStart = new Date(row.bucket);
+    rows.push({ locationId: row.locationId, bucketStart, metricId: "orders_paid", value: big(row.count), sourceRowCount: row.count });
+    rows.push({ locationId: row.locationId, bucketStart, metricId: "revenue_net", value: big(row.taxable), sourceRowCount: row.count });
+  }
+  for (const row of tickets) {
+    const bucketStart = new Date(row.bucket);
+    rows.push({ locationId: row.locationId, bucketStart, metricId: "tickets_ready", value: big(row.count), sourceRowCount: row.count });
+    rows.push({ locationId: row.locationId, bucketStart, metricId: "ticket_ready_seconds_total", value: big(row.seconds), sourceRowCount: row.count });
+  }
+  return rows;
+}
+
+/** The advisory lock key text for one org's intraday day — its own namespace, never the daily facts' key (R2.8). */
+export function intradayDayLockKey(orgId: string, date: string): string {
+  return `intraday:${orgId}:${date}`;
+}
+
+export type IntradayRebuildResult = RecomputeResult;
+
+/**
+ * Rebuilds every 15-minute bucket of one org's IST business day at once: a
+ * later capture or refund changes earlier buckets, so the whole day is
+ * deleted and inserted for (org, date, version) in one locked transaction
+ * (`runLockedDayTransaction`, key `intraday:<org>:<date>`, the caller's day
+ * lock budget). Idempotent. Throws `DayLockBusyError` / `DayTimeoutError`.
+ */
+export async function rebuildIntradayDay(orgId: string, date: string, opts: { readonly jobRunId?: string | null } & DayLockOptions = {}): Promise<IntradayRebuildResult> {
+  assertBusinessDate(date);
+  const { value: rowsWritten, lockWaits, attempts } = await runLockedDayTransaction(
+    intradayDayLockKey(orgId, date),
+    `iq-facts: intraday rebuild of ${date} for org ${orgId}`,
+    async (tx) => {
+      const rows = await computeIntradayFacts(orgId, date, tx);
+      await tx
+        .delete(iqIntradayFacts)
+        .where(and(eq(iqIntradayFacts.orgId, orgId), eq(iqIntradayFacts.businessDate, date), eq(iqIntradayFacts.definitionVersion, DEFINITION_VERSION)));
+      if (rows.length > 0) {
+        await tx.insert(iqIntradayFacts).values(
+          rows.map((row) => ({
+            orgId,
+            locationId: row.locationId,
+            businessDate: date,
+            bucketStart: row.bucketStart,
+            metricId: row.metricId,
+            unit: INTRADAY_METRICS[row.metricId].unit,
+            value: row.value,
+            sourceRowCount: row.sourceRowCount,
+            sourceWatermark: null,
+            definitionVersion: DEFINITION_VERSION,
+            jobRunId: opts.jobRunId ?? null,
+          })),
+        );
+      }
+      return rows.length;
+    },
+    opts,
+  );
+  return { orgId, businessDate: date, definitionVersion: DEFINITION_VERSION, rowsWritten, lockWaits, attempts };
+}
+
+/**
+ * Deletes one org's intraday facts older than the 63-day retention for
+ * `today` (IST business date, the same date the backfill counts back from, C7).
+ * Every version. Returns the rows removed.
+ */
+export async function purgeIntradayFacts(orgId: string, today: string): Promise<number> {
+  assertBusinessDate(today);
+  const removed = await db()
+    .delete(iqIntradayFacts)
+    .where(and(eq(iqIntradayFacts.orgId, orgId), lt(iqIntradayFacts.businessDate, intradayRetentionFirstDate(today))))
+    .returning({ id: iqIntradayFacts.id });
+  return removed.length;
+}
+
+export interface IntradayBucketRead {
+  readonly bucketStart: Date;
+  readonly metricId: IntradayMetricId;
+  /** Σ across locations. */
+  readonly value: bigint;
+}
+
+/** One org's current-version intraday buckets for one IST business day, across locations, oldest bucket first. */
+export async function readIntradayFacts(orgId: string, date: string): Promise<IntradayBucketRead[]> {
+  assertBusinessDate(date);
+  const rows = await db()
+    .select({
+      bucketStart: iqIntradayFacts.bucketStart,
+      metricId: iqIntradayFacts.metricId,
+      value: sql<string>`sum(${iqIntradayFacts.value})::text`,
+    })
+    .from(iqIntradayFacts)
+    .where(and(eq(iqIntradayFacts.orgId, orgId), eq(iqIntradayFacts.businessDate, date), eq(iqIntradayFacts.definitionVersion, DEFINITION_VERSION)))
+    .groupBy(iqIntradayFacts.bucketStart, iqIntradayFacts.metricId)
+    .orderBy(iqIntradayFacts.bucketStart, iqIntradayFacts.metricId);
+  return rows.map((row) => ({ bucketStart: row.bucketStart, metricId: row.metricId as IntradayMetricId, value: BigInt(row.value) }));
 }
