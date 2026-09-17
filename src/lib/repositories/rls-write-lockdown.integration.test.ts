@@ -21,6 +21,14 @@ import { featureFlags, memberships, orderEvents, orders, organizations, payments
 import { fromRupees } from "@/lib/money";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 
+/**
+ * GoTrue and PostgREST serve only the shared `postgres` database. On a
+ * per-worktree test database (hive/tools/test-db.sh sets FRYBIRD_TEST_DB) the
+ * users and rows these suites create would land in different databases, so
+ * they skip; run them on the shared stack with merged migrations only.
+ */
+const sharedStackOnly = describe.skipIf(Boolean(process.env.FRYBIRD_TEST_DB));
+
 /** Same guard as vitest.integration.setup.ts, for the HTTP side: GoTrue and PostgREST must be local too. */
 function localSupabaseEnv() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -76,7 +84,7 @@ function expectRefused(result: { error: { code?: string } | null }) {
   expect(result.error?.code).toBe("42501");
 }
 
-describe("0033 — client-side writes are refused, tenant reads still work", () => {
+sharedStackOnly("0033 — client-side writes are refused, tenant reads still work", () => {
   let admin: SupabaseClient;
   let cashier: SupabaseClient;
   let org: TestOrg;
