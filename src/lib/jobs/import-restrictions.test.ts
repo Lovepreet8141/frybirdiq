@@ -119,4 +119,64 @@ describe("IQ-0 S9: eslint.config.mjs restricted imports (fixture per rule, run t
     );
     expect(ids).toContain("import/no-restricted-paths");
   });
+
+  // ARCHITECT re-review of ebc0987 (iq0-s9c, item b): a path-based allowlist
+  // only constrains files under src/**, so a job could reach Postgres
+  // directly through an npm package instead of a repository — this is
+  // ARCHITECT's own probe (postgres + serverEnv().DATABASE_URL, zero
+  // errors) verified fixed.
+  it("job code may not import the postgres driver package directly", async () => {
+    const ids = await ruleIdsFor(
+      "lib/jobs/jobs/__fixtures__/db-package.ts",
+      'import postgres from "postgres";\nexport const x = postgres;\n',
+    );
+    expect(ids).toContain("no-restricted-imports");
+  });
+
+  it("job code may not import a drizzle-orm subpath directly", async () => {
+    const ids = await ruleIdsFor(
+      "lib/jobs/__fixtures__/db-package-drizzle.ts",
+      'import { eq } from "drizzle-orm/pg-core";\nexport const x = eq;\n',
+    );
+    expect(ids).toContain("no-restricted-imports");
+  });
+
+  it("job code may not import a @supabase/* package directly", async () => {
+    const ids = await ruleIdsFor(
+      "app/api/jobs/__fixtures__/db-package-supabase.ts",
+      'import { createClient } from "@supabase/supabase-js";\nexport const x = createClient;\n',
+    );
+    expect(ids).toContain("no-restricted-imports");
+  });
+
+  // ARCHITECT re-review of ebc0987 (iq0-s9c, item a): only src/app/api/jobs
+  // (deps.ts) reads a secret from src/lib/env; an individual job gets it
+  // injected via JobContext.
+  it("src/lib/jobs itself may not import src/lib/env directly", async () => {
+    const ids = await ruleIdsFor(
+      "lib/jobs/__fixtures__/no-env.ts",
+      'import { serverEnv } from "@/lib/env";\nexport const x = serverEnv;\n',
+    );
+    expect(ids).toContain("import/no-restricted-paths");
+  });
+
+  it("src/app/api/jobs (deps.ts's job) may import src/lib/env (no false positive)", async () => {
+    const ids = await ruleIdsFor(
+      "app/api/jobs/__fixtures__/env-ok.ts",
+      'import { serverEnv } from "@/lib/env";\nexport const x = serverEnv;\n',
+    );
+    expect(ids).not.toContain("import/no-restricted-paths");
+  });
+
+  // ARCHITECT re-review of ebc0987 (iq0-s9c, item c): the src/app/api/jobs
+  // zone glob must work even though that directory does not exist in this
+  // worktree yet (S8, agent/automation-architect-mu4xnv9l daa167f, not
+  // merged) — a fixture proves the target isn't vacuously unmatched.
+  it("src/app/api/jobs (the not-yet-merged job route) is covered by the allowlist even though the directory doesn't exist here yet", async () => {
+    const ids = await ruleIdsFor(
+      "app/api/jobs/__fixtures__/allowlist.ts",
+      'import { listExpenses } from "@/lib/repositories/expenses";\nexport const x = listExpenses;\n',
+    );
+    expect(ids).toContain("import/no-restricted-paths");
+  });
 });

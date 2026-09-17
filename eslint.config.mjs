@@ -26,10 +26,29 @@ const abs = (p) => path.join(ROOT, p);
 // daa167f, not yet merged) reads JOB_SECRET through it, and that read was
 // already fact-checked in the same review (item, "deps.ts:24-26").
 const JOBS_ALLOWLIST_MESSAGE =
-  "Job code (src/lib/jobs/**, src/app/api/jobs/**) may only import from itself, src/lib/iq, src/lib/repositories/iq-*, or src/lib/env — not a general repository, alias or relative (ARCHITECT review of daa167f, iq0-s9r item 3).";
+  "Job code (src/lib/jobs/**, src/app/api/jobs/**) may only import from itself, src/lib/iq, or src/lib/repositories/iq-* — not a general repository, alias or relative (ARCHITECT review of daa167f, iq0-s9r item 3).";
 
 const JOB_IMPLEMENTATION_DB_MESSAGE =
   "An individual job (src/lib/jobs/jobs/**, e.g. heartbeat) must reach the database only through ctx from its JobContext — no direct @/db or repository import, even an iq-* one (ARCHITECT review of daa167f, SECURITY condition).";
+
+// ARCHITECT re-review of ebc0987 (iq0-s9c, item b): a path-based allowlist
+// only constrains files under src/**, so a job could bypass every rule
+// above by talking to Postgres directly through an npm package instead of a
+// repository. This must be a `no-restricted-imports` block (paths are
+// package names, not project files, so no-restricted-paths does not apply),
+// and — same rule key as the minting block above, same files — it has to
+// repeat that block's paths/patterns verbatim or lose them (the flat-config
+// "last matching block wins wholesale" gotcha, hit twice already in this
+// file's history).
+const JOB_DB_PACKAGE_MESSAGE =
+  "Job code (src/lib/jobs/**, src/app/api/jobs/**) may not import a database driver or client package directly — go through a repository or ctx (ARCHITECT review of ebc0987, iq0-s9c item b).";
+
+// ARCHITECT re-review of ebc0987 (iq0-s9c, item a): only src/app/api/jobs
+// (deps.ts) reads a secret from src/lib/env — an individual job gets its
+// secrets injected via JobContext, so src/lib/jobs itself should not be able
+// to read env directly either.
+const JOBS_LIB_EXCEPT = ["src/lib/jobs/**", "src/lib/iq/**", "src/lib/repositories/iq-*.ts"];
+const JOBS_ROUTE_EXCEPT = [...JOBS_LIB_EXCEPT, "src/lib/env/**"];
 
 // ARCHITECT review of accdd93 (P2 #1): a forecast figure can be passed off
 // as a fact because every payload schema, InsightSchema, and ObservedSchema
@@ -99,7 +118,15 @@ const eslintConfig = defineConfig([
     // file's first two commits — same rule key + overlapping `files` means
     // the later block wins wholesale, not a merge).
     files: ["src/**/*.{ts,tsx}"],
-    ignores: ["src/lib/iq/engine/**", "src/lib/repositories/iq-*.ts", "**/*.test.ts", "**/*.test.tsx", "**/__test-support__/**"],
+    ignores: [
+      "src/lib/iq/engine/**",
+      "src/lib/repositories/iq-*.ts",
+      "src/lib/jobs/**",
+      "src/app/api/jobs/**",
+      "**/*.test.ts",
+      "**/*.test.tsx",
+      "**/__test-support__/**",
+    ],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -111,13 +138,44 @@ const eslintConfig = defineConfig([
     },
   },
   {
-    // IQ-0 DESIGN.md §3 / ARCHITECT review of daa167f (iq0-s9r items 2-3):
-    // the job runner runs unattended, per org, with postgres bypassing RLS.
-    // An allowlist, not a blocklist: only code job runs actually need.
-    // no-restricted-paths resolves relative imports and aliases to the same
-    // absolute file before matching a zone, so both are caught the same way
-    // (verified against a scratch fixture before relying on it — a plain
-    // named-import blocklist does not do this).
+    // ARCHITECT re-review of ebc0987 (iq0-s9c, item b): job code (and
+    // src/lib/jobs/jobs/** within it) still gets the same minting
+    // restriction as everywhere else — repeated here, not layered, because
+    // this block's `files` overlaps the one above for the exact same rule
+    // key. Plus the new database-package ban (item b) that a path-based
+    // allowlist alone cannot express.
+    files: ["src/lib/jobs/**/*.{ts,tsx}", "src/app/api/jobs/**/*.{ts,tsx}"],
+    ignores: ["**/*.test.ts", "**/*.test.tsx", "**/__test-support__/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            { name: "@/lib/iq/engine", importNames: ENGINE_MINTING_NAMES, message: ENGINE_MINTING_MESSAGE },
+            { name: "postgres", message: JOB_DB_PACKAGE_MESSAGE },
+            { name: "pg", message: JOB_DB_PACKAGE_MESSAGE },
+            { name: "drizzle-orm", message: JOB_DB_PACKAGE_MESSAGE },
+          ],
+          patterns: [
+            { group: ENGINE_MINTING_MODULES, message: ENGINE_MINTING_MESSAGE },
+            { group: ["drizzle-orm/*", "@supabase/*"], message: JOB_DB_PACKAGE_MESSAGE },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // IQ-0 DESIGN.md §3 / ARCHITECT review of daa167f (iq0-s9r items 2-3),
+    // re-reviewed at ebc0987 (iq0-s9c, item a): the job runner runs
+    // unattended, per org, with postgres bypassing RLS. An allowlist, not a
+    // blocklist: only code job runs actually need. no-restricted-paths
+    // resolves relative imports and aliases to the same absolute file
+    // before matching a zone, so both are caught the same way (verified
+    // against a scratch fixture before relying on it — a plain named-import
+    // blocklist does not do this). Two target-specific zones, not one: only
+    // src/app/api/jobs (deps.ts) reads a secret from src/lib/env — an
+    // individual job gets it injected via JobContext, so src/lib/jobs
+    // itself may not read env directly either.
     files: ["src/**/*.{ts,tsx}"],
     rules: {
       "import/no-restricted-paths": [
@@ -125,14 +183,15 @@ const eslintConfig = defineConfig([
         {
           zones: [
             {
-              target: [abs("src/lib/jobs/**"), abs("src/app/api/jobs/**")],
+              target: [abs("src/lib/jobs/**")],
               from: [abs("src/**")],
-              except: [
-                abs("src/lib/jobs/**"),
-                abs("src/lib/iq/**"),
-                abs("src/lib/repositories/iq-*.ts"),
-                abs("src/lib/env/**"),
-              ],
+              except: JOBS_LIB_EXCEPT.map(abs),
+              message: JOBS_ALLOWLIST_MESSAGE,
+            },
+            {
+              target: [abs("src/app/api/jobs/**")],
+              from: [abs("src/**")],
+              except: JOBS_ROUTE_EXCEPT.map(abs),
               message: JOBS_ALLOWLIST_MESSAGE,
             },
             {
