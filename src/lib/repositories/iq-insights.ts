@@ -28,7 +28,9 @@ import "server-only";
  * expiry carries `asOf`, the end of the period or bucket the rule evaluated.
  * It is required — there is no default — and a write or expiry older than the
  * stored as_of is refused with STALE_WRITE, so a slow run can neither
- * overwrite nor expire what a newer run found.
+ * overwrite nor expire what a newer run found. A write is also checked
+ * against the key's latest row in any status, so it cannot re-fire a finding
+ * a newer run already expired.
  *
  * **Payment-ledger findings are finance data** (IQ-2 R2.2). `loadInsightsFor`
  * leaves `recon.*` and `sig.*` producers out of the query unless the viewer
@@ -250,6 +252,18 @@ export async function writeInsight(tx: IqTx, lease: IqWriteLease, insight: Insig
     .for("update");
 
   if (!active) {
+    // No ACTIVE row may mean a newer run already EXPIRED (or superseded) this key.
+    // An older run must not re-fire it: compare with the key's latest as_of in any
+    // status (RELIABILITY iq2-s2-rel). Under READ COMMITTED a concurrent expire holds
+    // the row lock, so once it commits this statement sees the EXPIRED row.
+    const [latest] = await tx
+      .select({ id: iqInsights.id, asOf: iqInsights.asOf })
+      .from(iqInsights)
+      .where(and(eq(iqInsights.orgId, orgId), eq(iqInsights.dedupeKey, claim.dedupeKey)))
+      .orderBy(desc(iqInsights.asOf))
+      .limit(1);
+    if (latest && asOf.getTime() < latest.asOf.getTime()) return { outcome: "STALE_WRITE", insightId: latest.id };
+
     await tx.insert(iqInsights).values({
       id: claim.id,
       orgId,

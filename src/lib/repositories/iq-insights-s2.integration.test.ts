@@ -144,6 +144,34 @@ describe("as_of guard (RELIABILITY C5, U2)", () => {
   });
 });
 
+describe("as_of guard across statuses (RELIABILITY iq2-s2-rel blocker)", () => {
+  it("an older run cannot re-fire a key a newer run already expired; a run at the same or a later as_of can", async () => {
+    const lease = await startRun();
+    const first = await detection(lease);
+    await inTx((tx) => writeInsight(tx, lease, first, { asOf: DAY_END }));
+    await inTx((tx) => expireInsights(tx, lease, [{ dedupeKey: first.dedupeKey, asOf: LATER, reason: "CLEARED" }]));
+
+    const olderRefire = await detection(lease, { dedupeKey: first.dedupeKey });
+    expect(await inTx((tx) => writeInsight(tx, lease, olderRefire, { asOf: DAY_END }))).toEqual({ outcome: "STALE_WRITE", insightId: first.id });
+    expect(await row(olderRefire.id)).toBeUndefined();
+
+    const genuine = await detection(lease, { dedupeKey: first.dedupeKey, value: "400000" });
+    expect(await inTx((tx) => writeInsight(tx, lease, genuine, { asOf: LATER }))).toEqual({ outcome: "INSERTED", insightId: genuine.id });
+  });
+
+  it("an older run cannot insert over a newer superseded history either", async () => {
+    const lease = await startRun();
+    const first = await detection(lease);
+    await inTx((tx) => writeInsight(tx, lease, first, { asOf: LATER }));
+    await reference(first.id);
+    const replacement = await detection(lease, { dedupeKey: first.dedupeKey, value: "650000" });
+    await inTx((tx) => writeInsight(tx, lease, replacement, { asOf: LATER }));
+    await inTx((tx) => expireInsights(tx, lease, [{ dedupeKey: first.dedupeKey, asOf: LATER, reason: "CLEARED" }]));
+    const older = await detection(lease, { dedupeKey: first.dedupeKey, value: "100000" });
+    expect((await inTx((tx) => writeInsight(tx, lease, older, { asOf: DAY_END }))).outcome).toBe("STALE_WRITE");
+  });
+});
+
 describe("unchanged claim, new copy or trust (ARCHITECT R4)", () => {
   it("unreferenced: updates copy and trust in place", async () => {
     const lease = await startRun();
