@@ -36,6 +36,8 @@ export interface TrustForBadge {
   readonly limitingSignal: TrustSignalId | null;
   /** IST business date "YYYY-MM-DD" the limiting grade comes from. */
   readonly limitingDate: string | null;
+  /** Days in the range with facts but no trust rows. */
+  readonly missingDates: readonly string[];
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
@@ -52,14 +54,24 @@ const GRADE_WORDS: Readonly<Record<TrustGrade, { tone: TrustBadgeTone; words: st
   UNKNOWN: { tone: "neutral", words: "trust not checked" },
 };
 
+const days = (n: number) => `${n} ${n === 1 ? "day" : "days"}`;
+
 /**
  * "Net profit: low trust — payment integrity, 3 Sep". HIGH names nothing;
  * any other grade names its limiting signal and day when it has them.
+ *
+ * Days never scored name no signal: an unscored day reads as UNKNOWN on
+ * every signal, so naming the first one would blame a check that never ran.
+ * They show as "trust not scored for N days" — unless a scored day is LOW,
+ * which still leads, with the unscored days added.
  */
 export function trustBadge(label: string, trust: TrustForBadge): TrustBadge {
+  const unscored = trust.missingDates.length;
+  if (unscored > 0 && trust.grade !== "LOW") return { tone: "neutral", text: `${label}: trust not scored for ${days(unscored)}` };
   const { tone, words } = GRADE_WORDS[trust.grade];
-  if (trust.grade === "HIGH" || trust.limitingSignal === null) return { tone, text: `${label}: ${words}` };
+  const also = unscored > 0 ? `; not scored for ${days(unscored)}` : "";
+  if (trust.grade === "HIGH" || trust.limitingSignal === null) return { tone, text: `${label}: ${words}${also}` };
   const why = TRUST_SIGNAL_LABELS[trust.limitingSignal];
   const when = trust.limitingDate === null ? "" : `, ${dayMonth(trust.limitingDate)}`;
-  return { tone, text: `${label}: ${words} — ${why}${when}` };
+  return { tone, text: `${label}: ${words} — ${why}${when}${also}` };
 }

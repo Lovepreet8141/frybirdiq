@@ -6,10 +6,11 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/db";
-import { expenseCategories, expenses, targets } from "@/db/schema";
+import { expenseCategories, targets } from "@/db/schema";
 import { getStaff, staffCan } from "@/lib/auth";
 import { businessDate } from "@/lib/dates";
 import { bps, fromRupees } from "@/lib/money";
+import { createExpense } from "@/lib/repositories/expenses";
 
 export type ExpenseFormState = { status: "idle" } | { status: "error"; message: string };
 
@@ -74,17 +75,15 @@ export async function recordExpense(
     return { status: "error", message: "That category no longer exists." };
   }
 
-  await db()
-    .insert(expenses)
-    .values({
-      orgId: staff.orgId,
-      categoryId: parsed.data.categoryId,
-      description: parsed.data.description,
-      amount: fromRupees(parsed.data.amount),
-      paidOn: parsed.data.paidOn,
-      accountId: parsed.data.accountId ? parsed.data.accountId : null,
-      reference: parsed.data.reference || null,
-    });
+  // Also refreshes the IQ daily facts for that day, so a closed month's P&L shows it at once.
+  await createExpense(staff.orgId, {
+    categoryId: parsed.data.categoryId,
+    description: parsed.data.description,
+    amount: fromRupees(parsed.data.amount),
+    paidOn: parsed.data.paidOn,
+    accountId: parsed.data.accountId ? parsed.data.accountId : null,
+    reference: parsed.data.reference || null,
+  });
 
   revalidatePath("/app/iq/expenses");
   revalidatePath("/app/iq/pnl");

@@ -8,7 +8,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type DateRange, addDays, endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
 import { trustBadge } from "@/lib/finance/trust-badge";
-import { getProfitAndLoss, getProfitAndLossReport, type PnlReportSources } from "./expenses";
+import { paise } from "@/lib/money";
+import { createExpense, getProfitAndLoss, getProfitAndLossReport, type PnlReportSources, refreshFactsForDays } from "./expenses";
 import { readDailyFacts, recomputeDay } from "./iq-facts";
 import { computeTrustDay, getMetricTrust } from "./iq-trust";
 import { getFoodCostComparison } from "./stock";
@@ -171,5 +172,29 @@ describe("P&L report — facts with trust, live fallback (IQ-1 S9)", () => {
 
     const other = Object.assign(new Error("connection reset"), { code: "08006" });
     await expect(getProfitAndLossReport(orgs.a.orgId, AUGUST, sourcesAt(istInstant("2026-09-17"), { readFacts: () => Promise.reject(other) }))).rejects.toBe(other);
+  });
+
+  it("says trust was not scored, naming no signal, for facts computed without trust rows", async () => {
+    const { source, trust } = await getProfitAndLossReport(orgs.a.orgId, SEP_1_TO_10, AFTER);
+    expect(source).toBe("facts");
+    expect(trust?.revenue.missingDates).toHaveLength(10);
+    expect(trustBadge("Net sales (excl. GST)", trust!.revenue)).toEqual({ tone: "neutral", text: "Net sales (excl. GST): trust not scored for 10 days" });
+  });
+
+  it("shows an expense recorded today for last month at once on the facts path", async () => {
+    // Last test in the file: it changes org A's August.
+    const before = await getProfitAndLossReport(orgs.a.orgId, AUGUST, AFTER);
+    const category = await seedExpenseCategory(orgs.a, { behaviour: "DIRECT" });
+    await createExpense(orgs.a.orgId, { categoryId: category.id, description: "Late August invoice", amount: paise(11_111n), paidOn: "2026-08-20", accountId: null, reference: null });
+
+    const after = await getProfitAndLossReport(orgs.a.orgId, AUGUST, AFTER);
+    expect(after.source).toBe("facts");
+    expect(after.pnl.result.directCosts).toBe(before.pnl.result.directCosts + 11_111n);
+    expect(after.pnl).toEqual(await getProfitAndLoss(orgs.a.orgId, AUGUST));
+    expect(after.trust?.revenue.missingDates).toEqual([]);
+  });
+
+  it("never fails the write when the facts refresh fails", async () => {
+    await expect(refreshFactsForDays(orgs.a.orgId, ["2026-02-30"])).resolves.toBeUndefined();
   });
 });

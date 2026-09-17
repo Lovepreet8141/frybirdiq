@@ -18,8 +18,8 @@ import { type DateRange, addDays, businessDate, daysInRange, endOfBusinessDay, s
 import { type Bps, type Paise, ZERO, add, paise, ratioBps, subtract } from "@/lib/money";
 import { netRevenueOf, profit, type ProfitResult } from "@/lib/iq/profit";
 import { paidOrders } from "@/lib/repositories/analytics";
-import { type DailyFactsRead, readDailyFacts } from "@/lib/repositories/iq-facts";
-import { type MetricTrustRead, getMetricTrust } from "@/lib/repositories/iq-trust";
+import { type DailyFactsRead, readDailyFacts, recomputeDay } from "@/lib/repositories/iq-facts";
+import { type MetricTrustRead, computeTrustDay, getMetricTrust } from "@/lib/repositories/iq-trust";
 import { type FoodCostComparison, getFoodCostComparison } from "@/lib/repositories/stock";
 
 export interface ExpenseRow {
@@ -399,4 +399,56 @@ function foodCostFromFacts(facts: DailyFactsRead): FoodCostComparison {
   const theoreticalCost = paise(facts.totals.food_cost_theoretical ?? 0n);
   const actualCost = paise(facts.totals.food_cost_actual ?? 0n);
   return { theoreticalCost, actualCost, varianceCost: subtract(actualCost, theoreticalCost), saleMovementCount: Number(facts.totals.sale_lines_total ?? 0n) };
+}
+
+/* ------------------------------------------------------------------ */
+/* Expense writes keep the daily facts current                          */
+/* ------------------------------------------------------------------ */
+
+export interface NewExpense {
+  readonly categoryId: string;
+  readonly description: string;
+  readonly amount: Paise;
+  /** IST business date the money was paid. */
+  readonly paidOn: string;
+  readonly accountId: string | null;
+  readonly reference: string | null;
+}
+
+/**
+ * Records an expense, then refreshes the daily facts and trust for its day.
+ * The caller has already validated the input and checked the category
+ * belongs to `orgId`. The insert is the action; the refresh is best effort
+ * and never fails it.
+ */
+export async function createExpense(orgId: string, input: NewExpense): Promise<{ readonly id: string }> {
+  const [row] = await db()
+    .insert(expenses)
+    .values({ orgId, ...input })
+    .returning({ id: expenses.id });
+  if (!row) throw new Error("expenses: insert returned no row");
+  await refreshFactsForDays(orgId, [input.paidOn]);
+  return row;
+}
+
+/**
+ * Rebuilds the IQ daily facts, then trust, for each IST day a committed write
+ * touched — both the old and the new `paid_on` when an expense moves — so a
+ * closed month's P&L, which reads facts, shows the change at once instead of
+ * after the nightly run. Call after the write's transaction commits.
+ *
+ * Best effort: a failure (no facts tables on this database, a lock held past
+ * its budget) is logged with the error's name and code only, never a value,
+ * and swallowed; the nightly recompute heals the day.
+ */
+export async function refreshFactsForDays(orgId: string, dates: readonly string[]): Promise<void> {
+  for (const date of [...new Set(dates)].sort()) {
+    try {
+      await recomputeDay(orgId, date);
+      await computeTrustDay(orgId, date);
+    } catch (error) {
+      const code = typeof error === "object" && error !== null ? ((error as { code?: unknown; cause?: { code?: unknown } }).cause?.code ?? (error as { code?: unknown }).code) : undefined;
+      console.warn(`expenses: facts refresh for ${date} failed (${error instanceof Error ? error.name : "unknown"}${typeof code === "string" ? ` ${code}` : ""}); the nightly recompute will retry`);
+    }
+  }
 }
