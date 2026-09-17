@@ -16,6 +16,19 @@ const JOBS_MONEY_WRITER_MESSAGE =
 const ENGINE_MINTING_MESSAGE =
   "Only src/lib/repositories/iq-*.ts and the engine itself may import this — it mints an Observed quantity. Read a stored value through a repository instead (ARCHITECT review of accdd93, P2 #1).";
 
+// ARCHITECT review of daa167f (S8, item 2a): the job registry reaches this
+// repository, so the DESIGN.md §3 money-writer ban applies to it too, not
+// just to src/lib/jobs and src/app/api/jobs.
+const JOB_REGISTRY_REPOSITORIES = ["@/lib/repositories/iq-job-runs"];
+
+// ARCHITECT review of daa167f, SECURITY condition: an individual job
+// implementation (src/lib/jobs/jobs/**) must reach the database only through
+// its injected JobContext, never by importing a repository or @/db itself —
+// stricter than the general src/lib/jobs rule, which only bans the money
+// writers.
+const JOB_IMPLEMENTATION_DB_MESSAGE =
+  "src/lib/jobs/jobs/** must not import @/db or a repository directly — use ctx from JobContext (ARCHITECT review of daa167f, SECURITY condition).";
+
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
@@ -54,7 +67,7 @@ const eslintConfig = defineConfig([
     // layered, because flat config replaces a rule wholesale per matching
     // file rather than merging two blocks' `patterns` arrays together).
     files: ["src/lib/jobs/**/*.{ts,tsx}", "src/app/api/jobs/**/*.{ts,tsx}"],
-    ignores: ["**/*.test.ts", "**/*.test.tsx", "**/__test-support__/**"],
+    ignores: ["src/lib/jobs/jobs/**", "**/*.test.ts", "**/*.test.tsx", "**/__test-support__/**"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -83,6 +96,66 @@ const eslintConfig = defineConfig([
             {
               group: ["@/lib/iq/engine/observed-factory", "@/lib/iq/engine/insight", "@/lib/iq/engine/claims"],
               message: ENGINE_MINTING_MESSAGE,
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // ARCHITECT review of daa167f, SECURITY condition — stricter than the
+    // block above: an individual job (src/lib/jobs/jobs/**, e.g. heartbeat)
+    // gets all the database access it needs through ctx, so it may not
+    // import @/db or any repository at all, on top of the same
+    // engine-minting restriction every non-engine, non-repository file gets.
+    files: ["src/lib/jobs/jobs/**/*.{ts,tsx}"],
+    ignores: ["**/*.test.ts", "**/*.test.tsx"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            { name: "@/db", message: JOB_IMPLEMENTATION_DB_MESSAGE },
+            {
+              name: "@/lib/iq/engine",
+              importNames: [
+                "ObservedSchema",
+                "InsightSchema",
+                "FactPayloadSchema",
+                "DetectionPayloadSchema",
+                "ForecastPayloadSchema",
+                "ExplanationPayloadSchema",
+                "RecommendationPayloadSchema",
+                "AutomationPayloadSchema",
+              ],
+              message: ENGINE_MINTING_MESSAGE,
+            },
+          ],
+          patterns: [
+            { group: ["@/db/*", "@/lib/repositories", "@/lib/repositories/*"], message: JOB_IMPLEMENTATION_DB_MESSAGE },
+            {
+              group: ["@/lib/iq/engine/observed-factory", "@/lib/iq/engine/insight", "@/lib/iq/engine/claims"],
+              message: ENGINE_MINTING_MESSAGE,
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // ARCHITECT review of daa167f (item 2a): the job registry reaches this
+    // repository (today, only this one), so it may not import a money
+    // writer either — same rule as src/lib/jobs, applied by name since it
+    // lives in src/lib/repositories/, outside those directories' globs.
+    files: JOB_REGISTRY_REPOSITORIES.map((m) => `${m.replace("@/", "src/")}.ts`),
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@/lib/repositories/payments", "@/lib/repositories/orders", "@/lib/repositories/finance"],
+              message: JOBS_MONEY_WRITER_MESSAGE,
             },
           ],
         },

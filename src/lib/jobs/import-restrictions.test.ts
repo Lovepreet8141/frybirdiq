@@ -5,13 +5,20 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * Static, ESLint-independent guard for the three `no-restricted-imports`
- * rules in eslint.config.mjs (IQ-0 S9). ESLint enforces these at lint time;
- * this test re-derives the same violations directly from source text so a
- * future edit to eslint.config.mjs that quietly narrows or drops a rule
- * still fails CI here. See hive/reviews/iq-0/DESIGN.md §3 and the ARCHITECT
- * review of accdd93 (P2 #1, iq0-s1r).
+ * Static, ESLint-independent guard for the `no-restricted-imports` rules in
+ * eslint.config.mjs (IQ-0 S9, extended for S8's iq0-s8r-arch item 2a). ESLint
+ * enforces these at lint time; this test re-derives the same violations
+ * directly from source text so a future edit to eslint.config.mjs that
+ * quietly narrows or drops a rule still fails CI here. See
+ * hive/reviews/iq-0/DESIGN.md §3 and the ARCHITECT reviews of accdd93 (P2 #1,
+ * iq0-s1r) and daa167f (iq0-s8r-arch, item 2a + SECURITY condition).
  */
+
+// The job registry reaches these repositories to do its work — today, only
+// iq-job-runs.ts. Kept in sync by hand with eslint.config.mjs's
+// JOB_REGISTRY_REPOSITORIES; the two are independent on purpose (see the
+// docstring above), so a mismatch is a thing to notice, not merge away.
+const JOB_REGISTRY_REPOSITORY_FILES = ["lib/repositories/iq-job-runs.ts"];
 
 const SRC = fileURLToPath(new URL("../..", import.meta.url));
 const IMPORT_FROM = /from\s+["']([^"']+)["']/g;
@@ -48,7 +55,7 @@ describe("IQ-0 S9: restricted imports (mirrors eslint.config.mjs no-restricted-i
     expect(offenders).toEqual([]);
   });
 
-  it("src/lib/jobs and src/app/api/jobs do not import payments/orders/finance writers", () => {
+  it("src/lib/jobs, src/app/api/jobs, and the repositories the registry reaches do not import payments/orders/finance writers", () => {
     const banned = /^@\/lib\/repositories\/(payments|orders|finance)$/;
     const dirs = [join(SRC, "lib/jobs"), join(SRC, "app/api/jobs")].filter((d) => {
       try {
@@ -57,12 +64,32 @@ describe("IQ-0 S9: restricted imports (mirrors eslint.config.mjs no-restricted-i
         return false;
       }
     });
-    const offenders: string[] = [];
-    for (const dir of dirs) {
-      for (const file of listSourceFiles(dir)) {
-        for (const spec of importSpecifiers(file)) {
-          if (banned.test(spec)) offenders.push(`${rel(file)} -> ${spec}`);
+    const files = [
+      ...dirs.flatMap((dir) => listSourceFiles(dir)),
+      ...JOB_REGISTRY_REPOSITORY_FILES.map((f) => join(SRC, f)).filter((f) => {
+        try {
+          return statSync(f).isFile();
+        } catch {
+          return false;
         }
+      }),
+    ];
+    const offenders: string[] = [];
+    for (const file of files) {
+      for (const spec of importSpecifiers(file)) {
+        if (banned.test(spec)) offenders.push(`${rel(file)} -> ${spec}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("src/lib/jobs/jobs/** (an individual job) does not import @/db or a repository directly", () => {
+    const banned = /^(@\/db(\/.*)?|@\/lib\/repositories(\/.*)?)$/;
+    const dir = join(SRC, "lib/jobs/jobs");
+    const offenders: string[] = [];
+    for (const file of listSourceFiles(dir)) {
+      for (const spec of importSpecifiers(file)) {
+        if (banned.test(spec)) offenders.push(`${rel(file)} -> ${spec}`);
       }
     }
     expect(offenders).toEqual([]);
