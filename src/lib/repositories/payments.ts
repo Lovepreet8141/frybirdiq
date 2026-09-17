@@ -25,7 +25,7 @@ import { financialYear, invoiceNumber, parseInvoiceNumber } from "@/lib/invoice"
 import { CASH_PROVIDER, type PaymentMethod, type PaymentResult, RAZORPAY_PROVIDER, type RefundResult, getProvider } from "@/lib/payments";
 import { IdempotencyConflict, withIdempotency } from "./idempotency";
 import { type FactsRefreshSteps, refreshFactsForDays } from "./expenses";
-import { businessDate } from "@/lib/dates";
+import { refundFactsDays } from "@/lib/payments/refund-facts-days";
 import { getOrg } from "./org";
 import { canTransition, isTerminal } from "@/domain/order-status";
 import { advanceOrder } from "./orders";
@@ -1246,11 +1246,10 @@ async function followUpRefund(input: { orgId: string; actorUserId: string; refun
     await reversePointsForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
   }
 
-  // 4. Facts: the order's day (sales, statuses) and the refund's own days
-  // (made and finalized). Best effort, bounded, never fails the refund.
+  // 4. Facts: the order's day and the day the refund finalized — never the
+  // day it was reserved (an-3). Best effort, bounded, never fails the refund.
   try {
-    const days = [order.createdAt, refund.createdAt, refund.finalizedAt].filter((at): at is Date => at !== null).map((at) => businessDate(at));
-    await refreshFactsForDays(input.orgId, days, factsRefresh);
+    await refreshFactsForDays(input.orgId, refundFactsDays({ orderCreatedAt: order.createdAt, finalizedAt: refund.finalizedAt }), factsRefresh);
   } catch (error) {
     console.warn(`payments: facts refresh after refund failed (${error instanceof Error ? error.name : "unknown"}); the nightly recompute will heal it`);
   }

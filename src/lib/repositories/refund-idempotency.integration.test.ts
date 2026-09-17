@@ -22,7 +22,7 @@ import { istInstant, seedSale } from "./__test-support__/iq-fixtures";
 import { getProfitAndLoss, getProfitAndLossReport } from "./expenses";
 import { readDailyFacts, recomputeDay } from "./iq-facts";
 import { computeTrustDay } from "./iq-trust";
-import { businessDate, endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
+import { addDays, businessDate, endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
 import { fromRupees } from "@/lib/money";
 import { CASH_PROVIDER } from "@/lib/payments";
 
@@ -664,6 +664,32 @@ describe("refundPayment — reserve, finalize, converge (ref-b3)", () => {
     expect(await statusOf("order", o.orderId)).toBe("PAID");
     expect(await moneyEvents(o.orderId)).toHaveLength(1);
     expect(await reversals(o.orderId)).toHaveLength(0);
+  });
+
+  it("refreshes facts for the order's day and the day the refund FINALIZED, never the day it was reserved (reserved 23:59, finalized next day)", async () => {
+    const gateway = stubRazorpay();
+    gateway.mode = "pending";
+    const o = await paidOrder({ provider: "razorpay" });
+    await db().update(orders).set({ createdAt: new Date("2026-08-10T07:00:00Z") }).where(eq(orders.id, o.orderId));
+    const key = randomUUID();
+    const days: string[] = [];
+    const steps = { tablesExist: async () => true, recompute: async (_org: string, date: string) => void days.push(date), scoreTrust: async () => undefined };
+    const call = () => refundPayment({ paymentId: o.paymentId, amount: o.amount, reason: "late night refund", actorUserId: randomUUID(), actorRoles: OWNER, orgId: org.orgId, idempotencyKey: key }, { factsRefresh: steps });
+
+    expect(await call()).toMatchObject({ ok: false, retriable: true });
+    // Reserved at 23:59 IST yesterday.
+    const today = businessDate(new Date());
+    const yesterday = addDays(today, -1);
+    await db().update(refunds).set({ createdAt: new Date(startOfBusinessDay(today).getTime() - 60_000) }).where(eq(refunds.paymentId, o.paymentId));
+
+    gateway.refunds[0]!.status = "processed";
+    expect((await call()).ok).toBe(true);
+    const [row] = await refundRows(o.paymentId);
+    expect(row?.status).toBe("SUCCEEDED");
+    expect(businessDate(row!.createdAt)).toBe(yesterday);
+
+    expect([...new Set(days)].sort()).toEqual(["2026-08-10", businessDate(row!.finalizedAt!)].sort());
+    expect(days).not.toContain(yesterday);
   });
 
   it("S4: a stale claim from a caller that died takes over and completes the refund once", async () => {
