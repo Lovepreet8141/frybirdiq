@@ -1435,3 +1435,29 @@ export async function healLostRefundFollowUps(
 
   return { examined, healed: examined - stillOpenRefundIds.length, stillOpen: stillOpenRefundIds.length, stillOpenRefundIds, notReached: lost.length - examined };
 }
+
+/**
+ * How many refund follow-ups are stuck: SUCCEEDED refunds from the
+ * reserve-and-finalize flow (they carry an idempotency key) with no money
+ * event, whose heal has failed at least `minFailures` times
+ * (`refund_followup_failed` audit rows). State, not a per-run delta: the heal
+ * job alerts on a count above zero (RELIABILITY 4a8d76 #2), and it drops back
+ * to zero on its own once the follow-up finishes, because the money event
+ * then exists. Org-scoped; reads only.
+ */
+export async function countStuckRefundFollowUps(input: { readonly orgId: string; readonly minFailures?: number }): Promise<number> {
+  const minFailures = Math.max(1, input.minFailures ?? 2);
+  const [row] = await db()
+    .select({ stuck: sql<number>`count(*)::int` })
+    .from(refunds)
+    .where(
+      and(
+        eq(refunds.orgId, input.orgId),
+        eq(refunds.status, "SUCCEEDED"),
+        sql`${refunds.idempotencyKey} IS NOT NULL`,
+        sql`NOT EXISTS (SELECT 1 FROM ${orderEvents} e WHERE e.org_id = ${refunds.orgId} AND e.order_id = ${refunds.orderId} AND e.metadata->>'refundId' = ${refunds.id}::text)`,
+        sql`(SELECT count(*) FROM ${auditLogs} a WHERE a.org_id = ${refunds.orgId} AND a.entity = 'refunds' AND a.entity_id = ${refunds.id} AND a.action = ${REFUND_FOLLOWUP_FAILED_ACTION}) >= ${minFailures}`,
+      ),
+    );
+  return row?.stuck ?? 0;
+}

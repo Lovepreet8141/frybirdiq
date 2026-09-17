@@ -15,7 +15,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, idempotencyKeys, loyaltyAccounts, loyaltyStampEvents, loyaltyTransactions, orderEvents, orders, payments, refunds } from "@/db/schema";
-import { healLostRefundFollowUps, refundPayment } from "./payments";
+import { countStuckRefundFollowUps, healLostRefundFollowUps, refundPayment } from "./payments";
 import { fingerprint } from "./idempotency";
 import { createTestCustomer, createTestOrg, createTestProduct, createTestTaxRate, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
 import { istInstant, seedSale } from "./__test-support__/iq-fixtures";
@@ -897,6 +897,30 @@ describe("refundPayment — reserve, finalize, converge (ref-b3)", () => {
     await lostFollowUp(10);
     expect(await healLostRefundFollowUps({ orgId: org.orgId }, { shouldStop: () => true })).toEqual({ examined: 0, healed: 0, stillOpen: 0, stillOpenRefundIds: [], notReached: 1 });
     expect(await healLostRefundFollowUps({ orgId: org.orgId })).toMatchObject({ healed: 1, notReached: 0 });
+  });
+
+  it("ref-b7j: counts a follow-up as stuck only after two failed heals, and not once it heals", async () => {
+    expect(await countStuckRefundFollowUps({ orgId: org.orgId })).toBe(0);
+    const o = await lostFollowUp(20);
+    await arm("reversal", o.orderId);
+
+    await quietly(() => healLostRefundFollowUps({ orgId: org.orgId }));
+    expect(await countStuckRefundFollowUps({ orgId: org.orgId })).toBe(0); // one failure
+    expect(await countStuckRefundFollowUps({ orgId: org.orgId, minFailures: 1 })).toBe(1);
+
+    await quietly(() => healLostRefundFollowUps({ orgId: org.orgId, now: new Date(Date.now() + 2 * 60 * 60_000) }));
+    expect(await countStuckRefundFollowUps({ orgId: org.orgId })).toBe(1); // two failures
+
+    const otherOrg = await createTestOrg();
+    try {
+      expect(await countStuckRefundFollowUps({ orgId: otherOrg.orgId })).toBe(0);
+    } finally {
+      await deleteTestOrg(otherOrg.orgId);
+    }
+
+    await disarm(o.orderId);
+    expect(await healLostRefundFollowUps({ orgId: org.orgId, now: new Date(Date.now() + 4 * 60 * 60_000) })).toMatchObject({ healed: 1 });
+    expect(await countStuckRefundFollowUps({ orgId: org.orgId })).toBe(0); // healed: the money event now exists
   });
 
   it("ref-b7: a refund with no staff actor is healed by the system, with a null actor on its events", async () => {
