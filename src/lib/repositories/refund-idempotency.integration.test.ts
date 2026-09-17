@@ -797,7 +797,7 @@ describe("refundPayment — reserve, finalize, converge (ref-b3)", () => {
     expect(await moneyEvents(o.orderId)).toHaveLength(0);
 
     const first = await healLostRefundFollowUps({ orgId: org.orgId });
-    expect(first).toEqual({ examined: 1, healed: 1, stillOpen: 0 });
+    expect(first).toEqual({ examined: 1, healed: 1, stillOpen: 0, stillOpenRefundIds: [] });
     expect(await statusOf("order", o.orderId)).toBe("REFUNDED");
     expect(await reversals(o.orderId)).toHaveLength(1);
     expect(await stampReversed(o.orderId)).toBe(true);
@@ -805,7 +805,7 @@ describe("refundPayment — reserve, finalize, converge (ref-b3)", () => {
     // Under five minutes: possibly a live request still finishing, so left alone.
     expect(await reversals(recent.orderId)).toHaveLength(0);
 
-    expect(await healLostRefundFollowUps({ orgId: org.orgId })).toEqual({ examined: 0, healed: 0, stillOpen: 0 });
+    expect(await healLostRefundFollowUps({ orgId: org.orgId })).toEqual({ examined: 0, healed: 0, stillOpen: 0, stillOpenRefundIds: [] });
     expect(await reversals(o.orderId)).toHaveLength(1);
     expect(await moneyEvents(o.orderId)).toHaveLength(1);
 
@@ -835,19 +835,57 @@ describe("refundPayment — reserve, finalize, converge (ref-b3)", () => {
 
     const otherOrg = await createTestOrg();
     try {
-      expect(await healLostRefundFollowUps({ orgId: otherOrg.orgId })).toEqual({ examined: 0, healed: 0, stillOpen: 0 });
+      expect(await healLostRefundFollowUps({ orgId: otherOrg.orgId })).toEqual({ examined: 0, healed: 0, stillOpen: 0, stillOpenRefundIds: [] });
     } finally {
       await deleteTestOrg(otherOrg.orgId);
     }
 
-    expect(await healLostRefundFollowUps({ orgId: org.orgId, limit: 1 })).toEqual({ examined: 1, healed: 1, stillOpen: 0 });
+    expect(await healLostRefundFollowUps({ orgId: org.orgId, limit: 1 })).toEqual({ examined: 1, healed: 1, stillOpen: 0, stillOpenRefundIds: [] });
     expect(await reversals(a.orderId)).toHaveLength(1); // oldest first
     expect(await reversals(b.orderId)).toHaveLength(0);
-    expect(await healLostRefundFollowUps({ orgId: org.orgId, limit: 1 })).toEqual({ examined: 1, healed: 1, stillOpen: 0 });
-    expect(await healLostRefundFollowUps({ orgId: org.orgId })).toEqual({ examined: 0, healed: 0, stillOpen: 0 });
+    expect(await healLostRefundFollowUps({ orgId: org.orgId, limit: 1 })).toEqual({ examined: 1, healed: 1, stillOpen: 0, stillOpenRefundIds: [] });
+    expect(await healLostRefundFollowUps({ orgId: org.orgId })).toEqual({ examined: 0, healed: 0, stillOpen: 0, stillOpenRefundIds: [] });
 
     expect(await statusOf("order", legacy.orderId)).toBe("PAID");
     expect(await moneyEvents(legacy.orderId)).toHaveLength(0);
+  });
+
+  it("ref-b7: a follow-up that always fails is recorded and backed off, so it cannot starve a newer one (limit 1)", async () => {
+    const poison = await lostFollowUp(30);
+    await arm("reversal", poison.orderId); // stays broken across runs
+    const newer = await lostFollowUp(10);
+    const [poisonRefund] = await refundRows(poison.paymentId);
+
+    const first = await quietly(() => healLostRefundFollowUps({ orgId: org.orgId, limit: 1 }));
+    expect(first.value).toEqual({ examined: 1, healed: 0, stillOpen: 1, stillOpenRefundIds: [poisonRefund!.id] });
+    const failures = () =>
+      db().select({ before: auditLogs.before, after: auditLogs.after, actor: auditLogs.actorUserId }).from(auditLogs).where(and(eq(auditLogs.entityId, poisonRefund!.id), eq(auditLogs.action, "refund_followup_failed")));
+    expect(await failures()).toEqual([{ before: { attempts: 0 }, after: { attempts: 1, error: "Error", orderId: poison.orderId }, actor: null }]);
+
+    // Next run: the failing row is backed off, and the newer lost follow-up is reached.
+    expect(await healLostRefundFollowUps({ orgId: org.orgId, limit: 1 })).toEqual({ examined: 1, healed: 1, stillOpen: 0, stillOpenRefundIds: [] });
+    expect(await reversals(newer.orderId)).toHaveLength(1);
+    expect(await healLostRefundFollowUps({ orgId: org.orgId, limit: 1 })).toEqual({ examined: 0, healed: 0, stillOpen: 0, stillOpenRefundIds: [] });
+
+    // After the back-off it is tried again, and counted again.
+    const later = new Date(Date.now() + 2 * 60 * 60_000);
+    expect((await quietly(() => healLostRefundFollowUps({ orgId: org.orgId, now: later }))).value).toMatchObject({ examined: 1, healed: 0, stillOpenRefundIds: [poisonRefund!.id] });
+    expect((await failures()).map((f) => (f.after as { attempts: number }).attempts).sort()).toEqual([1, 2]);
+
+    // Once whatever broke it is fixed, it heals.
+    await disarm(poison.orderId);
+    expect(await healLostRefundFollowUps({ orgId: org.orgId, now: new Date(Date.now() + 4 * 60 * 60_000) })).toMatchObject({ examined: 1, healed: 1 });
+    expect(await reversals(poison.orderId)).toHaveLength(1);
+  });
+
+  it("ref-b7: a refund with no staff actor is healed by the system, with a null actor on its events", async () => {
+    const o = await lostFollowUp(10);
+    await db().update(refunds).set({ actorUserId: null }).where(eq(refunds.paymentId, o.paymentId));
+
+    expect(await healLostRefundFollowUps({ orgId: org.orgId })).toEqual({ examined: 1, healed: 1, stillOpen: 0, stillOpenRefundIds: [] });
+    expect(await reversals(o.orderId)).toHaveLength(1);
+    const [event] = await moneyEvents(o.orderId);
+    expect(event?.actorUserId).toBeNull();
   });
 
   it("S4: a stale claim from a caller that died takes over and completes the refund once", async () => {
