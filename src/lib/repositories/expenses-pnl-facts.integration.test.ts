@@ -5,12 +5,15 @@
  * no facts tables on this database) reads live, exactly as before, with no
  * trust badge.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { and, eq, sql } from "drizzle-orm";
+import { db } from "@/db";
+import { expenses } from "@/db/schema";
 import { type DateRange, addDays, endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
 import { trustBadge } from "@/lib/finance/trust-badge";
 import { paise } from "@/lib/money";
-import { createExpense, getProfitAndLoss, getProfitAndLossReport, type PnlReportSources, refreshFactsForDays } from "./expenses";
-import { readDailyFacts, recomputeDay } from "./iq-facts";
+import { EXPENSE_REFRESH_BUDGET, createExpense, getProfitAndLoss, getProfitAndLossReport, type PnlReportSources, refreshFactsForDays } from "./expenses";
+import { factDayLockKey, readDailyFacts, recomputeDay } from "./iq-facts";
 import { computeTrustDay, getMetricTrust } from "./iq-trust";
 import { getFoodCostComparison } from "./stock";
 import { createTestIngredient, createTestProduct, type TestOrg } from "./__test-support__/fixtures";
@@ -195,6 +198,62 @@ describe("P&L report — facts with trust, live fallback (IQ-1 S9)", () => {
   });
 
   it("never fails the write when the facts refresh fails", async () => {
-    await expect(refreshFactsForDays(orgs.a.orgId, ["2026-02-30"])).resolves.toBeUndefined();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(refreshFactsForDays(orgs.a.orgId, ["2026-02-30"])).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("saves quickly while the day is locked by another run, skipping the refresh without a warning", async () => {
+    const date = "2026-08-25";
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let held!: () => void;
+    const isHeld = new Promise<void>((resolve) => (held = resolve));
+    const holder = db().transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${factDayLockKey(orgs.b.orgId, date)}, 0))`);
+      held();
+      await released;
+    });
+    await isHeld;
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    try {
+      const category = await seedExpenseCategory(orgs.b, { behaviour: "DIRECT" });
+      const started = Date.now();
+      const saved = await createExpense(orgs.b.orgId, { categoryId: category.id, description: "During the nightly run", amount: paise(2_222n), paidOn: date, accountId: null, reference: null });
+      // One wait of at most 2 s, never the job defaults (20 waits × 60 s).
+      expect(EXPENSE_REFRESH_BUDGET).toEqual({ maxLockWaits: 1, lockWaitTimeoutMs: 2_000, statementTimeoutMs: 5_000 });
+      expect(Date.now() - started).toBeLessThan(6_000);
+      expect(await db().select({ id: expenses.id }).from(expenses).where(and(eq(expenses.id, saved.id), eq(expenses.orgId, orgs.b.orgId)))).toHaveLength(1);
+      expect(warn).not.toHaveBeenCalled();
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining("DAY_LOCK_BUSY"));
+    } finally {
+      warn.mockRestore();
+      debug.mockRestore();
+      release();
+      await holder;
+    }
+  });
+
+  it("computes nothing and logs nothing on a database without the facts tables", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const compute = vi.fn(async () => undefined);
+    try {
+      await refreshFactsForDays(orgs.a.orgId, ["2026-08-20"], { tablesExist: async () => false, recompute: compute, scoreTrust: compute });
+      expect(compute).not.toHaveBeenCalled();
+
+      // Tables dropped after the cached check: 42P01 from the compute is also silent.
+      const undefinedTable = Object.assign(new Error("Failed query"), { cause: { code: "42P01" } });
+      await refreshFactsForDays(orgs.a.orgId, ["2026-08-20", "2026-08-21"], { tablesExist: async () => true, recompute: () => Promise.reject(undefinedTable), scoreTrust: compute });
+      expect(compute).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

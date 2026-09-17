@@ -18,7 +18,7 @@ import { type DateRange, addDays, businessDate, daysInRange, endOfBusinessDay, s
 import { type Bps, type Paise, ZERO, add, paise, ratioBps, subtract } from "@/lib/money";
 import { netRevenueOf, profit, type ProfitResult } from "@/lib/iq/profit";
 import { paidOrders } from "@/lib/repositories/analytics";
-import { type DailyFactsRead, readDailyFacts, recomputeDay } from "@/lib/repositories/iq-facts";
+import { type DailyFactsRead, DayLockBusyError, type DayLockOptions, DayTimeoutError, readDailyFacts, recomputeDay } from "@/lib/repositories/iq-facts";
 import { type MetricTrustRead, computeTrustDay, getMetricTrust } from "@/lib/repositories/iq-trust";
 import { type FoodCostComparison, getFoodCostComparison } from "@/lib/repositories/stock";
 
@@ -432,21 +432,68 @@ export async function createExpense(orgId: string, input: NewExpense): Promise<{
 }
 
 /**
+ * The budget for a refresh inside the owner's request: at most one short wait
+ * for a day another run holds (the nightly job), and short statements. Past
+ * it the refresh skips; the save has already happened.
+ */
+export const EXPENSE_REFRESH_BUDGET: DayLockOptions = { maxLockWaits: 1, lockWaitTimeoutMs: 2_000, statementTimeoutMs: 5_000 };
+
+let factTablesPresent: Promise<boolean> | null = null;
+
+/**
+ * Whether this database has the IQ facts and trust tables, checked once per
+ * process with `to_regclass`. Production has neither until owner decision
+ * dec-2; the migration that adds them ships with a deploy, which restarts the
+ * process, so a cached "absent" never outlives it. A failed check is not
+ * cached.
+ */
+function factTablesExist(): Promise<boolean> {
+  factTablesPresent ??= db()
+    .execute<{ present: boolean }>(sql`SELECT to_regclass('public.iq_daily_facts') IS NOT NULL AND to_regclass('public.iq_daily_trust') IS NOT NULL AS present`)
+    .then((rows) => rows[0]?.present === true)
+    .catch(() => {
+      factTablesPresent = null;
+      return false;
+    });
+  return factTablesPresent;
+}
+
+export interface FactsRefreshSteps {
+  readonly tablesExist: () => Promise<boolean>;
+  readonly recompute: (orgId: string, date: string) => Promise<unknown>;
+  readonly scoreTrust: (orgId: string, date: string) => Promise<unknown>;
+}
+
+const REFRESH_STEPS: FactsRefreshSteps = {
+  tablesExist: factTablesExist,
+  recompute: (orgId, date) => recomputeDay(orgId, date, EXPENSE_REFRESH_BUDGET),
+  scoreTrust: (orgId, date) => computeTrustDay(orgId, date, EXPENSE_REFRESH_BUDGET),
+};
+
+/**
  * Rebuilds the IQ daily facts, then trust, for each IST day a committed write
  * touched — both the old and the new `paid_on` when an expense moves — so a
  * closed month's P&L, which reads facts, shows the change at once instead of
  * after the nightly run. Call after the write's transaction commits.
  *
- * Best effort: a failure (no facts tables on this database, a lock held past
- * its budget) is logged with the error's name and code only, never a value,
- * and swallowed; the nightly recompute heals the day.
+ * Best effort and bounded (EXPENSE_REFRESH_BUDGET), never failing the write:
+ * - no facts tables (production until dec-2): nothing is computed, nothing logged;
+ * - the day is busy past the budget or a statement times out (DayLockBusyError,
+ *   DayTimeoutError): skipped at debug level, the nightly recompute heals it;
+ * - anything else: logged with the error's name and code only, never a value.
  */
-export async function refreshFactsForDays(orgId: string, dates: readonly string[]): Promise<void> {
+export async function refreshFactsForDays(orgId: string, dates: readonly string[], steps: FactsRefreshSteps = REFRESH_STEPS): Promise<void> {
+  if (!(await steps.tablesExist())) return;
   for (const date of [...new Set(dates)].sort()) {
     try {
-      await recomputeDay(orgId, date);
-      await computeTrustDay(orgId, date);
+      await steps.recompute(orgId, date);
+      await steps.scoreTrust(orgId, date);
     } catch (error) {
+      if (isUndefinedTable(error)) return;
+      if (error instanceof DayLockBusyError || error instanceof DayTimeoutError) {
+        console.debug(`expenses: facts refresh for ${date} skipped (${error.code}); the nightly recompute will heal it`);
+        continue;
+      }
       const code = typeof error === "object" && error !== null ? ((error as { code?: unknown; cause?: { code?: unknown } }).cause?.code ?? (error as { code?: unknown }).code) : undefined;
       console.warn(`expenses: facts refresh for ${date} failed (${error instanceof Error ? error.name : "unknown"}${typeof code === "string" ? ` ${code}` : ""}); the nightly recompute will retry`);
     }
