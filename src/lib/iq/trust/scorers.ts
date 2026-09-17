@@ -10,7 +10,7 @@
  *
  * Thresholds are the design's proposals, pending RESTAURANT-OPS review. Where
  * the design gives no MEDIUM band (T5, T6) any failure is LOW. Where it names
- * two conditions and no band (T7), both met is HIGH and one is MEDIUM.
+ * two conditions and no band (T7), both met is HIGH and either one is MEDIUM.
  */
 
 import { type TrustSignalId, getDerivedMetric, getMetric, isDerivedMetricId, type AnyMetricId } from "@/lib/iq/metrics";
@@ -133,10 +133,15 @@ export function gradePaymentIntegrity(cleanOrders: bigint, checkedOrders: bigint
   return cleanOrders === checkedOrders ? "HIGH" : "LOW";
 }
 
-/** T7 cost recording: a DIRECT expense in the month so far and one within the last 7 days. Both HIGH, the month only MEDIUM, neither LOW. */
+/**
+ * T7 cost recording: a DIRECT expense in the IST month so far and one within
+ * the last 7 days. Both HIGH, either one MEDIUM, neither LOW. Week-only is
+ * MEDIUM so days 1–6 of a month are not LOW for an expense recorded late last
+ * month (FINANCE-LEDGER finding, RESTAURANT-OPS agreed).
+ */
 export function gradeCostRecording(inMonth: boolean, withinSevenDays: boolean): TrustGrade {
   if (inMonth && withinSevenDays) return "HIGH";
-  if (inMonth) return "MEDIUM";
+  if (inMonth || withinSevenDays) return "MEDIUM";
   return "LOW";
 }
 

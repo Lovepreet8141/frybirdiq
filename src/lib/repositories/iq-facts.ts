@@ -344,9 +344,13 @@ const DEFAULT_LOCK_WAIT_TIMEOUT_MS = 60_000;
 /**
  * The day's lock stayed busy past the caller's budget: too many waits, or one
  * wait longer than the timeout. Nothing was written. Retriable — a job should
- * reschedule the day rather than count it as a failed computation.
+ * reschedule the day rather than count it as a failed computation. Callers
+ * size the budget per call (`maxLockWaits`, `lockWaitTimeoutMs` on
+ * `recomputeDay` and `computeTrustDay`) to their own deadline.
  */
 export class DayLockBusyError extends Error {
+  /** Stable code for the job runner's errorCodeOf (src/lib/jobs/handle.ts). */
+  readonly code = "DAY_LOCK_BUSY";
   readonly retriable = true;
   constructor(
     readonly key: string,

@@ -10,7 +10,8 @@ import { db } from "@/db";
 import { iqDailyTrust, ingredientPrices } from "@/db/schema";
 import { paise } from "@/lib/money";
 import { businessDate } from "@/lib/dates";
-import { DayLockBusyError } from "./iq-facts";
+import { errorCodeOf } from "@/lib/jobs/handle";
+import { DayLockBusyError, factDayLockKey, recomputeDay } from "./iq-facts";
 import { computeTrustDay, getMetricTrust, trustDayLockKey } from "./iq-trust";
 import { createTestIngredient, createTestProduct, createTestRecipe, type TestOrg, warmPool } from "./__test-support__/fixtures";
 import {
@@ -60,6 +61,7 @@ async function seed(org: TestOrg) {
   await seedSaleMovements(org, clean.order, { ingredientId: fresh.id, perUnit: 150, costPerBaseUnitPaise: 3n });
   await seedWasteEntry(org, { at: istInstant(CLEAN, "22:00"), ingredientId: fresh.id, magnitude: 40, costPaise: 120n });
   await seedExpense(org, { behaviour: "DIRECT", amountPaise: 50_000n, paidOn: "2026-09-01" });
+  await seedExpense(org, { behaviour: "DIRECT", amountPaise: 20_000n, paidOn: "2026-09-29" });
 
   // DOUBLE: captured twice; a ₹20 line with no recipe; a stale-priced and an uncosted SALE row; no waste.
   const double = await seedSale(org, {
@@ -187,14 +189,20 @@ describe("IQ daily trust (IQ-1 S7)", () => {
     const isHeld = new Promise<void>((resolve) => (held = resolve));
     const holder = db().transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${trustDayLockKey(orgs.a.orgId, CLEAN)}, 0))`);
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${factDayLockKey(orgs.a.orgId, CLEAN)}, 0))`);
       held();
       await released;
     });
     await isHeld;
     try {
-      await expect(computeTrustDay(orgs.a.orgId, CLEAN, { maxLockWaits: 0 })).rejects.toMatchObject({ name: "DayLockBusyError", retriable: true, reason: "max_waits", lockWaits: 0 });
+      await expect(computeTrustDay(orgs.a.orgId, CLEAN, { maxLockWaits: 0 })).rejects.toMatchObject({ name: "DayLockBusyError", code: "DAY_LOCK_BUSY", retriable: true, reason: "max_waits", lockWaits: 0 });
       const started = Date.now();
-      await expect(computeTrustDay(orgs.a.orgId, CLEAN, { lockWaitTimeoutMs: 200 })).rejects.toBeInstanceOf(DayLockBusyError);
+      const timedOut = await computeTrustDay(orgs.a.orgId, CLEAN, { lockWaitTimeoutMs: 200, maxLockWaits: 3 }).catch((error: unknown) => error);
+      expect(timedOut).toBeInstanceOf(DayLockBusyError);
+      expect(timedOut).toMatchObject({ reason: "timeout", lockWaits: 1 });
+      expect(errorCodeOf(timedOut)).toBe("DAY_LOCK_BUSY");
+      // The same per-call budget on recomputeDay, which shares the helper.
+      await expect(recomputeDay(orgs.a.orgId, CLEAN, { maxLockWaits: 0 })).rejects.toMatchObject({ code: "DAY_LOCK_BUSY", reason: "max_waits" });
       expect(Date.now() - started).toBeLessThan(5_000);
     } finally {
       release();
@@ -203,9 +211,13 @@ describe("IQ daily trust (IQ-1 S7)", () => {
     expect((await computeTrustDay(orgs.a.orgId, CLEAN)).lockWaits).toBe(0);
   });
 
-  it("grades T7 MEDIUM with a DIRECT expense earlier in the month only, LOW with none", async () => {
+  it("grades T7 MEDIUM with a DIRECT expense this month only or last 7 days only, LOW with neither", async () => {
+    // Expenses on 1 Sep and 29 Sep.
     expect(scoreOf(await computeTrustDay(orgs.a.orgId, "2026-09-20"), "t7_cost_recording").grade).toBe("MEDIUM");
-    expect(scoreOf(await computeTrustDay(orgs.a.orgId, "2026-10-05"), "t7_cost_recording").grade).toBe("LOW");
+    // Day 3 of October: nothing this month yet, 29 Sep is within 7 days.
+    const oct03 = scoreOf(await computeTrustDay(orgs.a.orgId, "2026-10-03"), "t7_cost_recording");
+    expect(oct03).toMatchObject({ grade: "MEDIUM", detail: { month_direct_expenses: 0, week_direct_expenses: 1 } });
+    expect(scoreOf(await computeTrustDay(orgs.a.orgId, "2026-10-20"), "t7_cost_recording").grade).toBe("LOW");
   });
 
   it("gives a metric the lowest signal grade and names the limiting signal and day (I2)", async () => {

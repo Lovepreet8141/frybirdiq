@@ -113,6 +113,7 @@ describe("T7 cost recording", () => {
   it.each([
     [true, true, "HIGH"],
     [true, false, "MEDIUM"],
+    [false, true, "MEDIUM"],
     [false, false, "LOW"],
   ] as const)("in month %s, within 7 days %s is %s", (month, week, grade) => {
     expect(gradeCostRecording(month, week)).toBe(grade);
