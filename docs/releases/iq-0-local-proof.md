@@ -71,19 +71,44 @@ by DEVOPS-RELEASE's own review of the unit files. Recommend a
 
 ## Recovery
 
-- **Disable the timer** (stop future runs, keep the unit installed):
-  `systemctl disable --now frybird-job-heartbeat.timer` (and the same for
-  any other job's timer once it ships).
-- **Stop units immediately** (mid-run): `systemctl stop frybird-job@<job>.service`
-  — the lease expires (300 s) and the next scheduled attempt takes over
-  cleanly; nothing needs to be cleared by hand.
-- **Go fully dormant without touching systemd**: unset `JOB_SECRET` (and
-  `JOB_SECRET_PREVIOUS`) in `/etc/frybird/env` and restart the app. Every
-  `/api/jobs/*` request then gets an empty 404 regardless of the bearer
-  presented — confirmed above by restarting the local server with
-  `JOB_SECRET` removed. This is the fastest full stop: no systemd unit
-  needs touching, and nginx's own `/api/jobs/` block already refuses public
-  traffic on top of it.
+`docs/DEPLOY.md` §9.4 is the authoritative disable/rollback procedure —
+this proof does not restate it, only points to it. It covers what a
+timer-disable alone misses (DEVOPS-RELEASE review of 78659ff): a job that
+already failed once is sitting in `Restart=on-failure`'s wait state and can
+still fire up to two more times on its own schedule after
+`disable --now`, so §9.4 also runs `systemctl stop 'frybird-job@*.service'`
+(cancels the pending restart) and `systemctl reset-failed 'frybird-job@*.service'`
+(clears the failure count so a later `systemctl start` isn't refused) —
+neither of which this local proof exercised, since no systemd ran here.
+§9.4 also has the nginx rollback (back up `/etc/nginx/sites-available/frybird`
+before overwriting, `nginx -t` before every reload).
+
+What this proof *did* confirm, and still holds under §9.4: unsetting
+`JOB_SECRET` (and `JOB_SECRET_PREVIOUS`) and restarting the app makes every
+`/api/jobs/*` request answer 404 regardless of the bearer presented,
+whatever state any timer or unit is in — confirmed above by restarting the
+local server with `JOB_SECRET` removed.
+
+## Post-deploy checks the local proof cannot cover
+
+Nothing here ran under systemd (no systemd on macOS), so two things stay
+unverified until the first real install:
+
+1. **The `LoadCredential`/`%i` hand-off.** Before enabling the timer, run
+   `systemctl start frybird-job@heartbeat` by hand (DEPLOY.md §9.2) and
+   confirm a real 200/SUCCEEDED in `journalctl -u frybird-job@heartbeat`.
+   This proof's 200/SUCCEEDED came from a plain `curl` with a bearer read
+   from `.env.local` — it never exercised systemd's own credential
+   injection (`LoadCredential=job-header:/etc/frybird/jobs.header`) or the
+   `%i` instance-name substitution the real unit relies on.
+2. **The live, certbot-forked nginx config**, not the throwaway container:
+   `nginx -T | grep -c 'location \^~ /api/jobs/'` must equal 1, and
+   `curl -s -o /dev/null -w '%{http_code}\n' https://frybirdiq.tech/api/jobs/heartbeat`
+   must be 404 (DEPLOY.md §9.5). §5a: certbot forks the 80 block into a 443
+   block once, at cert-issue time — a location added to the source file
+   afterwards does not retroactively reach the already-forked 443 block, so
+   the container test above (which only ran the port-80-shaped block) does
+   not stand in for this.
 
 ## Cleanup
 
