@@ -20,10 +20,10 @@ import { type Role, authorize, can } from "@/domain/permissions";
 import { type Paise, ZERO, add, formatINR, paise, subtract } from "@/lib/money";
 import { pointsEarned } from "@/lib/loyalty";
 import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
-import { awardStampForOrderInTx, qualifyingStampSpend, redeemStampRewardInTx } from "./loyalty";
+import { awardStampForOrderInTx, qualifyingStampSpend, redeemStampRewardInTx, reversePointsForOrder, reverseStampForOrder } from "./loyalty";
 import { financialYear, invoiceNumber, parseInvoiceNumber } from "@/lib/invoice";
-import { CASH_PROVIDER, type PaymentMethod, type PaymentResult, RAZORPAY_PROVIDER, getProvider } from "@/lib/payments";
-import { withIdempotency } from "./idempotency";
+import { CASH_PROVIDER, type PaymentMethod, type PaymentResult, RAZORPAY_PROVIDER, type RefundResult, getProvider } from "@/lib/payments";
+import { IdempotencyConflict, withIdempotency } from "./idempotency";
 import { type FactsRefreshSteps, refreshFactsForDays } from "./expenses";
 import { businessDate } from "@/lib/dates";
 import { getOrg } from "./org";
@@ -851,35 +851,74 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
 /* Refunds — roadmap 1.4                                               */
 /* ------------------------------------------------------------------ */
 
-export type RefundPaymentResult = { ok: true; refundId: string; orderId: string; fullyRefunded: boolean } | { ok: false; error: string };
-
-type RefundTxOutcome =
-  // refundedAmount travels as a string, not a Paise/bigint: withIdempotency
-  // stores this whole object as a jsonb responseSnapshot for a replay to
-  // return later, and JSON has no bigint representation.
-  | { ok: true; refundId: string; orderId: string; fullyRefunded: boolean; orderStatusBefore: OrderRow["status"]; orderFulfilment: OrderRow["fulfilment"]; refundedAmount: string; reason: string; orderCreatedAt: string; refundCreatedAt: string }
-  | { ok: false; error: string };
+export type RefundPaymentResult =
+  | { ok: true; refundId: string; orderId: string; fullyRefunded: boolean }
+  /** `retriable`: the refund may or may not have gone through; retry the same attempt (same key) to find out. Never start a new one. */
+  | { ok: false; error: string; retriable?: boolean };
 
 /**
- * Gives money back.
+ * What the reserve-and-finalize work returns, and what `withIdempotency`
+ * stores for a replay. Deliberately small: the follow-up (F2) re-reads the
+ * refund, payment and order fresh instead of trusting a snapshot.
+ */
+type RefundWorkOutcome = { ok: true; refundId: string; orderId: string } | { ok: false; error: string };
+
+/**
+ * The provider could not say whether the money moved — a timeout, a 5xx, a
+ * 409, a refund still pending, an amount that does not match. Thrown, never
+ * returned, from inside the idempotent work: `withIdempotency` then stores no
+ * snapshot and releases its claim, the refund row stays RESERVED and keeps
+ * its amount out of the refundable balance, and the next call with the same
+ * key re-enters through that row and asks again (design Revision 2, B2).
+ */
+class AmbiguousRefundOutcome extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AmbiguousRefundOutcome";
+  }
+}
+
+/** The caller's key already belongs to a different refund (another payment, amount or reason). */
+class RefundKeyConflict extends Error {
+  constructor() {
+    super("payments: refund idempotency key reused for a different refund");
+    this.name = "RefundKeyConflict";
+  }
+}
+
+type RefundRow = typeof refunds.$inferSelect;
+type PaymentRow = typeof payments.$inferSelect;
+
+/** Statuses whose amount is no longer available to refund: money on its way back, or back. */
+const REFUND_HOLDS_BALANCE = ["RESERVED", "SUCCEEDED"] as const;
+
+const REFUND_STILL_OPEN =
+  "We couldn't confirm the refund yet. Nothing more will be refunded twice — try the same refund again in a minute to finish it.";
+
+function failureOf(row: RefundRow): string {
+  const failure = (row.providerPayload as { failure?: unknown } | null)?.failure;
+  return `The refund was not made: ${typeof failure === "string" ? failure : "the payment provider refused it"}.`;
+}
+
+/**
+ * Gives money back. Design: hive/agents/michael-mu4lr1ro/reports/
+ * 2026-09-16-refund-design.md, Revision 2.
  *
- * Online: Razorpay is asked to refund and the row is written only once it
- * agrees. Cash: the till hands it over and the row records who did. The
- * amount can never exceed what was captured less what has already gone
- * back; a full refund moves the order to REFUNDED (through `advanceOrder`,
- * which also voids the FRYBIRD REWARDS stamp) when the lifecycle allows the
- * move, and a partial one leaves the order where it is. Every refund lands
- * a `refunds` row, an `order_events` row and an audit row with the actor.
+ * 1. RESERVE (one transaction). Lock the payment row, look the caller's key
+ *    up in `refunds` (a hit is this same refund coming back — resume it),
+ *    check the balance counting RESERVED and SUCCEEDED refunds, and insert
+ *    the refund as RESERVED with an audit row. Nothing leaves the business.
+ * 2. PROVIDER, outside any transaction. Cash always succeeds. Razorpay is
+ *    asked under `X-Refund-Idempotency: <refund id>`; a resumed refund first
+ *    looks for an earlier refund carrying that id, and never asks twice for
+ *    one it finds. Pending or unknown outcomes throw `AmbiguousRefundOutcome`.
+ * 3. FINALIZE (one transaction). Lock payment, then refund row — the one
+ *    lock order every refund path uses — then SUCCEEDED with finalized_at and
+ *    the payment's status from the SUCCEEDED total, or FAILED with its reason.
+ * 4. FOLLOW-UP (`followUpRefund`), outside the idempotent work so it runs on
+ *    every call, replays included, and converges on what is stored.
  *
- * Idempotent on the caller's key (a retried request — a network timeout, a
- * double-tap — replays the first result rather than refunding twice), and
- * the balance check is additionally serialized with `SELECT ... FOR UPDATE`
- * on the payment row: two genuinely concurrent refund requests against the
- * *same* payment (different keys — two managers, two devices) would
- * otherwise both read "remaining" before either wrote, and could together
- * refund more than was ever captured. The lock makes the second request
- * wait for the first to finish and see its result before checking its own
- * amount against what is actually left.
+ * `orders.refund` only; every read is scoped to the caller's org.
  */
 export async function refundPayment(input: {
   paymentId: string;
@@ -899,141 +938,322 @@ export async function refundPayment(input: {
   const reason = input.reason.trim();
   if (reason.length < 3) return { ok: false, error: "Say why, in a few words." };
 
+  let outcome: RefundWorkOutcome;
+  try {
+    ({ result: outcome } = await withIdempotency(
+      {
+        key: input.idempotencyKey,
+        operation: "refund_payment",
+        orgId: input.orgId,
+        request: { paymentId: input.paymentId, amount: input.amount.toString(), reason },
+      },
+      () => reserveAndFinalizeRefund({ ...input, reason }),
+    ));
+  } catch (error) {
+    if (error instanceof AmbiguousRefundOutcome) return { ok: false, error: error.message, retriable: true };
+    if (error instanceof IdempotencyConflict || error instanceof RefundKeyConflict) {
+      return { ok: false, error: "That refund attempt was already used for a different refund. Close the dialog and start again." };
+    }
+    throw error;
+  }
+
+  if (!outcome.ok) return outcome;
+
+  const fullyRefunded = await followUpRefund({ orgId: input.orgId, actorUserId: input.actorUserId, refundId: outcome.refundId }, opts.factsRefresh);
+  return { ok: true, refundId: outcome.refundId, orderId: outcome.orderId, fullyRefunded };
+}
+
+type Reservation =
+  | { readonly kind: "settled"; readonly outcome: RefundWorkOutcome }
+  | { readonly kind: "ask"; readonly row: RefundRow; readonly payment: PaymentRow; readonly resumed: boolean };
+
+async function reserveAndFinalizeRefund(input: {
+  paymentId: string;
+  amount: Paise;
+  reason: string;
+  actorUserId: string;
+  orgId: string;
+  idempotencyKey: string;
+}): Promise<RefundWorkOutcome> {
   const database = db();
 
-  const { result: outcome, replayed } = await withIdempotency(
-    {
-      key: input.idempotencyKey,
-      operation: "refund_payment",
-      orgId: input.orgId,
-      request: { paymentId: input.paymentId, amount: input.amount.toString(), reason },
-    },
-    async (): Promise<RefundTxOutcome> =>
-      database.transaction(async (tx) => {
-        const [payment] = await tx
-          .select()
-          .from(payments)
-          .where(and(eq(payments.id, input.paymentId), eq(payments.orgId, input.orgId)))
-          .for("update")
-          .limit(1);
-        if (!payment) return { ok: false, error: "That payment does not exist." };
-        if (payment.status !== "CAPTURED" && payment.status !== "PARTIALLY_REFUNDED") {
-          return { ok: false, error: `Only a captured payment can be refunded; this one is ${payment.status.toLowerCase().replace("_", " ")}.` };
-        }
+  /* ---- 1. RESERVE ------------------------------------------------------ */
+  const reservation: Reservation = await database.transaction(async (tx) => {
+    const [payment] = await tx
+      .select()
+      .from(payments)
+      .where(and(eq(payments.id, input.paymentId), eq(payments.orgId, input.orgId)))
+      .for("update")
+      .limit(1);
+    if (!payment) return { kind: "settled", outcome: { ok: false, error: "That payment does not exist." } };
 
-        const [order] = await tx.select().from(orders).where(eq(orders.id, payment.orderId)).limit(1);
-        if (!order) return { ok: false, error: "That order does not exist." };
+    // After the payment lock, so a same-key call for this payment waits here
+    // and then sees the row the first one wrote (S1).
+    const findByKey = async () =>
+      (await tx.select().from(refunds).where(and(eq(refunds.orgId, input.orgId), eq(refunds.idempotencyKey, input.idempotencyKey))).limit(1))[0];
+    const resume = (row: RefundRow): Reservation => {
+      // The key's own row must be this very refund; anything else is a key
+      // reused for a different request (B3) — never replayed.
+      if (row.paymentId !== input.paymentId || paise(row.amount) !== input.amount || row.reason !== input.reason) throw new RefundKeyConflict();
+      if (row.status === "SUCCEEDED") return { kind: "settled", outcome: { ok: true, refundId: row.id, orderId: row.orderId } };
+      if (row.status === "FAILED") return { kind: "settled", outcome: { ok: false, error: failureOf(row) } };
+      return { kind: "ask", row, payment, resumed: true };
+    };
 
-        const booked = await tx.select({ amount: refunds.amount }).from(refunds).where(eq(refunds.paymentId, payment.id));
-        const alreadyRefunded = booked.reduce((sum, row) => add(sum, paise(row.amount)), ZERO);
-        const remaining = subtract(paise(payment.amount), alreadyRefunded);
-        if (input.amount > remaining) {
-          return { ok: false, error: `Only ${formatINR(remaining)} is left to refund on this payment.` };
-        }
+    const existing = await findByKey();
+    if (existing) return resume(existing);
 
-        const provider = getProvider(payment.provider);
-        const refunded = await provider.refund({ providerPaymentId: payment.providerPaymentId, amount: input.amount, reason });
-        if (!refunded.ok) return { ok: false, error: refunded.error ?? "The refund could not be made." };
+    if (payment.status !== "CAPTURED" && payment.status !== "PARTIALLY_REFUNDED") {
+      return { kind: "settled", outcome: { ok: false, error: `Only a captured payment can be refunded; this one is ${payment.status.toLowerCase().replace("_", " ")}.` } };
+    }
+    try {
+      getProvider(payment.provider);
+    } catch {
+      // Checked before reserving, so an unusable provider never parks an amount.
+      return { kind: "settled", outcome: { ok: false, error: "This payment's provider is not set up, so it cannot be refunded here." } };
+    }
 
-        const now = new Date();
-        const [row] = await tx
+    const [order] = await tx.select().from(orders).where(and(eq(orders.id, payment.orderId), eq(orders.orgId, input.orgId))).limit(1);
+    if (!order) return { kind: "settled", outcome: { ok: false, error: "That order does not exist." } };
+
+    const held = await tx
+      .select({ amount: refunds.amount })
+      .from(refunds)
+      .where(and(eq(refunds.paymentId, payment.id), eq(refunds.orgId, input.orgId), inArray(refunds.status, REFUND_HOLDS_BALANCE)));
+    const alreadyHeld = held.reduce((sum, row) => add(sum, paise(row.amount)), ZERO);
+    const remaining = subtract(paise(payment.amount), alreadyHeld);
+    if (input.amount > remaining) {
+      return { kind: "settled", outcome: { ok: false, error: `Only ${formatINR(remaining)} is left to refund on this payment.` } };
+    }
+
+    let row: RefundRow | undefined;
+    try {
+      // A savepoint: a 23505 here (the same key racing in for a different
+      // payment, which the payment lock does not serialize) must not abort
+      // the whole transaction before it can be read back.
+      [row] = await tx.transaction((sp) =>
+        sp
           .insert(refunds)
           .values({
             orgId: input.orgId,
             paymentId: payment.id,
             orderId: order.id,
-            amount: refunded.refundedAmount,
-            reason,
+            amount: input.amount,
+            reason: input.reason,
             actorUserId: input.actorUserId,
             provider: payment.provider,
-            providerRefundId: refunded.providerRefundId,
-            // Migration 0038 columns. Recorded only after the provider confirmed,
-            // so SUCCEEDED; the RESERVE → finalize flow replaces this (ref-b3).
-            status: "SUCCEEDED",
-            finalizedAt: sql`now()`,
+            status: "RESERVED",
+            idempotencyKey: input.idempotencyKey,
           })
-          .returning({ id: refunds.id, createdAt: refunds.createdAt });
-        if (!row) return { ok: false, error: "The refund was made but could not be recorded. Tell the owner." };
-
-        const fullyRefunded = add(alreadyRefunded, refunded.refundedAmount) >= paise(payment.amount);
-        await tx
-          .update(payments)
-          .set({ status: fullyRefunded ? "REFUNDED" : "PARTIALLY_REFUNDED", updatedAt: now })
-          .where(eq(payments.id, payment.id));
-
-        await tx.insert(auditLogs).values({
-          orgId: input.orgId,
-          locationId: order.locationId,
-          actorUserId: input.actorUserId,
-          action: "payment_refunded",
-          entity: "payments",
-          entityId: payment.id,
-          before: { status: payment.status, refunded: alreadyRefunded.toString() },
-          after: {
-            status: fullyRefunded ? "REFUNDED" : "PARTIALLY_REFUNDED",
-            amount: refunded.refundedAmount.toString(),
-            reason,
-            provider: payment.provider,
-            providerRefundId: refunded.providerRefundId,
-            orderId: order.id,
-          },
-        });
-
-        return { ok: true, refundId: row.id, orderId: order.id, fullyRefunded, orderStatusBefore: order.status, orderFulfilment: order.fulfilment, refundedAmount: refunded.refundedAmount.toString(), reason, orderCreatedAt: order.createdAt.toISOString(), refundCreatedAt: row.createdAt.toISOString() };
-      }),
-  );
-
-  if (!outcome.ok) return outcome;
-
-  // A replay must not repeat what only the first, successful run should do
-  // — the transaction above already ran exactly once and wrote everything
-  // that belongs to the refund itself. Moving the order and writing its
-  // event are the one part deliberately left outside that transaction (see
-  // below), so they need their own guard against running a second time.
-  if (replayed) return { ok: true, refundId: outcome.refundId, orderId: outcome.orderId, fullyRefunded: outcome.fullyRefunded };
-
-  // A full refund closes the order as REFUNDED where the lifecycle allows
-  // it (paid, cooking, ready, out, completed). advanceOrder writes the event
-  // and voids the stamp. A partial refund, or an order the graph will not
-  // move, gets an event of its own so the trail still shows the money.
-  // Outside the locked transaction deliberately: advanceOrder does its own
-  // writes (and its own idempotency, via order-status transition checks)
-  // and does not need to hold the payment row lock to do them.
-  const refundedAmount = paise(BigInt(outcome.refundedAmount));
-  if (outcome.fullyRefunded && canTransition(outcome.orderStatusBefore, "REFUNDED", outcome.orderFulfilment)) {
-    const moved = await advanceOrder({ orderId: outcome.orderId, to: "REFUNDED", actorUserId: input.actorUserId, orgId: input.orgId });
-    if (!moved.ok) {
-      await database.insert(orderEvents).values({ orgId: input.orgId, orderId: outcome.orderId, fromStatus: outcome.orderStatusBefore, toStatus: outcome.orderStatusBefore, actorUserId: input.actorUserId, reason: `Refunded ${formatINR(refundedAmount)} — ${outcome.reason}` });
+          .returning(),
+      );
+    } catch (error) {
+      const code = (error as { cause?: { code?: string }; code?: string }).cause?.code ?? (error as { code?: string }).code;
+      if (code !== "23505") throw error;
+      const raced = await findByKey();
+      if (!raced) throw error;
+      return resume(raced);
     }
-  } else {
-    await database.insert(orderEvents).values({
+    if (!row) throw new Error("payments: refund reservation returned no row");
+
+    await tx.insert(auditLogs).values({
       orgId: input.orgId,
-      orderId: outcome.orderId,
-      fromStatus: outcome.orderStatusBefore,
-      toStatus: outcome.orderStatusBefore,
+      locationId: order.locationId,
       actorUserId: input.actorUserId,
-      reason: `${outcome.fullyRefunded ? "Refunded" : "Part refunded"} ${formatINR(refundedAmount)} — ${outcome.reason}`,
+      action: "refund_reserved",
+      entity: "refunds",
+      entityId: row.id,
+      before: { paymentStatus: payment.status, held: alreadyHeld.toString() },
+      after: { status: "RESERVED", amount: input.amount.toString(), reason: input.reason, provider: payment.provider, paymentId: payment.id, orderId: order.id },
     });
+
+    return { kind: "ask", row, payment, resumed: false };
+  });
+
+  if (reservation.kind === "settled") return reservation.outcome;
+  const { row, payment, resumed } = reservation;
+
+  /* ---- 2. PROVIDER — outside every transaction ------------------------- */
+  let provider;
+  try {
+    provider = getProvider(row.provider);
+  } catch {
+    // A reservation made while the provider worked, resumed after it stopped:
+    // whether money moved is unknown, so the amount stays held.
+    throw new AmbiguousRefundOutcome(REFUND_STILL_OPEN);
+  }
+  const request = { providerPaymentId: payment.providerPaymentId, amount: paise(row.amount), reason: row.reason, refundId: row.id };
+
+  let result: RefundResult;
+  const lookup = resumed && provider.findRefund ? await provider.findRefund({ providerPaymentId: payment.providerPaymentId, refundId: row.id }) : null;
+  if (lookup?.found === "unknown") throw new AmbiguousRefundOutcome(REFUND_STILL_OPEN);
+  result = lookup?.found === true ? lookup.result : await provider.refund(request);
+
+  if (result.outcome === "succeeded" && result.refundedAmount !== paise(row.amount)) {
+    // S7: a refund for another amount is never booked as this one.
+    result = { ...result, outcome: "ambiguous", error: "The provider refunded a different amount than was reserved." };
+  }
+  if (result.outcome === "pending" || result.outcome === "ambiguous") {
+    if (result.providerRefundId) {
+      // Keep the gateway's reference on the held row for reconciliation; the status stays RESERVED.
+      await database
+        .update(refunds)
+        .set({ providerRefundId: result.providerRefundId, updatedAt: new Date() })
+        .where(and(eq(refunds.id, row.id), eq(refunds.orgId, input.orgId), eq(refunds.status, "RESERVED")));
+    }
+    throw new AmbiguousRefundOutcome(
+      result.outcome === "pending" ? "The payment provider accepted the refund and is still processing it. Try the same refund again shortly to finish recording it." : REFUND_STILL_OPEN,
+    );
   }
 
-  /*
-   * Refresh the IQ daily facts the refund changed, after everything above
-   * has committed — including the REFUNDED transition, which takes the order
-   * out of its day's sale set. A closed period's P&L reads facts, so without
-   * this a refund of an older order stays invisible there until the nightly
-   * recompute. Two IST days move: the order's own (sales, statuses, part
-   * refunds are keyed on orders.created_at) and the refund's (refunds_amount
-   * is keyed on refunds.created_at); the helper dedupes when they coincide.
-   *
-   * Same helper, budget and quiet skips as the expense refresh: no facts
-   * tables, a busy day or a timed-out statement skip, anything else logs
-   * name and code only. It never fails the refund — the money has moved.
-   */
+  /* ---- 3. FINALIZE ------------------------------------------------------ */
+  return database.transaction(async (tx): Promise<RefundWorkOutcome> => {
+    // Payment first, then the refund row: the same order as RESERVE (B1).
+    const [lockedPayment] = await tx
+      .select()
+      .from(payments)
+      .where(and(eq(payments.id, payment.id), eq(payments.orgId, input.orgId)))
+      .for("update")
+      .limit(1);
+    const [locked] = await tx
+      .select()
+      .from(refunds)
+      .where(and(eq(refunds.id, row.id), eq(refunds.orgId, input.orgId)))
+      .for("update")
+      .limit(1);
+    if (!lockedPayment || !locked) throw new Error("payments: a reserved refund or its payment disappeared before finalize");
+
+    // Another call finalized it while this one was asking the provider.
+    if (locked.status === "SUCCEEDED") return { ok: true, refundId: locked.id, orderId: locked.orderId };
+    if (locked.status === "FAILED") return { ok: false, error: failureOf(locked) };
+
+    const [order] = await tx.select({ locationId: orders.locationId }).from(orders).where(and(eq(orders.id, locked.orderId), eq(orders.orgId, input.orgId))).limit(1);
+
+    if (result.outcome === "refused") {
+      const failure = (result.error ?? "the payment provider refused it").slice(0, 300);
+      await tx
+        .update(refunds)
+        .set({ status: "FAILED", providerRefundId: result.providerRefundId, providerPayload: { failure, httpStatus: result.httpStatus }, updatedAt: new Date() })
+        .where(eq(refunds.id, locked.id));
+      await tx.insert(auditLogs).values({
+        orgId: input.orgId,
+        locationId: order?.locationId ?? null,
+        actorUserId: input.actorUserId,
+        action: "refund_failed",
+        entity: "refunds",
+        entityId: locked.id,
+        before: { status: "RESERVED" },
+        after: { status: "FAILED", amount: locked.amount.toString(), provider: locked.provider, httpStatus: result.httpStatus, failure, paymentId: lockedPayment.id, orderId: locked.orderId },
+      });
+      return { ok: false, error: failureOf({ ...locked, providerPayload: { failure } }) };
+    }
+
+    await tx
+      .update(refunds)
+      .set({ status: "SUCCEEDED", finalizedAt: sql`now()`, providerRefundId: result.providerRefundId, providerPayload: { httpStatus: result.httpStatus }, updatedAt: new Date() })
+      .where(eq(refunds.id, locked.id));
+
+    // Recomputed under the payment lock from what has actually SUCCEEDED
+    // (B1) — RESERVED and FAILED refunds never change the payment's status.
+    const succeeded = await tx
+      .select({ amount: refunds.amount })
+      .from(refunds)
+      .where(and(eq(refunds.paymentId, lockedPayment.id), eq(refunds.orgId, input.orgId), eq(refunds.status, "SUCCEEDED")));
+    const refundedTotal = succeeded.reduce((sum, r) => add(sum, paise(r.amount)), ZERO);
+    const nextStatus = refundedTotal >= paise(lockedPayment.amount) ? "REFUNDED" : "PARTIALLY_REFUNDED";
+    await tx.update(payments).set({ status: nextStatus, updatedAt: new Date() }).where(eq(payments.id, lockedPayment.id));
+
+    await tx.insert(auditLogs).values({
+      orgId: input.orgId,
+      locationId: order?.locationId ?? null,
+      actorUserId: input.actorUserId,
+      action: "payment_refunded",
+      entity: "payments",
+      entityId: lockedPayment.id,
+      before: { status: lockedPayment.status, refunded: subtract(refundedTotal, paise(locked.amount)).toString() },
+      after: {
+        status: nextStatus,
+        amount: locked.amount.toString(),
+        reason: locked.reason,
+        provider: locked.provider,
+        providerRefundId: result.providerRefundId,
+        refundId: locked.id,
+        orderId: locked.orderId,
+      },
+    });
+
+    return { ok: true, refundId: locked.id, orderId: locked.orderId };
+  });
+}
+
+/**
+ * Everything a SUCCEEDED refund owes the rest of the system, done so that
+ * running it again — a replay, a retry after a crash, two calls at once —
+ * finishes what is missing and repeats nothing (design Revision 2, B4, S4,
+ * S8). Reads refund, payment and order fresh; trusts no snapshot.
+ *
+ * 1. One money event per refund, keyed by `metadata.refundId` under the
+ *    refund row's lock, committed before anything else touches the order.
+ * 2. A full refund moves the order to REFUNDED where the lifecycle allows.
+ * 3. A full refund reverses the order's stamp and points, whatever the
+ *    order's status — also when advanceOrder's own reversal never ran (a
+ *    crash after its commit) or the order could not move (CANCELLED,
+ *    FAILED). Both reversals are idempotent, and they run only after every
+ *    transaction here has committed (RELIABILITY condition b526c5).
+ * 4. The IQ daily facts for the days the refund touched.
+ *
+ * Returns whether the payment is fully refunded.
+ */
+async function followUpRefund(input: { orgId: string; actorUserId: string; refundId: string }, factsRefresh: FactsRefreshSteps | undefined): Promise<boolean> {
+  const database = db();
+  const [refund] = await database.select().from(refunds).where(and(eq(refunds.id, input.refundId), eq(refunds.orgId, input.orgId))).limit(1);
+  if (!refund || refund.status !== "SUCCEEDED") return false;
+  const [payment] = await database.select({ status: payments.status }).from(payments).where(and(eq(payments.id, refund.paymentId), eq(payments.orgId, input.orgId))).limit(1);
+  const [order] = await database.select().from(orders).where(and(eq(orders.id, refund.orderId), eq(orders.orgId, input.orgId))).limit(1);
+  if (!payment || !order) return false;
+
+  const fullyRefunded = payment.status === "REFUNDED";
+  const amount = paise(refund.amount);
+
+  // 1. The money event — exactly once per refund.
+  await database.transaction(async (tx) => {
+    await tx.select({ id: refunds.id }).from(refunds).where(eq(refunds.id, refund.id)).for("update");
+    const [already] = await tx
+      .select({ id: orderEvents.id })
+      .from(orderEvents)
+      .where(and(eq(orderEvents.orderId, order.id), eq(orderEvents.orgId, input.orgId), sql`${orderEvents.metadata}->>'refundId' = ${refund.id}`))
+      .limit(1);
+    if (already) return;
+    await tx.insert(orderEvents).values({
+      orgId: input.orgId,
+      orderId: order.id,
+      fromStatus: order.status,
+      toStatus: order.status,
+      actorUserId: refund.actorUserId ?? input.actorUserId,
+      reason: `${fullyRefunded ? "Refunded" : "Part refunded"} ${formatINR(amount)} — ${refund.reason}`,
+      metadata: { refundId: refund.id },
+    });
+  });
+
+  if (fullyRefunded) {
+    // 2. The order, where the lifecycle allows. A refusal here is a race with
+    // another move (S8): the money event above already stands, once.
+    if (order.status !== "REFUNDED" && canTransition(order.status, "REFUNDED", order.fulfilment)) {
+      await advanceOrder({ orderId: order.id, to: "REFUNDED", actorUserId: input.actorUserId, orgId: input.orgId, reason: `Refunded — ${refund.reason}` });
+    }
+    // 3. Loyalty, unconditionally for a full refund.
+    await reverseStampForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
+    await reversePointsForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
+  }
+
+  // 4. Facts: the order's day (sales, statuses) and the refund's own days
+  // (made and finalized). Best effort, bounded, never fails the refund.
   try {
-    await refreshFactsForDays(input.orgId, [businessDate(new Date(outcome.orderCreatedAt)), businessDate(new Date(outcome.refundCreatedAt))], opts.factsRefresh);
+    const days = [order.createdAt, refund.createdAt, refund.finalizedAt].filter((at): at is Date => at !== null).map((at) => businessDate(at));
+    await refreshFactsForDays(input.orgId, days, factsRefresh);
   } catch (error) {
     console.warn(`payments: facts refresh after refund failed (${error instanceof Error ? error.name : "unknown"}); the nightly recompute will heal it`);
   }
 
-  return { ok: true, refundId: outcome.refundId, orderId: outcome.orderId, fullyRefunded: outcome.fullyRefunded };
+  return fullyRefunded;
 }

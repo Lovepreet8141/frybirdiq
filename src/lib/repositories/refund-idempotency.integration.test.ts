@@ -11,12 +11,13 @@
  *     checks its own amount against what is left.
  */
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { payments, refunds } from "@/db/schema";
+import { auditLogs, idempotencyKeys, loyaltyAccounts, loyaltyTransactions, orderEvents, orders, payments, refunds } from "@/db/schema";
 import { refundPayment } from "./payments";
-import { createTestOrg, createTestProduct, createTestTaxRate, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
+import { fingerprint } from "./idempotency";
+import { createTestCustomer, createTestOrg, createTestProduct, createTestTaxRate, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
 import { istInstant, seedSale } from "./__test-support__/iq-fixtures";
 import { getProfitAndLoss, getProfitAndLossReport } from "./expenses";
 import { readDailyFacts, recomputeDay } from "./iq-facts";
@@ -296,4 +297,385 @@ describe("refundPayment — facts refresh after commit (iq1-rfh)", () => {
       warn.mockRestore();
     }
   });
+});
+
+/**
+ * ref-b3: the reserve → provider → finalize → follow-up refund (design
+ * Revision 2), proven against a real local database. Crashes are forced
+ * deterministically by a throwaway trigger armed per order and per point;
+ * Razorpay is a recorded-shape fetch stub that remembers what it refunded, so
+ * a double refund would show up as a second POST. No network, no real money.
+ */
+describe("refundPayment — reserve, finalize, converge (ref-b3)", () => {
+  let org: TestOrg;
+  const realFetch = globalThis.fetch;
+  const savedKeys = { id: process.env.RAZORPAY_KEY_ID, secret: process.env.RAZORPAY_KEY_SECRET };
+  const OWNER = ["OWNER"] as const;
+
+  beforeAll(async () => {
+    org = await createTestOrg();
+    process.env.RAZORPAY_KEY_ID = "rzp_test_integration";
+    process.env.RAZORPAY_KEY_SECRET = "integration-test-secret";
+
+    await db().execute(sql`CREATE TABLE IF NOT EXISTS test_refund_faults (point text NOT NULL, order_id uuid NOT NULL, PRIMARY KEY (point, order_id))`);
+    await db().execute(sql`
+      CREATE OR REPLACE FUNCTION test_refund_fault() RETURNS TRIGGER AS $$
+      DECLARE v_point text; v_order uuid;
+      BEGIN
+        IF TG_TABLE_NAME = 'refunds' THEN
+          v_point := 'reserve'; v_order := NEW.order_id;
+        ELSIF TG_TABLE_NAME = 'audit_logs' THEN
+          IF NEW.action <> 'payment_refunded' THEN RETURN NEW; END IF;
+          v_point := 'finalize'; v_order := (NEW.after->>'orderId')::uuid;
+        ELSIF TG_TABLE_NAME = 'order_events' THEN
+          v_point := 'money_event'; v_order := NEW.order_id;
+        ELSIF TG_TABLE_NAME = 'loyalty_transactions' THEN
+          IF NEW.order_id IS NULL OR NEW.reason NOT LIKE 'Reversed%' THEN RETURN NEW; END IF;
+          v_point := 'reversal'; v_order := NEW.order_id;
+        END IF;
+        IF EXISTS (SELECT 1 FROM test_refund_faults f WHERE f.point = v_point AND f.order_id = v_order) THEN
+          RAISE EXCEPTION 'test: deliberate refund fault at % (order %)', v_point, v_order;
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    for (const table of ["refunds", "audit_logs", "order_events", "loyalty_transactions"]) {
+      await db().execute(sql.raw(`DROP TRIGGER IF EXISTS test_refund_fault_trigger ON ${table}`));
+      await db().execute(sql.raw(`CREATE TRIGGER test_refund_fault_trigger BEFORE INSERT ON ${table} FOR EACH ROW EXECUTE FUNCTION test_refund_fault()`));
+    }
+  });
+
+  afterAll(async () => {
+    try {
+      await deleteTestOrg(org.orgId);
+    } finally {
+      for (const table of ["refunds", "audit_logs", "order_events", "loyalty_transactions"]) {
+        await db().execute(sql.raw(`DROP TRIGGER IF EXISTS test_refund_fault_trigger ON ${table}`));
+      }
+      await db().execute(sql`DROP FUNCTION IF EXISTS test_refund_fault()`);
+      await db().execute(sql`DROP TABLE IF EXISTS test_refund_faults`);
+      if (savedKeys.id === undefined) delete process.env.RAZORPAY_KEY_ID;
+      else process.env.RAZORPAY_KEY_ID = savedKeys.id;
+      if (savedKeys.secret === undefined) delete process.env.RAZORPAY_KEY_SECRET;
+      else process.env.RAZORPAY_KEY_SECRET = savedKeys.secret;
+    }
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await db().execute(sql`DELETE FROM test_refund_faults`);
+  });
+
+  const arm = (point: "reserve" | "finalize" | "money_event" | "reversal", orderId: string) => db().execute(sql`INSERT INTO test_refund_faults (point, order_id) VALUES (${point}, ${orderId})`);
+  const disarm = (orderId: string) => db().execute(sql`DELETE FROM test_refund_faults WHERE order_id = ${orderId}`);
+
+  /** A PAID order with one captured payment; optionally a customer holding the points it earned. */
+  async function paidOrder(opts: { rupees?: string; provider?: "cash" | "razorpay"; points?: number; status?: "PAID" | "CANCELLED" } = {}) {
+    const amount = fromRupees(opts.rupees ?? "300");
+    const customer = opts.points ? await createTestCustomer(org.orgId) : null;
+    const [order] = await db()
+      .insert(orders)
+      .values({
+        orgId: org.orgId,
+        locationId: org.locationId,
+        orderNumber: `TEST-${randomUUID().slice(0, 8)}`,
+        businessDate: new Date().toISOString().slice(0, 10),
+        status: opts.status ?? "PAID",
+        channel: "TAKEAWAY",
+        fulfilment: "TAKEAWAY",
+        customerId: customer?.id ?? null,
+        pointsEarned: opts.points ?? 0,
+        grandTotal: amount,
+      })
+      .returning({ id: orders.id, orderNumber: orders.orderNumber });
+    if (!order) throw new Error("fixture: order insert returned no row");
+    const razorpay = opts.provider === "razorpay";
+    const [payment] = await db()
+      .insert(payments)
+      .values({
+        orgId: org.orgId,
+        orderId: order.id,
+        status: "CAPTURED",
+        method: razorpay ? "UPI" : "CASH",
+        amount,
+        provider: razorpay ? "razorpay" : CASH_PROVIDER,
+        providerPaymentId: razorpay ? `pay_test_${randomUUID().slice(0, 12)}` : null,
+        capturedAt: new Date(),
+      })
+      .returning({ id: payments.id });
+    if (!payment) throw new Error("fixture: payment insert returned no row");
+    if (customer && opts.points) {
+      const [account] = await db().insert(loyaltyAccounts).values({ orgId: org.orgId, customerId: customer.id, pointsBalance: opts.points }).returning({ id: loyaltyAccounts.id });
+      await db().insert(loyaltyTransactions).values({ orgId: org.orgId, accountId: account!.id, points: opts.points, reason: `Order #${order.orderNumber}`, orderId: order.id });
+    }
+    return { orderId: order.id, paymentId: payment.id, amount };
+  }
+
+  /** Razorpay, as far as these tests can tell: it remembers each refund by our row id, like the real one. */
+  function stubRazorpay() {
+    const state = {
+      mode: "processed" as "processed" | "pending" | "short" | "http400" | "http500",
+      posts: 0,
+      gets: 0,
+      keys: [] as string[],
+      refunds: [] as { id: string; entity: "refund"; amount: number; currency: "INR"; status: string; notes: Record<string, string> }[],
+    };
+    vi.stubGlobal("fetch", (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.startsWith("https://api.razorpay.com/")) return realFetch(input as Parameters<typeof fetch>[0], init);
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+      if (init?.method === "POST") {
+        state.posts += 1;
+        state.keys.push((init.headers as Record<string, string>)["X-Refund-Idempotency"] ?? "");
+        if (state.mode === "http500") return new Response("", { status: 500 });
+        if (state.mode === "http400") return json({ error: { code: "BAD_REQUEST_ERROR", description: "The payment has been fully refunded already" } }, 400);
+        const body = JSON.parse(String(init.body)) as { amount: number; notes: Record<string, string> };
+        let refund = state.refunds.find((r) => r.notes.frybirdRefundId === body.notes.frybirdRefundId);
+        if (!refund) {
+          refund = { id: `rfnd_${randomUUID().slice(0, 10)}`, entity: "refund", amount: state.mode === "short" ? body.amount - 100 : body.amount, currency: "INR", status: state.mode === "pending" ? "pending" : "processed", notes: body.notes };
+          state.refunds.push(refund);
+        }
+        return json(refund);
+      }
+      state.gets += 1;
+      return json({ entity: "collection", count: state.refunds.length, items: state.refunds });
+    }) as typeof fetch);
+    return state;
+  }
+
+  const refundRows = (paymentId: string) => db().select().from(refunds).where(and(eq(refunds.paymentId, paymentId), eq(refunds.orgId, org.orgId)));
+  const statusOf = async (table: "payment" | "order", id: string) =>
+    table === "payment"
+      ? (await db().select({ s: payments.status }).from(payments).where(eq(payments.id, id)))[0]?.s
+      : (await db().select({ s: orders.status }).from(orders).where(eq(orders.id, id)))[0]?.s;
+  const moneyEvents = (orderId: string) =>
+    db().select().from(orderEvents).where(and(eq(orderEvents.orderId, orderId), sql`${orderEvents.metadata}->>'refundId' IS NOT NULL`));
+  const reversals = (orderId: string) =>
+    db().select().from(loyaltyTransactions).where(and(eq(loyaltyTransactions.orderId, orderId), sql`${loyaltyTransactions.reason} LIKE 'Reversed%'`));
+  const refund = (paymentId: string, amount: bigint, key: string, reason = "cold fries") =>
+    refundPayment({ paymentId, amount: amount as ReturnType<typeof fromRupees>, reason, actorUserId: randomUUID(), actorRoles: OWNER, orgId: org.orgId, idempotencyKey: key });
+
+  it("a full cash refund: RESERVED then SUCCEEDED with finalized_at, payment REFUNDED, order REFUNDED, one money event, both audit rows, points back", async () => {
+    const o = await paidOrder({ points: 15 });
+    const key = randomUUID();
+    const result = await refund(o.paymentId, o.amount, key);
+
+    expect(result).toMatchObject({ ok: true, fullyRefunded: true, orderId: o.orderId });
+    const [row] = await refundRows(o.paymentId);
+    expect(row).toMatchObject({ status: "SUCCEEDED", idempotencyKey: key });
+    expect(row?.finalizedAt).toBeInstanceOf(Date);
+    expect(await statusOf("payment", o.paymentId)).toBe("REFUNDED");
+    expect(await statusOf("order", o.orderId)).toBe("REFUNDED");
+    expect(await moneyEvents(o.orderId)).toHaveLength(1);
+    expect(await reversals(o.orderId)).toHaveLength(1);
+    const audits = await db().select({ action: auditLogs.action }).from(auditLogs).where(and(eq(auditLogs.orgId, org.orgId), sql`(${auditLogs.entityId} = ${row!.id} OR ${auditLogs.entityId} = ${o.paymentId})`));
+    expect(audits.map((a) => a.action).sort()).toEqual(["payment_refunded", "refund_reserved"]);
+  });
+
+  it("a crash inside RESERVE leaves nothing — no row, payment untouched, claim released — and the retry refunds once", async () => {
+    const o = await paidOrder();
+    const key = randomUUID();
+    await arm("reserve", o.orderId);
+    await expect(refund(o.paymentId, o.amount, key)).rejects.toThrow();
+    expect(await refundRows(o.paymentId)).toHaveLength(0);
+    expect(await statusOf("payment", o.paymentId)).toBe("CAPTURED");
+    expect(await db().select().from(idempotencyKeys).where(eq(idempotencyKeys.key, key))).toHaveLength(0);
+
+    await disarm(o.orderId);
+    expect((await refund(o.paymentId, o.amount, key)).ok).toBe(true);
+    expect(await refundRows(o.paymentId)).toHaveLength(1);
+  });
+
+  it("pay-2: Razorpay refunds, then FINALIZE crashes — the retry finds that refund by its row id and never asks Razorpay twice", async () => {
+    const gateway = stubRazorpay();
+    const o = await paidOrder({ provider: "razorpay" });
+    const key = randomUUID();
+
+    await arm("finalize", o.orderId);
+    await expect(refund(o.paymentId, o.amount, key)).rejects.toThrow(/Failed query/);
+    const [held] = await refundRows(o.paymentId);
+    expect(held?.status).toBe("RESERVED"); // the money moved at the gateway; the amount stays held
+    expect(await statusOf("payment", o.paymentId)).toBe("CAPTURED");
+    expect(gateway.posts).toBe(1);
+
+    await disarm(o.orderId);
+    const retried = await refund(o.paymentId, o.amount, key);
+    expect(retried).toMatchObject({ ok: true, fullyRefunded: true });
+    expect(gateway.posts).toBe(1); // THE assertion: no second refund request
+    expect(gateway.gets).toBe(1);
+    const [done] = await refundRows(o.paymentId);
+    expect(done).toMatchObject({ status: "SUCCEEDED", providerRefundId: gateway.refunds[0]!.id });
+    expect(await statusOf("payment", o.paymentId)).toBe("REFUNDED");
+  });
+
+  it("a Razorpay refund still 'pending' stays RESERVED and keeps its amount held; the same attempt later finishes it", async () => {
+    const gateway = stubRazorpay();
+    gateway.mode = "pending";
+    const o = await paidOrder({ provider: "razorpay" });
+    const key = randomUUID();
+
+    const first = await refund(o.paymentId, o.amount, key);
+    expect(first).toMatchObject({ ok: false, retriable: true });
+    const [held] = await refundRows(o.paymentId);
+    expect(held).toMatchObject({ status: "RESERVED", providerRefundId: gateway.refunds[0]!.id });
+    expect(held?.finalizedAt).toBeNull();
+    expect(await statusOf("payment", o.paymentId)).toBe("CAPTURED");
+
+    // Nothing else can take the held amount meanwhile.
+    const other = await refund(o.paymentId, o.amount, randomUUID(), "second manager");
+    expect(other).toMatchObject({ ok: false });
+    if (other.ok) throw new Error("unreachable");
+    expect(other.error).toMatch(/left to refund/);
+
+    gateway.refunds[0]!.status = "processed";
+    const finished = await refund(o.paymentId, o.amount, key);
+    expect(finished).toMatchObject({ ok: true, fullyRefunded: true });
+    expect(gateway.posts).toBe(1);
+    expect((await refundRows(o.paymentId)).filter((r) => r.status === "SUCCEEDED")).toHaveLength(1);
+  });
+
+  it("a Razorpay refusal becomes FAILED (no finalized_at, audited), releases the amount, and replays as the same failure", async () => {
+    const gateway = stubRazorpay();
+    gateway.mode = "http400";
+    const o = await paidOrder({ provider: "razorpay" });
+    const key = randomUUID();
+
+    const failed = await refund(o.paymentId, o.amount, key);
+    expect(failed).toMatchObject({ ok: false });
+    expect("retriable" in failed && failed.retriable).toBeFalsy();
+    const [row] = await refundRows(o.paymentId);
+    expect(row).toMatchObject({ status: "FAILED", finalizedAt: null });
+    expect(await statusOf("payment", o.paymentId)).toBe("CAPTURED");
+    expect(await db().select().from(auditLogs).where(and(eq(auditLogs.entityId, row!.id), eq(auditLogs.action, "refund_failed")))).toHaveLength(1);
+
+    const replay = await refund(o.paymentId, o.amount, key);
+    expect(replay).toEqual(failed);
+    expect(gateway.posts).toBe(1);
+
+    gateway.mode = "processed";
+    expect((await refund(o.paymentId, o.amount, randomUUID(), "second attempt")).ok).toBe(true);
+  });
+
+  it("an unknown outcome (HTTP 500) stays RESERVED; the retry looks first, then asks again under the same idempotency key", async () => {
+    const gateway = stubRazorpay();
+    gateway.mode = "http500";
+    const o = await paidOrder({ provider: "razorpay" });
+    const key = randomUUID();
+
+    expect(await refund(o.paymentId, o.amount, key)).toMatchObject({ ok: false, retriable: true });
+    const [held] = await refundRows(o.paymentId);
+    expect(held?.status).toBe("RESERVED");
+
+    gateway.mode = "processed";
+    expect((await refund(o.paymentId, o.amount, key)).ok).toBe(true);
+    expect(gateway.gets).toBe(1);
+    expect(gateway.posts).toBe(2);
+    expect(gateway.keys).toEqual([held!.id, held!.id]);
+  });
+
+  it("never books a refund Razorpay made for a different amount (S7)", async () => {
+    const gateway = stubRazorpay();
+    gateway.mode = "short";
+    const o = await paidOrder({ provider: "razorpay" });
+    expect(await refund(o.paymentId, o.amount, randomUUID())).toMatchObject({ ok: false, retriable: true });
+    const [held] = await refundRows(o.paymentId);
+    expect(held?.status).toBe("RESERVED");
+    expect(await statusOf("payment", o.paymentId)).toBe("CAPTURED");
+  });
+
+  it("refuses a key reused for a different refund — from the stored result, and from the row itself once the claim is gone (B3)", async () => {
+    const o = await paidOrder();
+    const key = randomUUID();
+    expect((await refund(o.paymentId, fromRupees("100"), key)).ok).toBe(true);
+
+    const reused = await refund(o.paymentId, fromRupees("50"), key);
+    expect(reused).toMatchObject({ ok: false, error: expect.stringMatching(/already used/) });
+
+    await db().delete(idempotencyKeys).where(eq(idempotencyKeys.key, key));
+    const fromRow = await refund(o.paymentId, fromRupees("50"), key);
+    expect(fromRow).toMatchObject({ ok: false, error: expect.stringMatching(/already used/) });
+    expect(await refundRows(o.paymentId)).toHaveLength(1);
+  });
+
+  it("pay-3: a crash after FINALIZE, before the follow-up — the retry moves the order, writes one money event and reverses points once", async () => {
+    const o = await paidOrder({ points: 15 });
+    const key = randomUUID();
+    await arm("money_event", o.orderId);
+    await expect(refund(o.paymentId, o.amount, key)).rejects.toThrow(/Failed query/);
+    expect(await statusOf("payment", o.paymentId)).toBe("REFUNDED");
+    expect(await statusOf("order", o.orderId)).toBe("PAID"); // the old code left it here forever
+    expect(await reversals(o.orderId)).toHaveLength(0);
+
+    await disarm(o.orderId);
+    expect((await refund(o.paymentId, o.amount, key)).ok).toBe(true);
+    expect(await statusOf("order", o.orderId)).toBe("REFUNDED");
+    expect(await moneyEvents(o.orderId)).toHaveLength(1);
+    expect(await reversals(o.orderId)).toHaveLength(1);
+
+    expect((await refund(o.paymentId, o.amount, key)).ok).toBe(true); // and again: nothing repeats
+    expect(await moneyEvents(o.orderId)).toHaveLength(1);
+    expect(await reversals(o.orderId)).toHaveLength(1);
+  });
+
+  it("B4: a crash after the order became REFUNDED but before its points were reversed — the retry reverses them, exactly once", async () => {
+    const o = await paidOrder({ points: 15 });
+    const key = randomUUID();
+    await arm("reversal", o.orderId);
+    await expect(refund(o.paymentId, o.amount, key)).rejects.toThrow(/Failed query/);
+    expect(await statusOf("order", o.orderId)).toBe("REFUNDED");
+    expect(await reversals(o.orderId)).toHaveLength(0);
+
+    await disarm(o.orderId);
+    expect((await refund(o.paymentId, o.amount, key)).ok).toBe(true);
+    expect(await reversals(o.orderId)).toHaveLength(1);
+    const [account] = await db().select({ balance: loyaltyAccounts.pointsBalance }).from(loyaltyAccounts).innerJoin(orders, eq(orders.customerId, loyaltyAccounts.customerId)).where(eq(orders.id, o.orderId));
+    expect(account?.balance).toBe(0);
+  });
+
+  it("two follow-ups racing on the same refund write one money event and one reversal (ref-2 double-F2 condition)", async () => {
+    const o = await paidOrder({ points: 15 });
+    const key = randomUUID();
+    await arm("money_event", o.orderId);
+    await expect(refund(o.paymentId, o.amount, key)).rejects.toThrow();
+    await disarm(o.orderId);
+
+    await warmPool();
+    const [a, b] = await Promise.all([refund(o.paymentId, o.amount, key), refund(o.paymentId, o.amount, key)]);
+    expect(a.ok && b.ok).toBe(true);
+    expect(await moneyEvents(o.orderId)).toHaveLength(1);
+    expect(await reversals(o.orderId)).toHaveLength(1);
+    expect(await statusOf("order", o.orderId)).toBe("REFUNDED");
+  });
+
+  it("a full refund of a CANCELLED order leaves it CANCELLED but still reverses its points (loy-1 caller wiring)", async () => {
+    const o = await paidOrder({ points: 15, status: "CANCELLED" });
+    expect((await refund(o.paymentId, o.amount, randomUUID())).ok).toBe(true);
+    expect(await statusOf("order", o.orderId)).toBe("CANCELLED");
+    expect(await moneyEvents(o.orderId)).toHaveLength(1);
+    expect(await reversals(o.orderId)).toHaveLength(1);
+  });
+
+  it("a partial refund writes its money event, leaves the order where it is, and reverses nothing", async () => {
+    const o = await paidOrder({ points: 15 });
+    const result = await refund(o.paymentId, fromRupees("100"), randomUUID());
+    expect(result).toMatchObject({ ok: true, fullyRefunded: false });
+    expect(await statusOf("payment", o.paymentId)).toBe("PARTIALLY_REFUNDED");
+    expect(await statusOf("order", o.orderId)).toBe("PAID");
+    expect(await moneyEvents(o.orderId)).toHaveLength(1);
+    expect(await reversals(o.orderId)).toHaveLength(0);
+  });
+
+  it("S4: a stale claim from a caller that died takes over and completes the refund once", async () => {
+    const o = await paidOrder();
+    const key = randomUUID();
+    const reason = "stale claim";
+    const request = { paymentId: o.paymentId, amount: o.amount.toString(), reason };
+    await db().insert(idempotencyKeys).values({ orgId: org.orgId, key, operation: "refund_payment", requestFingerprint: fingerprint({ orgId: org.orgId, request }), expiresAt: new Date(Date.now() + 3_600_000) });
+
+    const result = await refund(o.paymentId, o.amount, key, reason);
+    expect(result.ok).toBe(true);
+    expect(await refundRows(o.paymentId)).toHaveLength(1);
+    expect(await statusOf("payment", o.paymentId)).toBe("REFUNDED");
+  }, 30_000);
 });

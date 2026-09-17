@@ -23,6 +23,7 @@ import {
   type PaymentMethod,
   type PaymentProvider,
   type PaymentResult,
+  type RefundLookup,
   type RefundResult,
   type WebhookVerification,
 } from "./provider";
@@ -134,24 +135,38 @@ export interface RazorpayPayment {
   readonly error_description?: string | null;
 }
 
-interface RazorpayRefund {
+export interface RazorpayRefund {
   readonly id: string;
+  readonly payment_id?: string;
   readonly amount: number;
+  readonly currency?: string;
+  /** "pending" → "processed", or "failed". */
   readonly status: string;
+  readonly notes?: Record<string, unknown> | unknown[] | null;
 }
 
-async function call<T>(config: RazorpayConfig, path: string, init?: { method?: "GET" | "POST"; body?: unknown }): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+/** Every Razorpay call gives up after this long; a refund that times out is ambiguous, never assumed. */
+export const RAZORPAY_TIMEOUT_MS = 10_000;
+
+type CallResult<T> = { ok: true; data: T; status: number } | { ok: false; error: string; status: number | null };
+
+async function call<T>(
+  config: RazorpayConfig,
+  path: string,
+  init?: { method?: "GET" | "POST"; body?: unknown; headers?: Record<string, string> },
+): Promise<CallResult<T>> {
   const auth = Buffer.from(`${config.keyId}:${config.keySecret}`).toString("base64");
   let response: Response;
   try {
     response = await fetch(`${API}${path}`, {
       method: init?.method ?? "GET",
-      headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json", ...init?.headers },
       body: init?.body === undefined ? undefined : JSON.stringify(init.body),
       cache: "no-store",
+      signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
     });
   } catch (error) {
-    return { ok: false, error: `Razorpay could not be reached (${error instanceof Error ? error.message : "network error"}).` };
+    return { ok: false, error: `Razorpay could not be reached (${error instanceof Error ? error.message : "network error"}).`, status: null };
   }
   const text = await response.text();
   let data: unknown = null;
@@ -162,9 +177,61 @@ async function call<T>(config: RazorpayConfig, path: string, init?: { method?: "
   }
   if (!response.ok) {
     const description = (data as { error?: { description?: string } } | null)?.error?.description;
-    return { ok: false, error: description ? `Razorpay: ${description}` : `Razorpay returned ${response.status}.` };
+    return { ok: false, error: description ? `Razorpay: ${description}` : `Razorpay returned ${response.status}.`, status: response.status };
   }
-  return { ok: true, data: data as T };
+  return { ok: true, data: data as T, status: response.status };
+}
+
+/**
+ * The note that ties a Razorpay refund to our refund row. Written on every
+ * refund request, and what a resumed refund looks for before asking again.
+ */
+export const REFUND_ROW_NOTE = "frybirdRefundId";
+
+/** The request body for a refund — built only from the reserved row, so a repeat is byte-identical (Razorpay answers a changed body under the same key with 409). */
+export function refundRequestBody(input: { amount: Paise; reason: string; refundId: string }): { amount: number; notes: Record<string, string> } {
+  return { amount: toRazorpayAmount(input.amount), notes: { reason: input.reason.slice(0, 250), [REFUND_ROW_NOTE]: input.refundId } };
+}
+
+/**
+ * A refund object Razorpay returned, classified. "processed" is money back;
+ * "pending" is accepted but not finished — it must stay reserved (ref-2
+ * condition); "failed" is refused. Anything else, or a refund for another
+ * amount than asked, is ambiguous: never booked, never released.
+ */
+export function classifyRazorpayRefund(refund: RazorpayRefund, expectedAmount: Paise, httpStatus: number | null): RefundResult {
+  const base = { providerRefundId: refund.id ?? null, refundedAmount: ZERO, httpStatus };
+  const amountMatches = Number.isSafeInteger(refund.amount) && BigInt(refund.amount) === expectedAmount && (refund.currency === undefined || refund.currency === "INR");
+  switch (refund.status) {
+    case "processed":
+      return amountMatches
+        ? { ...base, outcome: "succeeded", refundedAmount: paise(refund.amount) }
+        : { ...base, outcome: "ambiguous", error: "Razorpay refunded a different amount than was asked. Check the Razorpay dashboard before doing anything else." };
+    case "pending":
+      return { ...base, outcome: "pending", error: "Razorpay has accepted the refund and is still processing it." };
+    case "failed":
+      return { ...base, outcome: "refused", error: "Razorpay could not make the refund." };
+    default:
+      return { ...base, outcome: "ambiguous", error: `Razorpay reported the refund as ${String(refund.status)}.` };
+  }
+}
+
+/**
+ * A failed refund call, classified by what it proves (S5). A 4xx other than
+ * 409 and 429 carries Razorpay's own refusal: no money moved. A 409 (the key
+ * is in progress, or reused with another body), a 429, a 5xx, a timeout or a
+ * network error proves nothing — ambiguous.
+ */
+export function classifyRazorpayRefundFailure(error: string, httpStatus: number | null): RefundResult {
+  const definitive = httpStatus !== null && httpStatus >= 400 && httpStatus < 500 && httpStatus !== 409 && httpStatus !== 429;
+  return { outcome: definitive ? "refused" : "ambiguous", providerRefundId: null, refundedAmount: ZERO, httpStatus, error };
+}
+
+function noteOf(refund: RazorpayRefund): string | null {
+  const notes = refund.notes;
+  if (!notes || Array.isArray(notes)) return null;
+  const value = notes[REFUND_ROW_NOTE];
+  return typeof value === "string" ? value : null;
 }
 
 export async function fetchRazorpayPayment(config: RazorpayConfig, providerPaymentId: string): Promise<{ ok: true; payment: RazorpayPayment } | { ok: false; error: string }> {
@@ -271,16 +338,42 @@ export const razorpayProvider: PaymentProvider = {
     };
   },
 
-  async refund({ providerPaymentId, amount, reason }): Promise<RefundResult> {
+  /**
+   * Asks Razorpay to refund, under `X-Refund-Idempotency: <our refund row id>`
+   * (razorpay.com/docs/api/refunds/normal-refunds-idempotent): the same key
+   * with the same body returns the original refund instead of a second one.
+   * The row id is a UUID — 36 characters of hex and hyphens, inside the
+   * documented key rules.
+   */
+  async refund({ providerPaymentId, amount, reason, refundId }): Promise<RefundResult> {
     const config = razorpayConfig();
-    if (!config) return { ok: false, providerRefundId: null, refundedAmount: ZERO, error: "Online payment is not set up." };
-    if (!providerPaymentId) return { ok: false, providerRefundId: null, refundedAmount: ZERO, error: "No Razorpay payment to refund." };
+    // Keys missing or no payment to refund: nothing was sent, so nothing moved.
+    if (!config) return { outcome: "refused", providerRefundId: null, refundedAmount: ZERO, httpStatus: null, error: "Online payment is not set up." };
+    if (!providerPaymentId) return { outcome: "refused", providerRefundId: null, refundedAmount: ZERO, httpStatus: null, error: "No Razorpay payment to refund." };
     const result = await call<RazorpayRefund>(config, `/payments/${encodeURIComponent(providerPaymentId)}/refund`, {
       method: "POST",
-      body: { amount: toRazorpayAmount(amount), notes: { reason: reason.slice(0, 250) } },
+      body: refundRequestBody({ amount, reason, refundId }),
+      headers: { "X-Refund-Idempotency": refundId },
     });
-    if (!result.ok) return { ok: false, providerRefundId: null, refundedAmount: ZERO, error: result.error };
-    return { ok: true, providerRefundId: result.data.id, refundedAmount: paise(result.data.amount) };
+    if (!result.ok) return classifyRazorpayRefundFailure(result.error, result.status);
+    return classifyRazorpayRefund(result.data, amount, result.status);
+  },
+
+  /**
+   * Looks for a refund an earlier attempt already asked for, matched by our
+   * row id in its notes (ref-2 condition: a resumed refund looks up by
+   * frybirdRefundId before it asks again). Not relying on the idempotency
+   * key alone: Razorpay documents no validity window for it.
+   */
+  async findRefund({ providerPaymentId, refundId }): Promise<RefundLookup> {
+    const config = razorpayConfig();
+    if (!config) return { found: "unknown", error: "Online payment is not set up." };
+    if (!providerPaymentId) return { found: false };
+    const result = await call<{ items?: RazorpayRefund[] }>(config, `/payments/${encodeURIComponent(providerPaymentId)}/refunds?count=100`);
+    if (!result.ok) return { found: "unknown", error: result.error };
+    const match = (result.data.items ?? []).find((refund) => noteOf(refund) === refundId);
+    if (!match) return { found: false };
+    return { found: true, result: { ...classifyRazorpayRefund(match, paise(match.amount), result.status), refundedAmount: match.status === "processed" ? paise(match.amount) : ZERO } };
   },
 
   /** Verifies a webhook. The event id is Razorpay's `x-razorpay-event-id`, read by the route and passed through the body's own `event` name here. */

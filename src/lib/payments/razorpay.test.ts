@@ -6,8 +6,13 @@ import {
   RAZORPAY_PROVIDER,
   isRazorpayConfigured,
   methodFromRazorpay,
+  RAZORPAY_TIMEOUT_MS,
+  REFUND_ROW_NOTE,
+  classifyRazorpayRefund,
+  classifyRazorpayRefundFailure,
   paymentSignature,
   razorpayProvider,
+  refundRequestBody,
   toRazorpayAmount,
   verifyPaymentSignature,
   verifyWebhookSignature,
@@ -154,5 +159,129 @@ describe("cash on delivery cap", () => {
   it("reads a cap the caller passes — the org's own `cod_cap`, roadmap 5.5 — instead of the constant", () => {
     expect(codAllowed(fromRupees("4000"), true, fromRupees("5000")).ok).toBe(true);
     expect(codAllowed(fromRupees("5000.01"), true, fromRupees("5000")).ok).toBe(false);
+  });
+});
+
+/*
+ * Refunds (refund design Revision 2, slice 2). Recorded response shapes from
+ * razorpay.com/docs/api/refunds — no network: fetch is stubbed per test.
+ */
+describe("razorpay refunds", () => {
+  const saved = { id: process.env.RAZORPAY_KEY_ID, secret: process.env.RAZORPAY_KEY_SECRET };
+  const REFUND_ROW = "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f";
+  const refundObject = (over: Record<string, unknown> = {}) => ({
+    id: "rfnd_FP8QHiV938haTz",
+    entity: "refund",
+    amount: 29900,
+    currency: "INR",
+    payment_id: FIXTURE.paymentId,
+    notes: { reason: "Wrong order", [REFUND_ROW_NOTE]: REFUND_ROW },
+    status: "processed",
+    ...over,
+  });
+
+  beforeEach(() => {
+    process.env.RAZORPAY_KEY_ID = "rzp_test_x";
+    process.env.RAZORPAY_KEY_SECRET = FIXTURE.keySecret;
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (saved.id === undefined) delete process.env.RAZORPAY_KEY_ID;
+    else process.env.RAZORPAY_KEY_ID = saved.id;
+    if (saved.secret === undefined) delete process.env.RAZORPAY_KEY_SECRET;
+    else process.env.RAZORPAY_KEY_SECRET = saved.secret;
+  });
+
+  it("sends the refund row id as X-Refund-Idempotency and in the notes, with a byte-identical body on a repeat", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(refundObject()), { status: 200 }));
+    const input = { providerPaymentId: FIXTURE.paymentId, amount: fromRupees("299"), reason: "Wrong order", refundId: REFUND_ROW };
+
+    const first = await razorpayProvider.refund(input);
+    const second = await razorpayProvider.refund(input);
+
+    expect(first).toEqual({ outcome: "succeeded", providerRefundId: "rfnd_FP8QHiV938haTz", refundedAmount: fromRupees("299"), httpStatus: 200 });
+    expect(second).toEqual(first);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(String(url)).toBe(`https://api.razorpay.com/v1/payments/${FIXTURE.paymentId}/refund`);
+    expect((init?.headers as Record<string, string>)["X-Refund-Idempotency"]).toBe(REFUND_ROW);
+    expect(JSON.parse(String(init?.body))).toEqual({ amount: 29900, notes: { reason: "Wrong order", [REFUND_ROW_NOTE]: REFUND_ROW } });
+    expect(fetchSpy.mock.calls[1]![1]?.body).toBe(init?.body);
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(RAZORPAY_TIMEOUT_MS).toBe(10_000);
+  });
+
+  it("keeps a pending refund pending (it must stay RESERVED), and refuses a failed one", () => {
+    expect(classifyRazorpayRefund(refundObject({ status: "pending" }) as never, fromRupees("299"), 200).outcome).toBe("pending");
+    expect(classifyRazorpayRefund(refundObject({ status: "failed" }) as never, fromRupees("299"), 200).outcome).toBe("refused");
+    expect(classifyRazorpayRefund(refundObject({ status: "something_new" }) as never, fromRupees("299"), 200).outcome).toBe("ambiguous");
+  });
+
+  it("never books a processed refund for a different amount than was asked (S7)", () => {
+    const short = classifyRazorpayRefund(refundObject({ amount: 20000 }) as never, fromRupees("299"), 200);
+    expect(short.outcome).toBe("ambiguous");
+    expect(short.refundedAmount).toBe(paise(0));
+  });
+
+  it.each([
+    [400, "refused"],
+    [401, "refused"],
+    [404, "refused"],
+    [409, "ambiguous"],
+    [429, "ambiguous"],
+    [500, "ambiguous"],
+    [503, "ambiguous"],
+    [null, "ambiguous"],
+  ] as const)("classifies a failed call with HTTP %s as %s", (status, outcome) => {
+    expect(classifyRazorpayRefundFailure("x", status).outcome).toBe(outcome);
+  });
+
+  it("treats a 409 on the same key (in progress, or another body) as ambiguous, never a fresh refusal", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ error: { code: "BAD_REQUEST_ERROR", description: "Another request with the same idempotency key is still in progress." } }), { status: 409 }),
+    );
+    const result = await razorpayProvider.refund({ providerPaymentId: FIXTURE.paymentId, amount: fromRupees("299"), reason: "Wrong order", refundId: REFUND_ROW });
+    expect(result.outcome).toBe("ambiguous");
+    expect(result.httpStatus).toBe(409);
+  });
+
+  it("treats a network error or a timeout as ambiguous", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    });
+    const result = await razorpayProvider.refund({ providerPaymentId: FIXTURE.paymentId, amount: fromRupees("299"), reason: "Wrong order", refundId: REFUND_ROW });
+    expect(result).toMatchObject({ outcome: "ambiguous", httpStatus: null });
+  });
+
+  it("refuses without sending anything when there are no keys or no payment id", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    expect((await razorpayProvider.refund({ providerPaymentId: null, amount: fromRupees("1"), reason: "x", refundId: REFUND_ROW })).outcome).toBe("refused");
+    delete process.env.RAZORPAY_KEY_ID;
+    expect((await razorpayProvider.refund({ providerPaymentId: FIXTURE.paymentId, amount: fromRupees("1"), reason: "x", refundId: REFUND_ROW })).outcome).toBe("refused");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("finds an earlier refund by the row id in its notes, and only that one", async () => {
+    const other = refundObject({ id: "rfnd_other", notes: { [REFUND_ROW_NOTE]: "another-row" } });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ entity: "collection", count: 2, items: [other, refundObject({ status: "pending" })] }), { status: 200 }),
+    );
+    const found = await razorpayProvider.findRefund!({ providerPaymentId: FIXTURE.paymentId, refundId: REFUND_ROW });
+    expect(found).toMatchObject({ found: true, result: { outcome: "pending", providerRefundId: "rfnd_FP8QHiV938haTz" } });
+    expect(String(fetchSpy.mock.calls[0]![0])).toBe(`https://api.razorpay.com/v1/payments/${FIXTURE.paymentId}/refunds?count=100`);
+    expect(fetchSpy.mock.calls[0]![1]?.method).toBe("GET");
+
+    fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ entity: "collection", count: 1, items: [other] }), { status: 200 }));
+    expect(await razorpayProvider.findRefund!({ providerPaymentId: FIXTURE.paymentId, refundId: REFUND_ROW })).toEqual({ found: false });
+
+    fetchSpy.mockImplementation(async () => new Response("", { status: 502 }));
+    expect((await razorpayProvider.findRefund!({ providerPaymentId: FIXTURE.paymentId, refundId: REFUND_ROW })).found).toBe("unknown");
+  });
+
+  it("builds the request only from the reserved row's own fields", () => {
+    expect(refundRequestBody({ amount: fromRupees("150.50"), reason: "x".repeat(300), refundId: REFUND_ROW })).toEqual({
+      amount: 15050,
+      notes: { reason: "x".repeat(250), [REFUND_ROW_NOTE]: REFUND_ROW },
+    });
   });
 });
