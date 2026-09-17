@@ -1204,6 +1204,33 @@ export async function advanceOrder(input: {
       }
     }
 
+    /*
+     * An order that has taken money is never cancelled (ord-3).
+     *
+     * Cancelling a paid order drops it out of revenue while the payment stays
+     * captured: the till is over against nothing, which is skimming made easy.
+     * Money going back is a refund, with `orders.refund` and its own trail, and
+     * a fully refunded order closes as REFUNDED. PARTIALLY_REFUNDED still holds
+     * money and REFUNDED belongs to that other path, so both refuse too.
+     *
+     * Read under the order's row lock, not before it: a payment recorded while
+     * a cancellation waits on the lock is seen here, which closes the race
+     * rejectOrder's old unlocked pre-check had.
+     */
+    if (input.to === "CANCELLED") {
+      const moneyTaken = await tx
+        .select({ status: payments.status })
+        .from(payments)
+        .where(and(eq(payments.orderId, order.id), eq(payments.orgId, input.orgId), inArray(payments.status, ["CAPTURED", "PARTIALLY_REFUNDED", "REFUNDED"])));
+
+      if (moneyTaken.some((payment) => payment.status !== "REFUNDED")) {
+        return { ok: false, error: "This order has been paid for. It needs a refund rather than a rejection." };
+      }
+      if (moneyTaken.length > 0) {
+        return { ok: false, error: "This order's payment has been refunded, so it cannot be cancelled." };
+      }
+    }
+
     try {
       assertTransition(order.status, input.to, order.fulfilment);
     } catch {
@@ -1498,34 +1525,18 @@ export async function rejectOrder(input: {
   actorUserId: string;
   orgId: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  const database = db();
-  const [order] = await database
-    .select({ id: orders.id })
-    .from(orders)
-    .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
-    .limit(1);
-
-  if (!order) return { ok: false, error: "That order does not exist." };
-
-  const captured = await database
-    .select({ id: payments.id })
-    .from(payments)
-    .where(and(eq(payments.orderId, order.id), eq(payments.status, "CAPTURED")))
-    .limit(1);
-
   // Refusing an order that has already been paid for means money has to go
   // back, and that is a refund with its own permission and its own trail —
-  // not something to do silently from a pop-up.
-  if (captured.length > 0) {
-    return { ok: false, error: "This order has been paid for. It needs a refund rather than a rejection." };
-  }
-
+  // not something to do silently from a pop-up. advanceOrder refuses it
+  // (and a missing order) under the order's row lock; an unlocked pre-check
+  // here used to pass, then lose a race to a payment recorded before the
+  // lock was taken (ord-3).
   const detail = input.note?.trim() ? `${REJECTION_LABELS[input.reason]} — ${input.note.trim()}` : REJECTION_LABELS[input.reason];
 
   /*
    * Delegates the actual transition to `advanceOrder` — the CANCELLED path
-   * there already does everything a rejection needs (the locked read,
-   * `assertTransition`, the status + event write, and the same
+   * there already does everything a rejection needs (the locked read, the
+   * paid-order refusal, `assertTransition`, the status + event write, and the same
    * `foodWasCooking`-driven stock reversal a reject can trigger just as a
    * cancellation can) — rather than reimplementing an unlocked copy of it.
    * That used to be exactly what this function did: its own unlocked
@@ -1543,10 +1554,9 @@ export async function rejectOrder(input: {
   });
 
   if (!advanced.ok) {
-    // advanceOrder's generic wording ("cannot become cancelled") only
-    // applies when it came from *this* transition attempt, not some other
-    // reason a locked transaction can fail for — but the only failure this
-    // input shape can hit is exactly that one, so the rewording is safe.
+    // Only advanceOrder's generic state-machine wording ("cannot become
+    // cancelled") is reworded for a rejection; its other refusals (a missing
+    // order, a paid or refunded one) already read right and pass through.
     return { ok: false, error: advanced.error.replace(/cannot become cancelled\.?$/i, "cannot be turned down.") };
   }
 
