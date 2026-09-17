@@ -8,15 +8,20 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { refundPaymentAction } from "@/lib/finance/actions";
-import { type Paise, formatAmount, formatINR } from "@/lib/money";
+import { type Paise, ZERO, formatAmount, formatINR } from "@/lib/money";
+import { readAmount } from "./refund-amount";
 
 /**
  * Refund one payment. Roadmap 1.4.
  *
- * The amount defaults to everything that is left and cannot be typed above
- * it — but the server checks again, because a dialog is not authorization.
- * The reason is required: a refund with no reason is the one a manager
- * cannot explain a month later.
+ * The amount defaults to everything that is left and is capped at it on the
+ * client too — `remaining` is `captured − (RESERVED + SUCCEEDED)`, so a
+ * refund already in flight (RESERVED) is excluded the same as one that
+ * already succeeded (ref-2 design §1) — but the server checks again,
+ * because a dialog is not authorization. `payment.refunded` must already be
+ * that RESERVED+SUCCEEDED sum, excluding FAILED; this component only does
+ * the subtraction. The reason is required: a refund with no reason is the
+ * one a manager cannot explain a month later.
  */
 export function RefundDialog({
   open,
@@ -39,8 +44,9 @@ export function RefundDialog({
   // completed — rotates it, so the next attempt is a genuinely new one.
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
-  const remaining = payment ? ((payment.amount - payment.refunded) as Paise) : (0n as Paise);
+  const remaining = payment ? ((payment.amount - payment.refunded) as Paise) : ZERO;
   const remainingRupees = payment ? formatAmount(remaining) : "0";
+  const { value: typedAmount, error: amountError } = readAmount(amount, remaining);
 
   function reset() {
     setAmount("");
@@ -51,10 +57,10 @@ export function RefundDialog({
   }
 
   function submit() {
-    if (!payment) return;
+    if (!payment || amountError) return;
     setError(null);
     startTransition(async () => {
-      const result = await refundPaymentAction({ paymentId: payment.id, amount: amount.trim() === "" ? remainingRupees : amount.trim(), reason, idempotencyKey });
+      const result = await refundPaymentAction({ paymentId: payment.id, amount: formatAmount(typedAmount), reason, idempotencyKey });
       if (result.ok) {
         setDone(`Refunded. ${payment.provider === "razorpay" ? "Razorpay has been told; the customer sees it in a few days." : "Hand the cash over now."}`);
         router.refresh();
@@ -90,8 +96,23 @@ export function RefundDialog({
               <Label htmlFor="refund-amount" className="text-[13px] font-semibold">
                 Amount (₹)
               </Label>
-              <Input id="refund-amount" inputMode="decimal" placeholder={remainingRupees} value={amount} onChange={(event) => setAmount(event.target.value)} className="tabular" />
-              <p className="text-[12.5px] text-muted-foreground">Leave empty to refund everything that is left.</p>
+              <Input
+                id="refund-amount"
+                inputMode="decimal"
+                placeholder={remainingRupees}
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+                aria-invalid={amount.trim() !== "" && amountError !== null}
+                aria-describedby={amount.trim() !== "" && amountError ? "refund-amount-error" : "refund-amount-hint"}
+                className="tabular"
+              />
+              {amount.trim() !== "" && amountError ? (
+                <p id="refund-amount-error" role="alert" className="text-[12.5px] text-loss">
+                  {amountError}
+                </p>
+              ) : (
+                <p id="refund-amount-hint" className="text-[12.5px] text-muted-foreground">Leave empty to refund everything that is left.</p>
+              )}
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="refund-reason" className="text-[13px] font-semibold">
@@ -117,9 +138,9 @@ export function RefundDialog({
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
                 Cancel
               </Button>
-              <Button variant="destructive" onClick={submit} disabled={pending || reason.trim().length < 3}>
+              <Button variant="destructive" onClick={submit} disabled={pending || reason.trim().length < 3 || amountError !== null}>
                 {pending ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
-                {pending ? "Refunding" : `Refund ${amount.trim() === "" ? formatINR(remaining) : `₹${amount.trim()}`}`}
+                {pending ? "Refunding" : `Refund ${formatINR(typedAmount)}`}
               </Button>
             </>
           )}
