@@ -18,6 +18,14 @@ import { db } from "@/db";
 import { iqInsights, iqRecommendations, memberships } from "@/db/schema";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 
+/**
+ * GoTrue and PostgREST serve only the shared `postgres` database. On a
+ * per-worktree test database (hive/tools/test-db.sh sets FRYBIRD_TEST_DB) the
+ * users and rows these suites create would land in different databases, so
+ * they skip; run them on the shared stack with merged migrations only.
+ */
+const sharedStackOnly = describe.skipIf(Boolean(process.env.FRYBIRD_TEST_DB));
+
 const HASH = "a".repeat(64);
 const HOUR = 3600_000;
 
@@ -221,7 +229,7 @@ describe("0038 — freeze covers copy; trust and as_of stay writable", () => {
   });
 });
 
-describe("0038 — who reads which insights through PostgREST (R2.2)", () => {
+sharedStackOnly("0038 — who reads which insights through PostgREST (R2.2)", () => {
   let admin: SupabaseClient;
   const sessions = new Map<string, SupabaseClient>();
   const userIds: string[] = [];
