@@ -15,7 +15,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, count, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { expenses, iqDailyFacts } from "@/db/schema";
+import { expenses, iqDailyFacts, refunds } from "@/db/schema";
 import { type DateRange, addDays, endOfBusinessDay, resolveRange, startOfBusinessDay } from "@/lib/dates";
 import { profit } from "@/lib/iq/profit";
 import { FEES_DIMENSION_VALUE, V1_COMPUTED_METRIC_IDS } from "@/lib/iq/metrics";
@@ -362,6 +362,38 @@ describe("IQ daily facts — P&L parity (IQ-1 S6)", () => {
   it("refuses a date that is not a business date", async () => {
     await expect(recomputeDay(orgs.a.orgId, "2026-02-30")).rejects.toThrow(RangeError);
     await expect(readDailyFacts(orgs.a.orgId, "2026-09-04", "2026-09-01")).rejects.toThrow(RangeError);
+  });
+
+  it("counts only SUCCEEDED refunds, on the IST day they were finalized (refund release, 0038)", async () => {
+    // 25–26 Aug: outside the goldens; refunds are not a P&L figure, so parity is unaffected.
+    const org = orgs.a;
+    const sale = await seedSale(org, { at: istInstant("2026-08-25", "12:00"), lines: [{ unitPricePaise: 59_900n }] });
+    const payment = sale.payments[0]!;
+    const row = (status: "RESERVED" | "SUCCEEDED" | "FAILED", amount: bigint, createdAt: Date, finalizedAt: Date | null) => ({
+      orgId: org.orgId,
+      paymentId: payment.id,
+      orderId: sale.order.id,
+      amount: paise(amount),
+      reason: `Fixture ${status}`,
+      provider: "cash",
+      status,
+      finalizedAt,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db()
+      .insert(refunds)
+      .values([
+        row("RESERVED", 1_111n, istInstant("2026-08-25", "13:00"), null),
+        row("FAILED", 2_222n, istInstant("2026-08-25", "14:00"), null),
+        // Reserved at 23:59 on the 25th, finalized at 00:05 on the 26th.
+        row("SUCCEEDED", 3_333n, istInstant("2026-08-25", "23:59"), istInstant("2026-08-26", "00:05")),
+      ]);
+    await recomputeDay(org.orgId, "2026-08-25");
+    await recomputeDay(org.orgId, "2026-08-26");
+
+    expect((await readDailyFacts(org.orgId, "2026-08-25", "2026-08-25")).totals.refunds_amount).toBe(0n);
+    expect((await readDailyFacts(org.orgId, "2026-08-26", "2026-08-26")).totals.refunds_amount).toBe(3_333n);
   });
 });
 

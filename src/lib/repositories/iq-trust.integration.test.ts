@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, count, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { iqDailyTrust, ingredientPrices } from "@/db/schema";
+import { iqDailyTrust, ingredientPrices, refunds } from "@/db/schema";
 import { paise } from "@/lib/money";
 import { businessDate } from "@/lib/dates";
 import { errorCodeOf } from "@/lib/jobs/handle";
@@ -34,6 +34,7 @@ const T6_PARTIAL = "2026-09-10";
 const T6_CANCELLED = "2026-09-11";
 const T6_CAPTURED_REFUNDED = "2026-09-12";
 const T6_FAILED = "2026-09-13";
+const T6_CANCELLED_RESERVED = "2026-09-14";
 
 async function price(orgId: string, ingredientId: string, at: Date) {
   await db().insert(ingredientPrices).values({
@@ -90,6 +91,19 @@ async function seed(org: TestOrg) {
   const capturedRefunded = await seedSale(org, { at: istInstant(T6_CAPTURED_REFUNDED), lines: [{ productId: burger.id, unitPricePaise: 17_900n }], payments: [{}, {}] });
   await seedRefund(capturedRefunded.payments[1]!, { at: istInstant(T6_CAPTURED_REFUNDED, "13:00"), amountPaise: capturedRefunded.order.grandTotal });
   await seedSale(org, { at: istInstant(T6_FAILED), status: "FAILED", lines: [{ productId: burger.id, unitPricePaise: 17_900n }] });
+  // Cancelled with a capture and only a RESERVED refund: no money went back, so the flag stays.
+  const reserved = await seedSale(org, { at: istInstant(T6_CANCELLED_RESERVED), status: "CANCELLED", lines: [{ productId: burger.id, unitPricePaise: 17_900n }] });
+  await db().insert(refunds).values({
+    orgId: org.orgId,
+    paymentId: reserved.payments[0]!.id,
+    orderId: reserved.order.id,
+    amount: reserved.order.grandTotal,
+    reason: "Fixture reserved",
+    provider: "cash",
+    status: "RESERVED",
+    finalizedAt: null,
+    createdAt: istInstant(T6_CANCELLED_RESERVED, "13:00"),
+  });
 }
 
 const gradesOf = (result: Awaited<ReturnType<typeof computeTrustDay>>) => Object.fromEntries(result.scores.map((s) => [s.signalId, s.grade]));
@@ -176,6 +190,7 @@ describe("IQ daily trust (IQ-1 S7)", () => {
     ["a cancelled order with a capture and no refund", T6_CANCELLED, { cancelled_captured_no_refund: 1 }],
     ["CAPTURED + REFUNDED on one order", T6_CAPTURED_REFUNDED, { multi_captured: 0, captured_not_grand_total: 1 }],
     ["a FAILED order with a capture", T6_FAILED, { failed_with_capture: 1 }],
+    ["a cancelled order with a capture and only a RESERVED refund", T6_CANCELLED_RESERVED, { cancelled_captured_no_refund: 1 }],
   ] as const)("grades T6 LOW for %s", async (_label, date, expected) => {
     const t6 = scoreOf(await computeTrustDay(orgs.a.orgId, date), "t6_payment_integrity");
     expect(t6).toMatchObject({ grade: "LOW", numerator: 0n, denominator: 1n });
