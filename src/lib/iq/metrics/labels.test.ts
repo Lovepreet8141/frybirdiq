@@ -17,6 +17,9 @@ describe("metric labels", () => {
     expect(metricLabel("captured_amount")).toBe("Collected (cash received)");
     expect(metricLabel("food_cost_pct_theoretical")).toBe("Food cost – recipe");
     expect(metricLabel("food_cost_pct_recorded_purchases")).toBe("Food cost – recorded purchases");
+    expect(metricLabel("gross_margin_bps")).toBe("Gross margin");
+    expect(metricLabel("net_margin_bps")).toBe("Net margin");
+    expect(metricLabel("net_collected")).toBe("Net collected (after refunds)");
   });
 
   it("never calls a net figure 'captured'", () => {

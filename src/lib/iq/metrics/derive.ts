@@ -41,7 +41,11 @@ export function ratioBpsOrNull(part: Paise, whole: Paise): Bps | null {
 /**
  * Average order value, definition v1: TRUNCATES toward zero, exactly as
  * `averageOrder` in overview.ts does today. Kept for parity; do not use for
- * new screens. Null when there are no orders.
+ * new screens.
+ *
+ * Null when there are no orders, where `averageOrder` returns 0 today. That is
+ * the one deliberate difference: a parity check against overview.ts must map
+ * null → 0 before comparing (`?? 0n`), not treat it as a mismatch.
  */
 export function aovNetV1(revenueNet: Paise, ordersPaid: bigint | number): Paise | null {
   const orders = toCount(ordersPaid);
@@ -74,6 +78,31 @@ export function grossProfit(revenueNet: Paise, expenseDirect: Paise): Paise {
 /** Σ revenue_net − Σ expense_direct − Σ expense_operating. Non-operating expenses stay out. */
 export function netProfit(revenueNet: Paise, expenseDirect: Paise, expenseOperating: Paise): Paise {
   return subtract(grossProfit(revenueNet, expenseDirect), expenseOperating);
+}
+
+/**
+ * Gross margin: (Σ revenue_net − Σ expense_direct) ÷ Σ revenue_net, in bps,
+ * half away from zero. Null when revenue ≤ 0, as `profit()` in profit.ts does
+ * for the P&L page. Negative when direct costs exceed revenue.
+ */
+export function grossMarginBps(revenueNet: Paise, expenseDirect: Paise): Bps | null {
+  return ratioBpsOrNull(grossProfit(revenueNet, expenseDirect), revenueNet);
+}
+
+/**
+ * Net margin: net profit ÷ Σ revenue_net, in bps, half away from zero. Null
+ * when revenue ≤ 0 (parity with `profit()`).
+ */
+export function netMarginBps(revenueNet: Paise, expenseDirect: Paise, expenseOperating: Paise): Bps | null {
+  return ratioBpsOrNull(netProfit(revenueNet, expenseDirect, expenseOperating), revenueNet);
+}
+
+/**
+ * Net collected (F8): Σ captured_amount − Σ refunds_amount. Goes negative on a
+ * day that refunds more than it captures; never clamped.
+ */
+export function netCollected(capturedAmount: Paise, refundsAmount: Paise): Paise {
+  return subtract(capturedAmount, refundsAmount);
 }
 
 /** One channel's Σ revenue_net as a share of Σ revenue_net across channels. */

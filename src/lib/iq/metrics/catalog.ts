@@ -53,6 +53,9 @@ export const DERIVED_METRIC_IDS = [
   "gross_profit",
   "net_profit",
   "channel_share",
+  "gross_margin_bps",
+  "net_margin_bps",
+  "net_collected",
 ] as const;
 
 export type MetricId = (typeof STORED_METRIC_IDS)[number];
@@ -71,8 +74,14 @@ export type DerivedMetricUnit = (typeof DERIVED_METRIC_UNITS)[number];
  * Which side of GST a money figure sits on. `net` excludes GST (the only
  * basis a margin may use), `gross` is what the customer paid, `tax` is GST
  * itself, `cost` is an ingredient or expense cost, `none` is a count.
+ *
+ * `listed` follows the org's `organizations.price_basis`: excluding GST under
+ * `exclusive`, including it under `inclusive` (the column default). A discount
+ * comes off the listed price before tax (`priceLine` in src/lib/pricing), so
+ * it is net only for an exclusive-pricing org and must not be added to or
+ * subtracted from a `net` figure without knowing the basis.
  */
-export const METRIC_BASES = ["net", "gross", "tax", "cost", "none"] as const;
+export const METRIC_BASES = ["net", "gross", "tax", "cost", "listed", "none"] as const;
 export type MetricBasis = (typeof METRIC_BASES)[number];
 
 export const METRIC_GRAINS = ["day"] as const;
@@ -86,10 +95,41 @@ export const METRIC_DIMENSIONS = ["channel", "product", "expense_category"] as c
 export type MetricDimension = (typeof METRIC_DIMENSIONS)[number];
 
 /**
- * The `dimension_value` of the extra product row that carries delivery fees,
- * so `revenue_net_by_product` sums to `revenue_net` (D10).
+ * The `dimension_value` of the extra product row that carries everything on
+ * the order that is not a line — delivery fee taxable value today. Its amount
+ * is the residual Σ revenue_net − Σ order_items.line_taxable over the same
+ * sale set (`feesRowAmount`), so `revenue_net_by_product` sums to
+ * `revenue_net` exactly (D10). Only `revenue_net_by_product` carries it.
  */
 export const FEES_DIMENSION_VALUE = "__fees__";
+
+/**
+ * The `dimension_value` for an order line whose `order_items.product_id` is
+ * null. The column is nullable and `set null` on delete, so a product removed
+ * from the menu keeps its sales history under this bucket rather than
+ * dropping out of the product sum.
+ */
+export const NO_PRODUCT_DIMENSION_VALUE = "__no_product__";
+
+/**
+ * What `dimension_value` holds for each dimension. Ids, never display names:
+ * a rename must not split one product or category into two series.
+ */
+export const METRIC_DIMENSION_VALUES: Readonly<Record<MetricDimension, string>> = {
+  channel: "orders.channel enum value (DINE_IN, TAKEAWAY, ONLINE).",
+  product: `order_items.product_id (uuid); "${NO_PRODUCT_DIMENSION_VALUE}" when it is null; "${FEES_DIMENSION_VALUE}" for revenue_net − Σ line_taxable.`,
+  expense_category:
+    "expense_categories.id (uuid), never the name. Changing a category's behaviour (DIRECT/FIXED) or is_non_operating moves its past expenses between expense metrics: every day with an expense in it must be recomputed, facts are not restated automatically.",
+};
+
+/**
+ * Whether v1 can compute a stored metric from a column that exists today.
+ * `not_yet_available` metrics stay in the catalog so the id and label are
+ * reserved, but the fact job skips them (`V1_COMPUTED_METRIC_IDS`) and no
+ * derived metric may use them.
+ */
+export const METRIC_AVAILABILITIES = ["available", "not_yet_available"] as const;
+export type MetricAvailability = (typeof METRIC_AVAILABILITIES)[number];
 
 /** Trust signals from the design, stored in `iq_daily_trust.signal_id`. */
 export const TRUST_SIGNAL_IDS = [
@@ -124,7 +164,9 @@ export interface StoredMetricDefinition {
   readonly basis: MetricBasis;
   readonly grain: MetricGrain;
   readonly allowedDimensions: readonly MetricDimension[];
-  /** Tables the fact is computed from. Lineage only. */
+  /** `not_yet_available`: no reliable source column; excluded from v1 computation. */
+  readonly availability: MetricAvailability;
+  /** Tables the fact is computed from. Lineage only. Empty when not yet available. */
   readonly sources: readonly string[];
   readonly definitionVersion: number;
   readonly description: string;
@@ -141,6 +183,8 @@ export interface DerivedMetricDefinition {
   readonly allowedDimensions: readonly MetricDimension[];
   /** Stored metrics summed before the derivation. Its trust is the union of theirs. */
   readonly inputs: readonly MetricId[];
+  /** `available` only when every input is. */
+  readonly availability: MetricAvailability;
   readonly definitionVersion: number;
   readonly description: string;
   readonly trustSignals: readonly TrustSignalId[];
@@ -155,9 +199,12 @@ const EXPENSES = ["expenses", "expense_categories"] as const;
 const SALES_TRUST = ["t5_clock_sanity", "t6_payment_integrity"] as const;
 
 function stored<K extends MetricId>(
-  entry: Omit<StoredMetricDefinition, "id" | "kind" | "grain" | "definitionVersion"> & { readonly id: K },
+  entry: Omit<StoredMetricDefinition, "id" | "kind" | "grain" | "definitionVersion" | "availability"> & {
+    readonly id: K;
+    readonly availability?: MetricAvailability;
+  },
 ): StoredMetricDefinition & { readonly id: K } {
-  return { ...entry, kind: "stored", grain: "day", definitionVersion: DEFINITION_VERSION };
+  return { availability: "available", ...entry, kind: "stored", grain: "day", definitionVersion: DEFINITION_VERSION };
 }
 
 export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition & { readonly id: K } } = {
@@ -185,7 +232,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "net",
     allowedDimensions: ["product"],
     sources: SALE_SET_LINES,
-    description: `Net line value by product slug over the sale set, plus a "${FEES_DIMENSION_VALUE}" row so products sum to revenue_net.`,
+    description: `Σ order_items.line_taxable by order_items.product_id over the sale set ("${NO_PRODUCT_DIMENSION_VALUE}" when null), plus a "${FEES_DIMENSION_VALUE}" row = revenue_net − Σ line_taxable so products sum to revenue_net.`,
     trustSignals: SALES_TRUST,
   }),
   units_sold: stored({
@@ -194,7 +241,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "none",
     allowedDimensions: ["product"],
     sources: SALE_SET_LINES,
-    description: "Σ order_items.quantity by product slug over the sale set.",
+    description: `Σ order_items.quantity by order_items.product_id over the sale set ("${NO_PRODUCT_DIMENSION_VALUE}" when null). No fees row.`,
     trustSignals: SALES_TRUST,
   }),
   gst_output: stored({
@@ -212,7 +259,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "gross",
     allowedDimensions: ["channel"],
     sources: SALE_SET,
-    description: "Σ orders.grand_total over the sale set — what customers were charged, GST included.",
+    description: "Σ orders.grand_total over the sale set — what customers were charged, GST included, after points (points are tender, F5), so it is below taxable_total + tax_total on any order that spent points.",
     trustSignals: SALES_TRUST,
   }),
   points_tender: stored({
@@ -220,17 +267,19 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     unit: "paise",
     basis: "gross",
     allowedDimensions: ["channel"],
-    sources: SALE_SET,
-    description: "Value of loyalty points redeemed over the sale set. Treated as tender, not discount, until the CA decides (F5).",
+    availability: "not_yet_available",
+    sources: [],
+    description:
+      "NOT YET AVAILABLE — not computed in v1. Value of loyalty points redeemed over the sale set, tender not discount until the CA decides (F5). No paise column records it: orders.points_redeemed and loyalty_transactions.points are point counts, and the point value is live org config, not snapshotted per order; taxable_total + tax_total − grand_total holds only by an application invariant. Needs an orders points-value snapshot column first.",
     trustSignals: SALES_TRUST,
   }),
   discount_total: stored({
     id: "discount_total",
     unit: "paise",
-    basis: "gross",
+    basis: "listed",
     allowedDimensions: ["channel"],
     sources: SALE_SET,
-    description: "Σ orders.discount_total over the sale set.",
+    description: "Σ orders.discount_total over the sale set — promotions and stamp rewards, taken off the listed price before GST (excl. GST for an exclusive-pricing org, incl. GST for inclusive). Points are not a discount (F5).",
     trustSignals: SALES_TRUST,
   }),
   orders_comp: stored({
@@ -239,7 +288,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "none",
     allowedDimensions: ["channel"],
     sources: SALE_SET,
-    description: "Sale-set orders with a zero grand total (fully comped, e.g. a 100% stamp reward). Proposal.",
+    description: "Sale-set orders with orders.taxable_total = 0 (fully comped, e.g. a 100% stamp reward). Not grand_total: that is after points, and an order paid in points is tendered, not comped (F5). Proposal.",
     trustSignals: SALES_TRUST,
   }),
   orders_cancelled: stored({
@@ -266,7 +315,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "none",
     allowedDimensions: ["channel"],
     sources: ["orders", "payments", "refunds"],
-    description: "Orders whose payment is fully REFUNDED.",
+    description: "Orders whose payment is fully REFUNDED, on the order's created_at IST day in v1 (not the refund's day).",
     trustSignals: SALES_TRUST,
   }),
   orders_part_refunded: stored({
@@ -275,7 +324,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "none",
     allowedDimensions: ["channel"],
     sources: ["orders", "payments", "refunds"],
-    description: "Orders whose payment is PARTIALLY_REFUNDED. In v1 these leave the sale set whole (D2, trust LOW).",
+    description: "Orders whose payment is PARTIALLY_REFUNDED, on the order's created_at IST day in v1 (not the refund's day). In v1 these leave the sale set whole (D2, trust LOW).",
     trustSignals: SALES_TRUST,
   }),
   refunds_amount: stored({
@@ -284,7 +333,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "gross",
     allowedDimensions: [],
     sources: ["refunds", "payments"],
-    description: "Σ SUCCEEDED refund amounts on the refund's own IST day (F1). RESERVED and FAILED refunds are never summed.",
+    description: "Σ refunds.amount on the refund's own IST day (F1), anchored on refunds.created_at in v1 until ref-1 adds finalized_at (B6). refunds has no status column yet; a row is written only after the provider confirms (payments.ts), so every row is a succeeded refund. Once status exists, SUCCEEDED only.",
     trustSignals: SALES_TRUST,
   }),
   captured_amount: stored({
@@ -302,7 +351,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "cost",
     allowedDimensions: ["expense_category"],
     sources: EXPENSES,
-    description: "Σ expenses in DIRECT, operating categories, on the paid_on IST date. Org-level.",
+    description: "Σ expenses in DIRECT, operating categories, on the paid_on IST date. Org-level. Dimension value is expense_categories.id; recompute affected days when a category changes behaviour.",
     trustSignals: ["t7_cost_recording"],
   }),
   expense_operating: stored({
@@ -311,7 +360,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "cost",
     allowedDimensions: ["expense_category"],
     sources: EXPENSES,
-    description: "Σ expenses in FIXED, operating categories, on the paid_on IST date. Org-level.",
+    description: "Σ expenses in FIXED, operating categories, on the paid_on IST date. Org-level. Dimension value is expense_categories.id; recompute affected days when a category changes behaviour.",
     trustSignals: [],
   }),
   expense_nonoperating: stored({
@@ -320,7 +369,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "cost",
     allowedDimensions: ["expense_category"],
     sources: EXPENSES,
-    description: "Σ expenses in non-operating categories, on the paid_on IST date. Excluded from profit. Org-level.",
+    description: "Σ expenses in non-operating categories, on the paid_on IST date. Excluded from profit. Org-level. Dimension value is expense_categories.id; recompute affected days when is_non_operating changes.",
     trustSignals: [],
   }),
   food_cost_theoretical: stored({
@@ -377,8 +426,15 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
   }),
 };
 
+/** Stored metrics the v1 fact job computes. `not_yet_available` ones are skipped. */
+export const V1_COMPUTED_METRIC_IDS: readonly MetricId[] = STORED_METRIC_IDS.filter(
+  (id) => METRIC_CATALOG[id].availability === "available",
+);
+
 function derived<K extends DerivedMetricId>(
-  entry: Omit<DerivedMetricDefinition, "id" | "kind" | "grain" | "definitionVersion" | "trustSignals"> & { readonly id: K },
+  entry: Omit<DerivedMetricDefinition, "id" | "kind" | "grain" | "definitionVersion" | "trustSignals" | "availability"> & {
+    readonly id: K;
+  },
 ): DerivedMetricDefinition & { readonly id: K } {
   const signals = new Set<TrustSignalId>();
   for (const input of entry.inputs) for (const signal of METRIC_CATALOG[input].trustSignals) signals.add(signal);
@@ -387,6 +443,7 @@ function derived<K extends DerivedMetricId>(
     kind: "derived",
     grain: "day",
     definitionVersion: DEFINITION_VERSION,
+    availability: entry.inputs.every((input) => METRIC_CATALOG[input].availability === "available") ? "available" : "not_yet_available",
     trustSignals: TRUST_SIGNAL_IDS.filter((id) => signals.has(id)),
   };
 }
@@ -398,7 +455,7 @@ export const DERIVED_METRIC_CATALOG: { readonly [K in DerivedMetricId]: DerivedM
     basis: "net",
     allowedDimensions: ["channel"],
     inputs: ["revenue_net", "orders_paid"],
-    description: "Σ revenue_net ÷ Σ orders_paid. v1 truncates (parity with overview.ts); v2 rounds half-up (F12).",
+    description: "Σ revenue_net ÷ Σ orders_paid. v1 truncates (parity with overview.ts); v2 rounds half-up (F12). Null with no orders, where averageOrder shows 0 today: a parity check maps null → 0.",
   }),
   food_cost_pct_theoretical: derived({
     id: "food_cost_pct_theoretical",
@@ -440,6 +497,30 @@ export const DERIVED_METRIC_CATALOG: { readonly [K in DerivedMetricId]: DerivedM
     inputs: ["revenue_net"],
     description: "Σ revenue_net for one channel ÷ Σ revenue_net across all channels.",
   }),
+  gross_margin_bps: derived({
+    id: "gross_margin_bps",
+    unit: "bps",
+    basis: "net",
+    allowedDimensions: [],
+    inputs: ["revenue_net", "expense_direct"],
+    description: "gross_profit ÷ Σ revenue_net, half away from zero. Null when revenue ≤ 0 (parity with profit.ts grossMarginBps on the P&L page).",
+  }),
+  net_margin_bps: derived({
+    id: "net_margin_bps",
+    unit: "bps",
+    basis: "net",
+    allowedDimensions: [],
+    inputs: ["revenue_net", "expense_direct", "expense_operating"],
+    description: "net_profit ÷ Σ revenue_net, half away from zero. Null when revenue ≤ 0 (parity with profit.ts netMarginBps on the P&L page).",
+  }),
+  net_collected: derived({
+    id: "net_collected",
+    unit: "paise",
+    basis: "gross",
+    allowedDimensions: [],
+    inputs: ["captured_amount", "refunds_amount"],
+    description: "Σ captured_amount − Σ refunds_amount (F8): cash kept after refunds, GST included. Each input keeps its own day anchor (captured_at, refund day), so a day can be negative; never clamped.",
+  }),
 };
 
 export function isMetricId(value: string): value is MetricId {
@@ -448,6 +529,11 @@ export function isMetricId(value: string): value is MetricId {
 
 export function isDerivedMetricId(value: string): value is DerivedMetricId {
   return (DERIVED_METRIC_IDS as readonly string[]).includes(value);
+}
+
+/** True when the v1 fact job computes this stored metric. */
+export function isComputedInV1(id: MetricId): boolean {
+  return METRIC_CATALOG[id].availability === "available";
 }
 
 export function getMetric(id: MetricId): StoredMetricDefinition {

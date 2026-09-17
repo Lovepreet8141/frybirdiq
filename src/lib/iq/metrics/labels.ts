@@ -38,6 +38,9 @@ export const METRIC_LABELS: Readonly<Record<AnyMetricId, string>> = {
   gross_profit: "Gross profit",
   net_profit: "Net profit",
   channel_share: "Share of net sales",
+  gross_margin_bps: "Gross margin",
+  net_margin_bps: "Net margin",
+  net_collected: "Net collected (after refunds)",
 };
 
 export function metricLabel(id: AnyMetricId): string {

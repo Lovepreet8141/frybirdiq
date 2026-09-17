@@ -7,15 +7,20 @@ import {
   FEES_DIMENSION_VALUE,
   getDerivedMetric,
   getMetric,
+  isComputedInV1,
   isDerivedMetricId,
   isMetricId,
+  METRIC_AVAILABILITIES,
   METRIC_BASES,
   METRIC_CATALOG,
+  METRIC_DIMENSION_VALUES,
   METRIC_DIMENSIONS,
   METRIC_UNITS,
+  NO_PRODUCT_DIMENSION_VALUE,
   STORED_METRIC_IDS,
   TRUST_SIGNAL_DESCRIPTIONS,
   TRUST_SIGNAL_IDS,
+  V1_COMPUTED_METRIC_IDS,
 } from "./catalog";
 
 const stored = Object.values(METRIC_CATALOG);
@@ -50,7 +55,9 @@ describe("stored metric registry", () => {
       expect(entry.grain).toBe("day");
       expect(entry.definitionVersion).toBe(1);
       expect(entry.description.length).toBeGreaterThan(10);
-      expect(entry.sources.length).toBeGreaterThan(0);
+      expect(METRIC_AVAILABILITIES).toContain(entry.availability);
+      if (entry.availability === "available") expect(entry.sources.length).toBeGreaterThan(0);
+      else expect(entry.sources).toEqual([]);
       for (const source of entry.sources) expect(source).toMatch(/^[a-z_]+$/);
       for (const dimension of entry.allowedDimensions) expect(METRIC_DIMENSIONS).toContain(dimension);
       for (const signal of entry.trustSignals) expect(TRUST_SIGNAL_IDS).toContain(signal);
@@ -69,6 +76,7 @@ describe("stored metric registry", () => {
     expect(getMetric("revenue_net_by_product")).toMatchObject({ unit: "paise", basis: "net", allowedDimensions: ["product"] });
     expect(getMetric("gst_output")).toMatchObject({ unit: "paise", basis: "tax" });
     expect(getMetric("sales_gross").basis).toBe("gross");
+    expect(getMetric("sales_gross").description).toContain("after points");
     expect(getMetric("captured_amount").basis).toBe("gross");
     expect(getMetric("food_cost_theoretical").basis).toBe("cost");
   });
@@ -76,6 +84,62 @@ describe("stored metric registry", () => {
   it("names the fees row so products sum to revenue", () => {
     expect(FEES_DIMENSION_VALUE).toBe("__fees__");
     expect(getMetric("revenue_net_by_product").description).toContain(FEES_DIMENSION_VALUE);
+    expect(getMetric("revenue_net_by_product").description).toContain("revenue_net − Σ line_taxable");
+    expect(getMetric("units_sold").description).not.toContain(FEES_DIMENSION_VALUE);
+  });
+
+  it("keys the product dimension on the nullable order_items.product_id, not a slug", () => {
+    expect(NO_PRODUCT_DIMENSION_VALUE).toBe("__no_product__");
+    expect(NO_PRODUCT_DIMENSION_VALUE).not.toBe(FEES_DIMENSION_VALUE);
+    for (const id of ["revenue_net_by_product", "units_sold"] as const) {
+      expect(getMetric(id).description).toContain("order_items.product_id");
+      expect(getMetric(id).description).toContain(NO_PRODUCT_DIMENSION_VALUE);
+      expect(getMetric(id).description).not.toContain("slug");
+    }
+    expect(METRIC_DIMENSION_VALUES.product).toContain("order_items.product_id");
+  });
+
+  it("documents every dimension's value, with expense categories keyed by id and a recompute note", () => {
+    expect(Object.keys(METRIC_DIMENSION_VALUES).sort()).toEqual([...METRIC_DIMENSIONS].sort());
+    expect(METRIC_DIMENSION_VALUES.expense_category).toContain("expense_categories.id");
+    expect(METRIC_DIMENSION_VALUES.expense_category).toMatch(/recomputed/);
+    for (const id of ["expense_direct", "expense_operating", "expense_nonoperating"] as const) {
+      expect(getMetric(id).description).toContain("expense_categories.id");
+      expect(getMetric(id).description).toMatch(/recompute/);
+    }
+  });
+
+  it("counts comped orders on taxable_total, not grand_total (grand_total is after points)", () => {
+    const description = getMetric("orders_comp").description;
+    expect(description).toContain("orders.taxable_total = 0");
+    expect(description).not.toMatch(/zero grand total/);
+  });
+
+  it("puts discounts on the org's listed-price basis, not gross", () => {
+    expect(METRIC_BASES).toContain("listed");
+    expect(getMetric("discount_total").basis).toBe("listed");
+  });
+
+  it("states the v1 day anchor of refund counts and amounts", () => {
+    expect(getMetric("orders_refunded").description).toContain("order's created_at IST day");
+    expect(getMetric("orders_part_refunded").description).toContain("order's created_at IST day");
+    const refunds = getMetric("refunds_amount").description;
+    expect(refunds).toContain("refunds.created_at");
+    expect(refunds).toContain("finalized_at");
+  });
+
+  it("marks points_tender not yet available and keeps it out of v1 computation", () => {
+    const points = getMetric("points_tender");
+    expect(points.availability).toBe("not_yet_available");
+    expect(points.sources).toEqual([]);
+    expect(points.description).toMatch(/^NOT YET AVAILABLE/);
+    expect(isComputedInV1("points_tender")).toBe(false);
+    expect(V1_COMPUTED_METRIC_IDS).not.toContain("points_tender");
+  });
+
+  it("computes every other stored metric in v1", () => {
+    expect([...V1_COMPUTED_METRIC_IDS].sort()).toEqual(STORED_METRIC_IDS.filter((id) => id !== "points_tender").sort());
+    for (const id of V1_COMPUTED_METRIC_IDS) expect(isComputedInV1(id)).toBe(true);
   });
 
   it("wires the design's trust signals to the metrics they grade", () => {
@@ -116,7 +180,7 @@ describe("derived metric registry", () => {
     for (const entry of derived) {
       expect(entry.kind).toBe("derived");
       expect(DERIVED_METRIC_UNITS).toContain(entry.unit);
-      expect(entry.basis).toBe("net");
+      expect(entry.basis).toBe(entry.id === "net_collected" ? "gross" : "net");
       expect(entry.definitionVersion).toBe(1);
       expect(entry.inputs.length).toBeGreaterThan(0);
       for (const input of entry.inputs) {
@@ -124,6 +188,31 @@ describe("derived metric registry", () => {
         for (const signal of METRIC_CATALOG[input].trustSignals) expect(entry.trustSignals).toContain(signal);
       }
     }
+  });
+
+  it("uses only v1-computed inputs, so every derived metric is available", () => {
+    for (const entry of derived) {
+      expect(entry.availability).toBe("available");
+      for (const input of entry.inputs) expect(isComputedInV1(input)).toBe(true);
+    }
+  });
+
+  it("includes the P&L margins and net collected", () => {
+    expect([...DERIVED_METRIC_IDS].sort()).toEqual(
+      [
+        "aov_net", "food_cost_pct_theoretical", "food_cost_pct_recorded_purchases", "gross_profit", "net_profit",
+        "channel_share", "gross_margin_bps", "net_margin_bps", "net_collected",
+      ].sort(),
+    );
+    expect(getDerivedMetric("gross_margin_bps")).toMatchObject({ unit: "bps", basis: "net", inputs: ["revenue_net", "expense_direct"] });
+    expect(getDerivedMetric("net_margin_bps")).toMatchObject({
+      unit: "bps",
+      basis: "net",
+      inputs: ["revenue_net", "expense_direct", "expense_operating"],
+    });
+    expect(getDerivedMetric("net_margin_bps").inputs).not.toContain("expense_nonoperating");
+    expect(getDerivedMetric("net_collected")).toMatchObject({ unit: "paise", basis: "gross", inputs: ["captured_amount", "refunds_amount"] });
+    expect(getDerivedMetric("aov_net").description).toContain("null → 0");
   });
 
   it("uses bps for percentages and paise for amounts", () => {

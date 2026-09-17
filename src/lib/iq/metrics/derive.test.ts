@@ -8,7 +8,10 @@ import {
   channelShare,
   foodCostPctRecordedPurchases,
   foodCostPctTheoretical,
+  grossMarginBps,
   grossProfit,
+  netCollected,
+  netMarginBps,
   netProfit,
   ratioBpsOrNull,
   sumCount,
@@ -85,6 +88,11 @@ describe("average order value", () => {
     expect(aovNetV2(revenue, 2)).toBe(2n ** 61n + 1n);
   });
 
+  it("v1 null on zero orders maps to overview.ts averageOrder's 0 for parity", () => {
+    expect(aovNetV1(p(0), 0) ?? 0n).toBe(0n);
+    expect(aovNetV1(p(10_001), 2) ?? 0n).toBe(5_000n);
+  });
+
   it("rejects a fractional order count", () => {
     expect(() => aovNetV1(p(100), 1.5)).toThrow(RangeError);
     expect(() => aovNetV2(p(100), 1.5)).toThrow(RangeError);
@@ -138,5 +146,65 @@ describe("channel share", () => {
 
   it("is null with no revenue", () => {
     expect(channelShare(p(0), p(0))).toBeNull();
+  });
+});
+
+describe("margins", () => {
+  it("matches profit.ts: profit ÷ net revenue in bps, half away from zero", () => {
+    expect(grossMarginBps(p(100_000), p(30_000))).toBe(7_000);
+    expect(netMarginBps(p(100_000), p(30_000), p(50_000))).toBe(2_000);
+    // 2/3 of revenue kept = 6666.67 bps -> 6667
+    expect(grossMarginBps(p(3), p(1))).toBe(6_667);
+    // net profit 1 of 3 = 3333.33 -> 3333
+    expect(netMarginBps(p(3), p(1), p(1))).toBe(3_333);
+  });
+
+  it("is null when revenue is zero, even with costs", () => {
+    expect(grossMarginBps(p(0), p(0))).toBeNull();
+    expect(grossMarginBps(p(0), p(30_000))).toBeNull();
+    expect(netMarginBps(p(0), p(0), p(0))).toBeNull();
+    expect(netMarginBps(p(0), p(30_000), p(50_000))).toBeNull();
+  });
+
+  it("is null when revenue is negative", () => {
+    expect(grossMarginBps(p(-1_000), p(500))).toBeNull();
+    expect(netMarginBps(p(-1_000), p(500), p(500))).toBeNull();
+  });
+
+  it("goes negative when costs exceed positive revenue", () => {
+    expect(grossMarginBps(p(10_000), p(30_000))).toBe(-20_000);
+    expect(netMarginBps(p(10_000), p(30_000), p(50_000))).toBe(-70_000);
+  });
+
+  it("is 100% with no costs and leaves non-operating expenses out", () => {
+    expect(grossMarginBps(p(50_000), p(0))).toBe(10_000);
+    expect(netMarginBps(p(50_000), p(0), p(0))).toBe(10_000);
+  });
+
+  it("is Σ÷Σ across days", () => {
+    const revenue = sumPaise([p(10_000), p(100_000)]);
+    const direct = sumPaise([p(9_000), p(10_000)]);
+    // 91000/110000 = 82.727% -> 8273
+    expect(grossMarginBps(revenue, direct)).toBe(8_273);
+  });
+});
+
+describe("net collected", () => {
+  it("is captured minus refunds", () => {
+    expect(netCollected(p(100_000), p(25_000))).toBe(75_000n);
+    expect(netCollected(p(100_000), p(0))).toBe(100_000n);
+  });
+
+  it("is zero with nothing captured or refunded", () => {
+    expect(netCollected(p(0), p(0))).toBe(0n);
+  });
+
+  it("goes negative on a day that refunds more than it captures, never clamped", () => {
+    expect(netCollected(p(0), p(40_000))).toBe(-40_000n);
+    expect(netCollected(p(10_000), p(40_000))).toBe(-30_000n);
+  });
+
+  it("stays exact at bigint scale", () => {
+    expect(netCollected(p(2n ** 62n), p(1))).toBe(2n ** 62n - 1n);
   });
 });
