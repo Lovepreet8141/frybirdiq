@@ -24,6 +24,21 @@ fi
 
 cd "$(dirname "$0")/.."
 
+# Stamped into /etc/frybird/env below and read at runtime as
+# src/lib/env/index.ts's DEPLOY_COMMIT — the app records it on
+# iq_job_runs.code_version and every insight's producedBy.codeVersion, so a
+# job run or an insight can be traced back to the code that produced it.
+# Validated here, before anything else runs, against the exact pattern that
+# side reads (DEPLOY_COMMIT_PATTERN) — a value that doesn't match makes the
+# app fall back to "unversioned" rather than fail to boot (DEPLOY_COMMIT
+# gates nothing there), but shipping a bad value silently would still make
+# every run of this release untraceable, so deploy.sh refuses instead.
+DEPLOY_COMMIT="$(git rev-parse HEAD)"
+if [[ ! "$DEPLOY_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "refusing: git rev-parse HEAD did not return a 40-character lowercase SHA (\"$DEPLOY_COMMIT\")" >&2
+  exit 1
+fi
+
 echo "==> Gates"
 pnpm typecheck
 pnpm lint
@@ -61,12 +76,38 @@ echo "==> Restart"
 # `sudo` only when the target is not already root, so this works either way.
 ssh "$TARGET" '
   set -e
+  # pipefail matters below: without it, a failing `grep` mid-pipeline (env
+  # file unreadable, sudo prompt, anything) would not stop the script — tee
+  # would just write an empty file from the failed grep'"'"'s empty stdout, and
+  # the DEPLOY_COMMIT-only file that follows would silently replace every
+  # secret in /etc/frybird/env. dash (some distros'"'"' /bin/sh) has no
+  # pipefail, so this only works because the remote command runs under the
+  # login shell ssh invokes, and every distro this deploys to is bash.
+  set -o pipefail
   if [ "$(id -u)" -ne 0 ]; then SUDO=sudo; else SUDO=""; fi
   $SUDO chown -R frybird:frybird '"'$REMOTE_DIR'"'
   # Next writes its image cache here and the unit lists it as its only
   # writable path. Recreated rather than assumed: the first deploy to a fresh
   # box has never had one.
   $SUDO install -d -o frybird -g frybird '"'$REMOTE_DIR'"'/.next/cache
+
+  # Stamp DEPLOY_COMMIT into /etc/frybird/env in place. The file must already
+  # exist (docs/DEPLOY.md §2 creates it before the first deploy) — refuse
+  # rather than let the mv below create a fresh, wrongly-permissioned one out
+  # of a missing file. Every step here is grep/tee/mv on that one line; the
+  # rest of the file (JOB_SECRET, SUPABASE_SERVICE_ROLE_KEY, RAZORPAY_*,
+  # DATABASE_URL) is carried through untouched and never sent back to this
+  # script'"'"'s stdout, this terminal, or a log — piped straight from one
+  # root-only file to another, both ends of the pipe run as $SUDO so a
+  # non-root deploy user is never asked to read or write it directly.
+  $SUDO test -f /etc/frybird/env || { echo "refusing: /etc/frybird/env is missing" >&2; exit 1; }
+  NEW_ENV="$(mktemp)"
+  $SUDO grep -v "^DEPLOY_COMMIT=" /etc/frybird/env | $SUDO tee "$NEW_ENV" > /dev/null
+  printf "DEPLOY_COMMIT=%s\n" '"'$DEPLOY_COMMIT'"' | $SUDO tee -a "$NEW_ENV" > /dev/null
+  $SUDO chown root:frybird "$NEW_ENV"
+  $SUDO chmod 640 "$NEW_ENV"
+  $SUDO mv "$NEW_ENV" /etc/frybird/env
+
   $SUDO systemctl restart frybird
   sleep 2
   $SUDO systemctl is-active frybird
