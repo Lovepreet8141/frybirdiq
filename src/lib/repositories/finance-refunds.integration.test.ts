@@ -110,8 +110,8 @@ describe("payments ledger — refunds by status (refund slice 5)", () => {
     const ledger = await getPaymentsLedger(orgs.a.orgId, SEPTEMBER, 500, NOW);
     const cash = ledger.payments.find((row) => row.id === a.cash.payments[0]!.id);
     const online = ledger.payments.find((row) => row.id === a.online.payments[0]!.id);
-    expect(cash).toMatchObject({ refunded: 7_000n, refundReserved: 3_000n });
-    expect(online).toMatchObject({ refunded: 0n, refundReserved: 4_500n });
+    expect(cash).toMatchObject({ refunded: 7_000n, refundReserved: 3_000n, refundStuck: false, refundFailedCount: 2 });
+    expect(online).toMatchObject({ refunded: 0n, refundReserved: 4_500n, refundStuck: true, refundFailedCount: 0 });
   });
 
   it("reports nothing refunded in a month with only FAILED refunds, and still shows open RESERVED ones", async () => {

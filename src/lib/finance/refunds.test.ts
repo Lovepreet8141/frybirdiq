@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { paise } from "@/lib/money";
-import { type RefundFacts, isStaleReserved, refundDate, refundsByPayment, summariseRefunds } from "./refunds";
+import { type RefundFacts, isStaleReserved, paymentRefundBadges, refundDate, refundsByPayment, summariseRefunds } from "./refunds";
 
 const NOW = new Date("2026-09-17T12:00:00.000Z");
 const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000);
@@ -46,14 +46,34 @@ describe("summariseRefunds", () => {
 });
 
 describe("refundsByPayment", () => {
-  it("splits each payment into refunded and held, ignoring FAILED", () => {
-    const map = refundsByPayment([
-      { paymentId: "p1", status: "SUCCEEDED", amount: paise(1_000n) },
-      { paymentId: "p1", status: "RESERVED", amount: paise(400n) },
-      { paymentId: "p1", status: "FAILED", amount: paise(5_000n) },
-      { paymentId: "p2", status: "FAILED", amount: paise(5_000n) },
+  it("splits each payment into refunded and held, flags stuck, and counts FAILED without summing it", () => {
+    const map = refundsByPayment(
+      [
+        { paymentId: "p1", status: "SUCCEEDED", amount: paise(1_000n), provider: "cash", createdAt: minutesAgo(60) },
+        { paymentId: "p1", status: "RESERVED", amount: paise(400n), provider: "cash", createdAt: minutesAgo(5) },
+        { paymentId: "p1", status: "FAILED", amount: paise(5_000n), provider: "cash", createdAt: minutesAgo(90) },
+        { paymentId: "p2", status: "FAILED", amount: paise(5_000n), provider: "razorpay", createdAt: minutesAgo(90) },
+        { paymentId: "p3", status: "RESERVED", amount: paise(700n), provider: "razorpay", createdAt: minutesAgo(61) },
+      ],
+      NOW,
+    );
+    expect(map.get("p1")).toEqual({ refunded: 1_000n, reserved: 400n, stuck: false, failedCount: 1 });
+    expect(map.get("p2")).toEqual({ refunded: 0n, reserved: 0n, stuck: false, failedCount: 1 });
+    expect(map.get("p3")).toEqual({ refunded: 0n, reserved: 700n, stuck: true, failedCount: 0 });
+  });
+});
+
+describe("paymentRefundBadges", () => {
+  it("shows nothing for a payment with no open or failed refund", () => {
+    expect(paymentRefundBadges({ reserved: paise(0n), stuck: false, failedCount: 0 })).toEqual([]);
+  });
+
+  it("says in progress, or stuck past the limit, and counts failures", () => {
+    expect(paymentRefundBadges({ reserved: paise(400n), stuck: false, failedCount: 0 }).map((b) => b.label)).toEqual(["Refund in progress"]);
+    expect(paymentRefundBadges({ reserved: paise(400n), stuck: true, failedCount: 2 }).map((b) => [b.kind, b.label])).toEqual([
+      ["stuck", "Refund stuck"],
+      ["failed", "2 refunds failed"],
     ]);
-    expect(map.get("p1")).toEqual({ refunded: 1_000n, reserved: 400n });
-    expect(map.has("p2")).toBe(false);
+    expect(paymentRefundBadges({ reserved: paise(0n), stuck: false, failedCount: 1 })[0]?.description).toBe("A refund attempt failed; no money moved");
   });
 });

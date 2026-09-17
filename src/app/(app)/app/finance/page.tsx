@@ -181,6 +181,8 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
               at: row.at.toISOString(),
               refunded: row.refunded,
               refundReserved: row.refundReserved,
+              refundStuck: row.refundStuck,
+              refundFailedCount: row.refundFailedCount,
             }))}
             periodLabel={range.label}
             canRefund={canRefund}

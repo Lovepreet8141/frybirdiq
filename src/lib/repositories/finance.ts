@@ -22,7 +22,7 @@ import { db } from "@/db";
 import { type REFUND_STATUSES, auditLogs, memberships, orders, payments, refunds } from "@/db/schema";
 import type { OrderChannel } from "@/domain/order-channel";
 import type { DateRange } from "@/lib/dates";
-import { type RefundStatus, isStaleReserved, refundDate, refundsByPayment, summariseRefunds } from "@/lib/finance/refunds";
+import { NO_REFUNDS, type PaymentRefunds, type RefundStatus, isStaleReserved, refundDate, refundsByPayment, summariseRefunds } from "@/lib/finance/refunds";
 import { type Paise, ZERO, add, paise } from "@/lib/money";
 
 // The pure rules' statuses and the column's must be the same set.
@@ -53,6 +53,10 @@ export interface PaymentRow {
    * refundable = amount − refunded − refundReserved.
    */
   readonly refundReserved: Paise;
+  /** A RESERVED refund on this payment is past its limit (15 min cash, 60 min online). */
+  readonly refundStuck: boolean;
+  /** Refund attempts on this payment that FAILED; no money moved. */
+  readonly refundFailedCount: number;
   readonly providerPaymentId: string | null;
 }
 
@@ -146,12 +150,13 @@ export async function getPaymentsLedger(orgId: string, range: DateRange, limit =
       ? refundsByPayment(
           (
             await database
-              .select({ paymentId: refunds.paymentId, status: refunds.status, amount: refunds.amount })
+              .select({ paymentId: refunds.paymentId, status: refunds.status, amount: refunds.amount, provider: refunds.provider, createdAt: refunds.createdAt })
               .from(refunds)
               .where(and(eq(refunds.orgId, orgId), inArray(refunds.paymentId, paymentIds)))
-          ).map((row) => ({ paymentId: row.paymentId, status: row.status, amount: paise(row.amount) })),
+          ).map((row) => ({ ...row, amount: paise(row.amount) })),
+          now,
         )
-      : new Map<string, { readonly refunded: Paise; readonly reserved: Paise }>();
+      : new Map<string, PaymentRefunds>();
 
   // Each status on its own clock: SUCCEEDED by when the money went back,
   // FAILED by when it was asked for, RESERVED whenever it started.
@@ -215,8 +220,10 @@ export async function getPaymentsLedger(orgId: string, range: DateRange, limit =
     feeAmount: paise(row.feeAmount),
     capturedBy: row.status === "CAPTURED" || row.status === "PARTIALLY_REFUNDED" || row.status === "REFUNDED" ? nameOf(actorByOrder.get(row.orderId)) : null,
     at: row.capturedAt ?? row.createdAt,
-    refunded: byPayment.get(row.id)?.refunded ?? ZERO,
-    refundReserved: byPayment.get(row.id)?.reserved ?? ZERO,
+    refunded: (byPayment.get(row.id) ?? NO_REFUNDS).refunded,
+    refundReserved: (byPayment.get(row.id) ?? NO_REFUNDS).reserved,
+    refundStuck: (byPayment.get(row.id) ?? NO_REFUNDS).stuck,
+    refundFailedCount: (byPayment.get(row.id) ?? NO_REFUNDS).failedCount,
     providerPaymentId: row.providerPaymentId,
   }));
 

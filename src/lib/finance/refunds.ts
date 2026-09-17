@@ -68,13 +68,66 @@ export function summariseRefunds(rows: readonly RefundFacts[], now: Date): Refun
   };
 }
 
-/** Per payment: what went back (SUCCEEDED) and what is held (RESERVED). FAILED counts for neither. */
-export function refundsByPayment(rows: readonly (Pick<RefundFacts, "status" | "amount"> & { readonly paymentId: string })[]): Map<string, { readonly refunded: Paise; readonly reserved: Paise }> {
-  const out = new Map<string, { refunded: Paise; reserved: Paise }>();
+export interface PaymentRefunds {
+  /** Σ SUCCEEDED. */
+  readonly refunded: Paise;
+  /** Σ RESERVED. */
+  readonly reserved: Paise;
+  /** Some RESERVED refund on this payment is past its limit. */
+  readonly stuck: boolean;
+  /** FAILED refunds: counted, never summed. */
+  readonly failedCount: number;
+}
+
+export const NO_REFUNDS: PaymentRefunds = { refunded: ZERO, reserved: ZERO, stuck: false, failedCount: 0 };
+
+/** Per payment: what went back (SUCCEEDED), what is held (RESERVED) and whether any of it is stuck, and how many attempts failed. */
+export function refundsByPayment(rows: readonly (Pick<RefundFacts, "status" | "amount" | "provider" | "createdAt"> & { readonly paymentId: string })[], now: Date): Map<string, PaymentRefunds> {
+  const out = new Map<string, PaymentRefunds>();
   for (const row of rows) {
-    if (row.status === "FAILED") continue;
-    const found = out.get(row.paymentId) ?? { refunded: ZERO, reserved: ZERO };
-    out.set(row.paymentId, row.status === "SUCCEEDED" ? { ...found, refunded: add(found.refunded, row.amount) } : { ...found, reserved: add(found.reserved, row.amount) });
+    const found = out.get(row.paymentId) ?? NO_REFUNDS;
+    const next: PaymentRefunds =
+      row.status === "SUCCEEDED"
+        ? { ...found, refunded: add(found.refunded, row.amount) }
+        : row.status === "RESERVED"
+          ? { ...found, reserved: add(found.reserved, row.amount), stuck: found.stuck || isStaleReserved(row, now) }
+          : { ...found, failedCount: found.failedCount + 1 };
+    out.set(row.paymentId, next);
   }
   return out;
+}
+
+export type RefundBadgeKind = "in_progress" | "stuck" | "failed";
+
+export interface RefundBadge {
+  readonly kind: RefundBadgeKind;
+  /** The badge's visible words. */
+  readonly label: string;
+  /** The full sentence for assistive technology; the caller adds the amount at render. */
+  readonly description: string;
+}
+
+/**
+ * Badges beside a payment's own status for refunds that are not simply done:
+ * money held by a refund in progress (or stuck past its limit), and refund
+ * attempts that failed. SUCCEEDED refunds need none — the payment status
+ * already says refunded or part refunded.
+ */
+export function paymentRefundBadges(refunds: Pick<PaymentRefunds, "reserved" | "stuck" | "failedCount">): readonly RefundBadge[] {
+  const badges: RefundBadge[] = [];
+  if (refunds.reserved > ZERO) {
+    badges.push(
+      refunds.stuck
+        ? { kind: "stuck", label: "Refund stuck", description: "A refund has been in progress too long and needs checking; the amount is held, not refunded" }
+        : { kind: "in_progress", label: "Refund in progress", description: "A refund is in progress; the amount is held, not refunded yet" },
+    );
+  }
+  if (refunds.failedCount > 0) {
+    badges.push({
+      kind: "failed",
+      label: refunds.failedCount === 1 ? "Refund failed" : `${refunds.failedCount} refunds failed`,
+      description: `${refunds.failedCount === 1 ? "A refund attempt" : `${refunds.failedCount} refund attempts`} failed; no money moved`,
+    });
+  }
+  return badges;
 }

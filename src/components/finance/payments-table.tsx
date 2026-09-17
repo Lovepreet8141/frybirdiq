@@ -32,6 +32,7 @@ import { EmptyState } from "@/components/states";
 import { RefundDialog } from "@/components/staff/refund-dialog";
 import { ORDER_CHANNEL_LABELS, type OrderChannel } from "@/domain/order-channel";
 import { METHOD_LABELS, type PaymentMethod, type PaymentStatus, STATUS_LABELS, paymentsCsv } from "@/lib/finance/ledger-view";
+import { type RefundBadgeKind, paymentRefundBadges } from "@/lib/finance/refunds";
 import { type Paise, ZERO, add, formatINR, subtract } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
@@ -50,6 +51,30 @@ export interface PaymentRowView {
   readonly refunded: Paise;
   /** Held by refunds still in progress (RESERVED): not returned yet, but not refundable again either. */
   readonly refundReserved: Paise;
+  readonly refundStuck: boolean;
+  readonly refundFailedCount: number;
+}
+
+const REFUND_BADGE_VARIANT: Record<RefundBadgeKind, "warning" | "destructive" | "outline"> = { in_progress: "warning", stuck: "destructive", failed: "outline" };
+
+/** The payment's status, then any refund not simply done: in progress or stuck (money held), and failed attempts. Words, never colour alone. */
+function PaymentStatusBadges({ row }: { row: PaymentRowView }) {
+  const badges = paymentRefundBadges({ reserved: row.refundReserved, stuck: row.refundStuck, failedCount: row.refundFailedCount });
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      <Badge variant={STATUS_VARIANT[row.status]}>{STATUS_LABELS[row.status]}</Badge>
+      {badges.map((badge) => (
+        <Badge
+          key={badge.kind}
+          variant={REFUND_BADGE_VARIANT[badge.kind]}
+          aria-label={badge.kind === "failed" ? badge.description : `${badge.description}: ${formatINR(row.refundReserved)}`}
+          title={badge.kind === "failed" ? badge.description : `${badge.description}: ${formatINR(row.refundReserved)}`}
+        >
+          {badge.label}
+        </Badge>
+      ))}
+    </span>
+  );
 }
 
 const STATUS_VARIANT: Record<PaymentStatus, "success" | "warning" | "destructive" | "outline"> = {
@@ -153,7 +178,7 @@ export function PaymentsTable({ payments, periodLabel, canRefund, canExport }: {
           id: "status",
           header: "Status",
           enableSorting: false,
-          cell: ({ row }) => <Badge variant={STATUS_VARIANT[row.original.status]}>{STATUS_LABELS[row.original.status]}</Badge>,
+          cell: ({ row }) => <PaymentStatusBadges row={row.original} />,
         }),
         column.accessor((row) => row.capturedBy ?? "", {
           id: "by",
@@ -445,7 +470,7 @@ function PaymentSheet({ payment, onOpenChange, canRefund, onRefund }: { payment:
             <div className="px-4">
               <p className="tabular font-money text-[34px] leading-none tracking-[-0.01em]">{formatINR(payment.amount)}</p>
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <Badge variant={STATUS_VARIANT[payment.status]}>{STATUS_LABELS[payment.status]}</Badge>
+                <PaymentStatusBadges row={payment} />
                 <Badge variant="outline">{METHOD_LABELS[payment.method]}</Badge>
               </div>
 
