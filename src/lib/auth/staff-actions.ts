@@ -5,6 +5,7 @@ import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
 import { acceptOrder, advanceOrder, completeDelivery, rejectOrder } from "@/lib/repositories/orders";
 import { recordCashPayment } from "@/lib/repositories/payments";
+import { staffMayAdvanceTo } from "@/lib/orders/staff-advance";
 import { ORDER_STATUSES } from "@/domain/order-status";
 import { REJECTION_REASONS } from "@/domain/rejection";
 
@@ -60,10 +61,18 @@ export async function advanceOrderAction(input: unknown): Promise<StaffActionRes
   const parsed = advanceSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "That change could not be applied." };
 
+  // Only the kitchen moves the board makes, refused before any permission
+  // check or read. PAID is set only by a recorded payment and REFUNDED only by
+  // `refundPayment`; without this, a cashier or kitchen user holding
+  // `kitchen.update` could mark a paid or completed order refunded with no
+  // money moving, reversing its loyalty. CANCELLED goes only through
+  // `rejectOrderAction`, which carries a reason.
+  if (!staffMayAdvanceTo(parsed.data.to)) {
+    return { ok: false, error: "That change could not be applied." };
+  }
+
   try {
-    // Moving a ticket through the kitchen is kitchen work; cancelling is not.
-    const permission = parsed.data.to === "CANCELLED" ? "orders.cancel" : "kitchen.update";
-    const staff = await requirePermission(permission);
+    const staff = await requirePermission("kitchen.update");
     const result = await advanceOrder({
       orderId: parsed.data.orderId,
       to: parsed.data.to,
@@ -141,7 +150,12 @@ const rejectSchema = z.object({
   note: z.string().trim().max(200).optional(),
 });
 
-/** Turns an order down. Needs `orders.cancel`, which a cashier does not hold. */
+/**
+ * Turns an order down. Needs `orders.cancel`, which OWNER, MANAGER and CASHIER
+ * hold (src/domain/permissions.ts). A paid order is refused inside
+ * `advanceOrder`'s locked transaction: that needs a refund, which a cashier
+ * cannot make.
+ */
 export async function rejectOrderAction(input: unknown): Promise<StaffActionResult> {
   const parsed = rejectSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "Pick a reason before turning this down." };

@@ -13,14 +13,15 @@
  */
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { orderEvents, orderItems, orders, wasteEntries } from "@/db/schema";
+import { orderEvents, orderItems, orders, payments, wasteEntries } from "@/db/schema";
 import { advanceOrder, rejectOrder } from "./orders";
 import { createTestIngredient, createTestOrg, createTestProduct, createTestRecipe, createTestTaxRate, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
 import { fromRupees } from "@/lib/money";
+import { CASH_PROVIDER } from "@/lib/payments";
 
-async function createTestOrderAt(org: TestOrg, status: "PAID" | "PREPARING") {
+async function createTestOrderAt(org: TestOrg, status: "PENDING_PAYMENT" | "PAID" | "ACCEPTED" | "PREPARING") {
   const [order] = await db()
     .insert(orders)
     .values({
@@ -36,6 +37,30 @@ async function createTestOrderAt(org: TestOrg, status: "PAID" | "PREPARING") {
     .returning({ id: orders.id });
   if (!order) throw new Error("fixture: order insert returned no row");
   return order.id;
+}
+
+async function createCashPayment(org: TestOrg, orderId: string, status: "PENDING" | "CAPTURED" | "PARTIALLY_REFUNDED" | "REFUNDED") {
+  const [payment] = await db()
+    .insert(payments)
+    .values({
+      orgId: org.orgId,
+      orderId,
+      status,
+      method: "CASH",
+      amount: fromRupees("200"),
+      provider: CASH_PROVIDER,
+      capturedAt: status === "PENDING" ? null : new Date(),
+    })
+    .returning({ id: payments.id });
+  if (!payment) throw new Error("fixture: payment insert returned no row");
+  return payment.id;
+}
+
+async function statusesOf(orderId: string, paymentId: string) {
+  const [order] = await db().select({ status: orders.status }).from(orders).where(eq(orders.id, orderId));
+  const [payment] = await db().select({ status: payments.status }).from(payments).where(eq(payments.id, paymentId));
+  const events = await db().select({ id: orderEvents.id }).from(orderEvents).where(eq(orderEvents.orderId, orderId));
+  return { order: order?.status, payment: payment?.status, events: events.length };
 }
 
 describe("advanceOrder", () => {
@@ -181,5 +206,110 @@ describe("rejectOrder", () => {
       .from(wasteEntries)
       .where(and(eq(wasteEntries.orgId, org.orgId), eq(wasteEntries.orderId, orderId)));
     expect(waste?.notes).toBe("Sold out — no fries left"); // the actual reason, not "Order #X cancelled"
+  });
+});
+
+/*
+ * ord-3: cancelling a paid order drops it from revenue while the money stays
+ * captured — the till is short against nothing. A paid order is closed by a
+ * refund (orders.refund), never by CANCELLED, and the check runs under the
+ * order's row lock so rejectOrder's old unlocked pre-check can't be raced.
+ */
+describe("cancelling an order that has taken money", () => {
+  let org: TestOrg;
+
+  beforeAll(async () => {
+    org = await createTestOrg();
+  });
+
+  afterAll(async () => {
+    await deleteTestOrg(org.orgId);
+  });
+
+  it("refuses to cancel a PAID order with a CAPTURED cash payment: order stays PAID, payment stays CAPTURED", async () => {
+    const orderId = await createTestOrderAt(org, "PAID");
+    const paymentId = await createCashPayment(org, orderId, "CAPTURED");
+
+    const result = await advanceOrder({ orderId, to: "CANCELLED", actorUserId: randomUUID(), orgId: org.orgId });
+    expect(result).toEqual({ ok: false, error: "This order has been paid for. It needs a refund rather than a rejection." });
+
+    expect(await statusesOf(orderId, paymentId)).toEqual({ order: "PAID", payment: "CAPTURED", events: 0 });
+  });
+
+  it("refuses to cancel a paid order the kitchen is already cooking", async () => {
+    const orderId = await createTestOrderAt(org, "PREPARING");
+    const paymentId = await createCashPayment(org, orderId, "CAPTURED");
+
+    const result = await advanceOrder({ orderId, to: "CANCELLED", actorUserId: randomUUID(), orgId: org.orgId });
+    expect(result.ok).toBe(false);
+    expect(await statusesOf(orderId, paymentId)).toEqual({ order: "PREPARING", payment: "CAPTURED", events: 0 });
+  });
+
+  it("refuses to cancel an order whose payment is part-refunded (money still held) or fully refunded (it closes as REFUNDED)", async () => {
+    for (const paymentStatus of ["PARTIALLY_REFUNDED", "REFUNDED"] as const) {
+      const orderId = await createTestOrderAt(org, "ACCEPTED");
+      const paymentId = await createCashPayment(org, orderId, paymentStatus);
+
+      const result = await advanceOrder({ orderId, to: "CANCELLED", actorUserId: randomUUID(), orgId: org.orgId });
+      expect(result.ok).toBe(false);
+      expect(await statusesOf(orderId, paymentId)).toEqual({ order: "ACCEPTED", payment: paymentStatus, events: 0 });
+    }
+  });
+
+  it("rejectOrder refuses a paid order with the same message", async () => {
+    const orderId = await createTestOrderAt(org, "PAID");
+    const paymentId = await createCashPayment(org, orderId, "CAPTURED");
+
+    const result = await rejectOrder({ orderId, reason: "SOLD_OUT", actorUserId: randomUUID(), orgId: org.orgId });
+    expect(result).toEqual({ ok: false, error: "This order has been paid for. It needs a refund rather than a rejection." });
+    expect(await statusesOf(orderId, paymentId)).toEqual({ order: "PAID", payment: "CAPTURED", events: 0 });
+  });
+
+  it("rejectOrder cannot slip past a payment captured while it waits on the order lock (the old unlocked pre-check race)", async () => {
+    const orderId = await createTestOrderAt(org, "ACCEPTED");
+    await warmPool();
+
+    let paymentId = "";
+    let rejection: ReturnType<typeof rejectOrder> | undefined;
+    await db().transaction(async (tx) => {
+      // Hold the order row the way a concurrent settle would, and record the
+      // cash inside that still-uncommitted transaction.
+      await tx.select({ id: orders.id }).from(orders).where(eq(orders.id, orderId)).for("update");
+      const [payment] = await tx
+        .insert(payments)
+        .values({ orgId: org.orgId, orderId, status: "CAPTURED", method: "CASH", amount: fromRupees("200"), provider: CASH_PROVIDER, capturedAt: new Date() })
+        .returning({ id: payments.id });
+      paymentId = payment?.id ?? "";
+
+      rejection = rejectOrder({ orderId, reason: "SOLD_OUT", actorUserId: randomUUID(), orgId: org.orgId });
+
+      // Commit only once rejectOrder is blocked on the lock, i.e. past any
+      // unlocked read that could not yet see the payment.
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const waiting = await db().execute(sql`select 1 from pg_locks where not granted and locktype = 'transactionid'`);
+        if (waiting.length > 0) break;
+        if (Date.now() > deadline) throw new Error("rejectOrder never waited on the order lock");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    });
+
+    const result = await rejection;
+    expect(result?.ok).toBe(false);
+    expect(await statusesOf(orderId, paymentId)).toEqual({ order: "ACCEPTED", payment: "CAPTURED", events: 0 });
+  });
+
+  it("still cancels and rejects an unpaid order", async () => {
+    const cancelledId = await createTestOrderAt(org, "ACCEPTED");
+    const pendingPaymentId = await createCashPayment(org, cancelledId, "PENDING");
+    const cancelled = await advanceOrder({ orderId: cancelledId, to: "CANCELLED", actorUserId: randomUUID(), orgId: org.orgId });
+    expect(cancelled).toEqual({ ok: true });
+    expect(await statusesOf(cancelledId, pendingPaymentId)).toEqual({ order: "CANCELLED", payment: "PENDING", events: 1 });
+
+    const rejectedId = await createTestOrderAt(org, "PENDING_PAYMENT");
+    const rejected = await rejectOrder({ orderId: rejectedId, reason: "OUT_OF_AREA", actorUserId: randomUUID(), orgId: org.orgId });
+    expect(rejected).toEqual({ ok: true });
+    const [order] = await db().select({ status: orders.status }).from(orders).where(eq(orders.id, rejectedId));
+    expect(order?.status).toBe("CANCELLED");
   });
 });
