@@ -13,9 +13,9 @@ import "server-only";
  * nobody has paid for.
  */
 
-import { and, asc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
+import { type SQLWrapper, and, asc, eq, gte, inArray, lt, not, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { categories, orderItems, orders, payments, products, recipeItems, recipes } from "@/db/schema";
+import { categories, orderItems, orders, products, recipeItems, recipes } from "@/db/schema";
 import { ORDER_CHANNELS, type OrderChannel } from "@/domain/order-channel";
 import { type Paise, ZERO, add, paise, ratioBps, scale } from "@/lib/money";
 import { netRevenueOf } from "@/lib/iq/profit";
@@ -81,8 +81,31 @@ export function changeBps(current: bigint | number, previous: bigint | number): 
 }
 
 /**
- * Orders in a window that have been paid for — captured payment, not
- * cancelled/failed/refunded. The one definition of "paid" every revenue
+ * Payment statuses that mean the order was paid. A partial refund moves the
+ * payment from CAPTURED to PARTIALLY_REFUNDED; the order was still sold and
+ * stays in the set (D2).
+ *
+ * TODO(dec-9): revenue is still the order's full taxable_total after a
+ * partial refund. Reducing it waits on the owner/CA decision on GST
+ * treatment of refunds.
+ */
+export const PAID_PAYMENT_STATUSES = ["CAPTURED", "PARTIALLY_REFUNDED"] as const;
+
+/**
+ * True when the order has at least one paid payment. EXISTS, never a join:
+ * an order with two CAPTURED rows must count once, not twice (D3). Pass the
+ * order id column or an aliased SQL reference to it.
+ */
+export function hasPaidPayment(orderId: SQLWrapper) {
+  return sql`EXISTS (SELECT 1 FROM payments pp WHERE pp.order_id = ${orderId} AND pp.status IN (${sql.join(
+    PAID_PAYMENT_STATUSES.map((status) => sql`${status}`),
+    sql`, `,
+  )}))`;
+}
+
+/**
+ * Orders in a window that have been paid for — a payment in
+ * `PAID_PAYMENT_STATUSES`, counted once, not cancelled/failed/refunded. The one definition of "paid" every revenue
  * figure in FRYBIRD IQ reads through, exported so `src/lib/repositories/
  * expenses.ts`'s P&L computes revenue from the same rows as this dashboard
  * rather than a second copy of the same join and filter.
@@ -107,10 +130,10 @@ export async function paidOrders(orgId: string, range: DateRange) {
       createdAt: orders.createdAt,
     })
     .from(orders)
-    .innerJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, "CAPTURED")))
     .where(
       and(
         eq(orders.orgId, orgId),
+        hasPaidPayment(orders.id),
         gte(orders.createdAt, range.from),
         lt(orders.createdAt, range.to),
         // A refunded or cancelled order is not revenue, whatever was captured.
@@ -141,7 +164,7 @@ export async function getDashboard(orgId: string, range: DateRange): Promise<Das
       and(
         eq(orders.orgId, orgId),
         sql`${orders.status} NOT IN ('CANCELLED', 'FAILED', 'REFUNDED', 'COMPLETED')`,
-        sql`NOT EXISTS (SELECT 1 FROM payments p WHERE p.order_id = ${orders.id} AND p.status = 'CAPTURED')`,
+        not(hasPaidPayment(orders.id)),
       ),
     );
 
@@ -593,8 +616,8 @@ export async function notSelling(orgId: string, range: DateRange, limit = 6): Pr
         sql`NOT EXISTS (
           SELECT 1 FROM ${orderItems}
           INNER JOIN ${orders} ON ${orders.id} = ${orderItems.orderId}
-          INNER JOIN ${payments} ON ${payments.orderId} = ${orders.id} AND ${payments.status} = 'CAPTURED'
-          WHERE (${orderItems.productId} = ${products.id} OR (${orderItems.productId} IS NULL AND ${orderItems.productName} = ${products.name}))
+          WHERE ${hasPaidPayment(orders.id)}
+            AND (${orderItems.productId} = ${products.id} OR (${orderItems.productId} IS NULL AND ${orderItems.productName} = ${products.name}))
             AND ${orders.orgId} = ${orgId}
             AND ${orders.createdAt} >= ${range.from.toISOString()}
             AND ${orders.createdAt} < ${range.to.toISOString()}

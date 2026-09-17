@@ -19,7 +19,7 @@ import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
 import { type DateRange, addDays, businessDate, endOfBusinessDay, previousPeriod, resolveRange, startOfBusinessDay } from "@/lib/dates";
 import { type CompareKey, type CostInputs, type OpeningDate, type OverviewRange, averageOrder, isMultiDay } from "@/lib/iq/overview";
 import { type Paise, ZERO, add, formatINR, paise } from "@/lib/money";
-import { type DayTotal, periodTotals } from "./analytics";
+import { type DayTotal, PAID_PAYMENT_STATUSES, hasPaidPayment, periodTotals } from "./analytics";
 import { type StaffOrderView, listActiveOrders } from "./orders";
 
 /* ------------------------------------------------------------------ */
@@ -182,7 +182,7 @@ async function readiedSince(orgId: string, since: Date): Promise<readonly Readie
   const ids = rows.map((row) => row.id);
   const [lines, captured] = await Promise.all([
     db().select({ orderId: orderItems.orderId, name: orderItems.productName, quantity: orderItems.quantity }).from(orderItems).where(inArray(orderItems.orderId, ids)),
-    db().select({ orderId: payments.orderId }).from(payments).where(and(inArray(payments.orderId, ids), eq(payments.status, "CAPTURED"))),
+    db().select({ orderId: payments.orderId }).from(payments).where(and(inArray(payments.orderId, ids), inArray(payments.status, PAID_PAYMENT_STATUSES))),
   ]);
   const paid = new Set(captured.map((row) => row.orderId));
   return rows.map((row) => ({
@@ -457,8 +457,8 @@ export async function productLastSales(orgId: string, now: Date): Promise<readon
       lastSoldAt: sql<Date | null>`(
         SELECT max(o.created_at) FROM order_items oi
         INNER JOIN orders o ON o.id = oi.order_id
-        INNER JOIN payments p ON p.order_id = o.id AND p.status = 'CAPTURED'
-        WHERE (oi.product_id = products.id OR (oi.product_id IS NULL AND oi.product_name = products.name))
+        WHERE ${hasPaidPayment(sql`o.id`)}
+          AND (oi.product_id = products.id OR (oi.product_id IS NULL AND oi.product_name = products.name))
           AND o.org_id = ${orgId}
           AND o.status NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')
       )`,
