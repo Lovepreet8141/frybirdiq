@@ -97,4 +97,28 @@ describe("recordCashPayment — organization scoping", () => {
     if (wrongOrg.ok || realOrderWrongOrg.ok) throw new Error("unreachable");
     expect(wrongOrg.error).toBe(realOrderWrongOrg.error);
   });
+
+  it("a terminal or refunded order in another org is still just 'does not exist' — the pay-6 refusals leak nothing across orgs", async () => {
+    const cancelledInOrgA = await createTestOrder(orgA);
+    await db().update(orders).set({ status: "CANCELLED" }).where(eq(orders.id, cancelledInOrgA));
+
+    const refundedInOrgA = await createTestOrder(orgA);
+    const paid = await recordCashPayment({ orderId: refundedInOrgA, actorUserId: randomUUID(), actorRoles: ["OWNER"], orgId: orgA.orgId, tendered: fromRupees("300") });
+    if (!paid.ok) throw new Error(`fixture: settlement failed: ${paid.error}`);
+    await db().update(payments).set({ status: "REFUNDED" }).where(eq(payments.id, paid.paymentId));
+
+    for (const orderId of [cancelledInOrgA, refundedInOrgA]) {
+      const result = await recordCashPayment({ orderId, actorUserId: randomUUID(), actorRoles: ["OWNER"], orgId: orgB.orgId, tendered: fromRupees("300") });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("unreachable");
+      expect(result.error).toBe("That order does not exist.");
+    }
+
+    // The same orders, asked from their own org, are refused for what they are.
+    const ownCancelled = await recordCashPayment({ orderId: cancelledInOrgA, actorUserId: randomUUID(), actorRoles: ["OWNER"], orgId: orgA.orgId, tendered: fromRupees("300") });
+    const ownRefunded = await recordCashPayment({ orderId: refundedInOrgA, actorUserId: randomUUID(), actorRoles: ["OWNER"], orgId: orgA.orgId, tendered: fromRupees("300") });
+    if (ownCancelled.ok || ownRefunded.ok) throw new Error("expected both refused");
+    expect(ownCancelled.error).toMatch(/cancelled/);
+    expect(ownRefunded.error).toMatch(/refunded/);
+  });
 });
