@@ -38,16 +38,21 @@ export interface CategoryTotal {
 }
 
 /**
- * Spending in a period, grouped by category.
+ * The first and last IST business dates a range covers, inclusive.
  *
- * `paidOn` is a date column, so the range's timestamps are narrowed to dates.
- * The range is already anchored to the IST business day by lib/dates; taking
- * the ISO date of each end keeps an expense recorded on the 1st inside a month
- * that starts on the 1st, which a naive UTC comparison would not.
+ * `paidOn` is a date column holding the Ambala calendar date, so the range's
+ * instants are narrowed with `businessDate`, never `toISOString()`: a range
+ * starts at midnight IST, which is 18:30 UTC the day before, and the UTC date
+ * of that instant would pull the previous day's expenses into the period.
+ * `to` is exclusive, so the last covered date is the one just before it.
  */
+function businessDateBounds(range: DateRange): { from: string; to: string } {
+  return { from: businessDate(range.from), to: businessDate(new Date(range.to.getTime() - 1)) };
+}
+
+/** Spending in a period, grouped by category, by IST business date. */
 export async function expenseTotals(orgId: string, range: DateRange): Promise<CategoryTotal[]> {
-  const from = range.from.toISOString().slice(0, 10);
-  const to = new Date(range.to.getTime() - 1).toISOString().slice(0, 10);
+  const { from, to } = businessDateBounds(range);
 
   const rows = await db()
     .select({
@@ -125,9 +130,13 @@ export async function getProfitAndLoss(orgId: string, range: DateRange): Promise
   };
 }
 
-/** The food-cost target for the month a range starts in, if one was set. */
+/**
+ * The food-cost target for the IST month a range starts in, if one was set.
+ * Targets are saved under the month the owner picked in Ambala
+ * (`setFoodCostTarget`), so the month is read from the business date.
+ */
 export async function monthTarget(orgId: string, range: DateRange): Promise<Bps | null> {
-  const month = `${range.from.toISOString().slice(0, 7)}-01`;
+  const month = `${businessDateBounds(range).from.slice(0, 7)}-01`;
   const rows = await db()
     .select({ bps: targets.foodCostTargetBps })
     .from(targets)
@@ -138,8 +147,7 @@ export async function monthTarget(orgId: string, range: DateRange): Promise<Bps 
 }
 
 export async function listExpenses(orgId: string, range: DateRange, limit = 100): Promise<ExpenseRow[]> {
-  const from = range.from.toISOString().slice(0, 10);
-  const to = new Date(range.to.getTime() - 1).toISOString().slice(0, 10);
+  const { from, to } = businessDateBounds(range);
 
   const rows = await db()
     .select({
