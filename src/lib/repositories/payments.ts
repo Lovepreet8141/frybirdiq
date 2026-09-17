@@ -1280,7 +1280,7 @@ async function followUpRefund(input: { orgId: string; actorUserId: string | null
     // 1. The order, where the lifecycle allows. A refusal here is a race with
     // another move (S8) and changes nothing below.
     if (order.status !== "REFUNDED" && canTransition(order.status, "REFUNDED", order.fulfilment)) {
-      await advanceOrder({ orderId: order.id, to: "REFUNDED", actorUserId: systemOrStaff(input.actorUserId), orgId: input.orgId, reason: `Refunded — ${refund.reason}` });
+      await advanceOrder({ orderId: order.id, to: "REFUNDED", actorUserId: input.actorUserId, orgId: input.orgId, reason: `Refunded — ${refund.reason}` });
     }
     // Loyalty, unconditionally for a full refund.
     await reverseStampForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
@@ -1319,19 +1319,6 @@ async function followUpRefund(input: { orgId: string; actorUserId: string | null
   }
 
   return fullyRefunded;
-}
-
-/**
- * The actor for a REFUNDED move. A refund can be healed by the system with no
- * staff member on it (its actor unknown or gone); order_events.actor_user_id
- * allows null for exactly that ("Null when the system moved it"). advanceOrder
- * types its actor as a string (orders.ts, not this owner's file), but on a
- * move to REFUNDED it only writes the actor into that event row, and neither
- * inventory branch (ACCEPTED, CANCELLED) runs. The narrowing is safe for this
- * one call; widening advanceOrder's type is carded for ORDERS.
- */
-function systemOrStaff(actorUserId: string | null): string {
-  return actorUserId as string;
 }
 
 /** What one healer run did. */
