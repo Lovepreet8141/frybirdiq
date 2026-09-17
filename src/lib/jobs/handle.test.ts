@@ -168,7 +168,7 @@ describe("claims against existing rows", () => {
 
   it("answers 500 at max attempts and closes a zombie", async () => {
     const h = harness(job(async () => complete()));
-    seed(h, { attempt: 3, leaseExpiresAt: new Date(NOW.getTime() - 1) });
+    seed(h, { attempt: 3, failures: 2, leaseExpiresAt: new Date(NOW.getTime() - 1) });
     const response = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
     expect(response).toMatchObject({ status: 500, body: { counts: { EXHAUSTED: 1 } } });
     expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "LEASE_EXPIRED" });
@@ -272,7 +272,12 @@ describe("deadline", () => {
     );
     const first = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
     expect(first).toMatchObject({ status: 500, body: { counts: { PARTIAL: 1 } } });
-    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "DEADLINE", cursor: "after-1" });
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({
+      status: "FAILED",
+      errorCode: "DEADLINE",
+      cursor: "after-1",
+      failures: 0,
+    });
 
     h.clock.ms = 0;
     const retry = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
@@ -311,6 +316,9 @@ describe("failures", () => {
     const row = h.store.run("test_job", "org-a", HOUR)!;
     expect(row.errorCode).toBe("ECONNREFUSED");
     expect(row.errorMessage).toBe("connect [url] failed for [email] [number] Bearer [redacted]");
+    expect(scrubErrorMessage(new Error("call +91 98765 43210 or 098-7654-3210 about 2026-09-17 run 42"))).toBe(
+      "call [number] or [number] about 2026-09-17 run 42",
+    );
   });
 
   it("rolls back a chunk whose write throws", async () => {
@@ -362,5 +370,120 @@ describe("error helpers", () => {
   it("caps messages at 500 characters and ignores non-errors", () => {
     expect(scrubErrorMessage(new Error("x".repeat(900)))?.length).toBe(500);
     expect(scrubErrorMessage({ message: "not an Error" })).toBeNull();
+  });
+});
+
+describe("RELIABILITY review of ff7b92b", () => {
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  it("M1 stops heartbeating a job hung past the deadline, so its lease lapses and a retry takes over", async () => {
+    let release!: () => void;
+    const hung = new Promise<void>((resolve) => (release = resolve));
+    const h = harness(
+      job(async (ctx) => {
+        if (ctx.attempt === 1) await hung;
+        return complete();
+      }),
+    );
+    const first = handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    await settle();
+
+    h.clock.ms += DEFAULT_TIMING.deadlineSeconds * 1000;
+    h.ticks[0]!(); // the 60s timer fires after the deadline
+    await settle();
+    expect(h.store.heartbeats).toBe(0);
+    expect(h.ticks).toHaveLength(0);
+
+    h.store.advance(DEFAULT_TIMING.leaseSeconds + 1);
+    const retry = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(retry).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "SUCCEEDED", attempt: 2, failures: 1 });
+
+    release();
+    expect(await first).toMatchObject({ status: 500, body: { counts: { LEASE_LOST: 1 } } });
+  });
+
+  it("M2 never exhausts a long job that makes progress at every deadline", async () => {
+    const CHUNKS = 5;
+    const h = harness(
+      job(async (ctx) => {
+        const n = Number(ctx.resumeCursor ?? "0");
+        await ctx.commit(async (tx) => tx.write(`chunk-${n}`), { cursor: String(n + 1) });
+        if (n + 1 === CHUNKS) return complete(CHUNKS);
+        h.clock.ms += DEFAULT_TIMING.deadlineSeconds * 1000;
+        return { status: "PARTIAL", rowsWritten: 1, summary: {}, cursor: String(n + 1) };
+      }),
+    );
+    const statuses: number[] = [];
+    for (let i = 0; i < CHUNKS; i++) statuses.push((await handleJobRequest(request({ jobParam: "test_job" }), h.deps)).status);
+    expect(statuses).toEqual([500, 500, 500, 500, 200]);
+    expect(h.store.committed).toEqual(["chunk-0", "chunk-1", "chunk-2", "chunk-3", "chunk-4"]);
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "SUCCEEDED", attempt: CHUNKS, failures: 0 });
+  });
+
+  it("M2 counts a deadline cut with no progress as a failure", async () => {
+    const h = harness(
+      job(async () => {
+        h.clock.ms += DEFAULT_TIMING.deadlineSeconds * 1000;
+        return { status: "PARTIAL", rowsWritten: 0, summary: {}, cursor: "stuck" };
+      }),
+    );
+    const outcomes: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const r = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+      outcomes.push(Object.entries(r.body!.counts).find(([, n]) => n > 0)![0]);
+    }
+    // null → "stuck" is progress; then "stuck" → "stuck" three times reaches the limit.
+    expect(outcomes).toEqual(["PARTIAL", "PARTIAL", "PARTIAL", "PARTIAL", "EXHAUSTED"]);
+    expect(h.store.run("test_job", "org-a", HOUR)?.failures).toBe(3);
+  });
+
+  it("M3 saves the cursor with each chunk, so progress survives a crash before finish", async () => {
+    const seen: (string | null)[] = [];
+    const h = harness(
+      job(async (ctx) => {
+        seen.push(ctx.resumeCursor);
+        if (ctx.resumeCursor === null) {
+          await ctx.commit(async (tx) => tx.write("chunk-1"), { cursor: "after-1" });
+          throw new Error("crashed after a committed chunk");
+        }
+        await ctx.commit(async (tx) => tx.write("chunk-2"), { cursor: "after-2" });
+        return complete();
+      }),
+    );
+    expect((await handleJobRequest(request({ jobParam: "test_job" }), h.deps)).status).toBe(500);
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", cursor: "after-1", failures: 1 });
+
+    expect((await handleJobRequest(request({ jobParam: "test_job" }), h.deps)).status).toBe(200);
+    expect(seen).toEqual([null, "after-1"]);
+    expect(h.store.committed).toEqual(["chunk-1", "chunk-2"]);
+  });
+
+  it("M3 does not save a cursor whose chunk was rolled back", async () => {
+    const h = harness(
+      job(async (ctx) => {
+        await ctx.commit(
+          async () => {
+            throw new Error("write failed");
+          },
+          { cursor: "never" },
+        );
+        return complete();
+      }),
+    );
+    await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(h.store.run("test_job", "org-a", HOUR)?.cursor).toBeNull();
+  });
+
+  it("M4 isolates a unit whose store call throws; the other orgs still run", async () => {
+    const h = harness(job(async () => complete()), ["org-a", "org-b"]);
+    const claim = h.store.claim.bind(h.store);
+    h.store.claim = async (req) => {
+      if (req.orgId === "org-a") throw new Error("claim failed");
+      return claim(req);
+    };
+    const response = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(response).toMatchObject({ status: 500, body: { counts: { FAILED: 1, SUCCEEDED: 1 } } });
+    expect(h.store.run("test_job", "org-b", HOUR)?.status).toBe("SUCCEEDED");
   });
 });

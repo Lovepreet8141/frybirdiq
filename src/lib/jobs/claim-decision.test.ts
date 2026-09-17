@@ -9,6 +9,7 @@ const row = (overrides: Partial<JobRunRow> = {}): JobRunRow => ({
   id: "run-1",
   status: "RUNNING",
   attempt: 1,
+  failures: 0,
   leaseOwner: "owner-1",
   leaseExpiresAt: at(120),
   cursor: null,
@@ -38,33 +39,47 @@ describe("claim decision table (DESIGN §3)", () => {
     expect(decideClaim(existing({ leaseExpiresAt: at(0.001) }), 3, now).kind).toBe("BUSY");
   });
 
-  it("takes over an expired lease with attempts left, resuming its cursor", () => {
-    expect(decideClaim(existing({ leaseExpiresAt: at(-1), attempt: 2, cursor: "c-42" }), 3, now)).toEqual({
+  it("takes over an expired lease, counting the lost lease as a failure and resuming its cursor", () => {
+    expect(decideClaim(existing({ leaseExpiresAt: at(-1), attempt: 2, failures: 1, cursor: "c-42" }), 3, now)).toEqual({
       kind: "TAKEOVER",
       expected: { id: "run-1", status: "RUNNING", attempt: 2, leaseOwner: "owner-1" },
       nextAttempt: 3,
+      nextFailures: 2,
       resumeCursor: "c-42",
     });
   });
 
-  it("retries a FAILED run with attempts left, even if its old lease still looks live", () => {
-    expect(decideClaim(existing({ status: "FAILED", attempt: 1, leaseExpiresAt: at(200) }), 3, now)).toEqual({
+  it("retries a FAILED run below the failure limit, even if its old lease still looks live", () => {
+    expect(decideClaim(existing({ status: "FAILED", attempt: 1, failures: 1, leaseExpiresAt: at(200) }), 3, now)).toEqual({
       kind: "TAKEOVER",
       expected: { id: "run-1", status: "FAILED", attempt: 1, leaseOwner: "owner-1" },
       nextAttempt: 2,
+      nextFailures: 1,
       resumeCursor: null,
     });
   });
 
-  it("stops at max attempts, closing a zombie but not a FAILED row", () => {
-    expect(decideClaim(existing({ status: "FAILED", attempt: 3 }), 3, now)).toEqual({ kind: "EXHAUSTED", closeZombie: null });
-    expect(decideClaim(existing({ leaseExpiresAt: at(-1), attempt: 3 }), 3, now)).toEqual({
+  it("limits failures, not attempts: a long job cut at its deadline with progress keeps going (M2)", () => {
+    expect(decideClaim(existing({ status: "FAILED", attempt: 9, failures: 0, cursor: "c-9" }), 3, now)).toMatchObject({
+      kind: "TAKEOVER",
+      nextAttempt: 10,
+      nextFailures: 0,
+      resumeCursor: "c-9",
+    });
+  });
+
+  it("stops at the failure limit, closing a zombie but not a FAILED row", () => {
+    expect(decideClaim(existing({ status: "FAILED", attempt: 3, failures: 3 }), 3, now)).toEqual({
+      kind: "EXHAUSTED",
+      closeZombie: null,
+    });
+    expect(decideClaim(existing({ leaseExpiresAt: at(-1), attempt: 3, failures: 2 }), 3, now)).toEqual({
       kind: "EXHAUSTED",
       closeZombie: { id: "run-1", status: "RUNNING", attempt: 3, leaseOwner: "owner-1" },
     });
   });
 
-  it("decides every status × lease live/expired × attempts left/at max", () => {
+  it("decides every status × lease live/expired × failures left/at limit", () => {
     const expected: Record<string, string> = {
       "RUNNING|live|left": "BUSY",
       "RUNNING|live|max": "BUSY",
@@ -87,7 +102,7 @@ describe("claim decision table (DESIGN §3)", () => {
       for (const lease of ["live", "expired"] as const) {
         for (const attempts of ["left", "max"] as const) {
           const d = decideClaim(
-            existing({ status, leaseExpiresAt: at(lease === "live" ? 60 : -60), attempt: attempts === "max" ? 3 : 1 }),
+            existing({ status, leaseExpiresAt: at(lease === "live" ? 60 : -60), attempt: 5, failures: attempts === "max" ? 3 : 1 }),
             3,
             now,
           );

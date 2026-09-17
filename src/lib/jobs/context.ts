@@ -18,8 +18,12 @@ export type JobContext<Tx = unknown> = {
   readonly attempt: number;
   /** Where an earlier attempt stopped at its deadline, or null to start from the beginning. */
   readonly resumeCursor: string | null;
-  /** Commits one chunk of output in a fenced transaction. Throws `LeaseLostError`. */
-  commit<T>(write: (tx: Tx) => Promise<T>): Promise<T>;
+  /**
+   * Commits one chunk of output in a fenced transaction. Pass the cursor that
+   * follows this chunk and it is saved in the same transaction. Throws
+   * `LeaseLostError`.
+   */
+  commit<T>(write: (tx: Tx) => Promise<T>, options?: { readonly cursor?: string }): Promise<T>;
   /** True once the deadline has passed or the lease was lost: commit the cursor and return. */
   shouldStop(): boolean;
 };

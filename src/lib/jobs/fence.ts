@@ -11,11 +11,27 @@
  *   Every output chunk is ONE transaction whose first statement is
  *     UPDATE iq_job_runs
  *        SET heartbeat_at = now(), lease_expires_at = now() + lease
+ *            [, cursor = $cursor]          -- when the chunk carries one
  *      WHERE id = $runId AND attempt = $attempt AND lease_owner = $leaseOwner
  *        AND status = 'RUNNING' AND lease_expires_at > now()
  *     RETURNING id
  *   Zero rows → throw `LeaseLostError`; the transaction rolls back and
- *   nothing in the chunk is written. Time is always the database's now().
+ *   nothing in the chunk is written. The chunk and its cursor commit together,
+ *   so progress survives a crash between chunks.
+ *
+ * Conditions on the SQL (RELIABILITY review of ff7b92b):
+ *   C1 Safety comes from the row lock that first UPDATE takes and holds to
+ *      commit, not from a re-check (now() is transaction start). A takeover is
+ *        UPDATE … WHERE id AND status AND attempt AND lease_owner
+ *          AND (status = 'FAILED' OR lease_expires_at <= now())
+ *      so it waits behind an open chunk and then matches nothing.
+ *   C2 `finish` is fenced the same way and sets status in that one
+ *      statement; a heartbeat still in flight afterwards hits 0 rows.
+ *   C3 The pool has at least 2 connections, so a heartbeat does not queue
+ *      behind its own open chunk.
+ *   C4 Chunks are idempotent (upsert on dedupe_key): a takeover of an expired
+ *      RUNNING row resumes from the last saved cursor and may redo a chunk
+ *      whose transaction had not committed its cursor.
  *
  * `fenceHolds` is that WHERE clause as a pure predicate, for tests and fakes.
  */
@@ -59,8 +75,8 @@ export function fenceHolds(row: FencedRow, token: LeaseToken, dbNow: Date): bool
 
 /** What a job may call to commit work. Implemented by the store; throws `LeaseLostError`. */
 export interface Fence<Tx> {
-  /** Runs `write` inside one fenced transaction, extending the lease. */
-  commit<T>(token: LeaseToken, leaseSeconds: number, write: (tx: Tx) => Promise<T>): Promise<T>;
+  /** Runs `write` inside one fenced transaction, extending the lease and, if given, saving `cursor` with it. */
+  commit<T>(token: LeaseToken, leaseSeconds: number, write: (tx: Tx) => Promise<T>, cursor?: string): Promise<T>;
   /** Extends the lease without writing output. */
   heartbeat(token: LeaseToken, leaseSeconds: number): Promise<void>;
 }

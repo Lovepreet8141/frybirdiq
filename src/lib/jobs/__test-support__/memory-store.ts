@@ -15,6 +15,7 @@ export type StoredRun = {
   status: JobRunStatus;
   trigger: JobTrigger;
   attempt: number;
+  failures: number;
   leaseOwner: string;
   leaseExpiresAt: Date;
   cursor: string | null;
@@ -49,8 +50,13 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
     return this.runs.get(`${job}|${orgId}|${periodKey}`);
   }
 
-  seed(row: Omit<StoredRun, "id" | "errorCode" | "errorMessage" | "rowsWritten" | "summary" | "trigger">): StoredRun {
+  seed(
+    row: Omit<StoredRun, "id" | "errorCode" | "errorMessage" | "rowsWritten" | "summary" | "trigger" | "failures"> & {
+      failures?: number;
+    },
+  ): StoredRun {
     const stored: StoredRun = {
+      failures: 0,
       ...row,
       id: `run-${this.nextId++}`,
       trigger: "TIMER",
@@ -72,6 +78,7 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
       id: r.id,
       status: r.status,
       attempt: r.attempt,
+      failures: r.failures,
       leaseOwner: r.leaseOwner,
       leaseExpiresAt: new Date(r.leaseExpiresAt),
       cursor: r.cursor,
@@ -122,7 +129,7 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
 
   async takeover(
     expected: ExpectedRow,
-    next: { attempt: number; leaseOwner: string; trigger: JobTrigger; leaseSeconds: number },
+    next: { attempt: number; failures: number; leaseOwner: string; trigger: JobTrigger; leaseSeconds: number },
   ): Promise<JobRunRow | null> {
     const row = this.matches(expected);
     if (row === null) return null;
@@ -130,6 +137,7 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
     Object.assign(row, {
       status: "RUNNING",
       attempt: next.attempt,
+      failures: next.failures,
       leaseOwner: next.leaseOwner,
       trigger: next.trigger,
       leaseExpiresAt: new Date(this.nowMs + next.leaseSeconds * 1000),
@@ -141,17 +149,20 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
     const row = this.matches(expected);
     if (row !== null && row.leaseExpiresAt.getTime() <= this.nowMs) {
       row.status = "FAILED";
+      row.failures += 1;
       row.errorCode = "LEASE_EXPIRED";
     }
   }
 
-  async commit<T>(token: LeaseToken, leaseSeconds: number, write: (tx: MemoryTx) => Promise<T>): Promise<T> {
+  async commit<T>(token: LeaseToken, leaseSeconds: number, write: (tx: MemoryTx) => Promise<T>, cursor?: string): Promise<T> {
     this.fenced(token, leaseSeconds);
     const pending: string[] = [];
     const value = await write({ write: (v) => pending.push(v) });
-    // Re-check at commit: a transaction that outlived its lease must not land.
-    this.fenced(token, leaseSeconds);
+    // Postgres gets this from the row lock the fence UPDATE holds (fence.ts C1);
+    // with no locks here, re-check at commit instead.
+    const row = this.fenced(token, leaseSeconds);
     this.committed.push(...pending);
+    if (cursor !== undefined) row.cursor = cursor;
     return value;
   }
 
@@ -162,15 +173,26 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
 
   async finish(token: LeaseToken, outcome: FinishOutcome) {
     const row = this.fenced(token, 0);
-    row.status = outcome.status;
     row.rowsWritten = outcome.rowsWritten;
     row.summary = { ...outcome.summary };
-    if (outcome.status === "FAILED") {
-      row.errorCode = outcome.errorCode;
-      row.errorMessage = outcome.errorMessage;
-      row.cursor = outcome.cursor;
-    } else {
-      row.cursor = null;
+    switch (outcome.status) {
+      case "SUCCEEDED":
+        row.status = "SUCCEEDED";
+        row.cursor = null;
+        break;
+      case "DEADLINE":
+        row.status = "FAILED";
+        row.errorCode = "DEADLINE";
+        row.errorMessage = null;
+        row.cursor = outcome.cursor;
+        row.failures = outcome.failures;
+        break;
+      case "FAILED":
+        row.status = "FAILED";
+        row.errorCode = outcome.errorCode;
+        row.errorMessage = outcome.errorMessage;
+        row.failures = outcome.failures;
+        break;
     }
   }
 

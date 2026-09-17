@@ -2,14 +2,17 @@
  * One job request, start to finish — everything the route does except
  * reading the request and writing the response.
  *
- * DESIGN.md §3 with DESIGN-v2-DELTA.md §3. The route (slice S8) stays thin:
- * it passes the headers, the job segment and the parsed body, plus a store
- * (slice S7) that owns every SQL statement. This file decides.
+ * DESIGN.md §3 with DESIGN-v2-DELTA.md §3 and the RELIABILITY review of
+ * ff7b92b. The route (slice S8) stays thin: it passes the headers, the job
+ * segment and the parsed body, plus a store (slice S7) that owns every SQL
+ * statement. This file decides.
  *
- * For each org, for each period (oldest first): claim, decide, run under a
- * lease with heartbeats, finish. The whole request shares one deadline; once
- * it passes, no new (org, period) is started and the answer is 500 so the
- * timer's retry picks up where this left off.
+ * For each period (oldest first) and each org — one "unit" — claim, decide,
+ * run under a lease with heartbeats, finish. A unit that throws is counted
+ * FAILED and the next unit still runs. The whole request shares one
+ * deadline: once it passes, no new unit starts, heartbeats stop (so a hung
+ * job's lease lapses and a retry can take over), and the answer is 500 so
+ * the timer's retry picks up where this left off.
  *
  * Status codes: 404 with no body for any refusal (auth, unknown job, bad
  * body); 200 when every unit succeeded, was already done, or is being done
@@ -33,15 +36,30 @@ export type ClaimRequest = {
   readonly leaseSeconds: number;
 };
 
+type Summary = Readonly<Record<string, number>>;
+
+/**
+ * How a run ended, as the store must record it. `failures` is the new
+ * absolute value. The cursor is never written here except by DEADLINE: the
+ * cursor committed with the last chunk stays as it is.
+ */
 export type FinishOutcome =
-  | { readonly status: "SUCCEEDED"; readonly rowsWritten: number; readonly summary: Readonly<Record<string, number>> }
+  | { readonly status: "SUCCEEDED"; readonly rowsWritten: number; readonly summary: Summary }
+  | {
+      /** Stored as status FAILED, error_code DEADLINE, with this cursor. */
+      readonly status: "DEADLINE";
+      readonly rowsWritten: number;
+      readonly summary: Summary;
+      readonly cursor: string;
+      readonly failures: number;
+    }
   | {
       readonly status: "FAILED";
       readonly errorCode: string;
       readonly errorMessage: string | null;
       readonly rowsWritten: number;
-      readonly summary: Readonly<Record<string, number>>;
-      readonly cursor: string | null;
+      readonly summary: Summary;
+      readonly failures: number;
     };
 
 /** Everything the runner needs from the database. Implemented in slice S7; every time is the database's now(). */
@@ -50,14 +68,20 @@ export interface JobRunStore<Tx = unknown> extends Fence<Tx> {
   listOrgIds(): Promise<readonly string[]>;
   /** INSERT … ON CONFLICT (job, org_id, period_key) DO NOTHING RETURNING, else the existing row. */
   claim(request: ClaimRequest): Promise<ClaimRead>;
-  /** CAS on `expected`; sets RUNNING, the new attempt, owner and lease. Null if the row changed. */
+  /** CAS on `expected` (see fence.ts C1); sets RUNNING, attempt, failures, owner and lease. Null if the row changed. */
   takeover(
     expected: ExpectedRow,
-    next: { readonly attempt: number; readonly leaseOwner: string; readonly trigger: JobTrigger; readonly leaseSeconds: number },
+    next: {
+      readonly attempt: number;
+      readonly failures: number;
+      readonly leaseOwner: string;
+      readonly trigger: JobTrigger;
+      readonly leaseSeconds: number;
+    },
   ): Promise<JobRunRow | null>;
-  /** CAS on `expected`; marks a dead RUNNING row at max attempts FAILED LEASE_EXPIRED. */
+  /** CAS on `expected`; marks a dead RUNNING row at the limit FAILED LEASE_EXPIRED. */
   closeZombie(expected: ExpectedRow): Promise<void>;
-  /** Fenced like `commit`; throws `LeaseLostError`. */
+  /** Fenced like `commit`, in one statement (fence.ts C2); throws `LeaseLostError`. */
   finish(token: LeaseToken, outcome: FinishOutcome): Promise<void>;
   /** Whether a heavy job other than `job` holds a live lease. */
   heavyRunLive(job: string): Promise<boolean>;
@@ -122,7 +146,7 @@ export function scrubErrorMessage(error: unknown): string | null {
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[url]")
     .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
     .replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, "[email]")
-    .replace(/\d{10,}/g, "[number]")
+    .replace(/\+?\d[\d\s-]*\d/g, (run) => (run.replace(/\D/g, "").length >= 10 ? "[number]" : run))
     .slice(0, 500);
 }
 
@@ -137,12 +161,12 @@ export async function handleJobRequest<Tx>(request: JobRequest, deps: HandleDeps
   const body = BodySchema.safeParse(request.body);
   if (!body.success) return NOT_FOUND;
 
-  const startedMs = deps.monotonicMs();
-  const deadlineMs = startedMs + def.deadlineSeconds * 1000;
+  const deadlineMs = deps.monotonicMs() + def.deadlineSeconds * 1000;
 
+  let units: { key: string; trigger: JobTrigger }[];
+  let orgIds: readonly string[];
   try {
     const now = await deps.store.dbNow();
-    let units: { key: string; trigger: JobTrigger }[];
     const manual = body.data?.period;
     if (manual !== undefined) {
       const check = checkManualPeriod(def.periodKind, def.target, manual, now);
@@ -152,36 +176,41 @@ export async function handleJobRequest<Tx>(request: JobRequest, deps: HandleDeps
       const keys = scheduledPeriods(def.periodKind, def.target, def.catchUpPeriods, now);
       units = keys.map((key, i) => ({ key, trigger: i === keys.length - 1 ? "TIMER" : "CATCHUP" }));
     }
-
-    const counts: Record<UnitOutcome, number> = {
-      SUCCEEDED: 0,
-      PARTIAL: 0,
-      FAILED: 0,
-      NOOP: 0,
-      BUSY: 0,
-      EXHAUSTED: 0,
-      LEASE_LOST: 0,
-      HEAVY_BUSY: 0,
-      DEFERRED: 0,
-    };
-
-    const orgIds = await deps.store.listOrgIds();
-    for (const unit of units) {
-      for (const orgId of orgIds) {
-        let outcome: UnitOutcome;
-        if (deps.monotonicMs() >= deadlineMs) outcome = "DEFERRED";
-        else if (def.concurrency === "heavy" && (await deps.store.heavyRunLive(def.name))) outcome = "HEAVY_BUSY";
-        else outcome = await runUnit(def, orgId, unit.key, unit.trigger, deadlineMs, deps);
-        counts[outcome] += 1;
-      }
-    }
-
-    const report: JobReport = { job: def.name, periods: units.map((u) => u.key), counts };
-    const allOk = (Object.keys(counts) as UnitOutcome[]).every((o) => counts[o] === 0 || OK_OUTCOMES.has(o));
-    return { status: allOk ? 200 : 500, body: report };
+    orgIds = await deps.store.listOrgIds();
   } catch {
     return { status: 500, body: null };
   }
+
+  const counts: Record<UnitOutcome, number> = {
+    SUCCEEDED: 0,
+    PARTIAL: 0,
+    FAILED: 0,
+    NOOP: 0,
+    BUSY: 0,
+    EXHAUSTED: 0,
+    LEASE_LOST: 0,
+    HEAVY_BUSY: 0,
+    DEFERRED: 0,
+  };
+
+  for (const unit of units) {
+    for (const orgId of orgIds) {
+      let outcome: UnitOutcome;
+      try {
+        if (deps.monotonicMs() >= deadlineMs) outcome = "DEFERRED";
+        else if (def.concurrency === "heavy" && (await deps.store.heavyRunLive(def.name))) outcome = "HEAVY_BUSY";
+        else outcome = await runUnit(def, orgId, unit.key, unit.trigger, deadlineMs, deps);
+      } catch {
+        // One unit's store error must not skip the other orgs and periods.
+        outcome = "FAILED";
+      }
+      counts[outcome] += 1;
+    }
+  }
+
+  const report: JobReport = { job: def.name, periods: units.map((u) => u.key), counts };
+  const allOk = (Object.keys(counts) as UnitOutcome[]).every((o) => counts[o] === 0 || OK_OUTCOMES.has(o));
+  return { status: allOk ? 200 : 500, body: report };
 }
 
 async function runUnit<Tx>(
@@ -202,7 +231,6 @@ async function runUnit<Tx>(
   const decision = decideClaim(read, def.maxAttempts, dbNow);
 
   let row: JobRunRow;
-  let resumeCursor: string | null = null;
   switch (decision.kind) {
     case "NOOP":
       return "NOOP";
@@ -214,13 +242,13 @@ async function runUnit<Tx>(
     case "TAKEOVER": {
       const taken = await store.takeover(decision.expected, {
         attempt: decision.nextAttempt,
+        failures: decision.nextFailures,
         leaseOwner,
         trigger,
         leaseSeconds: def.leaseSeconds,
       });
       if (taken === null) return "BUSY";
       row = taken;
-      resumeCursor = decision.resumeCursor;
       break;
     }
     case "RUN":
@@ -231,10 +259,12 @@ async function runUnit<Tx>(
   if (row.leaseOwner !== leaseOwner || row.status !== "RUNNING") return "BUSY";
 
   const token: LeaseToken = { runId: row.id, attempt: row.attempt, leaseOwner };
+  const startCursor = row.cursor;
   let leaseLost = false;
   const markLost = (error: unknown) => {
     if (isLeaseLost(error)) leaseLost = true;
   };
+  const pastDeadline = () => deps.monotonicMs() >= deadlineMs;
 
   const ctx: JobContext<Tx> = {
     orgId,
@@ -243,20 +273,27 @@ async function runUnit<Tx>(
     trigger,
     runId: row.id,
     attempt: row.attempt,
-    resumeCursor,
-    commit: async (write) => {
+    resumeCursor: startCursor,
+    commit: async (write, options) => {
       if (leaseLost) throw new LeaseLostError(token);
       try {
-        return await store.commit(token, def.leaseSeconds, write);
+        return await store.commit(token, def.leaseSeconds, write, options?.cursor);
       } catch (error) {
         markLost(error);
         throw error;
       }
     },
-    shouldStop: () => leaseLost || deps.monotonicMs() >= deadlineMs,
+    shouldStop: () => leaseLost || pastDeadline(),
   };
 
-  const stopHeartbeat = deps.every(def.heartbeatSeconds * 1000, () => {
+  let stopHeartbeat = () => {};
+  stopHeartbeat = deps.every(def.heartbeatSeconds * 1000, () => {
+    // Past the deadline the job should already have stopped. If it has not,
+    // it is hung: let the lease lapse so a retry can take over (review M1).
+    if (pastDeadline()) {
+      stopHeartbeat();
+      return;
+    }
     store.heartbeat(token, def.leaseSeconds).catch(markLost);
   });
 
@@ -281,17 +318,18 @@ async function runUnit<Tx>(
       errorMessage: scrubErrorMessage(failure),
       rowsWritten: 0,
       summary: {},
-      cursor: resumeCursor,
+      failures: row.failures + 1,
     };
     reported = "FAILED";
   } else if (result.status === "PARTIAL") {
+    // A deadline cut that moved the cursor is progress, not a failure (review M2).
+    const progressed = result.cursor !== startCursor;
     outcome = {
-      status: "FAILED",
-      errorCode: "DEADLINE",
-      errorMessage: null,
+      status: "DEADLINE",
       rowsWritten: result.rowsWritten,
       summary: result.summary,
       cursor: result.cursor,
+      failures: progressed ? row.failures : row.failures + 1,
     };
     reported = "PARTIAL";
   } else {
