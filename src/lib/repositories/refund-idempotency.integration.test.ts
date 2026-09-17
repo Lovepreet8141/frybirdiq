@@ -535,7 +535,10 @@ describe("refundPayment — reserve, finalize, converge (ref-b3)", () => {
     expect(first).toMatchObject({ ok: false, retriable: true });
     const [held] = await refundRows(o.paymentId);
     expect(held).toMatchObject({ status: "RESERVED", providerRefundId: gateway.refunds[0]!.id });
+    // Not filled by 0038's expand-phase DEFAULT now() (3d48a8d): the reservation writes null itself.
     expect(held?.finalizedAt).toBeNull();
+    const [column] = await db().execute<{ column_default: string | null }>(sql`SELECT column_default FROM information_schema.columns WHERE table_name = 'refunds' AND column_name = 'finalized_at'`);
+    expect(column?.column_default).toMatch(/now\(\)/);
     expect(await statusOf("payment", o.paymentId)).toBe("CAPTURED");
 
     // Nothing else can take the held amount meanwhile.

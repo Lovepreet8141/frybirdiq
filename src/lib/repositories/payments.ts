@@ -1085,6 +1085,9 @@ async function reserveAndFinalizeRefund(input: {
             actorUserId: input.actorUserId,
             provider: payment.provider,
             status: "RESERVED",
+            // Explicit: 0038's expand-phase DEFAULT now() would otherwise mark a
+            // reservation finalized and trip refunds_finalized_check.
+            finalizedAt: null,
             idempotencyKey: input.idempotencyKey,
           })
           .returning(),
