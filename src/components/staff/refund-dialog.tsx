@@ -107,11 +107,11 @@ export function RefundDialog({
                 className="tabular"
               />
               {amount.trim() !== "" && amountError ? (
-                <p id="refund-amount-error" role="alert" className="text-[12.5px] text-loss">
+                <p key="error" id="refund-amount-error" role="alert" className="text-[12.5px] text-loss">
                   {amountError}
                 </p>
               ) : (
-                <p id="refund-amount-hint" className="text-[12.5px] text-muted-foreground">Leave empty to refund everything that is left.</p>
+                <p key="hint" id="refund-amount-hint" className="text-[12.5px] text-muted-foreground">Leave empty to refund everything that is left.</p>
               )}
             </div>
             <div className="grid gap-1.5">
