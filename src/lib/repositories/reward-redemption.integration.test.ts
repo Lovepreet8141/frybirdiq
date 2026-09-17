@@ -15,7 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { loyaltyAccounts, loyaltyRewards, loyaltyStampEvents, orders } from "@/db/schema";
-import { awardStampForOrderInTx, redeemStampRewardInTx, reverseStampForOrder } from "./loyalty";
+import { awardStampForOrderInTx, getStampAccountState, redeemStampRewardInTx, reverseStampForOrder } from "./loyalty";
 import { createTestCustomer, createTestOrg, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
 import { ZERO, paise } from "@/lib/money";
 import type { StampConfig } from "@/lib/loyalty/stamps";
@@ -557,6 +557,31 @@ describe("reverseStampForOrder", () => {
     for (const r of allRewards.filter((row) => row.status === "AVAILABLE")) {
       const backing = await db().select({ reversedAt: loyaltyStampEvents.reversedAt }).from(loyaltyStampEvents).where(eq(loyaltyStampEvents.rewardId, r.id));
       expect(backing.every((e) => e.reversedAt === null), `reward ${r.id} is AVAILABLE but backed by a reversed stamp`).toBe(true);
+    }
+  });
+});
+
+describe("getStampAccountState", () => {
+  it("loy-2: never returns another org's account, even for the right customerId", async () => {
+    // SECURITY-TENANCY (fin-1r): the loyalty_accounts read here filtered
+    // only on customer_id, not org_id. No caller today passes a
+    // customerId from a different org than its own orgId argument, but
+    // nothing enforced that — this asserts the query itself refuses a
+    // mismatched pair, not just that today's callers happen to be careful.
+    const orgA = await createTestOrg();
+    const orgB = await createTestOrg();
+    try {
+      const customer = await createTestCustomer(orgA.orgId);
+      await db().insert(loyaltyAccounts).values({ orgId: orgA.orgId, customerId: customer.id, stampCount: 3 });
+
+      const wrongOrg = await getStampAccountState(customer.id, orgB.orgId);
+      expect(wrongOrg).toBeNull();
+
+      const rightOrg = await getStampAccountState(customer.id, orgA.orgId);
+      expect(rightOrg?.stampCount).toBe(3);
+    } finally {
+      await deleteTestOrg(orgA.orgId);
+      await deleteTestOrg(orgB.orgId);
     }
   });
 });

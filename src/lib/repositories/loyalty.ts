@@ -509,7 +509,7 @@ export async function getPointsBalance(customerId: string, orgId: string): Promi
 
 export async function getStampAccountState(customerId: string, orgId: string): Promise<StampAccountState | null> {
   const database = db();
-  const [account] = await database.select().from(loyaltyAccounts).where(eq(loyaltyAccounts.customerId, customerId)).limit(1);
+  const [account] = await database.select().from(loyaltyAccounts).where(and(eq(loyaltyAccounts.customerId, customerId), eq(loyaltyAccounts.orgId, orgId))).limit(1);
   if (!account) return null;
 
   const available = await database
