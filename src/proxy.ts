@@ -62,7 +62,13 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Everything except static assets and images.
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif)$).*)",
+    // Everything except static assets, images and the scheduled-job routes.
+    //
+    // /api/jobs/* is called by a systemd timer on the box itself, never by a
+    // browser: it carries no session to refresh and must not pay for a
+    // Supabase round trip or have cookies written onto its response. The
+    // route authenticates itself (src/app/api/jobs). `api/jobs(?:/|$)` stops
+    // at the segment, so /api/jobsx still goes through the proxy.
+    "/((?!_next/static|_next/image|favicon.ico|api/jobs(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif)$).*)",
   ],
 };
