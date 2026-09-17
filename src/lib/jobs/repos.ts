@@ -33,7 +33,18 @@ export type FactsParity = {
   readonly missingDays: number;
 };
 
+/** What one refund healer run did (PAYMENT-SAFETY's RefundHealReport; ids only, nothing else about a refund). */
+export type RefundHealReport = {
+  readonly examined: number;
+  readonly healed: number;
+  readonly stillOpen: number;
+  readonly stillOpenRefundIds: readonly string[];
+  readonly notReached: number;
+};
+
 export type JobReadRepos = {
+  /** The summary counts of this org's latest finished run of `job` before `beforePeriodKey`, or null. */
+  readonly lastRunSummary: (job: string, beforePeriodKey: string) => Promise<Readonly<Record<string, number>> | null>;
   /** The first IST business day this org has history for (opened_on, else its first order), or null. */
   readonly factsHistoryStart: () => Promise<string | null>;
   /** Compares Σ daily facts with getProfitAndLoss for [from, to] (IST dates, inclusive). */
@@ -86,6 +97,12 @@ export class DayTimeout extends Error {
 }
 
 export type JobWriteRepos = {
+  /**
+   * Finishes this org's lost refund follow-ups (ref-b7, PAYMENT-SAFETY's
+   * healLostRefundFollowUps): idempotent, never calls a payment provider,
+   * and ends between refunds once `shouldStop` returns true.
+   */
+  readonly healLostRefundFollowUps: (options: { readonly shouldStop: () => boolean }) => Promise<RefundHealReport>;
   /** Rebuilds one IST business day's facts for this org, recorded against this run. Idempotent. Throws `DayLockBusy` or `DayTimeout`. */
   readonly recomputeDay: (date: string, budget: DayLockBudget) => ReturnType<typeof Facts.recomputeDay>;
   /** Scores and stores one IST business day's trust signals for this org, recorded against this run. Idempotent. Throws `DayLockBusy` or `DayTimeout`. */

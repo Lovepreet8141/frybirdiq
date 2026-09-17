@@ -45,6 +45,9 @@ function fakeContext(options: Options) {
     writeInsight: async () => {
       throw new Error("not used");
     },
+    healLostRefundFollowUps: async () => {
+      throw new Error("not used");
+    },
     proposeRecommendation: async () => {
       throw new Error("not used");
     },
@@ -54,6 +57,7 @@ function fakeContext(options: Options) {
   };
   const readers: JobReadRepos = {
     factsHistoryStart: async () => options.historyStart ?? null,
+    lastRunSummary: unused,
     checkFactsParity: async (from, to) => {
       parityCalls.push([from, to]);
       return options.parity ?? { ok: true, mismatchedMetrics: [], missingDays: 0 };

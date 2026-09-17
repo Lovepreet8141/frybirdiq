@@ -49,9 +49,11 @@ export type JobRunResult =
       /**
        * Why it stopped. DEADLINE counts as a failure unless a chunk committed;
        * DAY_LOCK_BUSY never does — another recompute of the same day was
-       * running, which is contention, not a fault.
+       * running, which is contention, not a fault. REFUNDS_STILL_OPEN is an
+       * alert (refund follow-ups unfinished on consecutive runs) and counts,
+       * so systemd's OnFailure fires.
        */
-      readonly reason?: "DEADLINE" | "DAY_LOCK_BUSY";
+      readonly reason?: "DEADLINE" | "DAY_LOCK_BUSY" | "REFUNDS_STILL_OPEN";
       readonly rowsWritten: number;
       readonly summary: Readonly<Record<string, number>>;
     };

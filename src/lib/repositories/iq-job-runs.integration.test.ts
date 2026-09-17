@@ -26,7 +26,10 @@ import { handleJobRequest, type ClaimRequest } from "@/lib/jobs/handle";
 import { DEFAULT_TIMING, type JobDefinition } from "@/lib/jobs/registry";
 import { nightlyDates, remainingAfter } from "@/lib/jobs/facts-plan";
 import { periodKeyAt, shiftPeriod } from "@/lib/jobs/period";
-import { iqDailyFacts, iqDailyTrust, organizations } from "@/db/schema";
+import { iqDailyFacts, iqDailyTrust, orderEvents, orders, organizations, payments, refunds } from "@/db/schema";
+import { CASH_PROVIDER } from "@/lib/payments";
+import { fromRupees } from "@/lib/money";
+import { refundPayment } from "./payments";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 import { seedExpense } from "./__test-support__/iq-fixtures";
 import { factDayLockKey, readDailyFacts } from "./iq-facts";
@@ -526,8 +529,8 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
     expect(response).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
     expect(seen).toMatchObject({
       ctxKeys: ["attempt", "commit", "orgId", "period", "periodKey", "remainingMs", "repos", "resumeCursor", "runId", "shouldStop", "trigger"],
-      readKeys: ["checkFactsParity", "factsHistoryStart", "getInsight", "listInsights", "listOpenRecommendations", "readFactFigures"],
-      writeKeys: ["computeTrustDay", "proposeRecommendation", "recomputeDay", "writeInsight"],
+      readKeys: ["checkFactsParity", "factsHistoryStart", "getInsight", "lastRunSummary", "listInsights", "listOpenRecommendations", "readFactFigures"],
+      writeKeys: ["computeTrustDay", "healLostRefundFollowUps", "proposeRecommendation", "recomputeDay", "writeInsight"],
       listedOrgs: [org.orgId],
       listedHasA: true,
       listedHasB: false,
@@ -709,4 +712,91 @@ describe("IQ-1 facts jobs through the runner (iq1-s8) on the local stack", () =>
     expect(intraday.body!.periods[0]!.slice(0, 10)).toBe(today);
     expect((await readDailyFacts(d.orgId, today, today)).computedDates).toEqual([today]);
   }, 120_000);
+});
+
+describe("refund-followup-heal through the job route (ref-b7) on the local stack", () => {
+  const SECRET = "h".repeat(40);
+  let healOrg: TestOrg;
+  beforeAll(async () => {
+    healOrg = await createTestOrg();
+  });
+  afterAll(async () => {
+    await deleteTestOrg(healOrg.orgId);
+  });
+
+  /** A PAID cash order, fully refunded through refundPayment, whose follow-up is then made to look lost. */
+  async function lostRefundFollowUp() {
+    const amount = fromRupees("250");
+    const [order] = await db()
+      .insert(orders)
+      .values({
+        orgId: healOrg.orgId,
+        locationId: healOrg.locationId,
+        orderNumber: `TEST-${randomUUID().slice(0, 8)}`,
+        businessDate: new Date().toISOString().slice(0, 10),
+        status: "PAID",
+        channel: "TAKEAWAY",
+        fulfilment: "TAKEAWAY",
+        grandTotal: amount,
+      })
+      .returning({ id: orders.id });
+    const [payment] = await db()
+      .insert(payments)
+      .values({ orgId: healOrg.orgId, orderId: order!.id, status: "CAPTURED", method: "CASH", amount, provider: CASH_PROVIDER, capturedAt: new Date() })
+      .returning({ id: payments.id });
+    const result = await refundPayment({
+      paymentId: payment!.id,
+      amount,
+      reason: "test",
+      actorUserId: randomUUID(),
+      actorRoles: ["OWNER"],
+      orgId: healOrg.orgId,
+      idempotencyKey: randomUUID(),
+    });
+    expect(result).toMatchObject({ ok: true, fullyRefunded: true });
+    // The follow-up writes the money event last: without it, and finalized long enough ago, the follow-up is lost.
+    await db().delete(orderEvents).where(and(eq(orderEvents.orderId, order!.id), sql`${orderEvents.metadata}->>'refundId' IS NOT NULL`));
+    await db().update(refunds).set({ finalizedAt: new Date(Date.now() - 10 * 60_000) }).where(eq(refunds.paymentId, payment!.id));
+    return order!.id;
+  }
+  const moneyEvents = (orderId: string) =>
+    db().select({ id: orderEvents.id }).from(orderEvents).where(and(eq(orderEvents.orderId, orderId), sql`${orderEvents.metadata}->>'refundId' IS NOT NULL`));
+
+  it("heals a lost refund follow-up through the route; a re-run of the quarter is a no-op", async () => {
+    const orderId = await lostRefundFollowUp();
+    expect(await moneyEvents(orderId)).toHaveLength(0);
+
+    const saved = process.env.JOB_SECRET;
+    process.env.JOB_SECRET = SECRET;
+    try {
+      const deps = jobRouteDeps();
+      deps.store.listOrgIds = async () => [healOrg.orgId];
+      const { respondToJobRequest } = await import("@/lib/jobs/http");
+      const request = () =>
+        new Request("http://127.0.0.1:3000/api/jobs/refund-followup-heal", {
+          method: "POST",
+          headers: { "x-forwarded-for": "127.0.0.1", host: JOB_HOST, authorization: `Bearer ${SECRET}` },
+        });
+
+      const response = await respondToJobRequest(request(), "refund-followup-heal", () => deps);
+      expect(response.status).toBe(200);
+      const report = (await response.json()) as { periods: string[]; counts: Record<string, number> };
+      expect(report.counts.SUCCEEDED).toBe(1);
+      expect(await moneyEvents(orderId)).toHaveLength(1);
+
+      const [row] = await db()
+        .select()
+        .from(iqJobRuns)
+        .where(and(eq(iqJobRuns.job, "refund-followup-heal"), eq(iqJobRuns.orgId, healOrg.orgId), eq(iqJobRuns.periodKey, report.periods[0]!)));
+      expect(row).toMatchObject({ status: "SUCCEEDED", failures: 0 });
+      expect(row!.summary).toEqual({ examined: 1, healed: 1, still_open: 0, not_reached: 0 });
+
+      const again = await respondToJobRequest(request(), "refund-followup-heal", () => deps);
+      expect(((await again.json()) as { counts: Record<string, number> }).counts.NOOP).toBe(1);
+      expect(await moneyEvents(orderId)).toHaveLength(1);
+    } finally {
+      if (saved === undefined) delete process.env.JOB_SECRET;
+      else process.env.JOB_SECRET = saved;
+    }
+  }, 60_000);
 });

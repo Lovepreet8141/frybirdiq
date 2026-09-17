@@ -63,7 +63,7 @@ export type FinishOutcome =
   | {
       /** Stored as status FAILED with this error_code; `cursor` is the one already committed (unchanged). */
       readonly status: "DEADLINE";
-      readonly errorCode: "DEADLINE" | "DAY_LOCK_BUSY";
+      readonly errorCode: "DEADLINE" | "DAY_LOCK_BUSY" | "REFUNDS_STILL_OPEN";
       readonly rowsWritten: number;
       readonly summary: Summary;
       readonly cursor: string | null;
@@ -369,7 +369,7 @@ async function runUnit<W>(
     const repeatedLockBusy = lockBusy && !progressed && previousErrorCode === "DAY_LOCK_BUSY";
     outcome = {
       status: "DEADLINE",
-      errorCode: lockBusy ? "DAY_LOCK_BUSY" : "DEADLINE",
+      errorCode: result.reason ?? "DEADLINE",
       rowsWritten: result.rowsWritten,
       summary: result.summary,
       cursor: committedCursor,

@@ -27,6 +27,7 @@
 import type { JobContext, JobRunResult } from "./context";
 import { runFactsBackfill, runFactsIntraday, runFactsNightly } from "./jobs/facts";
 import { runHeartbeat } from "./jobs/heartbeat";
+import { REFUND_HEAL_JOB, runRefundFollowUpHeal } from "./jobs/refund-heal";
 import type { PeriodKind, PeriodTarget } from "./period";
 
 export type JobConcurrency = "light" | "heavy";
@@ -99,6 +100,21 @@ export const JOB_REGISTRY = {
     catchUpPeriods: 0,
     concurrency: "light",
     run: runFactsBackfill,
+  },
+  /**
+   * ref-b7: lost refund follow-ups, every 15 minutes at :07 (clear of the :00
+   * quarter jobs), light, no catch-up — the next quarter picks up anything
+   * missed, and the healer only takes follow-ups older than 5 minutes.
+   */
+  [REFUND_HEAL_JOB]: {
+    name: REFUND_HEAL_JOB,
+    periodKind: "quarter_hour",
+    target: "current",
+    onCalendarUtc: "*-*-* *:07/15:00 UTC",
+    ...DEFAULT_TIMING,
+    catchUpPeriods: 0,
+    concurrency: "light",
+    run: runRefundFollowUpHeal,
   },
 } as const satisfies Record<string, JobDefinition>;
 

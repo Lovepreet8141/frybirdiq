@@ -10,8 +10,8 @@ const JOBS_DIR = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = join(JOBS_DIR, "..", "..", "..");
 
 describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
-  it("ships heartbeat (IQ-0) and the three IQ-1 facts jobs", () => {
-    expect(JOB_NAMES).toEqual(["heartbeat", "iq-facts-nightly", "iq-facts-intraday", "iq-facts-backfill"]);
+  it("ships heartbeat (IQ-0), the three IQ-1 facts jobs and the ref-b7 refund healer", () => {
+    expect(JOB_NAMES).toEqual(["heartbeat", "iq-facts-nightly", "iq-facts-intraday", "iq-facts-backfill", "refund-followup-heal"]);
     expect(isJobName("heartbeat")).toBe(true);
     expect(isJobName("constructor")).toBe(false);
   });
