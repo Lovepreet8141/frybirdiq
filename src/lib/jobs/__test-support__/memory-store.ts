@@ -6,6 +6,7 @@
 import type { ClaimRead, ExpectedRow, JobRunRow, JobRunStatus, JobTrigger } from "../claim-decision";
 import { LeaseLostError, fenceHolds, type LeaseToken } from "../fence";
 import type { ClaimRequest, FinishOutcome, JobRunStore } from "../handle";
+import type { JobReadRepos } from "../repos";
 
 export type StoredRun = {
   id: string;
@@ -194,6 +195,20 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
         row.failures = outcome.failures;
         break;
     }
+  }
+
+  /** Reads have no in-memory backing; a job test that needs them must supply its own. */
+  readRepos(token: LeaseToken): JobReadRepos {
+    if (this.byId(token.runId) === undefined) throw new LeaseLostError(token);
+    const unavailable = async (): Promise<never> => {
+      throw new Error("memory store: no read repositories");
+    };
+    return {
+      listInsights: unavailable,
+      getInsight: unavailable,
+      readFactFigures: unavailable,
+      listOpenRecommendations: unavailable,
+    };
   }
 
   async heavyRunLive() {

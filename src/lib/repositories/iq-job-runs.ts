@@ -25,7 +25,9 @@ import "server-only";
  * Org scoping: the app connects as `postgres`, which bypasses RLS. A store
  * learns each run's org when it claims it, and every later statement filters
  * on that org; a token for a run this store never claimed is refused as a
- * lost lease. Two statements are deliberately cross-org: `listOrgIds` (the
+ * lost lease. A job never sees a transaction: `readRepos` and the argument of
+ * `commit` are `iqRepos` / `iqWriteRepos`, closures over that same org (and,
+ * for writes, the chunk's transaction and this run's lease). Two statements are deliberately cross-org: `listOrgIds` (the
  * runner loops over every org) and `heavyRunLive` (heavy jobs share one
  * machine, whatever org they run for).
  */
@@ -36,10 +38,27 @@ import { iqJobRuns, organizations } from "@/db/schema";
 import { JOB_RUN_STATUSES, type ClaimRead, type ExpectedRow, type JobRunRow, type JobRunStatus, type JobTrigger } from "@/lib/jobs/claim-decision";
 import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
 import type { ClaimRequest, FinishOutcome, JobRunStore } from "@/lib/jobs/handle";
+import type { JobReadRepos, JobWriteRepos } from "@/lib/jobs/repos";
+import { getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
+import { listOpenRecommendations, proposeRecommendation } from "./iq-recommendations";
 
-type Db = ReturnType<typeof db>;
-/** The transaction a job's chunk writes through. */
-export type JobTx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+/** The iq-* reads a job may make, with `orgId` closed over. */
+export function iqRepos(orgId: string): JobReadRepos {
+  return {
+    listInsights: (...args) => listInsights(orgId, ...args),
+    getInsight: (...args) => getInsight(orgId, ...args),
+    readFactFigures: (...args) => readFactFigures(orgId, ...args),
+    listOpenRecommendations: (...args) => listOpenRecommendations(orgId, ...args),
+  };
+}
+
+/** The iq-* writes a job may make inside one fenced chunk: transaction, lease and org closed over. */
+export function iqWriteRepos(tx: IqTx, lease: LeaseToken & { readonly orgId: string }): JobWriteRepos {
+  return {
+    writeInsight: (...args) => writeInsight(tx, lease, ...args),
+    proposeRecommendation: (...args) => proposeRecommendation(tx, lease, ...args),
+  };
+}
 
 export type JobRunStoreOptions = {
   /** Recorded on every run: the deployed commit. */
@@ -69,11 +88,11 @@ function toRow(raw: RawRow): JobRunRow {
 
 const secondsFromNow = (seconds: number): SQL => sql`now() + make_interval(secs => ${seconds})`;
 
-export function createJobRunStore(options: JobRunStoreOptions): JobRunStore<JobTx> {
+export function createJobRunStore(options: JobRunStoreOptions): JobRunStore<JobWriteRepos> {
   return new PostgresJobRunStore(options);
 }
 
-class PostgresJobRunStore implements JobRunStore<JobTx> {
+class PostgresJobRunStore implements JobRunStore<JobWriteRepos> {
   /** run id → org id, learned from this store's own claims. */
   private readonly orgByRun = new Map<string, string>();
 
@@ -178,7 +197,9 @@ class PostgresJobRunStore implements JobRunStore<JobTx> {
       .where(and(this.expectedRow(expected, orgId), eq(iqJobRuns.status, "RUNNING"), lte(iqJobRuns.leaseExpiresAt, sql`now()`)));
   }
 
-  async commit<T>(token: LeaseToken, leaseSeconds: number, write: (tx: JobTx) => Promise<T>, cursor?: string): Promise<T> {
+  async commit<T>(token: LeaseToken, leaseSeconds: number, write: (repos: JobWriteRepos) => Promise<T>, cursor?: string): Promise<T> {
+    const orgId = this.orgByRun.get(token.runId);
+    if (orgId === undefined) throw new LeaseLostError(token);
     const fence = this.fence(token);
     return db().transaction(async (tx) => {
       const held = await tx
@@ -192,8 +213,14 @@ class PostgresJobRunStore implements JobRunStore<JobTx> {
         .where(fence)
         .returning({ id: iqJobRuns.id });
       if (held.length === 0) throw new LeaseLostError(token);
-      return write(tx);
+      return write(iqWriteRepos(tx, { ...token, orgId }));
     });
+  }
+
+  readRepos(token: LeaseToken): JobReadRepos {
+    const orgId = this.orgByRun.get(token.runId);
+    if (orgId === undefined) throw new LeaseLostError(token);
+    return iqRepos(orgId);
   }
 
   async heartbeat(token: LeaseToken, leaseSeconds: number): Promise<void> {

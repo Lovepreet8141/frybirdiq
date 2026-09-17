@@ -56,36 +56,60 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
   });
 });
 
-describe("what job code may import (DESIGN §3, review T5)", () => {
-  const FORBIDDEN = [
+describe("what job code may import (DESIGN §3, review T5; mirrors QA's eslint rules)", () => {
+  const ROUTE_DIR = join(REPO_ROOT, "src", "app", "api", "jobs");
+
+  /** Every job file and the route that wires it. */
+  const EVERYWHERE = [
     /["']@\/db(\/|["'])/,
     /["']drizzle-orm/,
     /["']postgres["']/,
+    /["']pg["']/,
+    /["']@supabase\//,
     /["']@\/lib\/supabase/,
     /["']@\/lib\/payments/,
-    /["']@\/lib\/repositories\/(orders|payments|refunds|invoices|expenses|finance|cash)/,
     /["']@\/lib\/finance/,
-    /["']next\//,
+    // A repository, but only an iq-* one (wiring and type-only contracts).
+    /["']@\/lib\/repositories\/(?!iq-)/,
     /["']react["']/,
   ];
+  /** src/lib/jobs: no framework and no secrets — both arrive through the route. */
+  const LIBRARY = [/["']next\//, /["']@\/lib\/env/];
+  /** src/lib/jobs/jobs: an individual job reaches the database only through ctx (SECURITY condition). */
+  const JOB = [/["']@\/lib\/repositories/, /["'](\.\.\/)+.*repositories/, /["']@\/db/];
 
-  const files: string[] = [];
-  const walk = (dir: string) => {
+  const walk = (dir: string, out: string[] = []) => {
+    if (!existsSync(dir)) return out;
     for (const name of readdirSync(dir)) {
       const path = join(dir, name);
-      if (statSync(path).isDirectory()) walk(path);
-      else if (/\.tsx?$/.test(name) && !name.endsWith(".test.ts")) files.push(path);
+      if (statSync(path).isDirectory()) walk(path, out);
+      else if (/\.tsx?$/.test(name) && !name.endsWith(".test.ts")) out.push(path);
     }
+    return out;
   };
-  walk(JOBS_DIR);
+  const files = [...walk(JOBS_DIR), ...walk(ROUTE_DIR)];
+  const rel = (path: string) => path.slice(REPO_ROOT.length + 1);
 
-  it("scans the job sources", () => {
+  it("scans the job sources and the route", () => {
     expect(files.some((f) => f.endsWith("heartbeat.ts"))).toBe(true);
+    expect(files.some((f) => f.endsWith(join("[job]", "route.ts")))).toBe(true);
   });
 
-  it.each(files.map((f) => [f.slice(JOBS_DIR.length)]))("%s imports no database, money writer or framework", (rel) => {
-    const source = readFileSync(join(JOBS_DIR, rel), "utf8");
+  it.each(files.map((f) => [rel(f), f]))("%s imports only what its layer allows", (_rel, path) => {
+    const source = readFileSync(path, "utf8");
     const imports = source.split("\n").filter((line) => /\bfrom\s+["']|^\s*import\s+["']|\bimport\(/.test(line));
-    for (const pattern of FORBIDDEN) expect(imports.filter((line) => pattern.test(line))).toEqual([]);
+    const rules = [
+      ...EVERYWHERE,
+      ...(path.startsWith(JOBS_DIR) ? LIBRARY : []),
+      ...(path.startsWith(join(JOBS_DIR, "jobs")) ? JOB : []),
+    ];
+    for (const pattern of rules) expect(imports.filter((line) => pattern.test(line)), String(pattern)).toEqual([]);
+  });
+
+  it("would catch a job that imports a repository or the database directly", () => {
+    const probe = ['import { writeInsight } from "@/lib/repositories/iq-insights";', 'import { db } from "@/db";'];
+    for (const line of probe) expect(JOB.some((pattern) => pattern.test(line))).toBe(true);
+    expect(EVERYWHERE.some((pattern) => pattern.test('import { placeOrder } from "@/lib/repositories/orders";'))).toBe(true);
+    expect(EVERYWHERE.some((pattern) => pattern.test('import type { JobTx } from "@/lib/repositories/iq-job-runs";'))).toBe(false);
   });
 });

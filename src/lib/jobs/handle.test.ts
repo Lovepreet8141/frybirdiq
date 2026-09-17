@@ -76,7 +76,7 @@ const job = (run: (ctx: JobContext<MemoryTx>) => Promise<JobRunResult>, override
     ...DEFAULT_TIMING,
     catchUpPeriods: 0,
     concurrency: "light",
-    run: run as JobDefinition["run"],
+    run: run as unknown as JobDefinition["run"],
     ...overrides,
   } satisfies JobDefinition,
 });

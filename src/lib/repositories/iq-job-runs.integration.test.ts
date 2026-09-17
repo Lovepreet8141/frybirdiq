@@ -13,16 +13,20 @@
  * - heavy-job exclusion; org isolation; one heartbeat request end to end.
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { auditLogs, iqJobRuns } from "@/db/schema";
+import { iqInsights, iqJobRuns } from "@/db/schema";
+import { computeContentHash, type InsightOf } from "@/lib/iq/engine";
 import { JOB_HOST } from "@/lib/jobs/auth";
 import { decideClaim } from "@/lib/jobs/claim-decision";
 import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
+import type { JobContext, JobRunResult } from "@/lib/jobs/context";
 import { handleJobRequest, type ClaimRequest } from "@/lib/jobs/handle";
+import { DEFAULT_TIMING, type JobDefinition } from "@/lib/jobs/registry";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
-import { createJobRunStore, type JobTx } from "./iq-job-runs";
+import type { JobWriteRepos } from "@/lib/jobs/repos";
+import { createJobRunStore } from "./iq-job-runs";
 import { jobRouteDeps } from "@/app/api/jobs/[job]/deps";
 import { POST } from "@/app/api/jobs/[job]/route";
 
@@ -62,17 +66,43 @@ const tokenOf = (row: { id: string; attempt: number }, leaseOwner: string): Leas
 
 const stored = async (id: string) => (await db().select().from(iqJobRuns).where(eq(iqJobRuns.id, id)))[0]!;
 
-/** A chunk write: one audit row, so a rollback is visible. */
-const auditWrite = (marker: string) => async (tx: JobTx) => {
-  await tx.insert(auditLogs).values({ orgId: org.orgId, action: "job_test_chunk", entity: "iq_job_runs", after: { marker } });
+const HOUR_MS = 3600_000;
+const ist = (date: Date) => `${new Date(date.getTime() + 5.5 * HOUR_MS).toISOString().slice(0, 19)}+05:30`;
+
+/** A valid FACT insight for `target`, produced by the run `token` names, keyed by `dedupeKey`. */
+async function factFor(target: TestOrg, token: LeaseToken, dedupeKey: string): Promise<InsightOf<"FACT">> {
+  const now = new Date();
+  const period = { start: ist(new Date(now.getTime() - 24 * HOUR_MS)), end: ist(now) };
+  const draft = {
+    id: randomUUID(),
+    orgId: target.orgId,
+    locationId: target.locationId,
+    schemaVersion: 1 as const,
+    producer: "test-job",
+    subject: { kind: "METRIC" as const, ref: "revenue.net" },
+    period,
+    dedupeKey,
+    evidence: [{ kind: "metric" as const, metricId: "revenue.net", period }],
+    trust: { state: "NOT_MEASURED" as const },
+    copy: { templateId: "test", slots: {} },
+    status: "ACTIVE" as const,
+    producedBy: { job: "test-job", runId: token.runId, attempt: token.attempt, codeVersion: "abc1234" },
+    supersedes: null,
+    createdAt: ist(now),
+    expiresAt: null,
+    claimType: "FACT" as const,
+    payload: { metricId: "revenue.net", value: { unit: "paise", value: "100" }, sourceQueryId: "orders.net-revenue" },
+  };
+  const contentHash = await computeContentHash({ payload: draft.payload, evidence: draft.evidence } as never);
+  return { ...draft, contentHash } as unknown as InsightOf<"FACT">;
+}
+
+/** A chunk write through the job's own writers: one FACT insight keyed by `marker`, so a rollback is visible. */
+const insightWrite = (marker: string, token: LeaseToken, target: () => TestOrg = () => org) => async (repos: JobWriteRepos) => {
+  await repos.writeInsight(await factFor(target(), token, marker));
 };
-const auditCount = async (marker: string) =>
-  (
-    await db()
-      .select({ id: auditLogs.id })
-      .from(auditLogs)
-      .where(and(eq(auditLogs.orgId, org.orgId), sql`${auditLogs.after} ->> 'marker' = ${marker}`))
-  ).length;
+const insightCount = async (marker: string) =>
+  (await db().select({ id: iqInsights.id }).from(iqInsights).where(eq(iqInsights.dedupeKey, marker))).length;
 
 const isLeaseLost = async (promise: Promise<unknown>) => {
   try {
@@ -123,12 +153,12 @@ describe("fence", () => {
     const request = claimRequest({ leaseSeconds: 5 });
     const { row } = await s.claim(request);
     const before = await stored(row.id);
-    await s.commit(tokenOf(row, request.leaseOwner), 300, auditWrite(`ok-${row.id}`), "after-1");
+    await s.commit(tokenOf(row, request.leaseOwner), 300, insightWrite(`ok-${row.id}`, tokenOf(row, request.leaseOwner)), "after-1");
     const after = await stored(row.id);
     expect(after.cursor).toBe("after-1");
     expect(after.heartbeatAt).toBeInstanceOf(Date);
     expect(after.leaseExpiresAt.getTime()).toBeGreaterThan(before.leaseExpiresAt.getTime());
-    expect(await auditCount(`ok-${row.id}`)).toBe(1);
+    expect(await insightCount(`ok-${row.id}`)).toBe(1);
   });
 
   it("rolls back a fenced-out chunk: wrong owner, wrong attempt, or a run this store never claimed", async () => {
@@ -136,10 +166,10 @@ describe("fence", () => {
     const request = claimRequest();
     const { row } = await s.claim(request);
     const marker = `fenced-${row.id}`;
-    expect(await isLeaseLost(s.commit(tokenOf(row, randomUUID()), 300, auditWrite(marker), "x"))).toBe(true);
-    expect(await isLeaseLost(s.commit({ ...tokenOf(row, request.leaseOwner), attempt: 2 }, 300, auditWrite(marker)))).toBe(true);
-    expect(await isLeaseLost(store().commit(tokenOf(row, request.leaseOwner), 300, auditWrite(marker)))).toBe(true);
-    expect(await auditCount(marker)).toBe(0);
+    expect(await isLeaseLost(s.commit(tokenOf(row, randomUUID()), 300, insightWrite(marker, tokenOf(row, request.leaseOwner)), "x"))).toBe(true);
+    expect(await isLeaseLost(s.commit({ ...tokenOf(row, request.leaseOwner), attempt: 2 }, 300, insightWrite(marker, tokenOf(row, request.leaseOwner))))).toBe(true);
+    expect(await isLeaseLost(store().commit(tokenOf(row, request.leaseOwner), 300, insightWrite(marker, tokenOf(row, request.leaseOwner))))).toBe(true);
+    expect(await insightCount(marker)).toBe(0);
     expect((await stored(row.id)).cursor).toBeNull();
   });
 
@@ -166,10 +196,10 @@ describe("fence", () => {
     const gate = new Promise<void>((resolve) => (release = resolve));
     let chunkStarted!: () => void;
     const started = new Promise<void>((resolve) => (chunkStarted = resolve));
-    const chunk = a.commit(tokenOf(row, request.leaseOwner), 60, async (tx) => {
+    const chunk = a.commit(tokenOf(row, request.leaseOwner), 60, async (repos) => {
       chunkStarted();
       await gate;
-      await auditWrite(`c1-${row.id}`)(tx);
+      await insightWrite(`c1-${row.id}`, tokenOf(row, request.leaseOwner))(repos);
     });
     await started;
     await sleep(1200); // the lease B last read has now expired in wall time
@@ -192,7 +222,7 @@ describe("fence", () => {
     await chunk;
     expect(await takeover).toBeNull();
     expect(await stored(row.id)).toMatchObject({ attempt: 1, leaseOwner: request.leaseOwner, status: "RUNNING" });
-    expect(await auditCount(`c1-${row.id}`)).toBe(1);
+    expect(await insightCount(`c1-${row.id}`)).toBe(1);
   });
 });
 
@@ -221,16 +251,16 @@ describe("zombie run", () => {
     expect(taken).toMatchObject({ status: "RUNNING", attempt: 2, failures: 1, leaseOwner: ownerB });
 
     const marker = `zombie-${row.id}`;
-    expect(await isLeaseLost(a.commit(tokenA, 300, auditWrite(marker)))).toBe(true);
+    expect(await isLeaseLost(a.commit(tokenA, 300, insightWrite(marker, tokenA)))).toBe(true);
     expect(await isLeaseLost(a.heartbeat(tokenA, 300))).toBe(true);
     expect(await isLeaseLost(a.finish(tokenA, { status: "SUCCEEDED", rowsWritten: 9, summary: {} }))).toBe(true);
-    expect(await auditCount(marker)).toBe(0);
+    expect(await insightCount(marker)).toBe(0);
 
     const tokenB = tokenOf(taken!, ownerB);
-    await b.commit(tokenB, 300, auditWrite(`${marker}-b`));
+    await b.commit(tokenB, 300, insightWrite(`${marker}-b`, tokenB));
     await b.finish(tokenB, { status: "SUCCEEDED", rowsWritten: 1, summary: { chunks: 1 } });
     expect(await stored(row.id)).toMatchObject({ status: "SUCCEEDED", attempt: 2, trigger: "CATCHUP", rowsWritten: 1 });
-    expect(await auditCount(`${marker}-b`)).toBe(1);
+    expect(await insightCount(`${marker}-b`)).toBe(1);
   });
 
   it("closeZombie fails an expired RUNNING row and counts it, but leaves a live one alone (J3)", async () => {
@@ -409,5 +439,100 @@ describe("the job route (S8) on the local stack", () => {
       expect(again.status).toBe(200);
       expect(((await again.json()) as { counts: Record<string, number> }).counts.NOOP).toBe(1);
     });
+  });
+});
+
+describe("a job reaches the database only through org-bound ctx (SECURITY condition, iq0-s7c)", () => {
+  it("a job running for org A cannot read or write org B's rows through ctx, and never sees a transaction", async () => {
+    const s = store();
+    // Seed one FACT for each org, written through each org's own run and writers.
+    const seed = async (target: TestOrg) => {
+      const request = claimRequest({ orgId: target.orgId });
+      const { row } = await s.claim(request);
+      const token = tokenOf(row, request.leaseOwner);
+      const insight = await factFor(target, token, `seed-${target.orgId}-${randomUUID()}`);
+      await s.commit(token, 300, (repos) => repos.writeInsight(insight));
+      return insight.id;
+    };
+    const aInsightId = await seed(org);
+    const bInsightId = await seed(otherOrg);
+    const bRowsBefore = (await db().select({ id: iqInsights.id }).from(iqInsights).where(eq(iqInsights.orgId, otherOrg.orgId))).length;
+
+    const seen: Record<string, unknown> = {};
+    const jobName = `iso_${randomUUID().slice(0, 8)}`;
+    const probe = async (ctx: JobContext): Promise<JobRunResult> => {
+      const token = { runId: ctx.runId, attempt: ctx.attempt, leaseOwner: "" };
+      seen.ctxKeys = Object.keys(ctx).sort();
+      seen.readKeys = Object.keys(ctx.repos).sort();
+
+      const listed = await ctx.repos.listInsights({ claimTypes: ["FACT"], limit: 500 });
+      seen.listedOrgs = [...new Set(listed.insights.map((i) => i.orgId))];
+      seen.listedHasB = listed.insights.some((i) => i.id === bInsightId);
+      seen.listedHasA = listed.insights.some((i) => i.id === aInsightId);
+      seen.getB = await ctx.repos.getInsight(bInsightId);
+      seen.getA = (await ctx.repos.getInsight(aInsightId))?.orgId;
+      const figures = await ctx.repos.readFactFigures("revenue.net", { limit: 400 });
+      seen.figuresHasB = figures.figures.some((f) => f.insightId === bInsightId);
+
+      await ctx.commit(async (repos) => {
+        seen.writeKeys = Object.keys(repos).sort();
+      });
+      try {
+        await ctx.commit(async (repos) => repos.writeInsight(await factFor(otherOrg, token, `cross-${randomUUID()}`)));
+        seen.crossWrite = "written";
+      } catch (error) {
+        seen.crossWrite = (error as Error).message;
+      }
+      const own = await ctx.commit(async (repos) => repos.writeInsight(await factFor(org, token, `own-${randomUUID()}`)));
+      seen.ownWrite = own.outcome;
+      return { status: "COMPLETE", rowsWritten: 1, summary: {} };
+    };
+    const registry: Record<string, JobDefinition> = {
+      [jobName]: {
+        name: jobName,
+        periodKind: "hour",
+        target: "current",
+        onCalendarUtc: "*-*-* *:00:00 UTC",
+        ...DEFAULT_TIMING,
+        catchUpPeriods: 0,
+        concurrency: "light",
+        run: probe,
+      },
+    };
+    const secret = "i".repeat(40);
+    const runStore = store();
+    runStore.listOrgIds = async () => [org.orgId];
+    const headers: Record<string, string> = { "x-forwarded-for": "127.0.0.1", host: JOB_HOST, authorization: `Bearer ${secret}` };
+    const response = await handleJobRequest(
+      { jobParam: jobName, body: undefined, headers: { get: (n: string) => headers[n.toLowerCase()] ?? null } },
+      {
+        secrets: { current: secret, previous: undefined },
+        store: runStore,
+        newLeaseOwner: () => randomUUID(),
+        monotonicMs: () => performance.now(),
+        every: (ms, tick) => {
+          const timer = setInterval(tick, ms);
+          return () => clearInterval(timer);
+        },
+        registry,
+      },
+    );
+
+    expect(response).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
+    expect(seen).toMatchObject({
+      ctxKeys: ["attempt", "commit", "orgId", "period", "periodKey", "repos", "resumeCursor", "runId", "shouldStop", "trigger"],
+      readKeys: ["getInsight", "listInsights", "listOpenRecommendations", "readFactFigures"],
+      writeKeys: ["proposeRecommendation", "writeInsight"],
+      listedOrgs: [org.orgId],
+      listedHasA: true,
+      listedHasB: false,
+      getB: null,
+      getA: org.orgId,
+      figuresHasB: false,
+      crossWrite: "iq-insights: insight belongs to another org",
+      ownWrite: "INSERTED",
+    });
+    const bRowsAfter = (await db().select({ id: iqInsights.id }).from(iqInsights).where(eq(iqInsights.orgId, otherOrg.orgId))).length;
+    expect(bRowsAfter).toBe(bRowsBefore);
   });
 });

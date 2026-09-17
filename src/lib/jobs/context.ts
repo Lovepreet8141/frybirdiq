@@ -1,15 +1,16 @@
 /**
  * What a job sees while it runs, and what it hands back.
  *
- * A job never gets a database handle. It commits work through `commit`,
- * which is fenced (`fence.ts`), and checks `shouldStop` between chunks so it
- * can hand back a cursor before its deadline. The repositories a job may use
- * are closed over its org (`iqRepos(orgId)`) and arrive with slice S7.
+ * A job never gets a database handle (SECURITY condition, DESIGN T5). It
+ * reads through `repos` and writes inside `commit`, both bound to the org its
+ * run was claimed for (`repos.ts`); the commit is fenced (`fence.ts`). It
+ * checks `shouldStop` between chunks so it can return before its deadline.
  */
 import type { JobTrigger } from "./claim-decision";
 import type { PeriodBounds } from "./period";
+import type { JobReadRepos, JobWriteRepos } from "./repos";
 
-export type JobContext<Tx = unknown> = {
+export type JobContext<W = JobWriteRepos> = {
   readonly orgId: string;
   readonly periodKey: string;
   readonly period: PeriodBounds;
@@ -18,12 +19,15 @@ export type JobContext<Tx = unknown> = {
   readonly attempt: number;
   /** Where an earlier attempt stopped at its deadline, or null to start from the beginning. */
   readonly resumeCursor: string | null;
+  /** Reads, bound to this run's org. */
+  readonly repos: JobReadRepos;
   /**
-   * Commits one chunk of output in a fenced transaction. Pass the cursor that
-   * follows this chunk and it is saved in the same transaction. Throws
-   * `LeaseLostError`.
+   * Commits one chunk of output in a fenced transaction; `write` receives the
+   * writers bound to that transaction, this run's lease and its org. Pass the
+   * cursor that follows this chunk and it is saved in the same transaction.
+   * Throws `LeaseLostError`.
    */
-  commit<T>(write: (tx: Tx) => Promise<T>, options?: { readonly cursor?: string }): Promise<T>;
+  commit<T>(write: (repos: W) => Promise<T>, options?: { readonly cursor?: string }): Promise<T>;
   /** True once the deadline has passed or the lease was lost: return PARTIAL now. Commits are refused shortly after. */
   shouldStop(): boolean;
 };

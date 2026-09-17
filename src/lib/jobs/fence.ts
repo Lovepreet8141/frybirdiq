@@ -73,10 +73,14 @@ export function fenceHolds(row: FencedRow, token: LeaseToken, dbNow: Date): bool
   );
 }
 
-/** What a job may call to commit work. Implemented by the store; throws `LeaseLostError`. */
-export interface Fence<Tx> {
+/**
+ * What a job may call to commit work. Implemented by the store; throws
+ * `LeaseLostError`. `W` is the set of writers the store binds to the chunk's
+ * transaction, lease and org — never the transaction itself.
+ */
+export interface Fence<W> {
   /** Runs `write` inside one fenced transaction, extending the lease and, if given, saving `cursor` with it. */
-  commit<T>(token: LeaseToken, leaseSeconds: number, write: (tx: Tx) => Promise<T>, cursor?: string): Promise<T>;
+  commit<T>(token: LeaseToken, leaseSeconds: number, write: (repos: W) => Promise<T>, cursor?: string): Promise<T>;
   /** Extends the lease without writing output. */
   heartbeat(token: LeaseToken, leaseSeconds: number): Promise<void>;
 }

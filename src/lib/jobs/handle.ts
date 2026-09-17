@@ -26,6 +26,7 @@ import type { JobContext, JobRunResult } from "./context";
 import { LeaseLostError, isLeaseLost, type Fence, type LeaseToken } from "./fence";
 import { checkManualPeriod, periodBounds, scheduledPeriods } from "./period";
 import { JOB_REGISTRY, type JobDefinition } from "./registry";
+import type { JobReadRepos } from "./repos";
 
 export type ClaimRequest = {
   readonly job: string;
@@ -77,7 +78,7 @@ export type FinishOutcome =
     };
 
 /** Everything the runner needs from the database. Implemented in slice S7; every time is the database's now(). */
-export interface JobRunStore<Tx = unknown> extends Fence<Tx> {
+export interface JobRunStore<W = unknown> extends Fence<W> {
   dbNow(): Promise<Date>;
   listOrgIds(): Promise<readonly string[]>;
   /** INSERT … ON CONFLICT (job, org_id, period_key) DO NOTHING RETURNING, else the existing row. */
@@ -100,11 +101,13 @@ export interface JobRunStore<Tx = unknown> extends Fence<Tx> {
   finish(token: LeaseToken, outcome: FinishOutcome): Promise<void>;
   /** Whether a heavy job other than `job` holds a live lease. */
   heavyRunLive(job: string): Promise<boolean>;
+  /** Read repositories bound to the org this store claimed `token`'s run for. Throws `LeaseLostError` for a run it never claimed. */
+  readRepos(token: LeaseToken): JobReadRepos;
 }
 
-export type HandleDeps<Tx = unknown> = {
+export type HandleDeps<W = unknown> = {
   readonly secrets: JobSecrets;
-  readonly store: JobRunStore<Tx>;
+  readonly store: JobRunStore<W>;
   readonly newLeaseOwner: () => string;
   /** A monotonic clock in milliseconds, for the deadline only. */
   readonly monotonicMs: () => number;
@@ -165,7 +168,7 @@ export function scrubErrorMessage(error: unknown): string | null {
     .slice(0, 500);
 }
 
-export async function handleJobRequest<Tx>(request: JobRequest, deps: HandleDeps<Tx>): Promise<JobResponse> {
+export async function handleJobRequest<W>(request: JobRequest, deps: HandleDeps<W>): Promise<JobResponse> {
   const registry: Readonly<Record<string, JobDefinition>> = deps.registry ?? JOB_REGISTRY;
   const isJob = (name: string): name is string => Object.hasOwn(registry, name);
 
@@ -228,13 +231,13 @@ export async function handleJobRequest<Tx>(request: JobRequest, deps: HandleDeps
   return { status: allOk ? 200 : 500, body: report };
 }
 
-async function runUnit<Tx>(
+async function runUnit<W>(
   def: JobDefinition,
   orgId: string,
   periodKey: string,
   trigger: JobTrigger,
   deadlineMs: number,
-  deps: HandleDeps<Tx>,
+  deps: HandleDeps<W>,
 ): Promise<UnitOutcome> {
   const { store } = deps;
   const period = periodBounds(def.periodKind, periodKey);
@@ -292,7 +295,7 @@ async function runUnit<Tx>(
   };
   const pastDeadline = () => deps.monotonicMs() >= deadlineMs;
 
-  const ctx: JobContext<Tx> = {
+  const ctx: JobContext<W> = {
     orgId,
     periodKey,
     period,
@@ -300,6 +303,7 @@ async function runUnit<Tx>(
     runId: row.id,
     attempt: row.attempt,
     resumeCursor: startCursor,
+    repos: store.readRepos(token),
     commit: async (write, options) => {
       if (leaseLost) throw new LeaseLostError(token);
       // A job that ignores shouldStop must not keep extending its lease (review J2).
