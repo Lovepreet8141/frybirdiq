@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { serverEnv } from "@/lib/env";
 import type { HandleDeps } from "@/lib/jobs/handle";
-import { JOB_REGISTRY, type JobDefinition } from "@/lib/jobs/registry";
+import { HEAVY_JOB_NAMES } from "@/lib/jobs/registry";
 import { createJobRunStore, type JobTx } from "@/lib/repositories/iq-job-runs";
 
 /**
@@ -15,16 +15,12 @@ import { createJobRunStore, type JobTx } from "@/lib/repositories/iq-job-runs";
  */
 export const JOB_CODE_VERSION = "unversioned";
 
-const HEAVY_JOBS = (Object.values(JOB_REGISTRY) as JobDefinition[])
-  .filter((job) => job.concurrency === "heavy")
-  .map((job) => job.name);
-
 /** Throws when the environment is invalid; the route turns that into an empty 404. */
 export function jobRouteDeps(): HandleDeps<JobTx> {
   const env = serverEnv();
   return {
     secrets: { current: env.JOB_SECRET, previous: env.JOB_SECRET_PREVIOUS },
-    store: createJobRunStore({ codeVersion: JOB_CODE_VERSION, heavyJobs: HEAVY_JOBS }),
+    store: createJobRunStore({ codeVersion: JOB_CODE_VERSION, heavyJobs: HEAVY_JOB_NAMES }),
     newLeaseOwner: randomUUID,
     monotonicMs: () => performance.now(),
     every: (ms, tick) => {

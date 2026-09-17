@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_TIMING, JOB_NAMES, JOB_REGISTRY, isJobName } from "./registry";
+import { DEFAULT_TIMING, HEAVY_JOB_NAMES, JOB_NAMES, JOB_REGISTRY, heavyJobNames, isJobName, type JobDefinition } from "./registry";
 
 const JOBS_DIR = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = join(JOBS_DIR, "..", "..", "..");
@@ -14,6 +14,16 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
     expect(JOB_NAMES).toEqual(["heartbeat"]);
     expect(isJobName("heartbeat")).toBe(true);
     expect(isJobName("constructor")).toBe(false);
+  });
+
+  it("lists heavy jobs from the registry: none today, since heartbeat is light", () => {
+    expect(HEAVY_JOB_NAMES).toEqual([]);
+    const fake = (name: string, concurrency: JobDefinition["concurrency"]): JobDefinition => ({
+      ...JOB_REGISTRY.heartbeat,
+      name,
+      concurrency,
+    });
+    expect(heavyJobNames({ a: fake("a", "heavy"), b: fake("b", "light"), c: fake("c", "heavy") })).toEqual(["a", "c"]);
   });
 
   it("uses lease 300s, heartbeat 60s, deadline 240s, 3 attempts", () => {

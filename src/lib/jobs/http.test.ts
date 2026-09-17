@@ -97,3 +97,62 @@ describe("job route responses (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
     expect(await manual.json()).toMatchObject({ periods: ["2026-09-17T08"], counts: { SUCCEEDED: 1 } });
   });
 });
+
+describe("body handling (review F1)", () => {
+  const CHUNK = 64 * 1024;
+  const TOTAL = 20 * 1024 * 1024;
+
+  /** A chunked 20 MB body with no Content-Length that counts how much was actually pulled. */
+  function chunkedOversize() {
+    const counter = { pulled: 0 };
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          if (counter.pulled >= TOTAL) return controller.close();
+          counter.pulled += CHUNK;
+          controller.enqueue(new Uint8Array(CHUNK).fill(0x7b));
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return { stream, counter };
+  }
+
+  const chunkedPost = (stream: ReadableStream<Uint8Array>, headers: Record<string, string>) =>
+    new Request("http://127.0.0.1:3000/api/jobs/heartbeat", {
+      method: "POST",
+      headers,
+      body: stream,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+
+  it("never reads the body of an unauthorized request, even a chunked 20 MB one", async () => {
+    const d = deps();
+    const { stream, counter } = chunkedOversize();
+    const request = chunkedPost(stream, { "x-forwarded-for": "127.0.0.1", host: "frybirdiq.tech", authorization: `Bearer ${SECRET}` });
+    expect(request.headers.get("content-length")).toBeNull();
+    await expectEmpty(await respondToJobRequest(request, "heartbeat", () => d), 404);
+    expect(counter.pulled).toBeLessThanOrEqual(CHUNK);
+    expect(d.store.runs.size).toBe(0);
+  });
+
+  it("stops reading an authorized chunked body just past 1 KB", async () => {
+    const d = deps();
+    const { stream, counter } = chunkedOversize();
+    const request = chunkedPost(stream, { "x-forwarded-for": "127.0.0.1", host: JOB_HOST, authorization: `Bearer ${SECRET}` });
+    await expectEmpty(await respondToJobRequest(request, "heartbeat", () => d), 404);
+    expect(counter.pulled).toBeLessThanOrEqual(2 * CHUNK);
+    expect(d.store.runs.size).toBe(0);
+  });
+
+  it("refuses a body that is not valid UTF-8", async () => {
+    const d = deps();
+    const bytes = new Uint8Array([0x7b, 0xff, 0x7d]);
+    const request = new Request("http://127.0.0.1:3000/api/jobs/heartbeat", {
+      method: "POST",
+      headers: { "x-forwarded-for": "127.0.0.1", host: JOB_HOST, authorization: `Bearer ${SECRET}` },
+      body: bytes,
+    });
+    await expectEmpty(await respondToJobRequest(request, "heartbeat", () => d), 404);
+  });
+});
