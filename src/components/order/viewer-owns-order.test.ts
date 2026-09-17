@@ -52,13 +52,13 @@ describe("greetingName", () => {
 });
 
 describe("redactReceiptCustomerForViewer", () => {
-  const customer = { name: "Priya", phone: "9876543210", address: "12 MG Road" };
+  const customer = { name: "Priya", phone: "9876543210", address: "12 MG Road", loyaltyTier: "gold" };
 
   it("passes the owner's receipt through untouched", () => {
     expect(redactReceiptCustomerForViewer(customer, true)).toEqual(customer);
   });
 
-  it("withholds a stranger's name and phone but keeps every other field", () => {
-    expect(redactReceiptCustomerForViewer(customer, false)).toEqual({ ...customer, name: null, phone: null });
+  it("withholds a stranger's name, phone and delivery address but keeps every other field", () => {
+    expect(redactReceiptCustomerForViewer(customer, false)).toEqual({ ...customer, name: null, phone: null, address: null });
   });
 });
