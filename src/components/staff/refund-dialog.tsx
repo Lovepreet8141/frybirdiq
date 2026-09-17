@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { refundPaymentAction } from "@/lib/finance/actions";
-import { type Paise, ZERO, formatAmount, formatINR } from "@/lib/money";
+import { type Paise, ZERO, compare, formatAmount, formatINR, toPlainDecimal } from "@/lib/money";
 import { readAmount } from "./refund-amount";
 
 /**
@@ -57,10 +57,13 @@ export function RefundDialog({
   }
 
   function submit() {
-    if (!payment || amountError) return;
+    if (!payment || amountError || compare(typedAmount, ZERO) <= 0) return;
     setError(null);
     startTransition(async () => {
-      const result = await refundPaymentAction({ paymentId: payment.id, amount: formatAmount(typedAmount), reason, idempotencyKey });
+      // Ungrouped: refundPaymentAction's schema (finance/actions.ts) is
+      // /^\d+(\.\d{1,2})?$/ and rejects the en-IN comma grouping formatAmount
+      // gives the display below — "1,500" fails it, "1500.00" doesn't.
+      const result = await refundPaymentAction({ paymentId: payment.id, amount: toPlainDecimal(typedAmount), reason, idempotencyKey });
       if (result.ok) {
         setDone(`Refunded. ${payment.provider === "razorpay" ? "Razorpay has been told; the customer sees it in a few days." : "Hand the cash over now."}`);
         router.refresh();
@@ -138,7 +141,11 @@ export function RefundDialog({
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
                 Cancel
               </Button>
-              <Button variant="destructive" onClick={submit} disabled={pending || reason.trim().length < 3 || amountError !== null}>
+              <Button
+                variant="destructive"
+                onClick={submit}
+                disabled={pending || reason.trim().length < 3 || amountError !== null || compare(typedAmount, ZERO) <= 0}
+              >
                 {pending ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
                 {pending ? "Refunding" : `Refund ${formatINR(typedAmount)}`}
               </Button>
