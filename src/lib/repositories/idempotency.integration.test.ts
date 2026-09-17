@@ -9,11 +9,12 @@
  * exercise at all.
  */
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { idempotencyKeys } from "@/db/schema";
-import { IdempotencyConflict, withIdempotency } from "./idempotency";
+import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
+import { IdempotencyConflict, fingerprint, withIdempotency } from "./idempotency";
 
 const OPERATION = "integration_test_op";
 
@@ -119,5 +120,125 @@ describe("withIdempotency", () => {
     const b = await withIdempotency({ key: randomUUID(), operation: OPERATION, request: { same: true } }, work);
     expect(runs).toBe(2);
     expect(a.result).not.toEqual(b.result);
+  });
+});
+
+/**
+ * idem-1 (SECURITY C1): the unique key is (key, operation) with no org, so
+ * every path must refuse a row another org holds — the replay, the wait, the
+ * release on failure and the final store.
+ */
+describe("withIdempotency across orgs", () => {
+  let a: TestOrg;
+  let b: TestOrg;
+
+  beforeAll(async () => {
+    a = await createTestOrg();
+    b = await createTestOrg();
+  });
+
+  afterAll(async () => {
+    await deleteTestOrg(a.orgId);
+    await deleteTestOrg(b.orgId);
+  });
+
+  const rowFor = async (key: string) => {
+    const [row] = await db()
+      .select()
+      .from(idempotencyKeys)
+      .where(and(eq(idempotencyKeys.key, key), eq(idempotencyKeys.operation, OPERATION)));
+    return row;
+  };
+
+  it("refuses another org's key with the same body instead of replaying its result, and the owner still replays", async () => {
+    const key = randomUUID();
+    const request = { paymentId: "same-body", amount: "9900" };
+    let runs = 0;
+
+    const first = await withIdempotency({ key, operation: OPERATION, orgId: a.orgId, request }, async () => ({ runs: ++runs, org: "a" }));
+    await expect(withIdempotency({ key, operation: OPERATION, orgId: b.orgId, request }, async () => ({ runs: ++runs, org: "b" }))).rejects.toThrow(IdempotencyConflict);
+
+    const again = await withIdempotency({ key, operation: OPERATION, orgId: a.orgId, request }, async () => ({ runs: ++runs, org: "a" }));
+    expect(runs).toBe(1);
+    expect(again).toEqual({ result: first.result, replayed: true });
+    expect((await rowFor(key))?.orgId).toBe(a.orgId);
+  });
+
+  it("refuses another org's in-flight claim at once rather than waiting for or taking it over", async () => {
+    const key = randomUUID();
+    const request = { cart: "in-flight" };
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+
+    const owner = withIdempotency({ key, operation: OPERATION, orgId: a.orgId, request }, async () => {
+      await held;
+      return { org: "a" };
+    });
+    // The owner's claim row is committed before its work starts waiting.
+    for (let i = 0; i < 200 && !(await rowFor(key)); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const started = Date.now();
+    let otherRan = false;
+    await expect(
+      withIdempotency({ key, operation: OPERATION, orgId: b.orgId, request }, async () => {
+        otherRan = true;
+        return { org: "b" };
+      }),
+    ).rejects.toThrow(IdempotencyConflict);
+    expect(otherRan).toBe(false);
+    expect(Date.now() - started).toBeLessThan(5_000);
+
+    release();
+    expect(await owner).toEqual({ result: { org: "a" }, replayed: false });
+  });
+
+  it("a takeover never releases or completes a claim another org made while its work ran", async () => {
+    const key = randomUUID();
+    const request = { cart: "takeover" };
+    const claimAsOrgA = () => db().insert(idempotencyKeys).values({ orgId: a.orgId, key, operation: OPERATION, requestFingerprint: fingerprint({ orgId: a.orgId, request }) });
+
+    // B holds the key first; A claims it in the gap after B's work started. B's success must not write into A's row.
+    const done = await withIdempotency({ key, operation: OPERATION, orgId: b.orgId, request }, async () => {
+      await db().delete(idempotencyKeys).where(and(eq(idempotencyKeys.key, key), eq(idempotencyKeys.operation, OPERATION)));
+      await claimAsOrgA();
+      return { org: "b" };
+    });
+    expect(done).toEqual({ result: { org: "b" }, replayed: false });
+    let row = await rowFor(key);
+    expect(row?.orgId).toBe(a.orgId);
+    expect(row?.responseSnapshot).toBeNull();
+
+    // Same gap, but B's work fails: its release must not delete A's claim.
+    await db().delete(idempotencyKeys).where(and(eq(idempotencyKeys.key, key), eq(idempotencyKeys.operation, OPERATION)));
+    await expect(
+      withIdempotency({ key, operation: OPERATION, orgId: b.orgId, request }, async () => {
+        await db().delete(idempotencyKeys).where(and(eq(idempotencyKeys.key, key), eq(idempotencyKeys.operation, OPERATION)));
+        await claimAsOrgA();
+        throw new Error("simulated failure");
+      }),
+    ).rejects.toThrow("simulated failure");
+    row = await rowFor(key);
+    expect(row?.orgId).toBe(a.orgId);
+  });
+
+  it("still replays a row stored before idem-1 (request-only fingerprint) to its own org, and refuses it to another", async () => {
+    const key = randomUUID();
+    const request = { cart: "legacy" };
+    await db()
+      .insert(idempotencyKeys)
+      .values({ orgId: a.orgId, key, operation: OPERATION, requestFingerprint: fingerprint(request), responseSnapshot: { orderId: "stored-before" } });
+
+    await expect(withIdempotency({ key, operation: OPERATION, orgId: b.orgId, request }, async () => ({ orderId: "b" }))).rejects.toThrow(IdempotencyConflict);
+    expect(await withIdempotency({ key, operation: OPERATION, orgId: a.orgId, request }, async () => ({ orderId: "rerun" }))).toEqual({
+      result: { orderId: "stored-before" },
+      replayed: true,
+    });
+  });
+
+  it("an org-scoped call and an org-less call never share a row", async () => {
+    const key = randomUUID();
+    const request = { cart: "no-org" };
+    await withIdempotency({ key, operation: OPERATION, request }, async () => ({ orderId: "none" }));
+    await expect(withIdempotency({ key, operation: OPERATION, orgId: a.orgId, request }, async () => ({ orderId: "a" }))).rejects.toThrow(IdempotencyConflict);
   });
 });
