@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requirePermission } from "@/lib/auth";
 import { type RangeKey, resolveRange } from "@/lib/dates";
 import { toCsv } from "@/lib/exports/csv";
+import { exportFilename } from "@/lib/exports/filename";
 import { formatBps, toPlainDecimal } from "@/lib/money";
 import { listExpenses } from "@/lib/repositories/expenses";
 import { getPaymentsLedger } from "@/lib/repositories/finance";
@@ -104,12 +105,8 @@ export async function GET(request: Request): Promise<Response> {
     }
   }
 
-  const from = range.from.toISOString().slice(0, 10);
-  // The range's `to` is exclusive (midnight of the day after) — the last
-  // covered instant is a millisecond earlier, same convention `expenses.ts`
-  // already uses to turn it back into a calendar date for a filename.
-  const to = new Date(range.to.getTime() - 1).toISOString().slice(0, 10);
-  const filename = `frybird-${type}-${from}_to_${to}.csv`;
+  // IST business dates, not UTC — see `exportFilename`.
+  const filename = exportFilename(type, range);
 
   // A leading BOM so Excel opens the file as UTF-8 rather than guessing at
   // the system codepage — the failure mode is a customer's name with a
