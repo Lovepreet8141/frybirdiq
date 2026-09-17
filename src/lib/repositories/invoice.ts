@@ -2,7 +2,7 @@ import "server-only";
 
 /** Everything a tax invoice or a customer receipt needs, gathered in one read. */
 
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { locations, orderItemModifiers, orderItems, orders, organizations, payments } from "@/db/schema";
 import { type Paise, paise } from "@/lib/money";
@@ -81,20 +81,55 @@ export interface Invoice {
   readonly pointsRedeemed: number;
 }
 
-export async function getInvoice(orderId: string): Promise<Invoice | null> {
+/**
+ * One order's invoice, read only inside `orgId`. The app connects as a role
+ * that bypasses row-level security, so every read below filters `org_id`
+ * itself: an order id from another organization returns null, exactly as an
+ * id that does not exist.
+ */
+export async function getInvoice(orgId: string, orderId: string): Promise<Invoice | null> {
   const database = db();
 
-  const [order] = await database.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+  const [order] = await database
+    .select()
+    .from(orders)
+    .where(and(eq(orders.id, orderId), eq(orders.orgId, orgId)))
+    .limit(1);
   if (!order) return null;
 
-  const [org] = await database.select().from(organizations).where(eq(organizations.id, order.orgId)).limit(1);
-  const [location] = await database.select().from(locations).where(eq(locations.id, order.locationId)).limit(1);
-  const items = await database.select().from(orderItems).where(eq(orderItems.orderId, order.id));
-  const mods = await database.select().from(orderItemModifiers).where(eq(orderItemModifiers.orgId, order.orgId));
+  const [org] = await database.select().from(organizations).where(eq(organizations.id, orgId)).limit(1);
+  const [location] = await database
+    .select()
+    .from(locations)
+    .where(and(eq(locations.id, order.locationId), eq(locations.orgId, orgId)))
+    .limit(1);
+  const items = await database
+    .select()
+    .from(orderItems)
+    .where(and(eq(orderItems.orderId, order.id), eq(orderItems.orgId, orgId)));
+  const mods =
+    items.length === 0
+      ? []
+      : await database
+          .select()
+          .from(orderItemModifiers)
+          .where(
+            and(
+              eq(orderItemModifiers.orgId, orgId),
+              inArray(
+                orderItemModifiers.orderItemId,
+                items.map((item) => item.id),
+              ),
+            ),
+          );
 
   // Captured beats pending, same rule the order-tracking page reads by —
   // once money has arrived that is the payment, whatever else was attempted.
-  const paymentRows = await database.select().from(payments).where(eq(payments.orderId, order.id)).orderBy(desc(payments.createdAt));
+  const paymentRows = await database
+    .select()
+    .from(payments)
+    .where(and(eq(payments.orderId, order.id), eq(payments.orgId, orgId)))
+    .orderBy(desc(payments.createdAt));
   const paymentRow = paymentRows.find((row) => row.status === "CAPTURED") ?? paymentRows[0] ?? null;
 
   // Tax is split evenly per line the same way it was charged; the order-level

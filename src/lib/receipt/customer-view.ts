@@ -21,6 +21,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { loyaltyStampEvents, organizations } from "@/db/schema";
 import { type Invoice, getInvoice } from "@/lib/repositories/invoice";
+import { getOrg } from "@/lib/repositories/org";
 import { getPointsBalance, getStampAccountState } from "@/lib/repositories/loyalty";
 import { type Paise, paise } from "@/lib/money";
 
@@ -45,9 +46,17 @@ export interface CustomerReceiptData extends Invoice {
  * One order's receipt, ready to render. Returns null exactly when `getInvoice`
  * would — the caller (`/order/[id]/invoice`) turns that into a 404, the same
  * as it does today.
+ *
+ * Access is unchanged: holding the order's UUID is what grants it, as on
+ * `/order/[id]`. The order is also bound to this site's organization, resolved
+ * server-side through `getOrg` and never taken from the request, so another
+ * organization's order id returns null rather than its customer's details.
  */
 export async function getCustomerReceipt(orderId: string): Promise<CustomerReceiptData | null> {
-  const invoice = await getInvoice(orderId);
+  const org = await getOrg();
+  if (!org) return null;
+
+  const invoice = await getInvoice(org.id, orderId);
   if (!invoice) return null;
 
   const isTaxInvoice = Boolean(invoice.seller.gstin);
@@ -68,7 +77,13 @@ async function loadRewards(invoice: Invoice): Promise<ReceiptRewards | null> {
     db()
       .select({ id: loyaltyStampEvents.id })
       .from(loyaltyStampEvents)
-      .where(and(eq(loyaltyStampEvents.orderId, invoice.orderId), isNull(loyaltyStampEvents.reversedAt)))
+      .where(
+        and(
+          eq(loyaltyStampEvents.orgId, invoice.orgId),
+          eq(loyaltyStampEvents.orderId, invoice.orderId),
+          isNull(loyaltyStampEvents.reversedAt),
+        ),
+      )
       .limit(1)
       .then((rows) => rows[0] ?? null),
   ]);
