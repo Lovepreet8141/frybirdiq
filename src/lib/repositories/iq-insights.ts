@@ -17,7 +17,8 @@ import "server-only";
  * content hashes on the org's ACTIVE row with the same dedupe key:
  *   - same hash → nothing to write (NOOP);
  *   - different hash, nothing references the row yet → update it in place;
- *   - different hash, referenced → the old row becomes SUPERSEDED, a new row
+ *   - different hash (or a re-proposal after cooldown), referenced → the old
+ *     row becomes SUPERSEDED, a new row
  *     supersedes it, and every still-PROPOSED recommendation that cited the
  *     old row (as its own insight or as evidence) is SUPERSEDED with it.
  * The database backs this up: a referenced insight's content is frozen by a
@@ -173,7 +174,20 @@ async function supersedeRecommendationsCiting(tx: IqTx, orgId: string, insightId
  * the partial unique index (23505) and its transaction rolls back; chunks are
  * idempotent, so the retry lands as NOOP or UPDATED.
  */
-export async function writeInsight(tx: IqTx, lease: IqWriteLease, insight: Insight): Promise<WriteInsightResult> {
+export async function writeInsight(
+  tx: IqTx,
+  lease: IqWriteLease,
+  insight: Insight,
+  options: {
+    /**
+     * Supersede a referenced row even when the content is unchanged. Used only
+     * to re-propose a recommendation after its dismissal or expiry cooldown:
+     * the closed recommendation holds the old row, so the new one needs a row
+     * of its own (RELIABILITY M2).
+     */
+    readonly replaceIfReferenced?: boolean;
+  } = {},
+): Promise<WriteInsightResult> {
   await assertLease(tx, lease);
   const claim = await checkWritable(insight, lease);
   const orgId = lease.orgId;
@@ -196,7 +210,9 @@ export async function writeInsight(tx: IqTx, lease: IqWriteLease, insight: Insig
     return { outcome: "INSERTED", insightId: claim.id };
   }
 
-  if (active.contentHash === claim.contentHash) return { outcome: "NOOP", insightId: active.id };
+  const replace = options.replaceIfReferenced === true && active.referencedAt !== null;
+  if (active.contentHash === claim.contentHash && !replace) return { outcome: "NOOP", insightId: active.id };
+  if (replace && claim.id === active.id) throw new Error("iq-insights: a replacement needs a new insight id");
 
   if (active.referencedAt === null) {
     await tx

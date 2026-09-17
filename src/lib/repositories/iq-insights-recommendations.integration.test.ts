@@ -23,8 +23,8 @@ import { iqInsights, iqJobRuns, iqRecommendations } from "@/db/schema";
 import { actionParamsHash, computeContentHash, type Insight, type InsightOf } from "@/lib/iq/engine";
 import { isLeaseLost } from "@/lib/jobs/fence";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
-import { getInsight, listInsights, readFactFigures, writeInsight, type IqWriteLease } from "./iq-insights";
-import { listOpenRecommendations, proposeRecommendation, recommendationHistory } from "./iq-recommendations";
+import { getInsight, listInsights, readFactFigures, writeInsight, type IqTx, type IqWriteLease } from "./iq-insights";
+import { listOpenRecommendations, proposeRecommendation, recommendationHistory, type ProposeInput } from "./iq-recommendations";
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
@@ -89,8 +89,11 @@ function envelope(org: TestOrg, lease: IqWriteLease, dedupeKey: string) {
   };
 }
 
-function fact(org: TestOrg, lease: IqWriteLease, dedupeKey: string, paise: string): Promise<InsightOf<"FACT">> {
-  return sealed<"FACT">({
+/** The content hash each test insight was built with, so a proposal can pin the evidence it read. */
+const pinned = new Map<string, string>();
+
+async function fact(org: TestOrg, lease: IqWriteLease, dedupeKey: string, paise: string): Promise<InsightOf<"FACT">> {
+  const built = await sealed<"FACT">({
     ...envelope(org, lease, dedupeKey),
     claimType: "FACT",
     payload: {
@@ -99,7 +102,30 @@ function fact(org: TestOrg, lease: IqWriteLease, dedupeKey: string, paise: strin
       sourceQueryId: "orders.net-revenue",
     } as InsightOf<"FACT">["payload"],
   });
+  pinned.set(built.id, built.contentHash);
+  return built;
 }
+
+/** Writes `count` FACT insights for a recommendation to rest on and returns their ids. */
+async function evidenceIds(org: TestOrg, lease: IqWriteLease, count = 1): Promise<string[]> {
+  const ids: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const e = await fact(org, lease, `evidence:${randomUUID()}`, "100");
+    await db().transaction((tx) => writeInsight(tx, lease, e));
+    ids.push(e.id);
+  }
+  return ids;
+}
+
+/** proposeRecommendation with the evidence pinned at the hashes the test built it with. */
+function propose(tx: IqTx, lease: IqWriteLease, input: Omit<ProposeInput, "evidenceContentHashes"> & Partial<Pick<ProposeInput, "evidenceContentHashes">>) {
+  const evidenceContentHashes =
+    input.evidenceContentHashes ??
+    Object.fromEntries(input.insight.payload.evidenceInsightIds.map((id) => [id, pinned.get(id) ?? "0".repeat(64)]));
+  return proposeRecommendation(tx, lease, { ...input, evidenceContentHashes });
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function recommendation(
   org: TestOrg,
@@ -230,7 +256,7 @@ describe("writeInsight — content-hash rules", () => {
     await db().transaction((tx) => writeInsight(tx, lease, evidence));
 
     const rec = await recommendation(org, lease, `rec:${randomUUID()}`, [evidence.id]);
-    const proposed = await db().transaction((tx) => proposeRecommendation(tx, lease, { insight: rec, params: { sku: "wings", batch: randomUUID() } }));
+    const proposed = await db().transaction((tx) => propose(tx, lease, { insight: rec, params: { sku: "wings", batch: randomUUID() } }));
     expect(proposed.outcome).toBe("PROPOSED");
     expect((await insightRow(evidence.id))?.referencedAt).not.toBeNull();
 
@@ -271,7 +297,7 @@ describe("proposeRecommendation", () => {
 
     const seenInside = await db().transaction(async (tx) => {
       await writeInsight(tx, lease, evidence);
-      const result = await proposeRecommendation(tx, lease, input);
+      const result = await propose(tx, lease, input);
       const [inTx] = await tx.select({ referencedAt: iqInsights.referencedAt }).from(iqInsights).where(eq(iqInsights.id, evidence.id));
       return { result, referencedAt: inTx?.referencedAt ?? null };
     });
@@ -279,7 +305,7 @@ describe("proposeRecommendation", () => {
     expect(seenInside.referencedAt).not.toBeNull();
     expect((await insightRow(rec.id))?.referencedAt).not.toBeNull();
 
-    expect(await db().transaction((tx) => proposeRecommendation(tx, lease, input))).toEqual({ outcome: "NOOP", insightId: rec.id });
+    expect(await db().transaction((tx) => propose(tx, lease, input))).toEqual({ outcome: "NOOP", insightId: rec.id });
     const rows = await db().select().from(iqRecommendations).where(eq(iqRecommendations.insightId, rec.id));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ impactUnit: "paise", impactLow: 150000n, impactHigh: 300000n, confidence: "MEDIUM", tier: "A1" });
@@ -289,10 +315,10 @@ describe("proposeRecommendation", () => {
     const lease = await startRun(org);
     const dedupeKey = `rec:${randomUUID()}`;
     const params = { batch: randomUUID() };
-    const v1 = await recommendation(org, lease, dedupeKey, [randomUUID()]);
-    const first = await db().transaction((tx) => proposeRecommendation(tx, lease, { insight: v1, params }));
+    const v1 = await recommendation(org, lease, dedupeKey, await evidenceIds(org, lease));
+    const first = await db().transaction((tx) => propose(tx, lease, { insight: v1, params }));
     const v2 = await recommendation(org, lease, dedupeKey, v1.payload.evidenceInsightIds, "400000");
-    const second = await db().transaction((tx) => proposeRecommendation(tx, lease, { insight: v2, params }));
+    const second = await db().transaction((tx) => propose(tx, lease, { insight: v2, params }));
     if (first.outcome !== "PROPOSED" || second.outcome !== "PROPOSED") throw new Error("expected two proposals");
     expect(second.supersededRecommendationIds).toEqual([first.recommendationId]);
     const open = await listOpenRecommendations(org.orgId);
@@ -303,10 +329,10 @@ describe("proposeRecommendation", () => {
   it("refuses an open duplicate of the same action under another dedupe key", async () => {
     const lease = await startRun(org);
     const params = { batch: randomUUID() };
-    const a = await recommendation(org, lease, `rec:${randomUUID()}`, [randomUUID()]);
-    const first = await db().transaction((tx) => proposeRecommendation(tx, lease, { insight: a, params }));
-    const b = await recommendation(org, lease, `rec:${randomUUID()}`, [randomUUID()]);
-    const second = await db().transaction((tx) => proposeRecommendation(tx, lease, { insight: b, params }));
+    const a = await recommendation(org, lease, `rec:${randomUUID()}`, await evidenceIds(org, lease));
+    const first = await db().transaction((tx) => propose(tx, lease, { insight: a, params }));
+    const b = await recommendation(org, lease, `rec:${randomUUID()}`, await evidenceIds(org, lease));
+    const second = await db().transaction((tx) => propose(tx, lease, { insight: b, params }));
     if (first.outcome !== "PROPOSED") throw new Error("expected a proposal");
     expect(second).toEqual({ outcome: "OPEN_DUPLICATE", openRecommendationId: first.recommendationId });
     expect(await insightRow(b.id)).toBeUndefined();
@@ -317,8 +343,8 @@ describe("proposeRecommendation", () => {
 
     async function closed(status: "DISMISSED" | "EXPIRED", ageMs: number) {
       const params = { batch: randomUUID() };
-      const rec = await recommendation(org, lease, `rec:${randomUUID()}`, [randomUUID()]);
-      const first = await db().transaction((tx) => proposeRecommendation(tx, lease, { insight: rec, params }));
+      const rec = await recommendation(org, lease, `rec:${randomUUID()}`, await evidenceIds(org, lease));
+      const first = await db().transaction((tx) => propose(tx, lease, { insight: rec, params }));
       if (first.outcome !== "PROPOSED") throw new Error("expected a proposal");
       await db()
         .update(iqRecommendations)
@@ -328,8 +354,8 @@ describe("proposeRecommendation", () => {
           decidedByUserId: status === "DISMISSED" ? randomUUID() : null,
         })
         .where(and(eq(iqRecommendations.id, first.recommendationId), eq(iqRecommendations.orgId, org.orgId)));
-      const next = await recommendation(org, lease, `rec:${randomUUID()}`, [randomUUID()]);
-      return db().transaction((tx) => proposeRecommendation(tx, lease, { insight: next, params }));
+      const next = await recommendation(org, lease, `rec:${randomUUID()}`, await evidenceIds(org, lease));
+      return db().transaction((tx) => propose(tx, lease, { insight: next, params }));
     }
 
     expect(await closed("DISMISSED", 6 * DAY)).toMatchObject({ outcome: "COOLDOWN", reason: "DISMISSED_COOLDOWN" });
@@ -342,14 +368,14 @@ describe("proposeRecommendation", () => {
     const lease = await startRun(org);
     const recDedupe = `rec:${randomUUID()}`;
     // Another run's open recommendation already holds this dedupe key, for a different action params hash.
-    const holder = await recommendation(org, lease, `holder:${randomUUID()}`, [randomUUID()]);
-    const held = await db().transaction((tx) => proposeRecommendation(tx, lease, { insight: holder, params: { batch: randomUUID() } }));
+    const holder = await recommendation(org, lease, `holder:${randomUUID()}`, await evidenceIds(org, lease));
+    const held = await db().transaction((tx) => propose(tx, lease, { insight: holder, params: { batch: randomUUID() } }));
     if (held.outcome !== "PROPOSED") throw new Error("expected a proposal");
     await db().update(iqRecommendations).set({ dedupeKey: recDedupe }).where(eq(iqRecommendations.id, held.recommendationId));
 
-    const mine = await recommendation(org, lease, recDedupe, [randomUUID()]);
+    const mine = await recommendation(org, lease, recDedupe, await evidenceIds(org, lease));
     const outcome = await db().transaction(async (tx) => {
-      const result = await proposeRecommendation(tx, lease, { insight: mine, params: { batch: randomUUID() } });
+      const result = await propose(tx, lease, { insight: mine, params: { batch: randomUUID() } });
       const [check] = await tx.execute<{ ok: number }>(sql`SELECT 1 AS ok`);
       return { result, usable: check?.ok === 1 };
     });
@@ -433,9 +459,9 @@ describe("proposeRecommendation — params are validated and hashed server-side 
     ["an over-long string", { note: "x".repeat(201) }],
   ])("refuses %s and writes nothing", async (_case, params) => {
     const lease = await startRun(org);
-    const rec = await recommendation(org, lease, `rec:${randomUUID()}`, [randomUUID()]);
+    const rec = await recommendation(org, lease, `rec:${randomUUID()}`, await evidenceIds(org, lease));
     const error = await thrown(
-      db().transaction((tx) => proposeRecommendation(tx, lease, { insight: rec, params: params as Record<string, string> })),
+      db().transaction((tx) => propose(tx, lease, { insight: rec, params: params as Record<string, string> })),
     );
     expect(String(error)).toMatch(/invalid action params/);
     expect(await insightRow(rec.id)).toBeUndefined();
@@ -444,28 +470,28 @@ describe("proposeRecommendation — params are validated and hashed server-side 
   it("stores the hash it computed from canonical params, so key order cannot split one action in two", async () => {
     const lease = await startRun(org);
     const batch = randomUUID();
-    const a = await recommendation(org, lease, `rec:${randomUUID()}`, [randomUUID()]);
+    const a = await recommendation(org, lease, `rec:${randomUUID()}`, await evidenceIds(org, lease));
     const first = await db().transaction((tx) =>
-      proposeRecommendation(tx, lease, { insight: a, params: { sku: "wings", batch, quantity: 4 } }),
+      propose(tx, lease, { insight: a, params: { sku: "wings", batch, quantity: 4 } }),
     );
     if (first.outcome !== "PROPOSED") throw new Error("expected a proposal");
     const [row] = await db().select().from(iqRecommendations).where(eq(iqRecommendations.id, first.recommendationId));
     expect(row?.paramsHash).toBe(await actionParamsHash({ batch, quantity: 4, sku: "wings" }));
     expect(row?.params).toEqual({ sku: "wings", batch, quantity: 4 });
 
-    const b = await recommendation(org, lease, `rec:${randomUUID()}`, [randomUUID()]);
+    const b = await recommendation(org, lease, `rec:${randomUUID()}`, await evidenceIds(org, lease));
     const second = await db().transaction((tx) =>
-      proposeRecommendation(tx, lease, { insight: b, params: { quantity: 4, batch, sku: "wings" } }),
+      propose(tx, lease, { insight: b, params: { quantity: 4, batch, sku: "wings" } }),
     );
     expect(second).toEqual({ outcome: "OPEN_DUPLICATE", openRecommendationId: first.recommendationId });
   });
 
   it("refuses a caller's params hash that does not match the params", async () => {
     const lease = await startRun(org);
-    const rec = await recommendation(org, lease, `rec:${randomUUID()}`, [randomUUID()]);
+    const rec = await recommendation(org, lease, `rec:${randomUUID()}`, await evidenceIds(org, lease));
     const error = await thrown(
       db().transaction((tx) =>
-        proposeRecommendation(tx, lease, { insight: rec, params: { batch: randomUUID() }, expectedParamsHash: sha("other") }),
+        propose(tx, lease, { insight: rec, params: { batch: randomUUID() }, expectedParamsHash: sha("other") }),
       ),
     );
     expect(String(error)).toMatch(/params hash/);
@@ -475,10 +501,10 @@ describe("proposeRecommendation — params are validated and hashed server-side 
   it("refuses an action kind outside the catalog, a tier that disagrees with it, and a kind blocked by an owner decision", async () => {
     const lease = await startRun(org);
     async function attempt(actionKind: string, tier: "A1" | "A2") {
-      const rec = await recommendation(org, lease, `rec:${randomUUID()}`, [randomUUID()]);
+      const rec = await recommendation(org, lease, `rec:${randomUUID()}`, await evidenceIds(org, lease));
       const insight = await sealed<"RECOMMENDATION">({ ...rec, payload: { ...rec.payload, actionKind, tier } });
       const result = await thrown(
-        db().transaction((tx) => proposeRecommendation(tx, lease, { insight, params: { batch: randomUUID() } })),
+        db().transaction((tx) => propose(tx, lease, { insight, params: { batch: randomUUID() } })),
       );
       return { result, stored: await insightRow(insight.id) };
     }
@@ -489,5 +515,132 @@ describe("proposeRecommendation — params are validated and hashed server-side 
     const blocked = await attempt("customer.winback_message", "A2");
     expect(String(blocked.result)).toMatch(/dec-5/);
     expect([unknown.stored, wrongTier.stored, blocked.stored]).toEqual([undefined, undefined, undefined]);
+  });
+});
+
+describe("proposeRecommendation — concurrency and re-proposal (RELIABILITY M1, M2, S1)", () => {
+  it("M1: refuses evidence that is missing, not ACTIVE, or no longer at the pinned hash", async () => {
+    const lease = await startRun(org);
+    const [e] = await evidenceIds(org, lease);
+    const rec = await recommendation(org, lease, `rec:${randomUUID()}`, [e!]);
+    const stale = await db().transaction((tx) => propose(tx, lease, { insight: rec, params: { batch: randomUUID() }, evidenceContentHashes: { [e!]: sha("old") } }));
+    expect(stale).toEqual({ outcome: "STALE_EVIDENCE", insightIds: [e] });
+
+    const ghost = randomUUID();
+    const onGhost = await recommendation(org, lease, `rec:${randomUUID()}`, [ghost]);
+    const missing = await db().transaction((tx) => propose(tx, lease, { insight: onGhost, params: { batch: randomUUID() }, evidenceContentHashes: { [ghost]: sha("x") } }));
+    expect(missing).toEqual({ outcome: "STALE_EVIDENCE", insightIds: [ghost] });
+    expect([await insightRow(rec.id), await insightRow(onGhost.id)]).toEqual([undefined, undefined]);
+  });
+
+  /** Runs `first` in a transaction held open until `second` has had time to block on it. */
+  async function race<A, B>(first: (tx: IqTx) => Promise<A>, second: (tx: IqTx) => Promise<B>) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let firstWrote!: () => void;
+    const wrote = new Promise<void>((resolve) => (firstWrote = resolve));
+    const a = db().transaction(async (tx) => {
+      const result = await first(tx);
+      firstWrote();
+      await gate;
+      return result;
+    });
+    await wrote;
+    let secondDone = false;
+    const b = db()
+      .transaction((tx) => second(tx))
+      .finally(() => (secondDone = true));
+    await sleep(400);
+    const finishedWhileFirstOpen = secondDone;
+    release();
+    return { a: await a, b: await b, finishedWhileFirstOpen };
+  }
+
+  it("M1(a): a proposal racing an in-place update of its evidence does not freeze content it never read", async () => {
+    const leaseW = await startRun(org);
+    const leaseR = await startRun(org);
+    const key = `evidence:${randomUUID()}`;
+    const e = await fact(org, leaseW, key, "100");
+    await db().transaction((tx) => writeInsight(tx, leaseW, e));
+    const changed = await fact(org, leaseW, key, "200");
+    const rec = await recommendation(org, leaseR, `rec:${randomUUID()}`, [e.id]);
+
+    const { a, b } = await race(
+      (tx) => writeInsight(tx, leaseW, { ...changed, id: randomUUID() }),
+      (tx) => propose(tx, leaseR, { insight: rec, params: { batch: randomUUID() }, evidenceContentHashes: { [e.id]: e.contentHash } }),
+    );
+    expect(a.outcome).toBe("UPDATED");
+    expect(b).toEqual({ outcome: "STALE_EVIDENCE", insightIds: [e.id] });
+    expect((await insightRow(e.id))?.referencedAt).toBeNull();
+  });
+
+  it("M1(b): a proposal racing the supersede of its evidence is refused instead of resting on a SUPERSEDED insight", async () => {
+    const lease = await startRun(org);
+    const leaseR = await startRun(org);
+    const key = `evidence:${randomUUID()}`;
+    const e = await fact(org, lease, key, "100");
+    await db().transaction((tx) => writeInsight(tx, lease, e));
+    const earlier = await recommendation(org, lease, `rec:${randomUUID()}`, [e.id]);
+    expect((await db().transaction((tx) => propose(tx, lease, { insight: earlier, params: { batch: randomUUID() } }))).outcome).toBe("PROPOSED");
+
+    const revised = await fact(org, lease, key, "300");
+    const rec = await recommendation(org, leaseR, `rec:${randomUUID()}`, [e.id]);
+    const { a, b } = await race(
+      (tx) => writeInsight(tx, lease, revised),
+      (tx) => propose(tx, leaseR, { insight: rec, params: { batch: randomUUID() }, evidenceContentHashes: { [e.id]: e.contentHash } }),
+    );
+    expect(a.outcome).toBe("SUPERSEDED");
+    expect(b).toEqual({ outcome: "STALE_EVIDENCE", insightIds: [e.id] });
+    const open = await db()
+      .select({ id: iqRecommendations.id })
+      .from(iqRecommendations)
+      .where(and(eq(iqRecommendations.orgId, org.orgId), eq(iqRecommendations.insightId, rec.id)));
+    expect(open).toEqual([]);
+  });
+
+  it("M2: the same recommendation comes back once its dismissal cooldown has passed", async () => {
+    const lease = await startRun(org);
+    const dedupeKey = `rec:${randomUUID()}`;
+    const params = { batch: randomUUID() };
+    const evidence = await evidenceIds(org, lease);
+    const v1 = await recommendation(org, lease, dedupeKey, evidence);
+    const first = await db().transaction((tx) => propose(tx, lease, { insight: v1, params }));
+    if (first.outcome !== "PROPOSED") throw new Error("expected a proposal");
+    await db()
+      .update(iqRecommendations)
+      .set({ status: "DISMISSED", decidedAt: sql`now() - interval '8 days'`, decidedByUserId: randomUUID() })
+      .where(eq(iqRecommendations.id, first.recommendationId));
+
+    // Identical content, as a rule re-deriving it would produce — only the id is new.
+    const again = { ...v1, id: randomUUID() };
+    const second = await db().transaction((tx) => propose(tx, lease, { insight: again, params }));
+    expect(second).toMatchObject({ outcome: "PROPOSED", insightId: again.id });
+    const old = await insightRow(v1.id);
+    expect([old?.status, old?.supersededBy]).toEqual(["SUPERSEDED", again.id]);
+  });
+
+  it("M2: an identical proposal while the recommendation is still PROPOSED stays a NOOP", async () => {
+    const lease = await startRun(org);
+    const params = { batch: randomUUID() };
+    const v1 = await recommendation(org, lease, `rec:${randomUUID()}`, await evidenceIds(org, lease));
+    await db().transaction((tx) => propose(tx, lease, { insight: v1, params }));
+    const again = { ...v1, id: randomUUID() };
+    expect(await db().transaction((tx) => propose(tx, lease, { insight: again, params }))).toEqual({ outcome: "NOOP", insightId: v1.id });
+  });
+
+  it("S1: two concurrent proposers of the same action under different dedupe keys open only one recommendation", async () => {
+    const leaseA = await startRun(org);
+    const leaseB = await startRun(org);
+    const params = { batch: randomUUID() };
+    const a = await recommendation(org, leaseA, `rec:${randomUUID()}`, await evidenceIds(org, leaseA));
+    const b = await recommendation(org, leaseB, `rec:${randomUUID()}`, await evidenceIds(org, leaseB));
+
+    const result = await race(
+      (tx) => propose(tx, leaseA, { insight: a, params }),
+      (tx) => propose(tx, leaseB, { insight: b, params }),
+    );
+    expect(result.finishedWhileFirstOpen).toBe(false);
+    if (result.a.outcome !== "PROPOSED") throw new Error("expected the first proposer to win");
+    expect(result.b).toEqual({ outcome: "OPEN_DUPLICATE", openRecommendationId: result.a.recommendationId });
   });
 });
