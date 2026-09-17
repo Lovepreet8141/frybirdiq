@@ -103,6 +103,11 @@ export interface RefundBadge {
   readonly kind: RefundBadgeKind;
   /** The badge's visible words. */
   readonly label: string;
+  /**
+   * The held amount belongs in the visible text ("Refund stuck · ₹500"), added
+   * at render with formatINR — never only in a tooltip or aria-label.
+   */
+  readonly showsHeldAmount: boolean;
   /** The full sentence for assistive technology; the caller adds the amount at render. */
   readonly description: string;
 }
@@ -118,14 +123,15 @@ export function paymentRefundBadges(refunds: Pick<PaymentRefunds, "reserved" | "
   if (refunds.reserved > ZERO) {
     badges.push(
       refunds.stuck
-        ? { kind: "stuck", label: "Refund stuck", description: "A refund has been in progress too long and needs checking; the amount is held, not refunded" }
-        : { kind: "in_progress", label: "Refund in progress", description: "A refund is in progress; the amount is held, not refunded yet" },
+        ? { kind: "stuck", label: "Refund stuck", showsHeldAmount: true, description: "A refund has been in progress too long and needs checking; the amount is held, not refunded" }
+        : { kind: "in_progress", label: "Refund in progress", showsHeldAmount: true, description: "A refund is in progress; the amount is held, not refunded yet" },
     );
   }
   if (refunds.failedCount > 0) {
     badges.push({
       kind: "failed",
       label: refunds.failedCount === 1 ? "Refund failed" : `${refunds.failedCount} refunds failed`,
+      showsHeldAmount: false,
       description: `${refunds.failedCount === 1 ? "A refund attempt" : `${refunds.failedCount} refund attempts`} failed; no money moved`,
     });
   }

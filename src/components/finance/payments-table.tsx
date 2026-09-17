@@ -63,16 +63,16 @@ function PaymentStatusBadges({ row }: { row: PaymentRowView }) {
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
       <Badge variant={STATUS_VARIANT[row.status]}>{STATUS_LABELS[row.status]}</Badge>
-      {badges.map((badge) => (
-        <Badge
-          key={badge.kind}
-          variant={REFUND_BADGE_VARIANT[badge.kind]}
-          aria-label={badge.kind === "failed" ? badge.description : `${badge.description}: ${formatINR(row.refundReserved)}`}
-          title={badge.kind === "failed" ? badge.description : `${badge.description}: ${formatINR(row.refundReserved)}`}
-        >
-          {badge.label}
-        </Badge>
-      ))}
+      {badges.map((badge) => {
+        const held = formatINR(row.refundReserved);
+        const detail = badge.showsHeldAmount ? `${badge.description}: ${held}` : badge.description;
+        return (
+          // The held amount is in the visible words; title and aria-label add the full sentence.
+          <Badge key={badge.kind} variant={REFUND_BADGE_VARIANT[badge.kind]} aria-label={detail} title={detail}>
+            {badge.showsHeldAmount ? `${badge.label} · ${held}` : badge.label}
+          </Badge>
+        );
+      })}
     </span>
   );
 }

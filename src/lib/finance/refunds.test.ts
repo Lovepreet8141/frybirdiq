@@ -70,10 +70,11 @@ describe("paymentRefundBadges", () => {
 
   it("says in progress, or stuck past the limit, and counts failures", () => {
     expect(paymentRefundBadges({ reserved: paise(400n), stuck: false, failedCount: 0 }).map((b) => b.label)).toEqual(["Refund in progress"]);
-    expect(paymentRefundBadges({ reserved: paise(400n), stuck: true, failedCount: 2 }).map((b) => [b.kind, b.label])).toEqual([
-      ["stuck", "Refund stuck"],
-      ["failed", "2 refunds failed"],
+    expect(paymentRefundBadges({ reserved: paise(400n), stuck: true, failedCount: 2 }).map((b) => [b.kind, b.label, b.showsHeldAmount])).toEqual([
+      ["stuck", "Refund stuck", true],
+      ["failed", "2 refunds failed", false],
     ]);
+    expect(paymentRefundBadges({ reserved: paise(400n), stuck: false, failedCount: 0 })[0]?.showsHeldAmount).toBe(true);
     expect(paymentRefundBadges({ reserved: paise(0n), stuck: false, failedCount: 1 })[0]?.description).toBe("A refund attempt failed; no money moved");
   });
 });
