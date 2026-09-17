@@ -26,7 +26,7 @@ import { handleJobRequest, type ClaimRequest } from "@/lib/jobs/handle";
 import { DEFAULT_TIMING, type JobDefinition } from "@/lib/jobs/registry";
 import { nightlyDates, remainingAfter } from "@/lib/jobs/facts-plan";
 import { periodKeyAt, shiftPeriod } from "@/lib/jobs/period";
-import { iqDailyFacts, iqDailyTrust, orderEvents, orders, organizations, payments, refunds } from "@/db/schema";
+import { auditLogs, iqDailyFacts, iqDailyTrust, orderEvents, orders, organizations, payments, refunds } from "@/db/schema";
 import { CASH_PROVIDER } from "@/lib/payments";
 import { fromRupees } from "@/lib/money";
 import { refundPayment } from "./payments";
@@ -529,8 +529,17 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
     expect(response).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
     expect(seen).toMatchObject({
       ctxKeys: ["attempt", "commit", "orgId", "period", "periodKey", "remainingMs", "repos", "resumeCursor", "runId", "shouldStop", "trigger"],
-      readKeys: ["checkFactsParity", "factsHistoryStart", "getInsight", "lastRunSummary", "listInsights", "listOpenRecommendations", "readFactFigures"],
-      writeKeys: ["computeTrustDay", "healLostRefundFollowUps", "proposeRecommendation", "recomputeDay", "writeInsight"],
+      readKeys: [
+        "checkFactsParity",
+        "countStuckRefundFollowUps",
+        "factsHistoryStart",
+        "getInsight",
+        "healLostRefundFollowUps",
+        "listInsights",
+        "listOpenRecommendations",
+        "readFactFigures",
+      ],
+      writeKeys: ["computeTrustDay", "proposeRecommendation", "recomputeDay", "writeInsight"],
       listedOrgs: [org.orgId],
       listedHasA: true,
       listedHasB: false,
@@ -789,10 +798,76 @@ describe("refund-followup-heal through the job route (ref-b7) on the local stack
         .from(iqJobRuns)
         .where(and(eq(iqJobRuns.job, "refund-followup-heal"), eq(iqJobRuns.orgId, healOrg.orgId), eq(iqJobRuns.periodKey, report.periods[0]!)));
       expect(row).toMatchObject({ status: "SUCCEEDED", failures: 0 });
-      expect(row!.summary).toEqual({ examined: 1, healed: 1, still_open: 0, not_reached: 0 });
+      expect(row!.summary).toEqual({ examined: 1, healed: 1, still_open: 0, not_reached: 0, stuck: 0 });
 
       const again = await respondToJobRequest(request(), "refund-followup-heal", () => deps);
       expect(((await again.json()) as { counts: Record<string, number> }).counts.NOOP).toBe(1);
+      expect(await moneyEvents(orderId)).toHaveLength(1);
+    } finally {
+      if (saved === undefined) delete process.env.JOB_SECRET;
+      else process.env.JOB_SECRET = saved;
+    }
+  }, 60_000);
+
+  it("a follow-up failed on two heals alerts PARTIAL REFUNDS_STILL_OPEN on the run and on its retry; once healed the run SUCCEEDS (RELIABILITY ref-b7j)", async () => {
+    // The previous test already ran this quarter for this org; start the quarter fresh.
+    await db().delete(iqJobRuns).where(and(eq(iqJobRuns.job, "refund-followup-heal"), eq(iqJobRuns.orgId, healOrg.orgId)));
+    const orderId = await lostRefundFollowUp();
+    const [refund] = await db()
+      .select({ id: refunds.id })
+      .from(refunds)
+      .innerJoin(payments, eq(payments.id, refunds.paymentId))
+      .where(and(eq(payments.orderId, orderId), eq(refunds.orgId, healOrg.orgId)));
+    // Two failed heals, the latest inside the healer's one-hour back-off, so this quarter's heal skips it.
+    const failedHeal = (attempts: number, minutesAgo: number) =>
+      db().insert(auditLogs).values({
+        orgId: healOrg.orgId,
+        action: "refund_followup_failed",
+        entity: "refunds",
+        entityId: refund!.id,
+        before: { attempts: attempts - 1 },
+        after: { attempts, error: "Error", orderId },
+        createdAt: new Date(Date.now() - minutesAgo * 60_000),
+      });
+    await failedHeal(1, 90);
+    await failedHeal(2, 20);
+
+    const saved = process.env.JOB_SECRET;
+    process.env.JOB_SECRET = SECRET;
+    try {
+      const deps = jobRouteDeps();
+      deps.store.listOrgIds = async () => [healOrg.orgId];
+      const { respondToJobRequest } = await import("@/lib/jobs/http");
+      const post = () =>
+        respondToJobRequest(
+          new Request("http://127.0.0.1:3000/api/jobs/refund-followup-heal", {
+            method: "POST",
+            headers: { "x-forwarded-for": "127.0.0.1", host: JOB_HOST, authorization: `Bearer ${SECRET}` },
+          }),
+          "refund-followup-heal",
+          () => deps,
+        );
+      const row = async (periodKey: string) =>
+        (await db().select().from(iqJobRuns).where(and(eq(iqJobRuns.job, "refund-followup-heal"), eq(iqJobRuns.orgId, healOrg.orgId), eq(iqJobRuns.periodKey, periodKey))))[0]!;
+
+      const first = await post();
+      expect(first.status).toBe(500);
+      const period = ((await first.json()) as { periods: string[] }).periods[0]!;
+      expect(await row(period)).toMatchObject({ status: "FAILED", errorCode: "REFUNDS_STILL_OPEN", failures: 1 });
+      expect((await row(period)).summary).toMatchObject({ examined: 0, stuck: 1 });
+
+      // systemd's retry of the same quarter: still stuck, still alerting.
+      expect((await post()).status).toBe(500);
+      expect(await row(period)).toMatchObject({ status: "FAILED", errorCode: "REFUNDS_STILL_OPEN", attempt: 2, failures: 2 });
+
+      // The back-off ends and the heal finishes the follow-up: the alert clears on its own.
+      await db()
+        .update(auditLogs)
+        .set({ createdAt: new Date(Date.now() - 2 * 60 * 60_000) })
+        .where(and(eq(auditLogs.entityId, refund!.id), eq(auditLogs.action, "refund_followup_failed")));
+      expect((await post()).status).toBe(200);
+      expect(await row(period)).toMatchObject({ status: "SUCCEEDED", attempt: 3 });
+      expect((await row(period)).summary).toEqual({ examined: 1, healed: 1, still_open: 0, not_reached: 0, stuck: 0 });
       expect(await moneyEvents(orderId)).toHaveLength(1);
     } finally {
       if (saved === undefined) delete process.env.JOB_SECRET;

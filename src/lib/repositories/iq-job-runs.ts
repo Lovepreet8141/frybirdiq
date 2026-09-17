@@ -32,7 +32,7 @@ import "server-only";
  * machine, whatever org they run for).
  */
 
-import { and, eq, gt, inArray, lte, or, sql, desc, lt, type SQL } from "drizzle-orm";
+import { and, eq, gt, inArray, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { iqJobRuns, orders, organizations } from "@/db/schema";
 import { businessDateSql, endOfBusinessDay, startOfBusinessDay } from "@/lib/iq/metrics";
@@ -41,7 +41,7 @@ import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
 import type { ClaimRequest, FinishOutcome, JobRunStore } from "@/lib/jobs/handle";
 import { DayLockBusy, DayTimeout, type FactsParity, type JobReadRepos, type JobWriteRepos } from "@/lib/jobs/repos";
 import { getProfitAndLoss } from "./expenses";
-import { healLostRefundFollowUps } from "./payments";
+import { countStuckRefundFollowUps, healLostRefundFollowUps } from "./payments";
 import { DayLockBusyError, DayTimeoutError, readDailyFacts, recomputeDay } from "./iq-facts";
 import { getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
 import { computeTrustDay } from "./iq-trust";
@@ -103,28 +103,12 @@ async function checkFactsParity(orgId: string, from: string, to: string): Promis
   return { ok: previous!.ok, mismatchedMetrics: previous!.mismatchedMetrics, missingDays: previous!.missingDays };
 }
 
-/** This org's latest finished run of `job` before `beforePeriodKey`: its summary counts, or null. */
-async function lastRunSummary(orgId: string, job: string, beforePeriodKey: string): Promise<Readonly<Record<string, number>> | null> {
-  const [row] = await db()
-    .select({ summary: iqJobRuns.summary })
-    .from(iqJobRuns)
-    .where(
-      and(
-        eq(iqJobRuns.orgId, orgId),
-        eq(iqJobRuns.job, job),
-        lt(iqJobRuns.periodKey, beforePeriodKey),
-        inArray(iqJobRuns.status, ["SUCCEEDED", "FAILED"]),
-      ),
-    )
-    .orderBy(desc(iqJobRuns.periodKey))
-    .limit(1);
-  return row?.summary ?? null;
-}
-
 /** The iq-* reads a job may make, with `orgId` closed over. */
 export function iqRepos(orgId: string): JobReadRepos {
   return {
-    lastRunSummary: (job, beforePeriodKey) => lastRunSummary(orgId, job, beforePeriodKey),
+    // PAYMENT-SAFETY's healer (ref-b7): its own idempotent transaction per refund, outside any chunk.
+    healLostRefundFollowUps: (options) => healLostRefundFollowUps({ orgId }, { shouldStop: options.shouldStop }),
+    countStuckRefundFollowUps: () => countStuckRefundFollowUps({ orgId }),
     factsHistoryStart: () => factsHistoryStart(orgId),
     checkFactsParity: (from, to) => checkFactsParity(orgId, from, to),
     listInsights: (...args) => listInsights(orgId, ...args),
@@ -160,9 +144,6 @@ export function iqWriteRepos(tx: IqTx, lease: LeaseToken & { readonly orgId: str
     recomputeDay: (date, budget) => mapDayLockBusy(date, () => recomputeDay(lease.orgId, date, { jobRunId: lease.runId, ...budget })),
     // Same lock discipline as recomputeDay. appNow is left to default: trust decides "today" (T5) itself.
     computeTrustDay: (date, budget) => mapDayLockBusy(date, () => computeTrustDay(lease.orgId, date, { jobRunId: lease.runId, ...budget })),
-    // PAYMENT-SAFETY's healer (ref-b7) runs its own transactions per refund and is idempotent;
-    // like recomputeDay it runs inside the chunk callback, after the fence has checked the lease.
-    healLostRefundFollowUps: (options) => healLostRefundFollowUps({ orgId: lease.orgId }, { shouldStop: options.shouldStop }),
     writeInsight: (...args) => writeInsight(tx, lease, ...args),
     proposeRecommendation: (...args) => proposeRecommendation(tx, lease, ...args),
   };

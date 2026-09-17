@@ -42,9 +42,24 @@ export type RefundHealReport = {
   readonly notReached: number;
 };
 
+/**
+ * `ctx.repos`: bound to the run's org, used outside any chunk — reads, and the
+ * few operations that manage their own short, idempotent transactions.
+ */
 export type JobReadRepos = {
-  /** The summary counts of this org's latest finished run of `job` before `beforePeriodKey`, or null. */
-  readonly lastRunSummary: (job: string, beforePeriodKey: string) => Promise<Readonly<Record<string, number>> | null>;
+  /**
+   * Finishes this org's lost refund follow-ups (ref-b7, PAYMENT-SAFETY's
+   * healLostRefundFollowUps). Called OUTSIDE any chunk (RELIABILITY ref-b7j):
+   * it runs its own idempotent transaction per refund, never calls a payment
+   * provider, and ends between refunds once `shouldStop` returns true.
+   */
+  readonly healLostRefundFollowUps: (options: { readonly shouldStop: () => boolean }) => Promise<RefundHealReport>;
+  /**
+   * How many of this org's refund follow-ups are stuck: unfinished and failed
+   * on at least two heals (PAYMENT-SAFETY's countStuckRefundFollowUps, read
+   * only). State, not a per-run delta, so it survives the healer's back-off.
+   */
+  readonly countStuckRefundFollowUps: () => Promise<number>;
   /** The first IST business day this org has history for (opened_on, else its first order), or null. */
   readonly factsHistoryStart: () => Promise<string | null>;
   /** Compares Σ daily facts with getProfitAndLoss for [from, to] (IST dates, inclusive). */
@@ -97,12 +112,6 @@ export class DayTimeout extends Error {
 }
 
 export type JobWriteRepos = {
-  /**
-   * Finishes this org's lost refund follow-ups (ref-b7, PAYMENT-SAFETY's
-   * healLostRefundFollowUps): idempotent, never calls a payment provider,
-   * and ends between refunds once `shouldStop` returns true.
-   */
-  readonly healLostRefundFollowUps: (options: { readonly shouldStop: () => boolean }) => Promise<RefundHealReport>;
   /** Rebuilds one IST business day's facts for this org, recorded against this run. Idempotent. Throws `DayLockBusy` or `DayTimeout`. */
   readonly recomputeDay: (date: string, budget: DayLockBudget) => ReturnType<typeof Facts.recomputeDay>;
   /** Scores and stores one IST business day's trust signals for this org, recorded against this run. Idempotent. Throws `DayLockBusy` or `DayTimeout`. */

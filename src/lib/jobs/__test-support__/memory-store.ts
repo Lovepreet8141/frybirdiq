@@ -206,7 +206,8 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
       throw new Error("memory store: no read repositories");
     };
     return {
-      lastRunSummary: unavailable,
+      healLostRefundFollowUps: unavailable,
+      countStuckRefundFollowUps: unavailable,
       factsHistoryStart: unavailable,
       checkFactsParity: unavailable,
       listInsights: unavailable,
