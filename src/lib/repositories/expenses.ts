@@ -405,6 +405,14 @@ function foodCostFromFacts(facts: DailyFactsRead): FoodCostComparison {
 /* Expense writes keep the daily facts current                          */
 /* ------------------------------------------------------------------ */
 
+/** A category or account id that is not this org's. One generic message: never say which, or whose. */
+export class ExpenseReferenceError extends Error {
+  constructor() {
+    super("That category or account is not available.");
+    this.name = "ExpenseReferenceError";
+  }
+}
+
 export interface NewExpense {
   readonly categoryId: string;
   readonly description: string;
@@ -417,16 +425,41 @@ export interface NewExpense {
 
 /**
  * Records an expense, then refreshes the daily facts and trust for its day.
- * The caller has already validated the input and checked the category
- * belongs to `orgId`. The insert is the action; the refresh is best effort
+ * The caller has already validated the input.
+ *
+ * The category and the account (when given) must belong to `orgId`, checked
+ * inside the insert's transaction with the rows locked against a concurrent
+ * delete. The foreign keys only prove the ids exist somewhere, and the app
+ * connects as `postgres`, which bypasses RLS — without this, a guessed id from
+ * another tenant would tie this org's cost to their category or account.
+ * Refused with `ExpenseReferenceError`, which never says which id or whose.
+ *
+ * The insert is the action; the refresh runs after commit, is best effort,
  * and never fails it.
  */
 export async function createExpense(orgId: string, input: NewExpense): Promise<{ readonly id: string }> {
-  const [row] = await db()
-    .insert(expenses)
-    .values({ orgId, ...input })
-    .returning({ id: expenses.id });
-  if (!row) throw new Error("expenses: insert returned no row");
+  const row = await db().transaction(async (tx) => {
+    const [category] = await tx
+      .select({ id: expenseCategories.id })
+      .from(expenseCategories)
+      .where(and(eq(expenseCategories.id, input.categoryId), eq(expenseCategories.orgId, orgId)))
+      .for("share");
+    if (!category) throw new ExpenseReferenceError();
+    if (input.accountId !== null) {
+      const [account] = await tx
+        .select({ id: accounts.id })
+        .from(accounts)
+        .where(and(eq(accounts.id, input.accountId), eq(accounts.orgId, orgId)))
+        .for("share");
+      if (!account) throw new ExpenseReferenceError();
+    }
+    const [inserted] = await tx
+      .insert(expenses)
+      .values({ ...input, orgId })
+      .returning({ id: expenses.id });
+    if (!inserted) throw new Error("expenses: insert returned no row");
+    return inserted;
+  });
   await refreshFactsForDays(orgId, [input.paidOn]);
   return row;
 }

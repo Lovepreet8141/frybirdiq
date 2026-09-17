@@ -10,7 +10,7 @@ import { expenseCategories, targets } from "@/db/schema";
 import { getStaff, staffCan } from "@/lib/auth";
 import { businessDate } from "@/lib/dates";
 import { bps, fromRupees } from "@/lib/money";
-import { createExpense } from "@/lib/repositories/expenses";
+import { ExpenseReferenceError, createExpense } from "@/lib/repositories/expenses";
 
 export type ExpenseFormState = { status: "idle" } | { status: "error"; message: string };
 
@@ -75,15 +75,22 @@ export async function recordExpense(
     return { status: "error", message: "That category no longer exists." };
   }
 
-  // Also refreshes the IQ daily facts for that day, so a closed month's P&L shows it at once.
-  await createExpense(staff.orgId, {
-    categoryId: parsed.data.categoryId,
-    description: parsed.data.description,
-    amount: fromRupees(parsed.data.amount),
-    paidOn: parsed.data.paidOn,
-    accountId: parsed.data.accountId ? parsed.data.accountId : null,
-    reference: parsed.data.reference || null,
-  });
+  // Checks the category and account belong to this org inside the insert
+  // (fin-8), and refreshes the IQ daily facts for that day, so a closed
+  // month's P&L shows it at once.
+  try {
+    await createExpense(staff.orgId, {
+      categoryId: parsed.data.categoryId,
+      description: parsed.data.description,
+      amount: fromRupees(parsed.data.amount),
+      paidOn: parsed.data.paidOn,
+      accountId: parsed.data.accountId ? parsed.data.accountId : null,
+      reference: parsed.data.reference || null,
+    });
+  } catch (error) {
+    if (error instanceof ExpenseReferenceError) return { status: "error", message: error.message };
+    throw error;
+  }
 
   revalidatePath("/app/iq/expenses");
   revalidatePath("/app/iq/pnl");
