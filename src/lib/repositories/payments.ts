@@ -1280,7 +1280,7 @@ async function followUpRefund(input: { orgId: string; actorUserId: string | null
     // 1. The order, where the lifecycle allows. A refusal here is a race with
     // another move (S8) and changes nothing below.
     if (order.status !== "REFUNDED" && canTransition(order.status, "REFUNDED", order.fulfilment)) {
-      await advanceOrder({ orderId: order.id, to: "REFUNDED", actorUserId: systemOrStaff(input.actorUserId), orgId: input.orgId, reason: `Refunded — ${refund.reason}` });
+      await advanceOrder({ orderId: order.id, to: "REFUNDED", actorUserId: input.actorUserId, orgId: input.orgId, reason: `Refunded — ${refund.reason}` });
     }
     // Loyalty, unconditionally for a full refund.
     await reverseStampForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
@@ -1319,19 +1319,6 @@ async function followUpRefund(input: { orgId: string; actorUserId: string | null
   }
 
   return fullyRefunded;
-}
-
-/**
- * The actor for a REFUNDED move. A refund can be healed by the system with no
- * staff member on it (its actor unknown or gone); order_events.actor_user_id
- * allows null for exactly that ("Null when the system moved it"). advanceOrder
- * types its actor as a string (orders.ts, not this owner's file), but on a
- * move to REFUNDED it only writes the actor into that event row, and neither
- * inventory branch (ACCEPTED, CANCELLED) runs. The narrowing is safe for this
- * one call; widening advanceOrder's type is carded for ORDERS.
- */
-function systemOrStaff(actorUserId: string | null): string {
-  return actorUserId as string;
 }
 
 /** What one healer run did. */
@@ -1447,4 +1434,30 @@ export async function healLostRefundFollowUps(
   }
 
   return { examined, healed: examined - stillOpenRefundIds.length, stillOpen: stillOpenRefundIds.length, stillOpenRefundIds, notReached: lost.length - examined };
+}
+
+/**
+ * How many refund follow-ups are stuck: SUCCEEDED refunds from the
+ * reserve-and-finalize flow (they carry an idempotency key) with no money
+ * event, whose heal has failed at least `minFailures` times
+ * (`refund_followup_failed` audit rows). State, not a per-run delta: the heal
+ * job alerts on a count above zero (RELIABILITY 4a8d76 #2), and it drops back
+ * to zero on its own once the follow-up finishes, because the money event
+ * then exists. Org-scoped; reads only.
+ */
+export async function countStuckRefundFollowUps(input: { readonly orgId: string; readonly minFailures?: number }): Promise<number> {
+  const minFailures = Math.max(1, input.minFailures ?? 2);
+  const [row] = await db()
+    .select({ stuck: sql<number>`count(*)::int` })
+    .from(refunds)
+    .where(
+      and(
+        eq(refunds.orgId, input.orgId),
+        eq(refunds.status, "SUCCEEDED"),
+        sql`${refunds.idempotencyKey} IS NOT NULL`,
+        sql`NOT EXISTS (SELECT 1 FROM ${orderEvents} e WHERE e.org_id = ${refunds.orgId} AND e.order_id = ${refunds.orderId} AND e.metadata->>'refundId' = ${refunds.id}::text)`,
+        sql`(SELECT count(*) FROM ${auditLogs} a WHERE a.org_id = ${refunds.orgId} AND a.entity = 'refunds' AND a.entity_id = ${refunds.id} AND a.action = ${REFUND_FOLLOWUP_FAILED_ACTION}) >= ${minFailures}`,
+      ),
+    );
+  return row?.stuck ?? 0;
 }
