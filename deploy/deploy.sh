@@ -43,6 +43,16 @@ if [[ ! "$DEPLOY_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
   exit 1
 fi
 
+# RELIABILITY (dv-1r-rel): deploy.sh builds and ships the WORKING TREE, but
+# DEPLOY_COMMIT stamps HEAD. A dirty tree means those two disagree — the
+# running code is not what that SHA describes, and code_version lies about
+# it on every job run and insight from this deploy onward.
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "refusing: working tree is not clean — commit or stash before deploying, so DEPLOY_COMMIT matches what's actually built" >&2
+  git status --short >&2
+  exit 1
+fi
+
 echo "==> Gates"
 pnpm typecheck
 pnpm lint
@@ -105,17 +115,23 @@ ssh "$TARGET" '
   # root-only file to another, both ends of the pipe run as $SUDO so a
   # non-root deploy user is never asked to read or write it directly.
   $SUDO test -f /etc/frybird/env || { echo "refusing: /etc/frybird/env is missing" >&2; exit 1; }
-  # Created inside /etc/frybird itself, as root, from the start (SECURITY-TENANCY,
-  # dv-1r-sec): a plain `mktemp` defaults to /tmp, which on some boxes is a
-  # different filesystem (tmpfs) than /etc — the final `mv` would then be a
-  # copy-then-unlink, not an atomic rename, and every secret in the file
-  # would sit for a moment in a /tmp file owned by the deploy user rather
-  # than root. Same directory + $SUDO from creation closes both.
+  # Created inside /etc/frybird itself, as root, from the start (SECURITY-TENANCY
+  # dv-1r-sec, RELIABILITY dv-1r-rel): a plain `mktemp` defaults to /tmp, which
+  # on some boxes is a different filesystem (tmpfs) than /etc — the final `mv`
+  # would then be a copy-then-unlink, not an atomic rename: ENOSPC or a crash
+  # mid-copy could truncate the live /etc/frybird/env, and the secret-bearing
+  # temp file would sit in /tmp, owned by the deploy user, in the meantime.
+  # Same directory + $SUDO from creation closes both. Permissions are set
+  # immediately after, before any content is written — not as an afterthought
+  # once the file already holds secrets — and `sync` runs before the rename
+  # so a crash right after does not leave a renamed file whose data was
+  # still only in the page cache, never actually reached disk.
   NEW_ENV="$($SUDO mktemp /etc/frybird/env.XXXXXX)"
-  $SUDO grep -v "^DEPLOY_COMMIT=" /etc/frybird/env | $SUDO tee "$NEW_ENV" > /dev/null
-  printf "DEPLOY_COMMIT=%s\n" '"'$DEPLOY_COMMIT'"' | $SUDO tee -a "$NEW_ENV" > /dev/null
   $SUDO chown root:frybird "$NEW_ENV"
   $SUDO chmod 640 "$NEW_ENV"
+  $SUDO grep -v "^DEPLOY_COMMIT=" /etc/frybird/env | $SUDO tee "$NEW_ENV" > /dev/null
+  printf "DEPLOY_COMMIT=%s\n" '"'$DEPLOY_COMMIT'"' | $SUDO tee -a "$NEW_ENV" > /dev/null
+  sync
   $SUDO mv "$NEW_ENV" /etc/frybird/env
 
   $SUDO systemctl restart frybird

@@ -544,6 +544,22 @@ the timer (a timer with no secret just spins on 404s), verification last.
    should have moved it in between.
 2. **Migrate.** `pnpm db:migrate` (§6) — applies those four, from your Mac,
    against Supabase. Confirm the new head is `0036` before moving on.
+
+   **Stop-safety between here and step 3 (RELIABILITY, dv-1r-rel):** the
+   currently-running (old) code is safe against all four. `0033` only
+   revokes `anon`/`authenticated` Postgres-role write grants and narrows
+   three tables' RLS policies to `SELECT`; the app — old code and new code
+   alike — has never written through those roles, only through Drizzle as
+   `postgres`, which owns every table and bypasses RLS entirely (see
+   `0033_rls_write_lockdown.sql`'s own header comment for the full
+   reasoning; CLAUDE.md's non-negotiable that the app connects as
+   `postgres`). `0034`–`0036` are additive-only (`iq_*` tables old code
+   never references). So a gap between migrating and deploying — even an
+   unplanned one — is not an outage. To roll back the schema alone, run the
+   down files in reverse: `0036_iq_facts.down.sql`,
+   `0035_iq_job_runs_failures.down.sql`, `0034_iq_foundations.down.sql`,
+   `0033_rls_write_lockdown.down.sql` (`supabase/rollback/`). To roll back
+   the code alone, `deploy.sh` at the previous commit.
 3. **Deploy the code.** `./deploy/deploy.sh root@194.238.16.200` (§7) —
    builds, ships, stamps `DEPLOY_COMMIT`, restarts `frybird`, smoke-tests
    `/`. The job route exists in the running app now but stays dormant
@@ -582,11 +598,16 @@ the timer (a timer with no secret just spins on 404s), verification last.
 10. **Smoke.** The public site (`docs/RELEASES.md`'s usual signed-out check)
     plus `systemctl is-active frybird-job-heartbeat.timer`.
 
-If step 7 doesn't show SUCCEEDED, stop before step 8 — an unattended timer
-retrying a job that's already failing by hand only makes the incident
-harder to read. §9.4 has the disable/rollback steps if you need to back out
-after step 6; to roll back step 4 alone, restore the newest
-`frybird.bak-*` file and `nginx -t && systemctl reload nginx` again (§5a).
+**If step 7 doesn't show SUCCEEDED, do not go on to step 8.** The manual
+`systemctl start` already put the unit under `Restart=on-failure` — it keeps
+auto-retrying on its own `RestartSec=360` schedule whether or not the timer
+was ever enabled, so a plain "stop" is not enough on its own. Run §9.4's
+`systemctl stop 'frybird-job@*.service'` then `systemctl reset-failed
+'frybird-job@*.service'` before doing anything else, so no attempt is left
+retrying in the background while the failure is investigated. §9.4 has the
+rest of the disable/rollback steps if you need to back out after step 6; to
+roll back step 4 alone, restore the newest `frybird.bak-*` file and
+`nginx -t && systemctl reload nginx` again (§5a).
 
 ## What this does not have yet
 
