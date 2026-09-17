@@ -315,7 +315,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "none",
     allowedDimensions: ["channel"],
     sources: ["orders"],
-    description: "Orders in REFUNDED order status, on the order's created_at IST day in v1 (not the refund's day). Read from the order, not its payments: a double-captured order with one payment refunded is still sold and counts in orders_part_refunded.",
+    description: "Orders in REFUNDED order status, on the order's created_at IST day in v1 (not the refund's day). Read from the order, not its payments: a double-captured order with one payment refunded is still sold and counts in orders_part_refunded. An order whose only payment is REFUNDED but whose status never reached REFUNDED is in neither count (it leaves the sale set and is not in REFUNDED status); t6_payment_integrity is where it belongs.",
     trustSignals: SALES_TRUST,
   }),
   orders_part_refunded: stored({

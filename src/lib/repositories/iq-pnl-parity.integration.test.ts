@@ -339,6 +339,26 @@ describe("IQ daily facts — P&L parity (IQ-1 S6)", () => {
     expect(after.totals.expense_direct).toBe(0n);
   });
 
+  it("counts a double capture with one capture refunded once, as partially refunded, revenue unchanged", async () => {
+    // 28 Aug: outside every day the goldens and org comparisons read; recomputed here only.
+    const date = "2026-08-28";
+    const product = await createTestProduct(orgs.a.orgId, { name: "Mixed capture" });
+    const sale = await seedSale(orgs.a, { at: istInstant(date, "18:00"), lines: [{ productId: product.id, unitPricePaise: 17_900n }], payments: [{}, {}] });
+    const refund = await seedRefund(sale.payments[1]!, { at: istInstant(date, "18:30"), amountPaise: sale.order.grandTotal });
+    expect(refund.paymentStatus).toBe("REFUNDED");
+
+    await recomputeDay(orgs.a.orgId, date);
+    const facts = await expectParity(orgs.a.orgId, dayRange(date));
+    expect(facts.totals).toMatchObject({
+      orders_paid: 1n,
+      revenue_net: 17_048n,
+      orders_part_refunded: 1n,
+      orders_refunded: 0n,
+      captured_amount: 35_800n,
+      refunds_amount: 17_900n,
+    });
+  });
+
   it("refuses a date that is not a business date", async () => {
     await expect(recomputeDay(orgs.a.orgId, "2026-02-30")).rejects.toThrow(RangeError);
     await expect(readDailyFacts(orgs.a.orgId, "2026-09-04", "2026-09-01")).rejects.toThrow(RangeError);
