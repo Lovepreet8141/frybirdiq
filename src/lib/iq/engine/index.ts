@@ -35,6 +35,15 @@ export {
 } from "./evidence";
 export { TrustRefSchema, ConfidenceSchema, type TrustRef, type Confidence } from "./trust";
 export {
+  CAPPED_LOW_TRUST,
+  trustGate,
+  trustRefFor,
+  type FigureTrust,
+  type GateDecision,
+  type TrustGradeInput,
+} from "./trust-gate";
+export { divRoundHalfAway, integerMedian, observedMedian, observedShare } from "./observed-stats";
+export {
   CLAIM_TYPES,
   ActionTierSchema,
   FactPayloadSchema,
