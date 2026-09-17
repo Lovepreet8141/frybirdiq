@@ -117,6 +117,37 @@ describe("reverseStampForOrder", () => {
     expect(row?.status).toBe("REVERSED");
   });
 
+  it("loy-1: two concurrent reversals of the same order reverse the reward exactly once, with no phantom reward created", async () => {
+    const customer = await createTestCustomer(org.orgId);
+    const accountId = await seedAccount(customer.id);
+    const [reward] = await db().insert(loyaltyRewards).values({ orgId: org.orgId, accountId, status: "AVAILABLE" }).returning({ id: loyaltyRewards.id });
+    if (!reward) throw new Error("fixture");
+    const orderId = randomUUID();
+    await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId, rewardId: reward.id });
+    // Two more stamps riding on the same reward — the org's default
+    // stampsRequired is 7, so handing these back to the pool must not
+    // unlock a fresh reward on its own; a duplicate, concurrent
+    // `settleAccount` run for this account is what would corrupt that.
+    await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: randomUUID(), rewardId: reward.id });
+    await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: randomUUID(), rewardId: reward.id });
+
+    await warmPool();
+
+    await Promise.all([
+      reverseStampForOrder({ orgId: org.orgId, orderId, reason: "concurrent caller A" }),
+      reverseStampForOrder({ orgId: org.orgId, orderId, reason: "concurrent caller B" }),
+    ]);
+
+    const [row] = await db().select({ status: loyaltyRewards.status }).from(loyaltyRewards).where(eq(loyaltyRewards.id, reward.id));
+    expect(row?.status).toBe("REVERSED");
+
+    const allRewards = await db().select({ id: loyaltyRewards.id }).from(loyaltyRewards).where(eq(loyaltyRewards.accountId, accountId));
+    expect(allRewards).toHaveLength(1); // still just the one — no phantom reward from a doubled settleAccount
+
+    const [account] = await db().select({ stampCount: loyaltyAccounts.stampCount }).from(loyaltyAccounts).where(eq(loyaltyAccounts.id, accountId));
+    expect(account?.stampCount).toBe(2); // the two pooled-back stamps, counted once
+  });
+
   it("a reversal that reads a reward already redeemed by a different order never touches it", async () => {
     // Deterministic, but — checked by hand — this does NOT distinguish the
     // pre-fix code from the fix: with the redemption fully committed
