@@ -34,17 +34,57 @@ import "server-only";
 
 import { and, eq, gt, inArray, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
-import { iqJobRuns, organizations } from "@/db/schema";
+import { iqJobRuns, orders, organizations } from "@/db/schema";
+import { endOfBusinessDay, startOfBusinessDay } from "@/lib/iq/metrics";
 import { JOB_RUN_STATUSES, type ClaimRead, type ExpectedRow, type JobRunRow, type JobRunStatus, type JobTrigger } from "@/lib/jobs/claim-decision";
 import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
 import type { ClaimRequest, FinishOutcome, JobRunStore } from "@/lib/jobs/handle";
-import type { JobReadRepos, JobWriteRepos } from "@/lib/jobs/repos";
+import type { FactsParity, JobReadRepos, JobWriteRepos } from "@/lib/jobs/repos";
+import { getProfitAndLoss } from "./expenses";
+import { readDailyFacts, recomputeDay } from "./iq-facts";
 import { getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
 import { listOpenRecommendations, proposeRecommendation } from "./iq-recommendations";
+
+/** The first IST business day an org has history for: its opened_on date, else the day of its first order. */
+async function factsHistoryStart(orgId: string): Promise<string | null> {
+  const [org] = await db().select({ openedOn: organizations.openedOn }).from(organizations).where(eq(organizations.id, orgId));
+  if (org?.openedOn) return org.openedOn;
+  const [first] = await db()
+    .select({ day: sql<string | null>`min((${orders.createdAt} AT TIME ZONE 'Asia/Kolkata')::date)::text` })
+    .from(orders)
+    .where(eq(orders.orgId, orgId));
+  return first?.day ?? null;
+}
+
+/**
+ * The IQ-1 monthly sum check: Σ daily facts over [from, to] against
+ * getProfitAndLoss for the same IST days — revenue, paid orders and each
+ * expense group. Missing days are reported, not treated as zero.
+ */
+async function checkFactsParity(orgId: string, from: string, to: string): Promise<FactsParity> {
+  const [facts, pnl] = await Promise.all([
+    readDailyFacts(orgId, from, to),
+    getProfitAndLoss(orgId, { from: startOfBusinessDay(from), to: endOfBusinessDay(to), label: "facts parity" }),
+  ]);
+  const sum = (rows: readonly { readonly amount: bigint }[]) => rows.reduce((total, row) => total + row.amount, 0n);
+  const expected: Record<string, bigint> = {
+    revenue_net: pnl.revenue,
+    orders_paid: BigInt(pnl.orderCount),
+    expense_direct: sum(pnl.direct),
+    expense_operating: sum(pnl.fixed),
+    expense_nonoperating: sum(pnl.nonOperating),
+  };
+  const mismatchedMetrics = Object.entries(expected)
+    .filter(([metric, value]) => (facts.totals[metric as keyof typeof facts.totals] ?? 0n) !== value)
+    .map(([metric]) => metric);
+  return { ok: mismatchedMetrics.length === 0 && facts.missingDates.length === 0, mismatchedMetrics, missingDays: facts.missingDates.length };
+}
 
 /** The iq-* reads a job may make, with `orgId` closed over. */
 export function iqRepos(orgId: string): JobReadRepos {
   return {
+    factsHistoryStart: () => factsHistoryStart(orgId),
+    checkFactsParity: (from, to) => checkFactsParity(orgId, from, to),
     listInsights: (...args) => listInsights(orgId, ...args),
     getInsight: (...args) => getInsight(orgId, ...args),
     readFactFigures: (...args) => readFactFigures(orgId, ...args),
@@ -55,6 +95,12 @@ export function iqRepos(orgId: string): JobReadRepos {
 /** The iq-* writes a job may make inside one fenced chunk: transaction, lease and org closed over. */
 export function iqWriteRepos(tx: IqTx, lease: LeaseToken & { readonly orgId: string }): JobWriteRepos {
   return {
+    // recomputeDay runs its own REPEATABLE READ transaction under a per-day
+    // advisory lock, so it cannot share the chunk's transaction. The chunk's
+    // fence has already checked the lease; the chunk (and its cursor) commits
+    // after the day does. The recompute is idempotent, so a crash in between
+    // only means the day is done again on resume.
+    recomputeDay: (date) => recomputeDay(lease.orgId, date, { jobRunId: lease.runId }),
     writeInsight: (...args) => writeInsight(tx, lease, ...args),
     proposeRecommendation: (...args) => proposeRecommendation(tx, lease, ...args),
   };

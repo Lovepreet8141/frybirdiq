@@ -14,6 +14,7 @@
  * iq-* repositories they wrap (minus the org, transaction and lease), so the
  * two cannot drift apart. Type-only: nothing here reaches a database.
  */
+import type * as Facts from "@/lib/repositories/iq-facts";
 import type * as Insights from "@/lib/repositories/iq-insights";
 import type * as Recommendations from "@/lib/repositories/iq-recommendations";
 
@@ -22,7 +23,20 @@ type WithoutOrg<F> = F extends (orgId: string, ...rest: infer A) => infer R ? (.
 /** `(tx, lease, ...rest) => R` becomes `(...rest) => R`. */
 type WithoutTxAndLease<F> = F extends (tx: never, lease: never, ...rest: infer A) => infer R ? (...rest: A) => R : never;
 
+/** Σ daily facts against the P&L over a date range (IQ-1 monthly sum check). Counts and ids only. */
+export type FactsParity = {
+  readonly ok: boolean;
+  /** Metric ids whose summed facts differ from the P&L. */
+  readonly mismatchedMetrics: readonly string[];
+  /** Days in the range with no facts at all. */
+  readonly missingDays: number;
+};
+
 export type JobReadRepos = {
+  /** The first IST business day this org has history for (opened_on, else its first order), or null. */
+  readonly factsHistoryStart: () => Promise<string | null>;
+  /** Compares Σ daily facts with getProfitAndLoss for [from, to] (IST dates, inclusive). */
+  readonly checkFactsParity: (from: string, to: string) => Promise<FactsParity>;
   readonly listInsights: WithoutOrg<typeof Insights.listInsights>;
   readonly getInsight: WithoutOrg<typeof Insights.getInsight>;
   readonly readFactFigures: WithoutOrg<typeof Insights.readFactFigures>;
@@ -30,6 +44,8 @@ export type JobReadRepos = {
 };
 
 export type JobWriteRepos = {
+  /** Rebuilds one IST business day's facts for this org, recorded against this run. Idempotent. */
+  readonly recomputeDay: (date: string) => ReturnType<typeof Facts.recomputeDay>;
   readonly writeInsight: WithoutTxAndLease<typeof Insights.writeInsight>;
   readonly proposeRecommendation: WithoutTxAndLease<typeof Recommendations.proposeRecommendation>;
 };

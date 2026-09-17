@@ -24,7 +24,12 @@ import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
 import type { JobContext, JobRunResult } from "@/lib/jobs/context";
 import { handleJobRequest, type ClaimRequest } from "@/lib/jobs/handle";
 import { DEFAULT_TIMING, type JobDefinition } from "@/lib/jobs/registry";
+import { nightlyDates, remainingAfter } from "@/lib/jobs/facts-plan";
+import { periodKeyAt, shiftPeriod } from "@/lib/jobs/period";
+import { iqDailyFacts, organizations } from "@/db/schema";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
+import { seedExpense } from "./__test-support__/iq-fixtures";
+import { readDailyFacts } from "./iq-facts";
 import type { JobWriteRepos } from "@/lib/jobs/repos";
 import { createJobRunStore } from "./iq-job-runs";
 import { jobRouteDeps } from "@/app/api/jobs/[job]/deps";
@@ -521,8 +526,8 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
     expect(response).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
     expect(seen).toMatchObject({
       ctxKeys: ["attempt", "commit", "orgId", "period", "periodKey", "repos", "resumeCursor", "runId", "shouldStop", "trigger"],
-      readKeys: ["getInsight", "listInsights", "listOpenRecommendations", "readFactFigures"],
-      writeKeys: ["proposeRecommendation", "writeInsight"],
+      readKeys: ["checkFactsParity", "factsHistoryStart", "getInsight", "listInsights", "listOpenRecommendations", "readFactFigures"],
+      writeKeys: ["proposeRecommendation", "recomputeDay", "writeInsight"],
       listedOrgs: [org.orgId],
       listedHasA: true,
       listedHasB: false,
@@ -535,4 +540,126 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
     const bRowsAfter = (await db().select({ id: iqInsights.id }).from(iqInsights).where(eq(iqInsights.orgId, otherOrg.orgId))).length;
     expect(bRowsAfter).toBe(bRowsBefore);
   });
+});
+
+describe("IQ-1 facts jobs through the runner (iq1-s8) on the local stack", () => {
+  const SECRET = "f".repeat(40);
+  const orgs: TestOrg[] = [];
+  const freshOrg = async () => {
+    const created = await createTestOrg();
+    orgs.push(created);
+    return created;
+  };
+  afterAll(async () => {
+    for (const created of orgs) await deleteTestOrg(created.orgId);
+  });
+
+  let yesterday: string;
+  beforeAll(async () => {
+    yesterday = shiftPeriod("day", periodKeyAt("day", await store().dbNow()), -1);
+  });
+
+  /** One job request through handleJobRequest with the real registry and store, for exactly these orgs. */
+  async function runJob(job: string, orgIds: string[], options: { period?: string; clock?: () => number } = {}) {
+    const runStore = store();
+    runStore.listOrgIds = async () => orgIds;
+    const headers: Record<string, string> = { "x-forwarded-for": "127.0.0.1", host: JOB_HOST, authorization: `Bearer ${SECRET}` };
+    return handleJobRequest(
+      { jobParam: job, body: options.period === undefined ? undefined : { period: options.period }, headers: { get: (n) => headers[n.toLowerCase()] ?? null } },
+      {
+        secrets: { current: SECRET, previous: undefined },
+        store: runStore,
+        newLeaseOwner: () => randomUUID(),
+        monotonicMs: options.clock ?? (() => performance.now()),
+        every: () => () => {},
+      },
+    );
+  }
+
+  const factRows = async (orgId: string) => (await db().select({ id: iqDailyFacts.id }).from(iqDailyFacts).where(eq(iqDailyFacts.orgId, orgId))).length;
+  const runRow = async (job: string, orgId: string, periodKey: string) =>
+    (await db().select().from(iqJobRuns).where(and(eq(iqJobRuns.job, job), eq(iqJobRuns.orgId, orgId), eq(iqJobRuns.periodKey, periodKey))))[0];
+
+  it("nightly recomputes both months for one org only, records the P&L check, and a re-run is a no-op", async () => {
+    const a = await freshOrg();
+    const b = await freshOrg();
+    const planned = nightlyDates(yesterday);
+    await seedExpense(a, { amountPaise: 12_345n, paidOn: yesterday });
+    await seedExpense(a, { amountPaise: 700n, paidOn: planned[0]! });
+    await seedExpense(b, { amountPaise: 999n, paidOn: yesterday });
+
+    const first = await runJob("iq-facts-nightly", [a.orgId], { period: yesterday });
+    expect(first).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
+    const row = await runRow("iq-facts-nightly", a.orgId, yesterday);
+    expect(row).toMatchObject({ status: "SUCCEEDED", failures: 0, cursor: null });
+    expect(row!.summary).toMatchObject({
+      days_planned: planned.length,
+      days_recomputed: planned.length,
+      parity_checks: 2,
+      parity_mismatches: 0,
+      parity_missing_days: 0,
+    });
+
+    const facts = await readDailyFacts(a.orgId, planned[0]!, yesterday);
+    expect(facts.missingDates).toEqual([]);
+    expect(facts.totals.expense_direct).toBe(13_045n);
+    const [stamped] = await db().select({ jobRunId: iqDailyFacts.jobRunId }).from(iqDailyFacts).where(eq(iqDailyFacts.orgId, a.orgId)).limit(1);
+    expect(stamped?.jobRunId).toBe(row!.id);
+
+    // Org B was not touched by org A's run.
+    expect(await factRows(b.orgId)).toBe(0);
+
+    const rowsBefore = await factRows(a.orgId);
+    expect(await runJob("iq-facts-nightly", [a.orgId], { period: yesterday })).toMatchObject({ status: 200, body: { counts: { NOOP: 1 } } });
+    expect(await factRows(a.orgId)).toBe(rowsBefore);
+
+    // B's own run sees only B's expense; A's figures are unchanged.
+    expect(await runJob("iq-facts-nightly", [b.orgId], { period: yesterday })).toMatchObject({ status: 200 });
+    expect((await readDailyFacts(b.orgId, yesterday, yesterday)).totals.expense_direct).toBe(999n);
+    expect((await readDailyFacts(a.orgId, planned[0]!, yesterday)).totals.expense_direct).toBe(13_045n);
+  }, 120_000);
+
+  it("nightly stops cleanly at the deadline with its cursor saved, and the retry resumes and finishes", async () => {
+    const c = await freshOrg();
+    const planned = nightlyDates(yesterday);
+    // A clock that moves 5s every time the runner looks: the 240s deadline arrives part-way through.
+    const steppingClock = () => {
+      let t = 0;
+      return () => (t += 5_000);
+    };
+
+    const cut = await runJob("iq-facts-nightly", [c.orgId], { period: yesterday, clock: steppingClock() });
+    expect(cut).toMatchObject({ status: 500, body: { counts: { PARTIAL: 1 } } });
+    const partial = await runRow("iq-facts-nightly", c.orgId, yesterday);
+    expect(partial).toMatchObject({ status: "FAILED", errorCode: "DEADLINE", failures: 0 });
+    expect(partial!.cursor).not.toBeNull();
+    const done = planned.length - remainingAfter(planned, partial!.cursor).length;
+    expect(done).toBeGreaterThan(0);
+    expect(done).toBeLessThan(planned.length);
+    expect((await readDailyFacts(c.orgId, planned[0]!, yesterday)).computedDates).toHaveLength(done);
+
+    const resumed = await runJob("iq-facts-nightly", [c.orgId], { period: yesterday });
+    expect(resumed).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
+    const finished = await runRow("iq-facts-nightly", c.orgId, yesterday);
+    expect(finished).toMatchObject({ status: "SUCCEEDED", attempt: 2, failures: 0, cursor: null });
+    expect(finished!.summary).toMatchObject({ days_recomputed: planned.length - done, parity_mismatches: 0, parity_missing_days: 0 });
+    expect((await readDailyFacts(c.orgId, planned[0]!, yesterday)).missingDates).toEqual([]);
+  }, 120_000);
+
+  it("backfill recomputes from the org's opened_on day through the period, and intraday recomputes only today", async () => {
+    const d = await freshOrg();
+    const openedOn = shiftPeriod("day", yesterday, -2);
+    await db().update(organizations).set({ openedOn }).where(eq(organizations.id, d.orgId));
+
+    expect(await runJob("iq-facts-backfill", [d.orgId], { period: yesterday })).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
+    expect((await runRow("iq-facts-backfill", d.orgId, yesterday))!.summary).toMatchObject({ days_planned: 3, days_recomputed: 3 });
+    const history = await readDailyFacts(d.orgId, shiftPeriod("day", openedOn, -1), yesterday);
+    expect(history.computedDates).toEqual([openedOn, shiftPeriod("day", yesterday, -1), yesterday]);
+
+    const today = shiftPeriod("day", yesterday, 1);
+    const intraday = await runJob("iq-facts-intraday", [d.orgId]);
+    expect(intraday).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
+    expect(intraday.body!.periods[0]!.slice(0, 10)).toBe(today);
+    expect((await readDailyFacts(d.orgId, today, today)).computedDates).toEqual([today]);
+  }, 120_000);
 });

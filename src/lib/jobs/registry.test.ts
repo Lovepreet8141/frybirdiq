@@ -10,20 +10,37 @@ const JOBS_DIR = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = join(JOBS_DIR, "..", "..", "..");
 
 describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
-  it("ships only heartbeat in IQ-0", () => {
-    expect(JOB_NAMES).toEqual(["heartbeat"]);
+  it("ships heartbeat (IQ-0) and the three IQ-1 facts jobs", () => {
+    expect(JOB_NAMES).toEqual(["heartbeat", "iq-facts-nightly", "iq-facts-intraday", "iq-facts-backfill"]);
     expect(isJobName("heartbeat")).toBe(true);
     expect(isJobName("constructor")).toBe(false);
   });
 
-  it("lists heavy jobs from the registry: none today, since heartbeat is light", () => {
-    expect(HEAVY_JOB_NAMES).toEqual([]);
+  it("lists heavy jobs from the registry: only the nightly facts job", () => {
+    expect(HEAVY_JOB_NAMES).toEqual(["iq-facts-nightly"]);
     const fake = (name: string, concurrency: JobDefinition["concurrency"]): JobDefinition => ({
       ...JOB_REGISTRY.heartbeat,
       name,
       concurrency,
     });
     expect(heavyJobNames({ a: fake("a", "heavy"), b: fake("b", "light"), c: fake("c", "heavy") })).toEqual(["a", "c"]);
+  });
+
+  it("registers at most one heavy job until heavy exclusion takes a lock (RELIABILITY, s7b)", () => {
+    // heavyRunLive is check-then-claim: two different heavy jobs starting together could both run.
+    expect(HEAVY_JOB_NAMES.length).toBeLessThanOrEqual(1);
+  });
+
+  it("schedules the facts jobs as designed: nightly 03:00 IST for yesterday, intraday every IST quarter for today, backfill by hand", () => {
+    expect(JOB_REGISTRY["iq-facts-nightly"]).toMatchObject({ periodKind: "day", target: "previous", onCalendarUtc: "*-*-* 21:30:00 UTC", catchUpPeriods: 0 });
+    expect(JOB_REGISTRY["iq-facts-intraday"]).toMatchObject({
+      periodKind: "quarter_hour",
+      target: "current",
+      onCalendarUtc: "*-*-* *:00/15:00 UTC",
+      catchUpPeriods: 0,
+      concurrency: "light",
+    });
+    expect(JOB_REGISTRY["iq-facts-backfill"]).toMatchObject({ periodKind: "day", onCalendarUtc: null, catchUpPeriods: 0 });
   });
 
   it("uses lease 300s, heartbeat 60s, deadline 240s, 3 attempts", () => {
@@ -33,7 +50,8 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
   it.each(JOB_NAMES)("%s: timing is internally safe", (name) => {
     const def = JOB_REGISTRY[name];
     expect(def.name).toBe(name);
-    expect(name).toMatch(/^[a-z][a-z0-9_]*$/);
+    // A URL segment and a systemd instance name: lower-case letters, digits, - and _.
+    expect(name).toMatch(/^[a-z][a-z0-9_-]*$/);
     // Several heartbeats fit in one lease, so one slow heartbeat does not lose it.
     expect(def.heartbeatSeconds * 2).toBeLessThan(def.leaseSeconds);
     // The job stops before its lease could lapse and before curl -m 290 and Node's 300s requestTimeout.
@@ -41,7 +59,7 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
     expect(def.deadlineSeconds).toBeLessThan(290);
     expect(def.maxAttempts).toBeGreaterThanOrEqual(1);
     expect(def.catchUpPeriods).toBeGreaterThanOrEqual(0);
-    expect(def.onCalendarUtc).toMatch(/ UTC$/);
+    if (def.onCalendarUtc !== null) expect(def.onCalendarUtc).toMatch(/ UTC$/);
   });
 
   it("keeps each installed timer in step with the registry", () => {
