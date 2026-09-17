@@ -212,3 +212,34 @@ describe("rejectAction", () => {
     });
   });
 });
+
+describe("a decision needs its recommendation still PROPOSED (RELIABILITY M1 on cb92f9b)", () => {
+  const closeRecommendation = (id: string, status: "SUPERSEDED" | "EXPIRED") =>
+    db().update(iqRecommendations).set({ status, decidedAt: new Date() }).where(eq(iqRecommendations.id, id));
+
+  it.each([
+    ["SUPERSEDED", "SUPERSEDED"],
+    ["EXPIRED", "EXPIRED"],
+  ] as const)("refuses to approve or reject when the recommendation is %s, changing nothing", async (recStatus, reason) => {
+    const paramsHash = hash();
+    const recommendationId = await insertRecommendation(org, paramsHash);
+    const { id } = await insertAction(org, { paramsHash, recommendationId });
+    await closeRecommendation(recommendationId, recStatus);
+
+    expect(await approveAction({ orgId: org.orgId, actionId: id, userId: ME, paramsHash })).toEqual({ ok: false, reason });
+    expect(await rejectAction({ orgId: org.orgId, actionId: id, userId: ME, paramsHash })).toEqual({ ok: false, reason });
+    expect(await actionRow(id)).toMatchObject({ status: "PENDING_APPROVAL", approvedBy: null, auditLogId: null });
+    expect(await auditFor(id)).toHaveLength(0);
+    const [rec] = await db().select().from(iqRecommendations).where(eq(iqRecommendations.id, recommendationId));
+    expect(rec?.status).toBe(recStatus);
+  });
+
+  it("still reports the same person's repeat as success once approval closed the recommendation", async () => {
+    const paramsHash = hash();
+    const recommendationId = await insertRecommendation(org, paramsHash);
+    const { id } = await insertAction(org, { paramsHash, recommendationId });
+    expect(await approveAction({ orgId: org.orgId, actionId: id, userId: ME, paramsHash })).toEqual({ ok: true, repeated: false });
+    expect(await approveAction({ orgId: org.orgId, actionId: id, userId: ME, paramsHash })).toEqual({ ok: true, repeated: true });
+    expect(await rejectAction({ orgId: org.orgId, actionId: id, userId: YOU, paramsHash })).toEqual({ ok: false, reason: "ALREADY_DECIDED" });
+  });
+});

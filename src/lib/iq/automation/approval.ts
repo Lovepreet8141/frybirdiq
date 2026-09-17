@@ -10,6 +10,10 @@
  *   repeated success the same person already made the same decision on the
  *                    same params — a double tap is not an error
  *   ALREADY_DECIDED  anything else that has left PENDING_APPROVAL
+ *   SUPERSEDED       the linked recommendation was replaced (its evidence
+ *                    changed), so the action stands on stale grounds
+ *   EXPIRED          the linked recommendation expired
+ *   ALREADY_DECIDED  the linked recommendation was decided some other way
  *   STALE_PARAMS     the proposal changed since the person looked at it
  *   EXPIRED          the request lapsed (database time)
  */
@@ -18,7 +22,10 @@ import type { ActionStatus } from "./state-machine";
 
 export type Decision = "APPROVE" | "REJECT";
 
-export type DecisionMiss = "NOT_FOUND" | "ALREADY_DECIDED" | "STALE_PARAMS" | "EXPIRED";
+export type DecisionMiss = "NOT_FOUND" | "ALREADY_DECIDED" | "SUPERSEDED" | "STALE_PARAMS" | "EXPIRED";
+
+/** iq_recommendations.status of the action's recommendation, or null when the action has none. */
+export type RecommendationStatus = "PROPOSED" | "APPROVED" | "DISMISSED" | "EXPIRED" | "SUPERSEDED";
 
 export type DecisionOutcome = { readonly ok: true; readonly repeated: boolean } | { readonly ok: false; readonly reason: DecisionMiss };
 
@@ -45,7 +52,12 @@ export function isPersonDecided(row: Pick<DecisionRowView, "tier" | "autoPolicyI
   return row.autoPolicyId === null && (row.tier === "A1" || row.tier === "A2");
 }
 
-export function classifyDecisionMiss(row: DecisionRowView | null, request: DecisionRequest, dbNow: Date): DecisionOutcome {
+export function classifyDecisionMiss(
+  row: DecisionRowView | null,
+  request: DecisionRequest,
+  dbNow: Date,
+  recommendation: RecommendationStatus | null = null,
+): DecisionOutcome {
   if (row === null || !isPersonDecided(row)) return { ok: false, reason: "NOT_FOUND" };
 
   const sameParams = row.paramsHash === request.paramsHash;
@@ -57,6 +69,9 @@ export function classifyDecisionMiss(row: DecisionRowView | null, request: Decis
   }
 
   if (row.status !== "PENDING_APPROVAL") return { ok: false, reason: "ALREADY_DECIDED" };
+  if (recommendation === "SUPERSEDED") return { ok: false, reason: "SUPERSEDED" };
+  if (recommendation === "EXPIRED") return { ok: false, reason: "EXPIRED" };
+  if (recommendation === "APPROVED" || recommendation === "DISMISSED") return { ok: false, reason: "ALREADY_DECIDED" };
   if (!sameParams) return { ok: false, reason: "STALE_PARAMS" };
   if (row.approvalExpiresAt === null || row.approvalExpiresAt.getTime() <= dbNow.getTime()) return { ok: false, reason: "EXPIRED" };
   // The update missed but the row reads as decidable: it changed and changed back between the two statements.

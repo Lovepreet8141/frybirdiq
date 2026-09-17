@@ -70,6 +70,23 @@ describe("classifyDecisionMiss (DESIGN-v2-DELTA §4)", () => {
     }
   });
 
+  it("refuses a pending action whose recommendation is no longer PROPOSED (RELIABILITY M1)", () => {
+    expect(classifyDecisionMiss(row(), approve, now, "SUPERSEDED")).toEqual({ ok: false, reason: "SUPERSEDED" });
+    expect(classifyDecisionMiss(row(), reject, now, "EXPIRED")).toEqual({ ok: false, reason: "EXPIRED" });
+    expect(classifyDecisionMiss(row(), approve, now, "APPROVED")).toEqual({ ok: false, reason: "ALREADY_DECIDED" });
+    expect(classifyDecisionMiss(row(), approve, now, "DISMISSED")).toEqual({ ok: false, reason: "ALREADY_DECIDED" });
+    // The same person's repeat still wins over the recommendation it closed.
+    expect(classifyDecisionMiss(row({ status: "APPROVED", approvedBy: ME }), approve, now, "APPROVED")).toEqual({
+      ok: true,
+      repeated: true,
+    });
+    // A superseded recommendation outranks stale params and expiry.
+    expect(classifyDecisionMiss(row({ paramsHash: OTHER_HASH, approvalExpiresAt: null }), approve, now, "SUPERSEDED")).toEqual({
+      ok: false,
+      reason: "SUPERSEDED",
+    });
+  });
+
   it("falls back to ALREADY_DECIDED when the row reads as still decidable", () => {
     expect(classifyDecisionMiss(row(), approve, now)).toEqual({ ok: false, reason: "ALREADY_DECIDED" });
   });

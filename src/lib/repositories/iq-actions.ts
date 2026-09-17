@@ -5,16 +5,22 @@ import "server-only";
  *
  * DESIGN-v2-DELTA.md §4. Each decision is ONE transaction:
  *
- *   1. a compare-and-set UPDATE on iq_actions that only matches a row a
+ *   1. if the action has a recommendation, lock it (FOR UPDATE, org-scoped)
+ *      and require it to be PROPOSED — a superseded or expired
+ *      recommendation means the action stands on stale grounds;
+ *   2. a compare-and-set UPDATE on iq_actions that only matches a row a
  *      person decides (A1 without a policy, or A2), in this org, still
  *      PENDING_APPROVAL, with the params hash the person saw, and not yet
  *      expired by the database's now();
- *   2. the linked recommendation leaves PROPOSED the same way;
- *   3. an audit_logs row, linked back from the action.
+ *   3. the recommendation leaves PROPOSED (must update exactly one row);
+ *   4. an audit_logs row, linked back from the action.
  *
- * Nothing else is locked or read first, so two people deciding at once
- * cannot both win: the second UPDATE waits for the first and then matches
- * nothing. A miss is classified by `classifyDecisionMiss`, and the same
+ * Lock order is recommendation, then action. Anything that supersedes a
+ * recommendation and also closes its open actions must take the locks in the
+ * same order (insight → recommendation → action), or the two can deadlock.
+ *
+ * Two people deciding at once cannot both win: the second waits for the
+ * first's lock and then matches nothing. A miss is classified by `classifyDecisionMiss`, and the same
  * person repeating the same decision is reported as success. No
  * withIdempotency — the CAS is the idempotency.
  *
@@ -28,7 +34,12 @@ import { db } from "@/db";
 import { auditLogs, iqActions, iqRecommendations } from "@/db/schema";
 import { ACTION_STATUSES, EXECUTE_WINDOW_SECONDS, type ActionStatus } from "@/lib/iq/automation";
 import { ActionTierSchema } from "@/lib/iq/engine";
-import { classifyDecisionMiss, type Decision, type DecisionOutcome } from "@/lib/iq/automation/approval";
+import {
+  classifyDecisionMiss,
+  type Decision,
+  type DecisionOutcome,
+  type RecommendationStatus,
+} from "@/lib/iq/automation/approval";
 
 export type ActionDecisionInput = {
   readonly orgId: string;
@@ -42,6 +53,10 @@ export type ActionDecisionInput = {
 };
 
 const isActionStatus = (value: string): value is ActionStatus => (ACTION_STATUSES as readonly string[]).includes(value);
+
+const RECOMMENDATION_STATUSES: readonly RecommendationStatus[] = ["PROPOSED", "APPROVED", "DISMISSED", "EXPIRED", "SUPERSEDED"];
+const isRecommendationStatus = (value: string): value is RecommendationStatus =>
+  (RECOMMENDATION_STATUSES as readonly string[]).includes(value);
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -70,37 +85,28 @@ async function decide(decision: Decision, input: ActionDecisionInput): Promise<D
 
   return db().transaction(async (tx) => {
     const approving = decision === "APPROVE";
-    const [updated] = await tx
-      .update(iqActions)
-      .set(
-        approving
-          ? {
-              status: "APPROVED",
-              approvedBy: input.userId,
-              approvedAt: sql`now()`,
-              executeBy: sql`now() + make_interval(secs => ${EXECUTE_WINDOW_SECONDS})`,
-              updatedAt: sql`now()`,
-            }
-          : { status: "REJECTED", decidedBy: input.userId, updatedAt: sql`now()` },
-      )
-      .where(
-        and(
-          eq(iqActions.id, input.actionId),
-          eq(iqActions.orgId, input.orgId),
-          inArray(iqActions.tier, ["A1", "A2"]),
-          isNull(iqActions.autoPolicyId),
-          eq(iqActions.status, "PENDING_APPROVAL"),
-          eq(iqActions.paramsHash, input.paramsHash),
-          gt(iqActions.approvalExpiresAt, sql`now()`),
-        ),
-      )
-      .returning({
-        id: iqActions.id,
-        locationId: iqActions.locationId,
-        recommendationId: iqActions.recommendationId,
-        actionKind: iqActions.actionKind,
-        tier: iqActions.tier,
-      });
+
+    const [link] = await tx
+      .select({ recommendationId: iqActions.recommendationId })
+      .from(iqActions)
+      .where(and(eq(iqActions.id, input.actionId), eq(iqActions.orgId, input.orgId)));
+    if (!link) return { ok: false, reason: "NOT_FOUND" } as const;
+
+    let recommendation: RecommendationStatus | null = null;
+    if (link.recommendationId !== null) {
+      const [rec] = await tx
+        .select({ status: iqRecommendations.status })
+        .from(iqRecommendations)
+        .where(and(eq(iqRecommendations.id, link.recommendationId), eq(iqRecommendations.orgId, input.orgId)))
+        .for("update");
+      if (!rec || !isRecommendationStatus(rec.status)) return { ok: false, reason: "NOT_FOUND" } as const;
+      recommendation = rec.status;
+    }
+
+    const updated =
+      recommendation === null || recommendation === "PROPOSED"
+        ? await compareAndSetDecision(tx, decision, input, link.recommendationId)
+        : undefined;
 
     if (!updated) {
       const [row] = await tx
@@ -124,11 +130,12 @@ async function decide(decision: Decision, input: ActionDecisionInput): Promise<D
         { ...view, tier: parsedTier.data, status },
         { decision, userId: input.userId, paramsHash: input.paramsHash },
         dbNow,
+        recommendation,
       );
     }
 
     if (updated.recommendationId !== null) {
-      await tx
+      const closed = await tx
         .update(iqRecommendations)
         .set({
           status: approving ? "APPROVED" : "DISMISSED",
@@ -143,7 +150,10 @@ async function decide(decision: Decision, input: ActionDecisionInput): Promise<D
             eq(iqRecommendations.orgId, input.orgId),
             eq(iqRecommendations.status, "PROPOSED"),
           ),
-        );
+        )
+        .returning({ id: iqRecommendations.id });
+      // Locked and checked above, so this cannot miss; if it does, roll everything back.
+      if (closed.length !== 1) throw new Error("iq-actions: recommendation changed under its lock");
     }
 
     const [audit] = await tx
@@ -174,4 +184,44 @@ async function decide(decision: Decision, input: ActionDecisionInput): Promise<D
 
     return { ok: true, repeated: false } as const;
   });
+}
+
+type Tx = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
+
+/** The decision itself: one UPDATE that only matches a still-decidable row. Undefined when it matched nothing. */
+async function compareAndSetDecision(tx: Tx, decision: Decision, input: ActionDecisionInput, recommendationId: string | null) {
+  const approving = decision === "APPROVE";
+  const [updated] = await tx
+    .update(iqActions)
+    .set(
+      approving
+        ? {
+            status: "APPROVED",
+            approvedBy: input.userId,
+            approvedAt: sql`now()`,
+            executeBy: sql`now() + make_interval(secs => ${EXECUTE_WINDOW_SECONDS})`,
+            updatedAt: sql`now()`,
+          }
+        : { status: "REJECTED", decidedBy: input.userId, updatedAt: sql`now()` },
+    )
+    .where(
+      and(
+        eq(iqActions.id, input.actionId),
+        eq(iqActions.orgId, input.orgId),
+        inArray(iqActions.tier, ["A1", "A2"]),
+        isNull(iqActions.autoPolicyId),
+        eq(iqActions.status, "PENDING_APPROVAL"),
+        eq(iqActions.paramsHash, input.paramsHash),
+        gt(iqActions.approvalExpiresAt, sql`now()`),
+        recommendationId === null ? isNull(iqActions.recommendationId) : eq(iqActions.recommendationId, recommendationId),
+      ),
+    )
+    .returning({
+      id: iqActions.id,
+      locationId: iqActions.locationId,
+      recommendationId: iqActions.recommendationId,
+      actionKind: iqActions.actionKind,
+      tier: iqActions.tier,
+    });
+  return updated;
 }
