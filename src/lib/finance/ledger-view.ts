@@ -109,6 +109,8 @@ export interface CsvPayment {
   readonly amount: Paise;
   readonly feeAmount: Paise;
   readonly refunded: Paise;
+  /** Held by refunds in progress; never part of `refunded`. */
+  readonly refundReserved: Paise;
   readonly capturedBy: string | null;
   readonly at: Date;
 }
@@ -124,7 +126,7 @@ function csvRupees(amount: Paise): string {
 
 /** One line per payment, amounts as rupees with paise, ISO timestamps in UTC — what a spreadsheet reads without guessing. */
 export function paymentsCsv(rows: readonly CsvPayment[]): string {
-  const header = ["Order", "Channel", "Status", "Method", "Provider", "Amount (INR)", "Fee (INR)", "Refunded (INR)", "Taken by", "At (UTC)"];
+  const header = ["Order", "Channel", "Status", "Method", "Provider", "Amount (INR)", "Fee (INR)", "Refunded (INR)", "Refund in progress (INR)", "Taken by", "At (UTC)"];
   const lines = rows.map((row) =>
     [
       row.orderNumber,
@@ -135,6 +137,7 @@ export function paymentsCsv(rows: readonly CsvPayment[]): string {
       csvRupees(row.amount),
       csvRupees(row.feeAmount),
       csvRupees(row.refunded),
+      csvRupees(row.refundReserved),
       row.capturedBy ?? "",
       row.at.toISOString(),
     ]

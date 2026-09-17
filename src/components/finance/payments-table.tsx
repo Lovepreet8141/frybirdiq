@@ -32,7 +32,7 @@ import { EmptyState } from "@/components/states";
 import { RefundDialog } from "@/components/staff/refund-dialog";
 import { ORDER_CHANNEL_LABELS, type OrderChannel } from "@/domain/order-channel";
 import { METHOD_LABELS, type PaymentMethod, type PaymentStatus, STATUS_LABELS, paymentsCsv } from "@/lib/finance/ledger-view";
-import { type Paise, formatINR, subtract } from "@/lib/money";
+import { type Paise, ZERO, add, formatINR, subtract } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
 export interface PaymentRowView {
@@ -48,6 +48,8 @@ export interface PaymentRowView {
   readonly capturedBy: string | null;
   readonly at: string;
   readonly refunded: Paise;
+  /** Held by refunds still in progress (RESERVED): not returned yet, but not refundable again either. */
+  readonly refundReserved: Paise;
 }
 
 const STATUS_VARIANT: Record<PaymentStatus, "success" | "warning" | "destructive" | "outline"> = {
@@ -84,8 +86,13 @@ function when(iso: string, style: "short" | "full" = "short"): string {
     : date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 }
 
+/** What can still go back: captured, less what went back, less what refunds in progress hold. */
+function leftToRefund(row: PaymentRowView): Paise {
+  return subtract(row.amount, add(row.refunded, row.refundReserved));
+}
+
 function refundable(row: PaymentRowView): boolean {
-  return (row.status === "CAPTURED" || row.status === "PARTIALLY_REFUNDED") && row.amount > row.refunded;
+  return (row.status === "CAPTURED" || row.status === "PARTIALLY_REFUNDED") && leftToRefund(row) > ZERO;
 }
 
 /**
@@ -405,7 +412,8 @@ export function PaymentsTable({ payments, periodLabel, canRefund, canExport }: {
         onOpenChange={(open) => {
           if (!open) setRefunding(null);
         }}
-        payment={refunding ? { id: refunding.id, orderNumber: refunding.orderNumber, amount: refunding.amount, refunded: refunding.refunded, provider: refunding.provider, method: refunding.method } : null}
+        // The dialog's cap is amount − refunded: a refund in progress holds its share, so it counts here.
+        payment={refunding ? { id: refunding.id, orderNumber: refunding.orderNumber, amount: refunding.amount, refunded: add(refunding.refunded, refunding.refundReserved), provider: refunding.provider, method: refunding.method } : null}
       />
     </div>
   );
@@ -448,7 +456,8 @@ function PaymentSheet({ payment, onOpenChange, canRefund, onRefund }: { payment:
                 </Row>
                 <Row label="Provider fee">{payment.feeAmount === 0n ? "—" : formatINR(payment.feeAmount)}</Row>
                 <Row label="Refunded so far">{payment.refunded === 0n ? "—" : formatINR(payment.refunded)}</Row>
-                {refundable(payment) && <Row label="Left to refund">{formatINR(subtract(payment.amount, payment.refunded))}</Row>}
+                {payment.refundReserved > 0n && <Row label="Refund in progress">{formatINR(payment.refundReserved)}</Row>}
+                {refundable(payment) && <Row label="Left to refund">{formatINR(leftToRefund(payment))}</Row>}
                 <Row label="Taken by">{payment.capturedBy ?? "—"}</Row>
                 <Row label="At">{when(payment.at, "full")}</Row>
               </dl>

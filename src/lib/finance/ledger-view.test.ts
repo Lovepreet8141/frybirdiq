@@ -86,12 +86,13 @@ describe("paymentsCsv", () => {
         amount: paise(280_050),
         feeAmount: paise(0),
         refunded: paise(0),
+        refundReserved: paise(12_500),
         capturedBy: 'Ravi "Counter" Singh',
         at: at("2026-09-14T09:30:00Z"),
       },
     ]);
     const [header, line] = csv.split("\n");
     expect(header).toContain('"Amount (INR)"');
-    expect(line).toBe('"1042","Dine-in","Captured","Cash","cash","2800.50","0.00","0.00","Ravi ""Counter"" Singh","2026-09-14T09:30:00.000Z"');
+    expect(line).toBe('"1042","Dine-in","Captured","Cash","cash","2800.50","0.00","0.00","125.00","Ravi ""Counter"" Singh","2026-09-14T09:30:00.000Z"');
   });
 });
