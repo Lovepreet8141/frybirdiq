@@ -44,7 +44,12 @@ LoadCredential=job-header:/etc/frybird/jobs.header
 # -m 290 sits under the route's 300s deadline budget (registry.ts: lease
 # 300s, deadline 240s + commit grace); systemd must not time this out first,
 # so TimeoutStartSec below is set above it, not left at the 90s default.
-ExecStart=curl -fsS -m 290 -X POST -H @${CREDENTIALS_DIRECTORY}/job-header http://127.0.0.1:3000/api/jobs/%i
+# %d (the credentials-directory specifier, systemd 250+) is expanded when the
+# unit file is parsed, so systemd-analyze verify can check it statically;
+# ${CREDENTIALS_DIRECTORY} is only an environment-variable substitution done
+# at spawn time and was unverified by anything that ran in this slice's local
+# proof (SECURITY-TENANCY, iq0-s10r-sec).
+ExecStart=curl -fsS -m 290 -X POST -H @%d/job-header http://127.0.0.1:3000/api/jobs/%i
 TimeoutStartSec=300
 
 # RESTART CONDITION (RELIABILITY, iq0-s8r-rel): the route's lease is 300s and
@@ -54,11 +59,15 @@ TimeoutStartSec=300
 Restart=on-failure
 RestartSec=360
 
-# Hardening. curl to loopback and nothing else — no filesystem writes at all.
+# Hardening. curl to loopback and nothing else — no filesystem writes at all,
+# no network reachable but the app's own loopback socket.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6
 
 StandardOutput=journal
 StandardError=journal

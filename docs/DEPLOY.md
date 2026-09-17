@@ -377,17 +377,21 @@ mkdir -p /etc/frybird
 umask 077
 head -c48 /dev/urandom | base64 > /tmp/frybird-job-secret   # >=32 chars, never echoed
 printf 'Authorization: Bearer %s' "$(cat /tmp/frybird-job-secret)" > /etc/frybird/jobs.header
+printf 'JOB_SECRET=%s\n' "$(cat /tmp/frybird-job-secret)" >> /etc/frybird/env
 shred -u /tmp/frybird-job-secret
 chown root:root /etc/frybird/jobs.header
 chmod 600 /etc/frybird/jobs.header
+systemctl restart frybird
 ```
 
-Then add the same value as `JOB_SECRET=` in `/etc/frybird/env` (§2) and
-`systemctl restart frybird`. Nothing above prints the secret to the terminal,
-a log, or a command's argv (`head`/`base64`/`printf` never appear in
-`journalctl` with the value; `ps` cannot see inside a shell builtin's
-argument list from a file redirect the way it can a literal CLI argument —
-even so, avoid retyping the secret on any command line).
+Nothing above prints the secret to the terminal, a log, or a command's argv
+(`head`/`base64`/`printf` never appear in `journalctl` with the value; `ps`
+cannot see inside a shell builtin's argument list from a file redirect the
+way it can a literal CLI argument — even so, avoid retyping the secret on any
+command line). Appending with `>>` before the `shred` means `/etc/frybird/env`
+never needs to be opened in an editor and the secret never has to be typed
+or pasted a second time; if it already has a `JOB_SECRET=` line from an
+earlier setup, remove that line first so the file doesn't carry two.
 
 `jobs.header` holds the literal header line the unit sends
 (`LoadCredential=job-header:/etc/frybird/jobs.header` in
@@ -459,9 +463,17 @@ past runs are just history.
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://frybirdiq.tech/api/jobs/heartbeat   # expect 404
+curl -s -o /dev/null -w '%{http_code}\n' http://frybirdiq.tech/api/jobs/heartbeat    # expect 404 (or 301 to https, then 404)
+nginx -T 2>/dev/null | grep -c 'location \^~ /api/jobs/'                             # expect 2 — one per listener (§5a)
 systemctl is-active frybird-job-heartbeat.timer
 journalctl -u frybird-job@heartbeat -u frybird-job-failed@heartbeat --since -1d -p warning
 ```
+
+The `nginx -T` count catches exactly the failure mode in §5a: certbot forks
+the 80 block into a 443 block once, at cert-issue time, and a `location`
+added to this file afterwards never reaches the already-forked 443 block by
+itself. 1 means the 443 block is missing it; hand-copy it in (§5a) and
+re-check.
 
 ## What this does not have yet
 
