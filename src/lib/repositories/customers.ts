@@ -6,18 +6,22 @@ import "server-only";
  * Read-only apart from `ensureCustomerByPhone`, the one write: a counter
  * enrolment that needs a record to attach an order to. "Paid" here means the same
  * thing it means everywhere else revenue is computed in this app (see
- * `analytics.ts`'s `paidOrders`): a captured payment, on an order that
- * hasn't since been cancelled, failed or refunded. A customer's order count
- * and spend use that definition rather than a looser "every order they ever
- * started", so this screen can never disagree with the dashboard about what
- * counts as a sale.
+ * `analytics.ts`'s `paidOrders`): a payment in `PAID_PAYMENT_STATUSES`
+ * (`CAPTURED` or `PARTIALLY_REFUNDED` — a partial refund does not undo the
+ * sale, D2), on an order that hasn't since been cancelled, failed or fully
+ * refunded, counted once via `EXISTS` even when an order carries more than
+ * one paid payment row (D3). A customer's order count and spend use that
+ * exact definition rather than a looser "every order they ever started", so
+ * this screen can never disagree with the dashboard about what counts as a
+ * sale.
  */
 
 import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { customers, loyaltyAccounts, orderItems, orders, organizations, payments } from "@/db/schema";
+import { customers, loyaltyAccounts, orderItems, orders, organizations } from "@/db/schema";
 import type { OrderChannel } from "@/domain/order-channel";
 import type { OrderStatus } from "@/domain/order-status";
+import { hasPaidPayment } from "@/lib/repositories/analytics";
 import { type Paise, ZERO, add, paise } from "@/lib/money";
 
 export interface CustomerLookup {
@@ -59,7 +63,17 @@ export async function ensureCustomerByPhone(orgId: string, phone: string): Promi
   return existing;
 }
 
-/** A customer's paid orders — the same join `analytics.ts` uses for revenue, without a date range. */
+/**
+ * A customer's paid orders — the same `hasPaidPayment` EXISTS check
+ * `analytics.ts`'s `paidOrders` uses for revenue, without a date range.
+ *
+ * `EXISTS`, not a join: an order with two `CAPTURED` payment rows (a double
+ * capture) must count once, not twice (D3), and one with a `PARTIALLY_REFUNDED`
+ * payment must still count — it was still sold (D2). The previous
+ * `innerJoin(payments, ... eq(payments.status, "CAPTURED"))` got both wrong:
+ * it multiplied a row per matching payment and dropped partially refunded
+ * orders entirely.
+ */
 async function paidOrdersFor(orgId: string, customerIds: readonly string[]) {
   if (customerIds.length === 0) return [];
   return db()
@@ -71,11 +85,11 @@ async function paidOrdersFor(orgId: string, customerIds: readonly string[]) {
       createdAt: orders.createdAt,
     })
     .from(orders)
-    .innerJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, "CAPTURED")))
     .where(
       and(
         eq(orders.orgId, orgId),
         inArray(orders.customerId, customerIds as string[]),
+        hasPaidPayment(orders.id),
         // Same exclusion `analytics.ts`'s `paidOrders` uses: a refunded or
         // cancelled order is not a sale, whatever was captured on it.
         sql`${orders.status} NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')`,
