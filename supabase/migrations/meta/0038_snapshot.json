@@ -4760,7 +4760,8 @@
           "name": "status",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": "'SUCCEEDED'"
         },
         "idempotency_key": {
           "name": "idempotency_key",
@@ -4772,7 +4773,8 @@
           "name": "finalized_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "default": "now()"
         },
         "created_at": {
           "name": "created_at",

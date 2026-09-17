@@ -372,14 +372,21 @@ export const refunds = pgTable(
     providerPayload: jsonb("provider_payload").$type<Record<string, unknown>>(),
     /**
      * RESERVED → SUCCEEDED | FAILED (refund design Revision 2; migration 0038).
-     * No default: every insert states it. RESERVED and SUCCEEDED count against
-     * the payment's refundable balance; FAILED does not.
+     * RESERVED and SUCCEEDED count against the payment's refundable balance;
+     * FAILED does not. The default is expand-phase only (RELIABILITY): code
+     * deployed before the refund redesign inserts without a status. A later
+     * contract migration drops it once the redesign is live.
      */
-    status: text("status").$type<(typeof REFUND_STATUSES)[number]>().notNull(),
+    status: text("status").$type<(typeof REFUND_STATUSES)[number]>().notNull().default("SUCCEEDED"),
     /** The caller's key for this refund; a retry finds the row by (org_id, key). Old rows are null. */
     idempotencyKey: text("idempotency_key"),
-    /** Database time the refund became SUCCEEDED; set exactly then (finance dates refunds by it). */
-    finalizedAt: timestamp("finalized_at", { withTimezone: true }),
+    /**
+     * Database time the refund became SUCCEEDED; set exactly then (finance
+     * dates refunds by it). Expand-phase DEFAULT now() pairs with the status
+     * default so old-code inserts satisfy refunds_finalized_check. A RESERVED
+     * or FAILED insert must therefore pass `finalizedAt: null` explicitly.
+     */
+    finalizedAt: timestamp("finalized_at", { withTimezone: true }).defaultNow(),
     ...timestamps,
   },
   (table) => [

@@ -21,10 +21,13 @@
 -- That delete is outside this transaction; 0038 must be the newest applied
 -- migration, or Drizzle will never re-apply it.
 --
--- Statement order: lock → guard → indexes → constraints → columns.
+-- Statement order: lock timeout → lock → guard → indexes → constraints → columns.
 
 BEGIN;
 
+-- Give up after 5 s rather than queue every refund, payment page and
+-- checkout behind this lock while a long transaction holds refunds.
+SET LOCAL lock_timeout = '5s';
 LOCK TABLE "refunds" IN ACCESS EXCLUSIVE MODE;
 
 DO $$
