@@ -35,25 +35,11 @@ import "server-only";
 import { and, eq, gt, gte, inArray, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { iqDailyTrust, iqJobRuns, orders, organizations } from "@/db/schema";
-import { DETECT_FIGURES, FIGURE_UNITS, type DetectDay, type DetectFigureId, type DetectTrust } from "@/lib/iq/detect/rules";
-import type { Observed } from "@/lib/iq/engine";
+import { detectDayFrom, type DayFacts, type DayTrustRow } from "@/lib/iq/detect/day";
+import type { DetectDay } from "@/lib/iq/detect/rules";
 import { observed } from "@/lib/iq/engine/observed-factory";
-import {
-  aovNetV2,
-  businessDateSql,
-  channelShare,
-  endOfBusinessDay,
-  foodCostPctTheoretical,
-  getDerivedMetric,
-  getMetric,
-  isDerivedMetricId,
-  ratioBpsOrNull,
-  startOfBusinessDay,
-  type AnyMetricId,
-  type TrustSignalId,
-} from "@/lib/iq/metrics";
-import { gradeRank, type TrustGrade } from "@/lib/iq/trust";
-import { paise } from "@/lib/money";
+import { TRUST_SIGNAL_IDS, businessDateSql, endOfBusinessDay, startOfBusinessDay, type TrustSignalId } from "@/lib/iq/metrics";
+import { TRUST_GRADES, type TrustGrade } from "@/lib/iq/trust";
 import { FACTS_NIGHTLY_JOB, nightlyDates } from "@/lib/jobs/facts-plan";
 import { JOB_RUN_STATUSES, type ClaimRead, type ExpectedRow, type JobRunRow, type JobRunStatus, type JobTrigger } from "@/lib/jobs/claim-decision";
 import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
@@ -61,7 +47,7 @@ import type { ClaimRequest, FinishOutcome, JobRunStore } from "@/lib/jobs/handle
 import { DayLockBusy, DayTimeout, type FactsParity, type JobReadRepos, type JobWriteRepos } from "@/lib/jobs/repos";
 import { getProfitAndLoss } from "./expenses";
 import { DayLockBusyError, DayTimeoutError, purgeIntradayFacts, readDailyFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
-import { expireInsights, getInsight, istTimestamp, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
+import { expireInsights, getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
 import { TRUST_DEFINITION_VERSION, computeTrustDay } from "./iq-trust";
 import { listOpenRecommendations, proposeRecommendation } from "./iq-recommendations";
 
@@ -145,46 +131,14 @@ async function factsReadyFor(orgId: string, date: string): Promise<boolean> {
 }
 
 /**
- * The stored metrics each detector figure's trust rests on. A figure built from
- * several metrics is as trusted as the weakest of their signals.
- */
-const FIGURE_TRUST_METRICS: Readonly<Record<DetectFigureId, readonly AnyMetricId[]>> = {
-  revenue_net: ["revenue_net"],
-  orders_paid: ["orders_paid"],
-  aov_net: ["aov_net"],
-  discount_share: ["discount_total", "sales_gross"],
-  orders_cancelled_failed: ["orders_cancelled", "orders_failed"],
-  refunds_amount: ["refunds_amount"],
-  sales_gross: ["sales_gross"],
-  waste_cost: ["waste_cost"],
-  food_cost_pct_theoretical: ["food_cost_pct_theoretical"],
-  online_share: ["channel_share"],
-};
-
-function signalsOf(metricIds: readonly AnyMetricId[]): TrustSignalId[] {
-  const signals: TrustSignalId[] = [];
-  for (const id of metricIds) {
-    const definition = isDerivedMetricId(id) ? getDerivedMetric(id) : getMetric(id);
-    for (const signal of definition.trustSignals) if (!signals.includes(signal)) signals.push(signal);
-  }
-  return signals;
-}
-
-const asObserved = (id: DetectFigureId, value: bigint): Observed =>
-  FIGURE_UNITS[id] === "paise" ? observed({ unit: "paise", value: value.toString() }) : observed({ unit: FIGURE_UNITS[id], value: Number(value) });
-
-/**
- * The detectors' view of each date (IQ-2 S3 `DetectDay`), built only from this
- * org's stored daily facts and daily trust, with the derived figures computed by
- * the metrics catalog's own helpers (`FIGURE_INPUTS` in detect/rules.ts):
- * - a day with no computed facts has `hasFacts` false and no figures;
- * - a figure whose input is undefined (no orders, no gross sales) is absent;
- * - a day with no trust rows has no trust entries, so its rules do not evaluate;
- * - a figure's trust is the lowest grade of all its signals (a signal not scored
- *   that day is UNKNOWN), naming that signal with its stored ratio and the
- *   count of its LOW signals.
- * `parityFlagged` is false: parity is checked per month (checkFactsParity) and
- * no per-day flag exists yet — see the TODO in detect/detect-job.ts.
+ * The detectors' view of each date (IQ-2 S3 `DetectDay`). This repository does
+ * only the org-scoped reads — each day's summed daily facts and the day's
+ * iq_daily_trust rows — and hands them to IQ-ENGINE's pure `detectDayFrom`,
+ * which owns the figures and the trust rule (ARCHITECT review of 56fc9ba).
+ *
+ * Facts are read per date: `readDailyFacts` sums over its range, and the dates
+ * are not contiguous (the day, the day before, and 8 same-weekday days), so one
+ * call over min..max would add the days together.
  */
 async function readDetectDays(orgId: string, dates: readonly string[]): Promise<DetectDay[]> {
   const unique = [...new Set(dates)];
@@ -207,61 +161,21 @@ async function readDetectDays(orgId: string, dates: readonly string[]): Promise<
         inArray(iqDailyTrust.businessDate, unique),
       ),
     );
+  const knownSignal = (id: string): id is TrustSignalId => (TRUST_SIGNAL_IDS as readonly string[]).includes(id);
+  const knownGrade = (grade: string): grade is TrustGrade => (TRUST_GRADES as readonly string[]).includes(grade);
 
   const days: DetectDay[] = [];
   for (const date of dates) {
     const facts = await readDailyFacts(orgId, date, date);
-    const hasFacts = facts.computedDates.includes(date);
-    const total = (id: keyof typeof facts.totals) => facts.totals[id] ?? 0n;
-
-    const values: Partial<Record<DetectFigureId, bigint | number | null>> = {};
-    if (hasFacts) {
-      const revenue = paise(total("revenue_net"));
-      const onlineRevenue = paise(facts.breakdowns.revenue_net?.channel?.ONLINE ?? 0n);
-      values.revenue_net = revenue;
-      values.orders_paid = total("orders_paid");
-      values.aov_net = aovNetV2(revenue, total("orders_paid"));
-      values.discount_share = ratioBpsOrNull(paise(total("discount_total")), paise(total("sales_gross")));
-      values.orders_cancelled_failed = total("orders_cancelled") + total("orders_failed");
-      values.refunds_amount = total("refunds_amount");
-      values.sales_gross = total("sales_gross");
-      values.waste_cost = total("waste_cost");
-      values.food_cost_pct_theoretical = revenue > 0n ? foodCostPctTheoretical(paise(total("food_cost_theoretical")), revenue) : null;
-      values.online_share = revenue > 0n ? channelShare(onlineRevenue, revenue) : null;
+    const dayFacts: DayFacts = { computed: facts.computedDates.includes(date), totals: facts.totals, breakdowns: facts.breakdowns };
+    const dayTrust: DayTrustRow[] = [];
+    for (const row of trustRows) {
+      if (row.date !== date || !knownSignal(row.signalId) || !knownGrade(row.grade)) continue;
+      dayTrust.push({ signalId: row.signalId, grade: row.grade, numerator: row.numerator, denominator: row.denominator, computedAt: row.computedAt });
     }
-    const figures: Partial<Record<DetectFigureId, Observed>> = {};
-    for (const id of DETECT_FIGURES) {
-      const value = values[id];
-      if (value !== null && value !== undefined) figures[id] = asObserved(id, BigInt(value));
-    }
-
-    const rows = trustRows.filter((row) => row.date === date);
-    const trust: Partial<Record<DetectFigureId, DetectTrust>> = {};
-    if (rows.length > 0) {
-      const asOf = istTimestamp(new Date(Math.max(...rows.map((row) => row.computedAt.getTime()))));
-      const bySignal = new Map(rows.map((row) => [row.signalId, row]));
-      for (const id of DETECT_FIGURES) {
-        const signals = signalsOf(FIGURE_TRUST_METRICS[id]);
-        if (signals.length === 0) {
-          trust[id] = { grade: "UNKNOWN", signalId: null, ratio: null, asOf, lowSignals: observed({ unit: "count", value: 0 }) };
-          continue;
-        }
-        const gradeOf = (signal: TrustSignalId) => (bySignal.get(signal)?.grade ?? "UNKNOWN") as TrustGrade;
-        let limiting = signals[0]!;
-        for (const signal of signals) if (gradeRank(gradeOf(signal)) < gradeRank(gradeOf(limiting))) limiting = signal;
-        const row = bySignal.get(limiting);
-        trust[id] = {
-          grade: gradeOf(limiting),
-          signalId: limiting,
-          ratio: row && row.denominator > 0n ? { numerator: row.numerator, denominator: row.denominator } : null,
-          asOf,
-          lowSignals: observed({ unit: "count", value: signals.filter((signal) => gradeOf(signal) === "LOW").length }),
-        };
-      }
-    }
-    // TODO(IQ-2 S4, FINANCE-LEDGER): set parityFlagged from S4's per-day recon.facts_parity flag once it exists
-    // (god ruling on iq2-s7: false is accepted until then).
-    days.push({ date, hasFacts, parityFlagged: false, figures, trust });
+    // TODO(IQ-2 S4, FINANCE-LEDGER): parityFlagged comes from S4's per-day recon.facts_parity flag once it exists
+    // (god ruling on iq2-s7: detectDayFrom's false is accepted until then).
+    days.push(detectDayFrom(date, dayFacts, dayTrust, observed));
   }
   return days;
 }
