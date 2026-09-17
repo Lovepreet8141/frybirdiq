@@ -84,24 +84,36 @@ const serverSchema = z.object({
    */
   JOB_SECRET: optionalBearerSecret(32),
   JOB_SECRET_PREVIOUS: optionalBearerSecret(32),
-  /**
-   * The deployed commit, written into `iq_job_runs.code_version` and every
-   * insight's `producedBy.codeVersion` (`src/app/api/jobs/[job]/deps.ts`).
-   * Unset until DEVOPS-RELEASE's `deploy.sh` writes it — every run records
-   * `"unversioned"` until then. §51-adjacent: once a run is recorded against
-   * a commit, that record must not silently drift to mean a different one.
-   */
-  DEPLOY_COMMIT: z.preprocess(
-    (value) => (value === "" ? undefined : value),
-    z
-      .string()
-      .regex(/^[0-9a-f]{40}$/, "must be a 40-character lowercase git commit SHA")
-      .optional(),
-  ),
 });
 
+/**
+ * The deployed commit, written into `iq_job_runs.code_version` and every
+ * insight's `producedBy.codeVersion` (`src/app/api/jobs/[job]/deps.ts`).
+ *
+ * Validated outside `serverSchema` on purpose: this is informational, not a
+ * secret or a permission. `JOB_SECRET` fails closed because a bad value
+ * would otherwise silently open (or wrongly deny) a security boundary — an
+ * empty 404 either way, so refusing to boot is not a bigger outage than the
+ * broken state. DEPLOY_COMMIT gates nothing; a malformed value should never
+ * be able to take the whole app down. Unset (or invalid) means
+ * `"unversioned"` at the call site, with a warning that never prints the
+ * value, so a `git rev-parse` producing the wrong shape is visible without
+ * being able to crash the process.
+ */
+const DEPLOY_COMMIT_PATTERN = /^[0-9a-f]{40}$/;
+
+function readDeployCommit(): string | undefined {
+  const raw = process.env.DEPLOY_COMMIT;
+  if (raw === undefined || raw === "") return undefined;
+  if (DEPLOY_COMMIT_PATTERN.test(raw)) return raw;
+  console.warn(
+    'env: DEPLOY_COMMIT is set but is not a 40-character lowercase git commit SHA — ignoring it; code_version will read "unversioned"',
+  );
+  return undefined;
+}
+
 export type ClientEnv = z.infer<typeof clientSchema>;
-export type ServerEnv = z.infer<typeof serverSchema>;
+export type ServerEnv = z.infer<typeof serverSchema> & { readonly DEPLOY_COMMIT: string | undefined };
 
 function describe(error: z.ZodError): string {
   return error.issues.map((issue) => `  ${issue.path.join(".")}: ${issue.message}`).join("\n");
@@ -149,5 +161,5 @@ export function serverEnv(): ServerEnv {
       `Missing server environment variables. Copy .env.example to .env.local and fill these in:\n${describe(result.error)}`,
     );
   }
-  return result.data;
+  return { ...result.data, DEPLOY_COMMIT: readDeployCommit() };
 }

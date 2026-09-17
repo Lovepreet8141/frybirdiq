@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serverEnv } from "./index";
 
 const REQUIRED = {
@@ -95,8 +95,11 @@ describe("serverEnv JOB_SECRET / JOB_SECRET_PREVIOUS", () => {
 /*
  * DEPLOY_COMMIT is written into iq_job_runs.code_version
  * (src/app/api/jobs/[job]/deps.ts). Optional until DEVOPS-RELEASE's
- * deploy.sh writes it; when present it must be a real 40-character git SHA,
- * not an arbitrary label.
+ * deploy.sh writes it. Unlike JOB_SECRET, it gates nothing — SECURITY-TENANCY
+ * flagged (be-1r) that a malformed value must never throw and take the whole
+ * app down. An invalid shape is treated as unset (code_version falls back to
+ * "unversioned" at the call site) with a single console.warn that never
+ * prints the value.
  */
 describe("serverEnv DEPLOY_COMMIT", () => {
   const saved = { DATABASE_URL: process.env.DATABASE_URL, SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY, DEPLOY_COMMIT: process.env.DEPLOY_COMMIT };
@@ -112,6 +115,7 @@ describe("serverEnv DEPLOY_COMMIT", () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    vi.restoreAllMocks();
   });
 
   it("is undefined, no throw, when unset", () => {
@@ -134,8 +138,28 @@ describe("serverEnv DEPLOY_COMMIT", () => {
     ["uppercase hex", "A".repeat(40)],
     ["the wrong alphabet", "g".repeat(40)],
     ["too long", "a".repeat(41)],
-  ])("rejects %s", (_label, value) => {
+    ["a trailing newline", `${"a".repeat(40)}\n`],
+  ])("falls back to undefined (no throw) for %s", (_label, value) => {
     process.env.DEPLOY_COMMIT = value;
-    expect(() => serverEnv()).toThrow(/DEPLOY_COMMIT/);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => serverEnv()).not.toThrow();
+    expect(serverEnv().DEPLOY_COMMIT).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("never echoes the invalid value in the warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    process.env.DEPLOY_COMMIT = "UNMISTAKABLE_MARKER".repeat(2);
+    serverEnv();
+    const logged = warn.mock.calls.flat().join(" ");
+    expect(logged).not.toContain("UNMISTAKABLE_MARKER");
+  });
+
+  it("does not affect JOB_SECRET's fail-closed behaviour", () => {
+    process.env.DEPLOY_COMMIT = "not-a-sha";
+    process.env.JOB_SECRET = "too-short";
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => serverEnv()).toThrow(/JOB_SECRET/);
+    delete process.env.JOB_SECRET;
   });
 });
