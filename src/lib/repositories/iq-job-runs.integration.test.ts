@@ -104,7 +104,8 @@ async function factFor(target: TestOrg, token: LeaseToken, dedupeKey: string): P
 
 /** A chunk write through the job's own writers: one FACT insight keyed by `marker`, so a rollback is visible. */
 const insightWrite = (marker: string, token: LeaseToken, target: () => TestOrg = () => org) => async (repos: JobWriteRepos) => {
-  await repos.writeInsight(await factFor(target(), token, marker));
+  const insight = await factFor(target(), token, marker);
+  await repos.writeInsight(insight, { asOf: insight.period.end });
 };
 const insightCount = async (marker: string) =>
   (await db().select({ id: iqInsights.id }).from(iqInsights).where(eq(iqInsights.dedupeKey, marker))).length;
@@ -456,7 +457,7 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
       const { row } = await s.claim(request);
       const token = tokenOf(row, request.leaseOwner);
       const insight = await factFor(target, token, `seed-${target.orgId}-${randomUUID()}`);
-      await s.commit(token, 300, (repos) => repos.writeInsight(insight));
+      await s.commit(token, 300, (repos) => repos.writeInsight(insight, { asOf: insight.period.end }));
       return insight.id;
     };
     const aInsightId = await seed(org);
@@ -483,12 +484,14 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
         seen.writeKeys = Object.keys(repos).sort();
       });
       try {
-        await ctx.commit(async (repos) => repos.writeInsight(await factFor(otherOrg, token, `cross-${randomUUID()}`)));
+        const cross = await factFor(otherOrg, token, `cross-${randomUUID()}`);
+        await ctx.commit(async (repos) => repos.writeInsight(cross, { asOf: cross.period.end }));
         seen.crossWrite = "written";
       } catch (error) {
         seen.crossWrite = (error as Error).message;
       }
-      const own = await ctx.commit(async (repos) => repos.writeInsight(await factFor(org, token, `own-${randomUUID()}`)));
+      const ownInsight = await factFor(org, token, `own-${randomUUID()}`);
+      const own = await ctx.commit(async (repos) => repos.writeInsight(ownInsight, { asOf: ownInsight.period.end }));
       seen.ownWrite = own.outcome;
       return { status: "COMPLETE", rowsWritten: 1, summary: {} };
     };
