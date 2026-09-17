@@ -1,0 +1,209 @@
+import "server-only";
+
+/**
+ * Recommendations — a proposed action and what the owner did with it.
+ *
+ * hive/reviews/iq-0 DESIGN.md §2 and DESIGN-v2-DELTA.md §2–§4, over 0034.
+ *
+ * `proposeRecommendation` is the only writer. In one fenced transaction it:
+ *   1. refuses a proposal still cooling down after the owner dismissed the
+ *      same action (7 days) or let it expire (1 day) — same org, action kind
+ *      and params hash, durations from automation/cooldown.ts;
+ *   2. refuses one while a different PROPOSED row for the same action is open;
+ *   3. writes the RECOMMENDATION insight (iq-insights.ts — NOOP, update, or
+ *      supersede, which also closes the PROPOSED row it replaces);
+ *   4. inserts the recommendation. The 0034 trigger marks its insight and
+ *      every evidence insight referenced in the same transaction, freezing
+ *      them. An insert that collides with an open duplicate (23505) is a
+ *      NOOP, not an error: the chunk is being retried or another run got there.
+ *
+ * The recommendation's numbers are copied from the insight payload, never
+ * passed separately, so the row and the claim cannot disagree (review A3).
+ * Every query filters on org_id itself; the app's role bypasses RLS.
+ */
+
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { db } from "@/db";
+import { iqRecommendations } from "@/db/schema";
+import { COOLDOWN_MS, type CooldownReason } from "@/lib/iq/automation/cooldown";
+import { Sha256HexSchema, magnitudeOf, type InsightOf } from "@/lib/iq/engine";
+import { assertLease, writeInsight, type IqTx, type IqWriteLease } from "./iq-insights";
+
+export type RecommendationStatus = "PROPOSED" | "APPROVED" | "DISMISSED" | "EXPIRED" | "SUPERSEDED";
+
+const CLOSED: readonly RecommendationStatus[] = ["APPROVED", "DISMISSED", "EXPIRED", "SUPERSEDED"];
+
+/** A person said no → a week; nobody looked in time → a day; approved or superseded → none. */
+const COOLDOWN: { readonly [S in RecommendationStatus]?: { readonly reason: CooldownReason; readonly ms: number } } = {
+  DISMISSED: { reason: "DISMISSED_COOLDOWN", ms: COOLDOWN_MS.dismissed },
+  EXPIRED: { reason: "EXPIRED_COOLDOWN", ms: COOLDOWN_MS.expired },
+};
+
+export type RecommendationHistory = {
+  /** An open PROPOSED row for this action, if any. */
+  readonly open: { readonly id: string; readonly dedupeKey: string } | null;
+  /** The most recently closed row for this action. */
+  readonly latestClosed: { readonly id: string; readonly status: RecommendationStatus; readonly decidedAt: Date } | null;
+  /** Database time, so the cooldown never depends on the app server's clock. */
+  readonly dbNow: Date;
+};
+
+/** The cooldown lookup: open and latest closed recommendation for one org, action kind and params hash. */
+export async function recommendationHistory(
+  orgId: string,
+  actionKind: string,
+  paramsHash: string,
+  tx: IqTx | ReturnType<typeof db> = db(),
+): Promise<RecommendationHistory> {
+  const scope = and(
+    eq(iqRecommendations.orgId, orgId),
+    eq(iqRecommendations.actionKind, actionKind),
+    eq(iqRecommendations.paramsHash, paramsHash),
+  );
+  const [open] = await tx
+    .select({ id: iqRecommendations.id, dedupeKey: iqRecommendations.dedupeKey })
+    .from(iqRecommendations)
+    .where(and(scope, eq(iqRecommendations.status, "PROPOSED")))
+    .limit(1);
+  const [closed] = await tx
+    .select({ id: iqRecommendations.id, status: iqRecommendations.status, decidedAt: iqRecommendations.decidedAt })
+    .from(iqRecommendations)
+    .where(and(scope, inArray(iqRecommendations.status, [...CLOSED])))
+    .orderBy(desc(iqRecommendations.decidedAt))
+    .limit(1);
+  const [clock] = await tx.execute<{ now: Date | string }>(sql`SELECT clock_timestamp() AS now`);
+
+  return {
+    open: open ?? null,
+    latestClosed:
+      closed && closed.decidedAt
+        ? { id: closed.id, status: closed.status as RecommendationStatus, decidedAt: closed.decidedAt }
+        : null,
+    dbNow: new Date(clock?.now ?? Date.now()),
+  };
+}
+
+export type ProposeResult =
+  | { readonly outcome: "PROPOSED"; readonly recommendationId: string; readonly insightId: string; readonly supersededRecommendationIds: readonly string[] }
+  | { readonly outcome: "NOOP"; readonly insightId: string }
+  | { readonly outcome: "OPEN_DUPLICATE"; readonly openRecommendationId: string }
+  | { readonly outcome: "COOLDOWN"; readonly reason: CooldownReason; readonly until: Date };
+
+export type ProposeInput = {
+  readonly insight: InsightOf<"RECOMMENDATION">;
+  /** The action's parameters, and their hash — the identity the cooldown and the action row share. */
+  readonly params: Readonly<Record<string, unknown>>;
+  readonly paramsHash: string;
+};
+
+function isUniqueViolation(error: unknown): boolean {
+  const e = error as { code?: string; cause?: { code?: string } };
+  return (e.cause?.code ?? e.code) === "23505";
+}
+
+export async function proposeRecommendation(tx: IqTx, lease: IqWriteLease, input: ProposeInput): Promise<ProposeResult> {
+  await assertLease(tx, lease);
+  const { insight, params, paramsHash } = input;
+  if (insight.claimType !== "RECOMMENDATION") throw new Error("iq-recommendations: insight is not a RECOMMENDATION");
+  Sha256HexSchema.parse(paramsHash);
+  const orgId = lease.orgId;
+  const { actionKind } = insight.payload;
+
+  const history = await recommendationHistory(orgId, actionKind, paramsHash, tx);
+  // An open row under the same dedupe key is this claim's earlier version:
+  // writeInsight supersedes it. Under a different key it is a real duplicate.
+  if (history.open && history.open.dedupeKey !== insight.dedupeKey) {
+    return { outcome: "OPEN_DUPLICATE", openRecommendationId: history.open.id };
+  }
+  const cooldown = history.latestClosed ? COOLDOWN[history.latestClosed.status] : undefined;
+  if (history.latestClosed && cooldown) {
+    const until = new Date(history.latestClosed.decidedAt.getTime() + cooldown.ms);
+    if (history.dbNow.getTime() < until.getTime()) return { outcome: "COOLDOWN", reason: cooldown.reason, until };
+  }
+
+  const written = await writeInsight(tx, lease, insight);
+  if (written.outcome === "NOOP") {
+    const [existing] = await tx
+      .select({ id: iqRecommendations.id })
+      .from(iqRecommendations)
+      .where(and(eq(iqRecommendations.orgId, orgId), eq(iqRecommendations.insightId, written.insightId)));
+    if (existing) return { outcome: "NOOP", insightId: written.insightId };
+  }
+
+  const { impact, confidence, assumptions, tier, expiresAt } = insight.payload;
+  try {
+    // A savepoint, so a 23505 leaves the caller's transaction usable.
+    const [row] = await tx.transaction((sp) =>
+      sp
+        .insert(iqRecommendations)
+        .values({
+          orgId,
+          locationId: insight.locationId,
+          insightId: written.insightId,
+          actionKind,
+          tier,
+          params: { ...params },
+          paramsHash,
+          impactUnit: impact.low.unit,
+          impactLow: magnitudeOf(impact.low),
+          impactHigh: magnitudeOf(impact.high),
+          confidence: confidence.level,
+          assumptions: assumptions as unknown[],
+          status: "PROPOSED",
+          expiresAt: new Date(expiresAt),
+          dedupeKey: insight.dedupeKey,
+        })
+        .returning({ id: iqRecommendations.id }),
+    );
+    if (!row) throw new Error("iq-recommendations: insert returned no row");
+    return {
+      outcome: "PROPOSED",
+      recommendationId: row.id,
+      insightId: written.insightId,
+      supersededRecommendationIds: written.supersededRecommendationIds ?? [],
+    };
+  } catch (error) {
+    if (isUniqueViolation(error)) return { outcome: "NOOP", insightId: written.insightId };
+    throw error;
+  }
+}
+
+export type OpenRecommendation = {
+  readonly id: string;
+  readonly insightId: string;
+  readonly actionKind: string;
+  readonly tier: string;
+  readonly impactUnit: string;
+  readonly impactLow: bigint;
+  readonly impactHigh: bigint;
+  readonly confidence: string;
+  readonly expiresAt: Date;
+  readonly createdAt: Date;
+};
+
+/** The org's PROPOSED recommendations that have not yet expired, soonest expiry first. */
+export async function listOpenRecommendations(orgId: string, limit = 50): Promise<readonly OpenRecommendation[]> {
+  return db()
+    .select({
+      id: iqRecommendations.id,
+      insightId: iqRecommendations.insightId,
+      actionKind: iqRecommendations.actionKind,
+      tier: iqRecommendations.tier,
+      impactUnit: iqRecommendations.impactUnit,
+      impactLow: iqRecommendations.impactLow,
+      impactHigh: iqRecommendations.impactHigh,
+      confidence: iqRecommendations.confidence,
+      expiresAt: iqRecommendations.expiresAt,
+      createdAt: iqRecommendations.createdAt,
+    })
+    .from(iqRecommendations)
+    .where(
+      and(
+        eq(iqRecommendations.orgId, orgId),
+        eq(iqRecommendations.status, "PROPOSED"),
+        sql`${iqRecommendations.expiresAt} > now()`,
+      ),
+    )
+    .orderBy(iqRecommendations.expiresAt)
+    .limit(Math.min(Math.max(limit, 1), 200));
+}
