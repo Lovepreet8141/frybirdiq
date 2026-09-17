@@ -5,11 +5,15 @@ import type { OrderStatus } from "@/domain/order-status";
  *
  * An allowlist, not a denylist: the action is guarded by `kitchen.update`,
  * which CASHIER and KITCHEN both hold, so anything not named here is refused
- * before the order is touched. It covers every move the orders board, the
- * order card and the KDS make (`nextStep`, `nextKitchenStatus`), plus
- * CANCELLED, which the action gates behind `orders.cancel`.
+ * before the order is touched. It covers exactly the moves the orders board,
+ * the order card and the KDS make (`nextStep` in
+ * src/components/staff/order-card.tsx, `nextKitchenStatus` in
+ * src/lib/kitchen/tickets.ts); staff-advance.test.ts fails if they drift.
  *
  * Deliberately absent:
+ * - CANCELLED: turning an order down goes only through `rejectOrderAction`
+ *   (`orders.cancel`, a structured reason). No screen asks this action for it,
+ *   and a paid order is never cancelled at all (`advanceOrder` refuses it).
  * - PAID: only a recorded payment sets it (`recordCashPayment`, settlement).
  * - REFUNDED: only `refundPayment` sets it, after money has moved. Marking an
  *   order refunded also reverses its loyalty stamp and points.
@@ -22,7 +26,6 @@ export const STAFF_ADVANCE_STATUSES = [
   "READY",
   "OUT_FOR_DELIVERY",
   "COMPLETED",
-  "CANCELLED",
 ] as const satisfies readonly OrderStatus[];
 
 export function staffMayAdvanceTo(to: OrderStatus): boolean {

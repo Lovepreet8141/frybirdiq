@@ -30,29 +30,20 @@ describe("advanceOrderAction", () => {
     mocks.advanceOrder.mockReset().mockResolvedValue({ ok: true });
   });
 
-  it("refuses REFUNDED without touching the order: only refundPayment may set it", async () => {
-    const result = await advanceOrderAction({ orderId, to: "REFUNDED" });
-    expect(result.ok).toBe(false);
-    expect(result.error).toEqual(expect.any(String));
-    expect(mocks.advanceOrder).not.toHaveBeenCalled();
-  });
-
-  it("refuses PAID without touching the order: only a recorded payment may set it", async () => {
-    const result = await advanceOrderAction({ orderId, to: "PAID" });
-    expect(result.ok).toBe(false);
-    expect(mocks.advanceOrder).not.toHaveBeenCalled();
-  });
+  it.each(["CANCELLED", "REFUNDED", "PAID", "DRAFT", "PENDING_PAYMENT", "FAILED"] as const)(
+    "refuses %s before any permission check or database call",
+    async (to) => {
+      const result = await advanceOrderAction({ orderId, to });
+      expect(result).toEqual({ ok: false, error: "That change could not be applied." });
+      expect(mocks.requirePermission).not.toHaveBeenCalled();
+      expect(mocks.advanceOrder).not.toHaveBeenCalled();
+    },
+  );
 
   it("still moves a ticket forward with kitchen.update, scoped to the staff member's org", async () => {
     const result = await advanceOrderAction({ orderId, to: "READY" });
     expect(result).toEqual({ ok: true });
     expect(mocks.requirePermission).toHaveBeenCalledWith("kitchen.update");
     expect(mocks.advanceOrder).toHaveBeenCalledWith({ orderId, to: "READY", actorUserId: staff.userId, orgId: staff.orgId });
-  });
-
-  it("still requires orders.cancel to cancel", async () => {
-    await advanceOrderAction({ orderId, to: "CANCELLED" });
-    expect(mocks.requirePermission).toHaveBeenCalledWith("orders.cancel");
-    expect(mocks.advanceOrder).toHaveBeenCalledOnce();
   });
 });
