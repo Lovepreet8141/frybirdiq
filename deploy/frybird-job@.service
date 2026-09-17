@@ -1,0 +1,81 @@
+# Template unit for a scheduled job (DESIGN.md §3). One instance per job
+# name in src/lib/jobs/registry.ts — `systemctl start frybird-job@heartbeat`
+# runs the `heartbeat` job. A timer per job (frybird-job-<name>.timer) starts
+# its own instance; this file never runs on its own.
+#
+#   install -m 600 -o root -g root /dev/null /etc/frybird/jobs.header
+#   # then put "Authorization: Bearer <JOB_SECRET>" in it — see docs/DEPLOY.md §9
+#   cp deploy/frybird-job@.service deploy/frybird-job-failed@.service /etc/systemd/system/
+#   cp deploy/frybird-job-heartbeat.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now frybird-job-heartbeat.timer
+#
+# The unit only ever talks to 127.0.0.1:3000 — same host, same loopback
+# interface the app itself binds to (deploy/frybird.service). It never needs
+# network-online.target for that reason.
+
+[Unit]
+Description=FRYBIRD job runner (%i)
+After=frybird.service
+# A job with nothing to run is a no-op (200 NOOP), so a boot race against the
+# app starting is harmless; this only orders it after, it does not require it.
+
+# maxAttempts in registry.ts is 3 — this is the systemd-side backstop, not
+# the source of truth. The route's own claim/takeover accounting (handle.ts)
+# is what actually stops a FAILED run at max attempts and returns 500; this
+# unit gives up around the same point rather than retrying forever.
+# (OnFailure=, StartLimit*= are [Unit]-section keys, not [Service] — systemd
+# silently ignores them in the wrong section instead of failing to start.)
+OnFailure=frybird-job-failed@%i.service
+StartLimitIntervalSec=1200
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+
+# Root-owned, 0600 (see docs/DEPLOY.md §9). LoadCredential has systemd (PID 1,
+# running as root) read the file and hand the service a private copy under
+# $CREDENTIALS_DIRECTORY — the secret is in neither this unit file (which is
+# world-readable) nor the process list, and DynamicUser never needs read
+# access to /etc/frybird/jobs.header itself.
+LoadCredential=job-header:/etc/frybird/jobs.header
+
+# -m 290 sits under the route's 300s deadline budget (registry.ts: lease
+# 300s, deadline 240s + commit grace); systemd must not time this out first,
+# so TimeoutStartSec below is set above it, not left at the 90s default.
+# %d (the credentials-directory specifier, systemd 250+) is expanded when the
+# unit file is parsed, so systemd-analyze verify can check it statically;
+# ${CREDENTIALS_DIRECTORY} is only an environment-variable substitution done
+# at spawn time and was unverified by anything that ran in this slice's local
+# proof (SECURITY-TENANCY, iq0-s10r-sec).
+ExecStart=curl -fsS -m 290 -X POST -H @%d/job-header http://127.0.0.1:3000/api/jobs/%i
+TimeoutStartSec=300
+
+# RESTART CONDITION (RELIABILITY, iq0-s8r-rel): the route's lease is 300s and
+# heartbeats stop the moment a run dies, so a retry that lands before the
+# lease has lapsed gets BUSY 200 and systemd stops retrying without the job
+# ever having actually run again. RestartSec must clear lease + margin: 360s.
+Restart=on-failure
+RestartSec=360
+# RestartMode=direct (RELIABILITY, iq0-s10r-rel; systemd >=254, VPS runs 259):
+# the default (normal) takes the unit through inactive/failed on every single
+# restart, and OnFailure= fires on that transition every time — the failed@
+# unit above would log on attempt 1 and 2, not just the final one, which is
+# not what its own comment claims. direct skips that intermediate state on
+# a restart, so OnFailure= fires only once retries are truly exhausted.
+RestartMode=direct
+
+# Hardening. curl to loopback and nothing else — no filesystem writes at all,
+# no network reachable but the app's own loopback socket.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=frybird-job-%i

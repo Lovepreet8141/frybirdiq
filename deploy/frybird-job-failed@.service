@@ -1,0 +1,22 @@
+# Fired once by `OnFailure=` in frybird-job@.service, after that unit's own
+# Restart=on-failure retries are exhausted (or skipped, e.g. StartLimitBurst
+# hit) — never per individual retry, since the unit is "activating
+# (auto-restart)" and not yet "failed" between attempts.
+#
+# journalctl already has the real failure; this exists so a failed job shows
+# up as its own `user.err` line, greppable without knowing systemd unit
+# names, and so a future paging setup (owner gate 8, not decided) has a
+# single log line to hook into rather than parsing unit-state transitions.
+#
+#   cp deploy/frybird-job-failed@.service /etc/systemd/system/
+#   systemctl daemon-reload
+#
+# Never enabled or started directly — only ever `Wants=`-triggered by
+# frybird-job@.service's OnFailure=.
+
+[Unit]
+Description=Log FRYBIRD job failure (%i)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -p user.err -t frybird-job "job %i failed: see journalctl -u frybird-job@%i"
