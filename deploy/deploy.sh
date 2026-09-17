@@ -30,9 +30,13 @@ cd "$(dirname "$0")/.."
 # job run or an insight can be traced back to the code that produced it.
 # Validated here, before anything else runs, against the exact pattern that
 # side reads (DEPLOY_COMMIT_PATTERN) — a value that doesn't match makes the
-# app fall back to "unversioned" rather than fail to boot (DEPLOY_COMMIT
-# gates nothing there), but shipping a bad value silently would still make
-# every run of this release untraceable, so deploy.sh refuses instead.
+# app fall back to "unversioned" with one non-fatal console.warn, not fail to
+# boot (fixed in 49cb953 after an earlier version validated it inside
+# serverSchema alongside JOB_SECRET and could crash serverEnv() on a bad
+# value; DEPLOY_COMMIT is informational, not a security boundary, so it
+# can't be allowed to do that). Shipping a bad value would still make every
+# run of this release untraceable even though nothing crashes, so deploy.sh
+# refuses instead of letting that happen silently.
 DEPLOY_COMMIT="$(git rev-parse HEAD)"
 if [[ ! "$DEPLOY_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
   echo "refusing: git rev-parse HEAD did not return a 40-character lowercase SHA (\"$DEPLOY_COMMIT\")" >&2
@@ -101,7 +105,13 @@ ssh "$TARGET" '
   # root-only file to another, both ends of the pipe run as $SUDO so a
   # non-root deploy user is never asked to read or write it directly.
   $SUDO test -f /etc/frybird/env || { echo "refusing: /etc/frybird/env is missing" >&2; exit 1; }
-  NEW_ENV="$(mktemp)"
+  # Created inside /etc/frybird itself, as root, from the start (SECURITY-TENANCY,
+  # dv-1r-sec): a plain `mktemp` defaults to /tmp, which on some boxes is a
+  # different filesystem (tmpfs) than /etc — the final `mv` would then be a
+  # copy-then-unlink, not an atomic rename, and every secret in the file
+  # would sit for a moment in a /tmp file owned by the deploy user rather
+  # than root. Same directory + $SUDO from creation closes both.
+  NEW_ENV="$($SUDO mktemp /etc/frybird/env.XXXXXX)"
   $SUDO grep -v "^DEPLOY_COMMIT=" /etc/frybird/env | $SUDO tee "$NEW_ENV" > /dev/null
   printf "DEPLOY_COMMIT=%s\n" '"'$DEPLOY_COMMIT'"' | $SUDO tee -a "$NEW_ENV" > /dev/null
   $SUDO chown root:frybird "$NEW_ENV"

@@ -531,8 +531,11 @@ Owner-approved (`dec-1`, `dec-2`). One-page order for this install — each
 step links back to its full detail section. Do not reorder: migrations
 before the job runner's own migration-dependent tables exist, `deploy.sh`
 before the job unit is installed (systemd has nothing to start yet
-otherwise), the job secret before enabling the timer (a timer with no
-secret just spins on 404s), verification last.
+otherwise), **nginx's own block verified live before `JOB_SECRET` is ever
+set** (SECURITY-TENANCY, dv-1r-sec — otherwise there's a window where the
+job route is non-dormant and the only thing refusing a public request is
+the app's own header check, not nginx's), the job secret before enabling
+the timer (a timer with no secret just spins on 404s), verification last.
 
 1. **Pre-checks (read-only, §8 allowlist).** `systemctl is-active frybird`;
    record the current `drizzle.__drizzle_migrations` head before migrating —
@@ -544,33 +547,46 @@ secret just spins on 404s), verification last.
 3. **Deploy the code.** `./deploy/deploy.sh root@194.238.16.200` (§7) —
    builds, ships, stamps `DEPLOY_COMMIT`, restarts `frybird`, smoke-tests
    `/`. The job route exists in the running app now but stays dormant
-   (`JOB_SECRET` unset) and nginx still refuses `/api/jobs/` outright (§5).
-4. **Create the job secret.** §9.1's block, run once: writes
+   (`JOB_SECRET` unset), so it answers 404 on its own even before the next
+   step.
+4. **Apply and verify the nginx change (§5a).** Back up the live config
+   (`cp /etc/nginx/sites-available/frybird
+   /etc/nginx/sites-available/frybird.bak-$(date +%s)`), copy in
+   `deploy/nginx-frybird.conf`'s `location ^~ /api/jobs/` 404 and the
+   server-level proxy headers — both the 80 and 443 blocks, since certbot
+   forked the 443 one and a repo edit never reaches it by itself (§5a) —
+   `nginx -t && systemctl reload nginx`. Then immediately check: `nginx -T |
+   grep -c 'location \^~ /api/jobs/'` must be **1**, `curl` to
+   `https://frybirdiq.tech/api/jobs/heartbeat` must be **404**. Do not move
+   on until both hold — this is the step SECURITY-TENANCY required happen
+   before the secret exists, not after.
+5. **Create the job secret.** §9.1's block, run once: writes
    `/etc/frybird/jobs.header` (0600) and appends `JOB_SECRET=` to
    `/etc/frybird/env`, neither ever printed, then `systemctl restart
    frybird` (already the last line of that block).
-5. **Install the job units.** §9.2's `cp`/`daemon-reload` steps for
+6. **Install the job units.** §9.2's `cp`/`daemon-reload` steps for
    `frybird-job@.service`, `frybird-job-failed@.service`,
    `frybird-job-heartbeat.timer` — **do not `enable --now` the timer yet.**
-6. **Run one heartbeat by hand.** `systemctl start frybird-job@heartbeat`,
+7. **Run one heartbeat by hand.** `systemctl start frybird-job@heartbeat`,
    then `journalctl -u frybird-job@heartbeat -n 20` — confirm **200 and
    SUCCEEDED** before anything is on a schedule. This is the first real
    exercise of `LoadCredential`/`%d` end to end (nothing in the local proof
    used systemd at all — `docs/releases/iq-0-local-proof.md`'s own "not run
    here" list) and of this VPS's actual systemd version (open question V1,
    never resolved locally either).
-7. **Enable the timer.** `systemctl enable --now frybird-job-heartbeat.timer`
+8. **Enable the timer.** `systemctl enable --now frybird-job-heartbeat.timer`
    (§9.2) — now it's on a schedule.
-8. **Verify nginx and the route.** §9.5's block: `nginx -T | grep -c
-   'location \^~ /api/jobs/'` must be **1**, `curl` to
-   `https://frybirdiq.tech/api/jobs/heartbeat` must be **404**.
-9. **Smoke.** The public site (`docs/RELEASES.md`'s usual signed-out check)
-   plus `systemctl is-active frybird-job-heartbeat.timer`.
+9. **Verify nginx and the route again.** Same two checks as step 4 —
+   `nginx -T` count still **1**, https still **404**. Confirms nothing
+   later in the install (a reload, a cert renewal) undid step 4.
+10. **Smoke.** The public site (`docs/RELEASES.md`'s usual signed-out check)
+    plus `systemctl is-active frybird-job-heartbeat.timer`.
 
-If step 6 doesn't show SUCCEEDED, stop before step 7 — an unattended timer
+If step 7 doesn't show SUCCEEDED, stop before step 8 — an unattended timer
 retrying a job that's already failing by hand only makes the incident
 harder to read. §9.4 has the disable/rollback steps if you need to back out
-after step 5.
+after step 6; to roll back step 4 alone, restore the newest
+`frybird.bak-*` file and `nginx -t && systemctl reload nginx` again (§5a).
 
 ## What this does not have yet
 
