@@ -39,6 +39,8 @@ const PERMISSION_INFO: Record<Permission, { readonly group: string; readonly lab
   "reports.export": { group: "Reporting", label: "Export reports" },
   "finance.view": { group: "Reporting", label: "View the payments ledger" },
   "finance.manage": { group: "Reporting", label: "Record expenses and finance" },
+  "iq.approve": { group: "Reporting", label: "Approve IQ actions" },
+  "iq.autopolicy.manage": { group: "Reporting", label: "Manage IQ auto policies" },
   "staff.manage": { group: "Admin", label: "Manage staff" },
   "settings.manage": { group: "Admin", label: "Manage settings" },
   "integrations.manage": { group: "Admin", label: "Manage integrations" },
