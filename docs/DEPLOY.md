@@ -441,23 +441,50 @@ whichever secret it was carrying.
 
 ```bash
 systemctl disable --now frybird-job-heartbeat.timer
+systemctl stop 'frybird-job@*.service'
+systemctl reset-failed 'frybird-job@*.service'
 ```
 
-stops future runs; a run already in flight finishes on its own (it's a
-plain `curl`, nothing tracks the timer after it starts). To go back to fully
-dormant instead of just paused, unset `JOB_SECRET` and `JOB_SECRET_PREVIOUS`
-in `/etc/frybird/env` and restart `frybird` — every job route then answers
-404 again regardless of whether any timer is still enabled. To remove the
-units entirely:
+`disable --now` on the timer only stops *future* scheduled starts. It does
+**not** stop an instance that already failed once and is sitting in
+`Restart=on-failure`'s wait state for its next attempt (RELIABILITY,
+iq0-s10r-rel) — up to two more runs of a job that failed right before you
+disabled the timer can still fire on their own `RestartSec=360` schedule.
+`systemctl stop 'frybird-job@*.service'` cancels any such pending restart
+across every job instance; `reset-failed` clears the failed/rate-limited
+state so a future `systemctl start` isn't refused by the old failure count.
+
+To go back to fully dormant instead of just paused, unset `JOB_SECRET` and
+`JOB_SECRET_PREVIOUS` in `/etc/frybird/env` and restart `frybird` — every job
+route then answers 404 again regardless of whether any timer is still
+enabled. To remove the units entirely:
 
 ```bash
 systemctl disable --now frybird-job-heartbeat.timer
+systemctl stop 'frybird-job@*.service'
+systemctl reset-failed 'frybird-job@*.service'
 rm /etc/systemd/system/frybird-job@.service /etc/systemd/system/frybird-job-failed@.service /etc/systemd/system/frybird-job-heartbeat.timer
 systemctl daemon-reload
 ```
 
 No migration or data is touched by any of this — `iq_job_runs` rows from
 past runs are just history.
+
+**nginx rollback.** The job-route change here is one file
+(`/etc/nginx/sites-available/frybird`, both the 80 block and, per §5a, the
+443 block certbot forked). Keep the previous version before overwriting it:
+
+```bash
+cp /etc/nginx/sites-available/frybird /etc/nginx/sites-available/frybird.bak-$(date +%s)
+cp deploy/nginx-frybird.conf /etc/nginx/sites-available/frybird   # (§5a: 443 block still needs its own edit)
+nginx -t && systemctl reload nginx
+```
+
+and to roll back, restore the newest `.bak-*` file the same way and
+`nginx -t && systemctl reload nginx` again. `nginx -t` before every reload —
+a bad config leaves the last-loaded (working) config running until reload
+succeeds, but reloading a broken one live is still the wrong time to find
+that out.
 
 ### 9.5 Verify (read-only)
 

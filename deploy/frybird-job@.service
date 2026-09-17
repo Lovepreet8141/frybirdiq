@@ -58,6 +58,13 @@ TimeoutStartSec=300
 # ever having actually run again. RestartSec must clear lease + margin: 360s.
 Restart=on-failure
 RestartSec=360
+# RestartMode=direct (RELIABILITY, iq0-s10r-rel; systemd >=254, VPS runs 259):
+# the default (normal) takes the unit through inactive/failed on every single
+# restart, and OnFailure= fires on that transition every time — the failed@
+# unit above would log on attempt 1 and 2, not just the final one, which is
+# not what its own comment claims. direct skips that intermediate state on
+# a restart, so OnFailure= fires only once retries are truly exhausted.
+RestartMode=direct
 
 # Hardening. curl to loopback and nothing else — no filesystem writes at all,
 # no network reachable but the app's own loopback socket.
