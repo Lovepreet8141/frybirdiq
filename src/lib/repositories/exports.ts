@@ -24,6 +24,7 @@ import type { FulfilmentType } from "@/domain/order-status";
 import type { DateRange } from "@/lib/dates";
 import { type Bps, type Paise, ZERO, paise } from "@/lib/money";
 import { splitTax } from "@/lib/tax/gst";
+import { PAID_PAYMENT_STATUSES, hasPaidPayment } from "./analytics";
 
 /** A safety cap on a single download — a month at one QSR outlet never approaches this. */
 const EXPORT_ROW_LIMIT = 10_000;
@@ -47,7 +48,11 @@ export interface OrderExportRow {
   readonly deliveryFee: Paise;
   readonly grandTotal: Paise;
   readonly invoiceNumber: string | null;
-  /** Whether a payment against this order has actually been captured — the payments table's answer, never the status's. */
+  /**
+   * Whether a payment against this order was taken and not fully refunded — a
+   * payment in `PAID_PAYMENT_STATUSES`. The payments table's answer, never the
+   * order status's: a cancelled order with a captured payment still says paid.
+   */
   readonly isPaid: boolean;
   readonly paymentMethod: string | null;
   readonly cancellationReason: string | null;
@@ -72,13 +77,14 @@ export async function listOrdersForExport(orgId: string, range: DateRange): Prom
     .from(payments)
     .where(and(eq(payments.orgId, orgId), inArray(payments.orderId, orderIds)));
 
-  // Captured beats anything else, same rule `getOrder` uses — whatever else
-  // was attempted, the captured row is the payment that actually happened.
-  const paymentByOrder = new Map<string, { status: string; method: string }>();
+  // A paid row (captured, or captured then partly refunded) beats anything
+  // else — whatever else was attempted, that row is the payment that
+  // actually happened.
+  const paymentByOrder = new Map<string, { paid: boolean; method: string }>();
   for (const row of paymentRows) {
     const existing = paymentByOrder.get(row.orderId);
-    if (!existing || existing.status !== "CAPTURED") {
-      paymentByOrder.set(row.orderId, { status: row.status, method: row.method });
+    if (!existing || !existing.paid) {
+      paymentByOrder.set(row.orderId, { paid: isPaidStatus(row.status), method: row.method });
     }
   }
 
@@ -103,7 +109,7 @@ export async function listOrdersForExport(orgId: string, range: DateRange): Prom
       deliveryFee: paise(row.deliveryFee),
       grandTotal: paise(row.grandTotal),
       invoiceNumber: row.invoiceNumber,
-      isPaid: payment?.status === "CAPTURED",
+      isPaid: payment?.paid ?? false,
       paymentMethod: payment?.method ?? null,
       cancellationReason: row.cancellationReason,
     };
@@ -122,9 +128,11 @@ export interface GstSummaryRow {
 
 /**
  * GST actually collected, by rate, for a date range — CGST + SGST + total,
- * the figures a GST return needs. Scoped the same way `paidRevenue` in
- * expenses.ts is: a captured payment, and not a cancelled/failed/refunded
- * order, because tax on money that never arrived was never collected.
+ * the figures a GST return needs. Scoped to the same paid-order set as
+ * `analytics.ts`'s `paidOrders`: a payment in `PAID_PAYMENT_STATUSES`, counted
+ * once however many rows match, and not a cancelled/failed/refunded order,
+ * because tax on money that never arrived was never collected. A partially
+ * refunded order still reports its full tax — TODO(dec-9).
  *
  * `order_items` carries `line_tax` (CGST+SGST combined) per line, not the
  * split — the split only exists at the order level, already summed across
@@ -144,11 +152,11 @@ export async function gstSummaryByRate(orgId: string, range: DateRange): Promise
     })
     .from(orderItems)
     .innerJoin(orders, eq(orders.id, orderItems.orderId))
-    .innerJoin(payments, and(eq(payments.orderId, orders.id), eq(payments.status, "CAPTURED")))
     .where(
       and(
         eq(orderItems.orgId, orgId),
         eq(orders.orgId, orgId),
+        hasPaidPayment(orders.id),
         gte(orders.createdAt, range.from),
         lt(orders.createdAt, range.to),
         sql`${orders.status} NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')`,
@@ -170,4 +178,8 @@ export async function gstSummaryByRate(orgId: string, range: DateRange): Promise
       orderCount: row.orderCount,
     };
   });
+}
+
+function isPaidStatus(status: string): boolean {
+  return (PAID_PAYMENT_STATUSES as readonly string[]).includes(status);
 }
