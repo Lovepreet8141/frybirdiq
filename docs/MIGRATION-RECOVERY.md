@@ -454,6 +454,65 @@ its `idx` (a gap) and on a `when` that does not increase.
 Recorded with the table it applies to, in §4c (35 → 63 days, iq2-s8). 0037
 does not touch `iq_intraday_facts`.
 
+## 4e. 0038 `refunds_status_idempotency` (not deployed; `agent/database-ref-b1`, card ref-b1)
+
+Added 2026-09-17. Requires 0037. Slice 1 of the refund redesign
+(`hive/agents/michael-mu4lr1ro/reports/2026-09-16-refund-design.md`,
+Revision 2). Owner decision dec-10 approved it for the local build; running it
+in production is owner gate 1, and changing the live cash refund path is gate 7.
+
+### Classification — **Reversible only with every refund SUCCEEDED; forward-fix otherwise**
+- **What it does (FACT):** on `refunds` adds
+  - `status text NOT NULL`, CHECK in RESERVED | SUCCEEDED | FAILED. Added with
+    `DEFAULT 'SUCCEEDED'` so existing rows take it, then the default is dropped
+    in the same migration (design S3): every insert must state a status.
+  - `idempotency_key text` (nullable, 1–200 characters) with
+    `UNIQUE (org_id, idempotency_key)`, NULLs distinct, so rows written before
+    0038 never collide (design B3).
+  - `finalized_at timestamptz`; existing rows take `created_at` (design S6);
+    CHECK `(status = 'SUCCEEDED') = (finalized_at IS NOT NULL)`: FAILED and
+    RESERVED keep it null (FINANCE-LEDGER S6 condition).
+  - indexes `refunds_payment_idx (payment_id)` for the refundable-balance sum
+    and `refunds_reserved_idx (org_id, created_at) WHERE status = 'RESERVED'`
+    for the stuck-reservation sweep.
+- **Existing rows (FACT):** all classified SUCCEEDED with
+  `finalized_at = created_at`; none is left unclassified. Basis: the only insert
+  into `refunds` in `src/` and `scripts/` runs after the provider confirmed the
+  refund, cash refunds succeed by construction, and production has no Razorpay
+  refunds (design §4). Production row counts were not checked on this card (no
+  production access). Drilled on a per-worktree database: two pre-0038 cash
+  refunds → SUCCEEDED, `finalized_at = created_at`, no default left on
+  `status`.
+- **Cross-owner touch (FACT):** `status` has no default, so
+  `src/lib/repositories/payments.ts` (PAYMENT-SAFETY) now writes
+  `status: 'SUCCEEDED', finalized_at: now()` on its existing insert, which runs
+  only after the provider confirmed. Slice 3 replaces it with RESERVE →
+  finalize. The integration fixture `__test-support__/iq-fixtures.ts` does the
+  same.
+- **Down file (FACT):** `supabase/rollback/0038_refunds_status_idempotency.down.sql`,
+  one transaction (design S2): `LOCK TABLE refunds IN ACCESS EXCLUSIVE MODE` →
+  guard that **refuses** (55000, naming each id and status) while any refund is
+  not SUCCEEDED → drop the two indexes, the unique constraint and the three
+  CHECKs → drop the three columns. It never deletes a refund. Journal-row
+  delete is a manual step outside the transaction.
+- **Why it refuses (EXPLANATION):** a RESERVED row can be money the gateway
+  already returned (crash before finalize), and the pre-0038 code sums every
+  refund row as money returned. Keeping or deleting RESERVED/FAILED rows both
+  misstate the books. Reconcile each first (design §4: provider lookup or the
+  staff member on the audit row), or fix forward.
+- **Tested locally (FACT, 2026-09-17, local Postgres 17.6, per-worktree
+  database):** built 0000–0038 → `refunds-0038.integration.test.ts` 4/4 →
+  down refused with a RESERVED row and again with a FAILED row (columns intact) →
+  row finalized → down ran (0 new columns and indexes left, 3 refunds kept) →
+  `test-db.sh migrate` re-applied → the tests failed 4/4 while down, passed 4/4
+  after re-apply. Full integration suite 34 files / 310 passed / 21 skipped.
+  Drizzle migrator path not tested (CLI-managed local stack).
+- **Data at risk:** each refund's `status`, `idempotency_key` and `finalized_at`.
+  After a down + re-apply every surviving refund gets
+  `finalized_at = created_at`, losing a later finalize time. Once slice 3 writes
+  RESERVED/FAILED rows in production, fix forward.
+- **Journal (FACT):** `when` set by hand to 1790300000000, above 0037.
+
 ---
 
 ## 5. Rollback files 0022–0026: the known-safe procedure

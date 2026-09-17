@@ -847,6 +847,10 @@ export async function refundPayment(input: {
             actorUserId: input.actorUserId,
             provider: payment.provider,
             providerRefundId: refunded.providerRefundId,
+            // Migration 0038 columns. Recorded only after the provider confirmed,
+            // so SUCCEEDED; the RESERVE → finalize flow replaces this (ref-b3).
+            status: "SUCCEEDED",
+            finalizedAt: sql`now()`,
           })
           .returning({ id: refunds.id });
         if (!row) return { ok: false, error: "The refund was made but could not be recorded. Tell the owner." };

@@ -354,6 +354,9 @@ export async function seedRefund(payment: SeededPayment, input: SeedRefundInput)
         amount,
         reason: input.reason ?? "Fixture refund",
         provider: "cash",
+        // Migration 0038: a completed cash refund, finalized when it was made.
+        status: "SUCCEEDED",
+        finalizedAt: input.at,
         createdAt: input.at,
         updatedAt: input.at,
       })
