@@ -39,9 +39,9 @@ import { businessDateSql, endOfBusinessDay, startOfBusinessDay } from "@/lib/iq/
 import { JOB_RUN_STATUSES, type ClaimRead, type ExpectedRow, type JobRunRow, type JobRunStatus, type JobTrigger } from "@/lib/jobs/claim-decision";
 import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
 import type { ClaimRequest, FinishOutcome, JobRunStore } from "@/lib/jobs/handle";
-import { DayLockBusy, type FactsParity, type JobReadRepos, type JobWriteRepos } from "@/lib/jobs/repos";
+import { DayLockBusy, DayTimeout, type FactsParity, type JobReadRepos, type JobWriteRepos } from "@/lib/jobs/repos";
 import { getProfitAndLoss } from "./expenses";
-import { DayLockBusyError, readDailyFacts, recomputeDay } from "./iq-facts";
+import { DayLockBusyError, DayTimeoutError, readDailyFacts, recomputeDay } from "./iq-facts";
 import { getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
 import { computeTrustDay } from "./iq-trust";
 import { listOpenRecommendations, proposeRecommendation } from "./iq-recommendations";
@@ -114,12 +114,17 @@ export function iqRepos(orgId: string): JobReadRepos {
   };
 }
 
-/** A day lock still busy past the caller's budget becomes the job-level DayLockBusy (code DAY_LOCK_BUSY). */
+/**
+ * The day-lock errors become their job-level forms, so job code never imports
+ * a repository: DayLockBusyError -> DayLockBusy (DAY_LOCK_BUSY, contention)
+ * and DayTimeoutError -> DayTimeout (DAY_TIMEOUT, a counted failure).
+ */
 async function mapDayLockBusy<T>(date: string, work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } catch (error) {
     if (error instanceof DayLockBusyError) throw new DayLockBusy(date);
+    if (error instanceof DayTimeoutError) throw new DayTimeout(date);
     throw error;
   }
 }

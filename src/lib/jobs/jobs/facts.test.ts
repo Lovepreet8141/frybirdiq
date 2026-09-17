@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { JobContext } from "../context";
-import { DayLockBusy, type DayLockBudget, type FactsParity, type JobReadRepos, type JobWriteRepos } from "../repos";
+import { DayLockBusy, DayTimeout, type DayLockBudget, type FactsParity, type JobReadRepos, type JobWriteRepos } from "../repos";
 import { dayLockBudget, runFactsBackfill, runFactsIntraday, runFactsNightly } from "./facts";
 
 type Options = {
@@ -14,6 +14,8 @@ type Options = {
   busyOn?: string;
   /** A day whose trust lock stays busy past the budget. */
   trustBusyOn?: string;
+  /** A day whose facts step times out. */
+  timeoutOn?: string;
   remainingMs?: number;
 };
 
@@ -29,6 +31,7 @@ function fakeContext(options: Options) {
     recomputeDay: async (date, budget) => {
       budgets.push(budget);
       if (date === options.busyOn) throw new DayLockBusy(date);
+      if (date === options.timeoutOn) throw new DayTimeout(date);
       recomputed.push(date);
       steps.push(`facts ${date}`);
       return { orgId: "org", businessDate: date, definitionVersion: 1, rowsWritten: 20, lockWaits: date.endsWith("-05") ? 1 : 0, attempts: 1 };
@@ -186,25 +189,37 @@ describe("iq-facts-backfill", () => {
 });
 
 describe("day lock budget (RELIABILITY, iq1-s7b)", () => {
-  it("allows 3 waits per locked step, each at most 60 s, with both steps' waits together inside the deadline less 30 s", () => {
-    expect(dayLockBudget(480_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 60_000 });
-    expect(dayLockBudget(240_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 35_000 });
-    expect(dayLockBudget(36_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 1_000 });
-    for (const remaining of [480_000, 240_000, 120_000, 36_000]) {
-      const budget = dayLockBudget(remaining)!;
-      expect(2 * budget.maxLockWaits * budget.lockWaitTimeoutMs).toBeLessThanOrEqual(remaining - 30_000);
+  it("shares the time left less 30 s between both locked steps, half to 3 lock waits and half to the statement/idle timeout", () => {
+    expect(dayLockBudget(240_000)).toEqual({
+      maxLockWaits: 3,
+      lockWaitTimeoutMs: 17_500,
+      statementTimeoutMs: 30_000,
+      idleInTransactionTimeoutMs: 30_000,
+    });
+    expect(dayLockBudget(90_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 5_000, statementTimeoutMs: 15_000, idleInTransactionTimeoutMs: 15_000 });
+    expect(dayLockBudget(42_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 1_000, statementTimeoutMs: 3_000, idleInTransactionTimeoutMs: 3_000 });
+    for (const remaining of [900_000, 240_000, 90_000, 42_000]) {
+      const b = dayLockBudget(remaining)!;
+      const perStepWorst = b.maxLockWaits * b.lockWaitTimeoutMs + b.statementTimeoutMs;
+      expect(2 * perStepWorst).toBeLessThanOrEqual(remaining - 30_000);
+      expect(b.lockWaitTimeoutMs).toBeLessThanOrEqual(60_000);
+      expect(b.statementTimeoutMs).toBeLessThanOrEqual(30_000);
     }
-    expect(dayLockBudget(35_999)).toBeNull();
+    expect(dayLockBudget(41_999)).toBeNull();
     expect(dayLockBudget(0)).toBeNull();
   });
 
   it("passes the budget sized to the time left to both locked steps of the day", async () => {
     const f = fakeContext({ periodKey: "2026-09-17T10:15", remainingMs: 90_000 });
     await runFactsIntraday(f.ctx);
-    expect(f.budgets).toEqual([
-      { maxLockWaits: 3, lockWaitTimeoutMs: 10_000 },
-      { maxLockWaits: 3, lockWaitTimeoutMs: 10_000 },
-    ]);
+    const budget = { maxLockWaits: 3, lockWaitTimeoutMs: 5_000, statementTimeoutMs: 15_000, idleInTransactionTimeoutMs: 15_000 };
+    expect(f.budgets).toEqual([budget, budget]);
+  });
+
+  it("lets a DAY_TIMEOUT propagate so the run fails, keeping the days before it", async () => {
+    const f = fakeContext({ periodKey: "2026-09-16", resumeCursor: "2026-09-13", timeoutOn: "2026-09-15" });
+    await expect(runFactsNightly(f.ctx)).rejects.toMatchObject({ code: "DAY_TIMEOUT" });
+    expect(f.cursors).toEqual(["2026-09-14"]);
   });
 
   it("stops with PARTIAL DAY_LOCK_BUSY on a busy day, keeping the days before it and not saving that day as the cursor", async () => {

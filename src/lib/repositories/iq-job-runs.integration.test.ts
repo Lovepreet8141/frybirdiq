@@ -672,9 +672,9 @@ describe("IQ-1 facts jobs through the runner (iq1-s8) on the local stack", () =>
     });
     await holding;
 
-    // 40 s left of the deadline: the budget is 3 waits of 1.666 s per locked step.
+    // 50 s left of the deadline: per locked step, 3 lock waits of 1.666 s and a 5 s statement timeout.
     let calls = 0;
-    const lateClock = () => (calls++ === 0 ? 0 : 200_000);
+    const lateClock = () => (calls++ === 0 ? 0 : 190_000);
     const started = performance.now();
     try {
       const busy = await runJob("iq-facts-nightly", [e.orgId], { period: yesterday, clock: lateClock });

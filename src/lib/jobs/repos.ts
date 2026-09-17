@@ -44,10 +44,16 @@ export type JobReadRepos = {
   readonly listOpenRecommendations: WithoutOrg<typeof Recommendations.listOpenRecommendations>;
 };
 
-/** How long a day's recompute may wait for another recompute of the same day (RELIABILITY, iq1-s7b). */
+/**
+ * How long one locked day step may take: waits for another holder of the same
+ * day (RELIABILITY, iq1-s7b) and each statement or idle gap inside its
+ * transaction (ANALYTICS-DATA iq1-s6d).
+ */
 export type DayLockBudget = {
   readonly maxLockWaits: number;
   readonly lockWaitTimeoutMs: number;
+  readonly statementTimeoutMs: number;
+  readonly idleInTransactionTimeoutMs: number;
 };
 
 /**
@@ -64,10 +70,25 @@ export class DayLockBusy extends Error {
   }
 }
 
+/**
+ * A statement or an idle gap in the day's locked transaction ran past its
+ * timeout. The transaction rolled back. Unlike DayLockBusy this is a fault,
+ * not contention: the job lets it propagate and the run records a counted
+ * failure with error_code DAY_TIMEOUT.
+ */
+export class DayTimeout extends Error {
+  readonly code = "DAY_TIMEOUT";
+
+  constructor(readonly date: string) {
+    super("day step timed out");
+    this.name = "DayTimeout";
+  }
+}
+
 export type JobWriteRepos = {
-  /** Rebuilds one IST business day's facts for this org, recorded against this run. Idempotent. Throws `DayLockBusy`. */
+  /** Rebuilds one IST business day's facts for this org, recorded against this run. Idempotent. Throws `DayLockBusy` or `DayTimeout`. */
   readonly recomputeDay: (date: string, budget: DayLockBudget) => ReturnType<typeof Facts.recomputeDay>;
-  /** Scores and stores one IST business day's trust signals for this org, recorded against this run. Idempotent. Throws `DayLockBusy`. */
+  /** Scores and stores one IST business day's trust signals for this org, recorded against this run. Idempotent. Throws `DayLockBusy` or `DayTimeout`. */
   readonly computeTrustDay: (date: string, budget: DayLockBudget) => ReturnType<typeof Trust.computeTrustDay>;
   readonly writeInsight: WithoutTxAndLease<typeof Insights.writeInsight>;
   readonly proposeRecommendation: WithoutTxAndLease<typeof Recommendations.proposeRecommendation>;

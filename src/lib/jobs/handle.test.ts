@@ -580,6 +580,16 @@ describe("DAY_LOCK_BUSY partials (RELIABILITY, iq1-s7b)", () => {
     expect(failures).toEqual([1, 1, 1]);
   });
 
+  it("records a DAY_TIMEOUT thrown by a job as a counted failure with that error code", async () => {
+    const h = harness(
+      job(async () => {
+        throw Object.assign(new Error("day step timed out"), { code: "DAY_TIMEOUT" });
+      }),
+    );
+    await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "DAY_TIMEOUT", failures: 1 });
+  });
+
   it("still counts a plain deadline cut without progress as a failure", async () => {
     const h = harness(job(async () => ({ status: "PARTIAL", reason: "DEADLINE", rowsWritten: 0, summary: {} })));
     await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
