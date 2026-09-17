@@ -16,7 +16,7 @@ import "server-only";
 import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, loyaltyAccounts, loyaltyTransactions, orderEvents, orders, payments, refunds } from "@/db/schema";
-import { type Role, authorize } from "@/domain/permissions";
+import { type Role, authorize, can } from "@/domain/permissions";
 import { type Paise, ZERO, add, formatINR, paise, subtract } from "@/lib/money";
 import { pointsEarned } from "@/lib/loyalty";
 import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
@@ -101,6 +101,13 @@ export async function isOrderPaid(orderId: string): Promise<boolean> {
  * actor is recorded because cash is the one method with no external trail —
  * see the note in payments/cash.ts.
  *
+ * One narrow exception, cash at the door (card ord-4): `completeDelivery`
+ * passes `via: "delivery"`, and then `delivery.complete` — all a RIDER holds —
+ * is enough, but only for a DELIVERY order that is OUT_FOR_DELIVERY, checked
+ * on the org-scoped read and again under settle's order-row lock. The rider
+ * stays the recorded actor and the amount is still the server's. No other
+ * caller passes the flag, so every other path still needs `orders.update`.
+ *
  * Idempotent on the order: pressing "taken" twice does not book the money
  * twice, and the second press reports that it was already settled rather than
  * failing in a way that looks like the first press did not work.
@@ -113,16 +120,22 @@ export async function recordCashPayment(input: {
   orgId: string;
   /** What the customer handed over, when the till knows it. Must cover the amount due; the change is stored with the payment. */
   tendered?: Paise;
+  /**
+   * Set only by `completeDelivery`: cash taken at the door by whoever closes
+   * the delivery. Lets `delivery.complete` stand in for `orders.update`, for
+   * an OUT_FOR_DELIVERY delivery order and nothing else.
+   */
+  via?: "delivery";
 }): Promise<RecordPaymentResult> {
-  try {
-    authorize(input.actorRoles, "orders.update");
-  } catch {
+  const deliveryCashOnly = !can(input.actorRoles, "orders.update");
+  if (deliveryCashOnly && !(input.via === "delivery" && can(input.actorRoles, "delivery.complete"))) {
     return { ok: false, error: "You don't have permission to take payment." };
   }
 
   return settle({
     orderId: input.orderId,
     orgId: input.orgId,
+    orderGuard: deliveryCashOnly ? deliveryCashGuard : undefined,
     provider: CASH_PROVIDER,
     actorUserId: input.actorUserId,
     idempotencyKey: (order) => `cash-payment:${order.id}`,
@@ -133,6 +146,14 @@ export async function recordCashPayment(input: {
     methodFor: () => "CASH",
     reasonFor: (amount) => `Cash received — ${formatINR(amount)}`,
   });
+}
+
+/** The only orders `delivery.complete` may take cash for: a delivery on the road. */
+function deliveryCashGuard(order: OrderRow): string | null {
+  if (order.fulfilment !== "DELIVERY" || order.status !== "OUT_FOR_DELIVERY") {
+    return "Only a delivery that is out for delivery can take cash at the door.";
+  }
+  return null;
 }
 
 /**
@@ -244,6 +265,14 @@ interface Settlement {
    * only a role check and no tenant check at all.
    */
   readonly orgId?: string;
+  /**
+   * An extra condition the order must meet before any money is taken — a
+   * refusal message, or null to proceed. Checked on the org-scoped first read
+   * and again on the row held under the lock, before the settlement gate, so
+   * a narrower authorization (cash at the door) can never reach an order it
+   * does not cover. Refusals are never stored by withIdempotency.
+   */
+  readonly orderGuard?: (order: OrderRow) => string | null;
 }
 
 /**
@@ -326,6 +355,9 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
     .where(settlement.orgId ? and(eq(orders.id, settlement.orderId), eq(orders.orgId, settlement.orgId)) : eq(orders.id, settlement.orderId))
     .limit(1);
   if (!order) return { ok: false, error: "That order does not exist." };
+
+  const guardRefusal = settlement.orderGuard?.(order);
+  if (guardRefusal) return { ok: false, error: guardRefusal };
 
   /*
    * Already settled. For a gateway, the same payment id arriving twice (the
@@ -443,6 +475,10 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
           .for("update")
           .limit(1);
         if (!locked) return { ok: false as const, error: "That order does not exist." };
+
+        // Re-checked on the locked row: the order may have moved since the first read.
+        const lockedGuardRefusal = settlement.orderGuard?.(locked);
+        if (lockedGuardRefusal) throw new SettlementRefused(lockedGuardRefusal);
 
         // The same gate as the pre-transaction fast path — but this one is
         // authoritative, because it runs under the lock: a capture, a refund
