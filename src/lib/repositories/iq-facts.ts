@@ -50,7 +50,7 @@ import { saleSetWhere } from "./analytics";
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** A real "YYYY-MM-DD" IST business date, or a RangeError. */
-function assertBusinessDate(date: string): void {
+export function assertBusinessDate(date: string): void {
   if (!ISO_DATE.test(date) || businessDate(startOfBusinessDay(date)) !== date) {
     throw new RangeError(`iq-facts: "${date}" is not a business date`);
   }
@@ -331,77 +331,134 @@ export function factDayLockKey(orgId: string, date: string): string {
 
 class LockBusy extends Error {}
 
+export interface DayLockOptions {
+  /** Waits for other holders before giving up with `DayLockBusyError`. Default 20. 0 = never wait. */
+  readonly maxLockWaits?: number;
+  /** How long one wait may block before giving up with `DayLockBusyError`. Default 60 s. */
+  readonly lockWaitTimeoutMs?: number;
+}
+
+const DEFAULT_MAX_LOCK_WAITS = 20;
+const DEFAULT_LOCK_WAIT_TIMEOUT_MS = 60_000;
+
 /**
- * Rebuilds one org's facts for one IST business day, idempotently (B2).
- *
- * One REPEATABLE READ transaction, so every metric reads the same snapshot,
- * holding a 64-bit advisory lock on (org, date); delete then insert for
- * (org, date, version), so a category or product that no longer has rows
- * loses its old fact row too. Readers see the old rows or the new ones,
- * never a mix.
- *
- * Lock before snapshot: a REPEATABLE READ snapshot is taken when the first
- * statement starts, so blocking on the lock inside it would compute from data
- * older than the recompute it waited for. Instead the transaction only
- * *tries* the lock; when another recompute holds it, the transaction ends
- * without reading anything, waits for that holder in a separate READ
- * COMMITTED transaction, and starts again with a fresh snapshot. Waiting
- * never uses up an attempt. The only remaining collision is a holder
- * committing in the instant between snapshot and try; that rolls back on the
- * unique key (23505) or as 40001 and retries, logged, up to MAX_ATTEMPTS.
+ * The day's lock stayed busy past the caller's budget: too many waits, or one
+ * wait longer than the timeout. Nothing was written. Retriable — a job should
+ * reschedule the day rather than count it as a failed computation. Callers
+ * size the budget per call (`maxLockWaits`, `lockWaitTimeoutMs` on
+ * `recomputeDay` and `computeTrustDay`) to their own deadline.
  */
-export async function recomputeDay(orgId: string, date: string, opts: { readonly jobRunId?: string | null } = {}): Promise<RecomputeResult> {
-  assertBusinessDate(date);
-  const key = factDayLockKey(orgId, date);
+export class DayLockBusyError extends Error {
+  /** Stable code for the job runner's errorCodeOf (src/lib/jobs/handle.ts). */
+  readonly code = "DAY_LOCK_BUSY";
+  readonly retriable = true;
+  constructor(
+    readonly key: string,
+    readonly lockWaits: number,
+    readonly reason: "max_waits" | "timeout",
+  ) {
+    super(`day lock ${key} still busy after ${lockWaits} wait(s) (${reason})`);
+    this.name = "DayLockBusyError";
+  }
+}
+
+type DayTransaction = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
+
+/**
+ * Runs `work` in a REPEATABLE READ transaction that holds the advisory lock
+ * named by `key`, with the lock taken before the snapshot matters.
+ *
+ * A REPEATABLE READ snapshot is taken when the first statement starts, so
+ * blocking on the lock inside it would compute from data older than the
+ * holder it waited for. Instead the transaction only *tries* the lock; when
+ * another holder has it, the transaction ends without reading anything,
+ * waits for that holder in a separate READ COMMITTED transaction, and starts
+ * again with a fresh snapshot. Waiting never uses up an attempt. The only
+ * remaining collision is a holder committing in the instant between snapshot
+ * and try; that rolls back on a unique key (23505) or as 40001 and retries,
+ * logged, up to MAX_ATTEMPTS. Shared by the facts and trust writers.
+ */
+export async function runLockedDayTransaction<T>(
+  key: string,
+  label: string,
+  work: (tx: DayTransaction) => Promise<T>,
+  options: DayLockOptions = {},
+): Promise<{ readonly value: T; readonly lockWaits: number; readonly attempts: number }> {
+  const maxLockWaits = options.maxLockWaits ?? DEFAULT_MAX_LOCK_WAITS;
+  const timeoutMs = Math.max(1, Math.floor(options.lockWaitTimeoutMs ?? DEFAULT_LOCK_WAIT_TIMEOUT_MS));
   let lockWaits = 0;
   for (let attempt = 1; ; ) {
     try {
-      const rowsWritten = await db().transaction(
+      const value = await db().transaction(
         async (tx) => {
           const [lock] = await tx.execute<{ locked: boolean }>(sql`SELECT pg_try_advisory_xact_lock(hashtextextended(${key}, 0)) AS locked`);
           if (!lock?.locked) throw new LockBusy();
-          const rows = await computeDayFacts(orgId, date, tx);
-          await tx
-            .delete(iqDailyFacts)
-            .where(and(eq(iqDailyFacts.orgId, orgId), eq(iqDailyFacts.businessDate, date), eq(iqDailyFacts.definitionVersion, DEFINITION_VERSION)));
-          if (rows.length > 0) {
-            await tx.insert(iqDailyFacts).values(
-              rows.map((row) => ({
-                orgId,
-                locationId: row.locationId,
-                businessDate: date,
-                metricId: row.metricId,
-                dimensionKey: row.dimensionKey,
-                dimensionValue: row.dimensionValue,
-                unit: METRIC_CATALOG[row.metricId].unit,
-                value: row.value,
-                sourceRowCount: row.sourceRowCount,
-                // Not updated_at: nothing maintains it (REVIEW required change 2). Freshness is the job's recompute policy.
-                sourceWatermark: null,
-                definitionVersion: DEFINITION_VERSION,
-                jobRunId: opts.jobRunId ?? null,
-              })),
-            );
-          }
-          return rows.length;
+          return work(tx);
         },
         { isolationLevel: "repeatable read" },
       );
-      return { orgId, businessDate: date, definitionVersion: DEFINITION_VERSION, rowsWritten, lockWaits, attempts: attempt };
+      return { value, lockWaits, attempts: attempt };
     } catch (error) {
       if (error instanceof LockBusy) {
+        // A cap on waits and on each wait, so a job cannot starve behind a stuck holder.
+        if (lockWaits >= maxLockWaits) throw new DayLockBusyError(key, lockWaits, "max_waits");
         lockWaits += 1;
-        // Blocks until the holder commits or rolls back, then lets go at once.
-        await db().transaction(async (tx) => {
-          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
-        });
+        try {
+          // Blocks until the holder commits or rolls back, then lets go at once.
+          await db().transaction(async (tx) => {
+            await tx.execute(sql.raw(`SET LOCAL lock_timeout = '${timeoutMs}ms'`));
+            await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+          });
+        } catch (waitError) {
+          const e = waitError as { code?: string; cause?: { code?: string } };
+          // 55P03 lock_not_available: lock_timeout expired.
+          if ((e.cause?.code ?? e.code) === "55P03") throw new DayLockBusyError(key, lockWaits, "timeout");
+          throw waitError;
+        }
         continue;
       }
       if (!isRetryable(error) || attempt >= MAX_ATTEMPTS) throw error;
-      console.warn(`iq-facts: recompute of ${date} for org ${orgId} collided with a concurrent recompute; retrying (attempt ${attempt + 1} of ${MAX_ATTEMPTS})`);
+      console.warn(`${label} collided with a concurrent run; retrying (attempt ${attempt + 1} of ${MAX_ATTEMPTS})`);
       attempt += 1;
     }
   }
+}
+
+/**
+ * Rebuilds one org's facts for one IST business day, idempotently (B2): under
+ * `runLockedDayTransaction`, delete then insert for (org, date, version), so
+ * a category or product that no longer has rows loses its old fact row too.
+ * Readers see the old rows or the new ones, never a mix.
+ */
+export async function recomputeDay(orgId: string, date: string, opts: { readonly jobRunId?: string | null } & DayLockOptions = {}): Promise<RecomputeResult> {
+  assertBusinessDate(date);
+  const { value: rowsWritten, lockWaits, attempts } = await runLockedDayTransaction(factDayLockKey(orgId, date), `iq-facts: recompute of ${date} for org ${orgId}`, async (tx) => {
+    const rows = await computeDayFacts(orgId, date, tx);
+    await tx
+      .delete(iqDailyFacts)
+      .where(and(eq(iqDailyFacts.orgId, orgId), eq(iqDailyFacts.businessDate, date), eq(iqDailyFacts.definitionVersion, DEFINITION_VERSION)));
+    if (rows.length > 0) {
+      await tx.insert(iqDailyFacts).values(
+        rows.map((row) => ({
+          orgId,
+          locationId: row.locationId,
+          businessDate: date,
+          metricId: row.metricId,
+          dimensionKey: row.dimensionKey,
+          dimensionValue: row.dimensionValue,
+          unit: METRIC_CATALOG[row.metricId].unit,
+          value: row.value,
+          sourceRowCount: row.sourceRowCount,
+          // Not updated_at: nothing maintains it (REVIEW required change 2). Freshness is the job's recompute policy.
+          sourceWatermark: null,
+          definitionVersion: DEFINITION_VERSION,
+          jobRunId: opts.jobRunId ?? null,
+        })),
+      );
+    }
+    return rows.length;
+  }, opts);
+  return { orgId, businessDate: date, definitionVersion: DEFINITION_VERSION, rowsWritten, lockWaits, attempts };
 }
 
 export interface DailyFactsRead {
