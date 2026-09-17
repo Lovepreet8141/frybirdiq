@@ -27,12 +27,12 @@
  * where a real failure happens to land.
  */
 import { randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, loyaltyAccounts, loyaltyTransactions, orders, organizations, payments } from "@/db/schema";
-import { recordCashPayment } from "./payments";
-import { createTestCustomer, createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
+import { recordCashPayment, recordOnlinePayment } from "./payments";
+import { createTestCustomer, createTestOrg, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
 import { fromRupees } from "@/lib/money";
 import { ORG_SLUG } from "./org";
 
@@ -213,5 +213,107 @@ describe("settle() atomicity", () => {
 
     const capturedRows = await db().select().from(payments).where(and(eq(payments.orderId, orderId), eq(payments.status, "CAPTURED")));
     expect(capturedRows).toHaveLength(1); // the double-tap never wrote a second row
+  });
+});
+
+/**
+ * Baseline P2-2: two genuinely concurrent settlements of the same order —
+ * cash at the counter while the customer pays online — used to both pass the
+ * pre-transaction "already captured" check (it runs before either commits)
+ * and both capture: two CAPTURED payments, one meal charged twice.
+ *
+ * The fix is the order-row `SELECT ... FOR UPDATE` at the top of settle()'s
+ * transaction, plus a re-check of captured payments under that lock: the
+ * loser blocks until the winner commits, then sees the capture and refuses.
+ *
+ * The online side is exercised for real through recordOnlinePayment: the
+ * Razorpay keys are stubbed into the environment and global fetch answers
+ * api.razorpay.com with a recorded-shape captured payment — no network, no
+ * gateway, exactly the amount the pending payment was opened for. Nothing
+ * else uses fetch here (the database speaks over a socket), and the stub
+ * passes any other URL through untouched.
+ */
+describe("settle() concurrent double-capture (baseline P2-2)", () => {
+  let org: TestOrg;
+  const savedKeyId = process.env.RAZORPAY_KEY_ID;
+  const savedKeySecret = process.env.RAZORPAY_KEY_SECRET;
+  const realFetch = globalThis.fetch;
+
+  beforeAll(async () => {
+    // Its own random-slug org: these orders carry no customer, so settle()
+    // never resolves loyalty config through the shared ORG_SLUG lookup and
+    // this block needs no claim on that contended fixture slug.
+    org = await createTestOrg();
+    process.env.RAZORPAY_KEY_ID = "rzp_test_integration";
+    process.env.RAZORPAY_KEY_SECRET = "integration-test-secret";
+  });
+
+  afterAll(async () => {
+    if (savedKeyId === undefined) delete process.env.RAZORPAY_KEY_ID;
+    else process.env.RAZORPAY_KEY_ID = savedKeyId;
+    if (savedKeySecret === undefined) delete process.env.RAZORPAY_KEY_SECRET;
+    else process.env.RAZORPAY_KEY_SECRET = savedKeySecret;
+    vi.unstubAllGlobals();
+    await deleteTestOrg(org.orgId);
+  });
+
+  function stubRazorpayPaymentFetch(payment: { id: string; order_id: string; amount: number }) {
+    vi.stubGlobal("fetch", (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("https://api.razorpay.com/")) {
+        return new Response(
+          JSON.stringify({ ...payment, currency: "INR", status: "captured", method: "upi", fee: 0, tax: 0 }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return realFetch(input as Parameters<typeof fetch>[0], init);
+    }) as typeof fetch);
+  }
+
+  async function createOnlineOrderAwaitingPayment(amountRupees: string) {
+    const orderId = await createOrderPendingPayment(org, { grandTotalRupees: amountRupees });
+    const providerOrderId = `order_test_${randomUUID().slice(0, 12)}`;
+    await db().insert(payments).values({
+      orgId: org.orgId,
+      orderId,
+      status: "PENDING",
+      method: "UPI",
+      amount: fromRupees(amountRupees),
+      provider: "razorpay",
+      providerOrderId,
+    });
+    return { orderId, providerOrderId };
+  }
+
+  it("cash and online settling the same order at the same instant capture exactly once; the loser gets a clear refusal", async () => {
+    const { orderId, providerOrderId } = await createOnlineOrderAwaitingPayment("200");
+    const providerPaymentId = `pay_test_${randomUUID().slice(0, 12)}`;
+    stubRazorpayPaymentFetch({ id: providerPaymentId, order_id: providerOrderId, amount: 20000 });
+
+    // Same reason as the refund race test: a cold pool serializes the two
+    // calls on connection acquisition alone, which would hide the race this
+    // test exists to prove.
+    await warmPool();
+
+    const [cash, online] = await Promise.all([
+      recordCashPayment({ orderId, actorUserId: randomUUID(), actorRoles: ["OWNER"], orgId: org.orgId, tendered: fromRupees("200") }),
+      recordOnlinePayment({ orderId, providerPaymentId }),
+    ]);
+
+    // Exactly one of the two took the money; the other was told, in words a
+    // cashier can act on, that it was already paid. Which one wins is timing.
+    const results = [cash, online];
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    const loser = results.find((result) => !result.ok);
+    if (!loser || loser.ok) throw new Error("expected exactly one refusal");
+    expect(loser.error).toMatch(/already been paid/);
+
+    // THE assertion this card exists for: one order, one CAPTURED payment —
+    // never a cash capture and an online capture side by side.
+    const capturedRows = await db().select().from(payments).where(and(eq(payments.orderId, orderId), eq(payments.status, "CAPTURED")));
+    expect(capturedRows).toHaveLength(1);
+
+    const [order] = await db().select({ status: orders.status, invoiceNumber: orders.invoiceNumber }).from(orders).where(eq(orders.id, orderId));
+    expect(order?.status).toBe("PAID");
+    expect(order?.invoiceNumber).toBeTruthy();
   });
 });

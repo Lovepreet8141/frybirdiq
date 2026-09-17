@@ -307,8 +307,9 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
    * So: the payment is always recorded. The status only moves to PAID when the
    * order is still waiting on payment and has gone nowhere else. Whether an
    * order is paid is answered by the payments table, never by the status.
+   * That decision is made inside the transaction below, from the row as it
+   * is under the lock — not from the read above, which may be stale by then.
    */
-  const movesToPaid = order.status === "PENDING_PAYMENT";
 
   const { result, replayed } = await withIdempotency(
     {
@@ -350,6 +351,51 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
        * retry after a rollback starts from a genuinely clean slate.
        */
       return database.transaction(async (tx) => {
+        /*
+         * Serialize concurrent settlements of the same order.
+         *
+         * The "already captured" check before withIdempotency runs outside
+         * any transaction, so two settlements arriving together — cash at
+         * the counter while the customer pays online, each under its own
+         * idempotency key — both used to pass it before either committed,
+         * and both captured: one meal, charged twice. Locking the order row
+         * here and re-checking under the lock makes the loser wait for the
+         * winner's commit and then see it.
+         *
+         * Lock order, kept consistent across the codebase: the ORDER row is
+         * always locked first (advanceOrder in orders.ts does the same),
+         * and payment rows are only ever written after it. refundPayment
+         * locks a PAYMENTS row and then merely reads the order without
+         * locking it, so no path takes these two locks in the opposite
+         * order and no cycle exists.
+         */
+        const [locked] = await tx
+          .select()
+          .from(orders)
+          .where(settlement.orgId ? and(eq(orders.id, order.id), eq(orders.orgId, settlement.orgId)) : eq(orders.id, order.id))
+          .for("update")
+          .limit(1);
+        if (!locked) return { ok: false as const, error: "That order does not exist." };
+
+        // Same identity rule as the pre-transaction fast path — but this
+        // one is authoritative, because it runs under the lock.
+        const [alreadyCaptured] = await tx
+          .select({ id: payments.id, providerPaymentId: payments.providerPaymentId })
+          .from(payments)
+          .where(and(eq(payments.orderId, order.id), eq(payments.status, "CAPTURED")))
+          .limit(1);
+        if (alreadyCaptured) {
+          const sameSettlement = settlement.providerPaymentId
+            ? alreadyCaptured.providerPaymentId === settlement.providerPaymentId
+            : !alreadyCaptured.providerPaymentId;
+          if (sameSettlement) return { ok: true as const, paymentId: alreadyCaptured.id };
+          return { ok: false as const, error: "That order has already been paid." };
+        }
+
+        // See the comment above the transaction: decided from the locked
+        // row, so a status that moved since the first read is respected.
+        const movesToPaid = locked.status === "PENDING_PAYMENT";
+
         const method = settlement.methodFor(capturedResult);
         const feeAmount = typeof capturedResult.payload?.fee === "number" ? paise(capturedResult.payload.fee) : paise(0);
         const now = new Date();
@@ -428,7 +474,7 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
          */
         const issuedAt = now;
         const year = financialYear(issuedAt);
-        const settlingOrder = order; // rebound so the nested closures below keep TS's non-undefined narrowing
+        const settlingOrder = locked; // the row as held under the lock — its invoiceNumber/invoicedAt are current, and the closures below keep TS's non-undefined narrowing
 
         // Recount-and-increment means a fully adversarial burst of N
         // concurrent settlements can force the unluckiest one through up to
@@ -561,8 +607,8 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
         await tx.insert(orderEvents).values({
           orgId: order.orgId,
           orderId: order.id,
-          fromStatus: order.status,
-          toStatus: movesToPaid ? "PAID" : order.status,
+          fromStatus: locked.status,
+          toStatus: movesToPaid ? "PAID" : locked.status,
           actorUserId: settlement.actorUserId,
           reason: settlement.reasonFor(capturedResult.capturedAmount, method),
         });
@@ -575,9 +621,9 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
           action: "payment_captured",
           entity: "orders",
           entityId: order.id,
-          before: { status: order.status },
+          before: { status: locked.status },
           after: {
-            status: movesToPaid ? "PAID" : order.status,
+            status: movesToPaid ? "PAID" : locked.status,
             method,
             provider: settlement.provider,
             amount: capturedResult.capturedAmount.toString(),
