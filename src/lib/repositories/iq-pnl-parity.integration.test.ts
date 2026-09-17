@@ -21,7 +21,7 @@ import { profit } from "@/lib/iq/profit";
 import { FEES_DIMENSION_VALUE, V1_COMPUTED_METRIC_IDS } from "@/lib/iq/metrics";
 import { paise } from "@/lib/money";
 import { type CategoryTotal, getProfitAndLoss } from "./expenses";
-import { type DailyFactsRead, businessDatesOf, factDayLockKey, readDailyFacts, recomputeDay } from "./iq-facts";
+import { type DailyFactsRead, DayLockBusyError, DayTimeoutError, businessDatesOf, factDayLockKey, readDailyFacts, recomputeDay, runLockedDayTransaction } from "./iq-facts";
 import { getFoodCostComparison } from "./stock";
 import { createTestIngredient, createTestProduct, type TestOrg, warmPool } from "./__test-support__/fixtures";
 import {
@@ -362,5 +362,43 @@ describe("IQ daily facts — P&L parity (IQ-1 S6)", () => {
   it("refuses a date that is not a business date", async () => {
     await expect(recomputeDay(orgs.a.orgId, "2026-02-30")).rejects.toThrow(RangeError);
     await expect(readDailyFacts(orgs.a.orgId, "2026-09-04", "2026-09-01")).rejects.toThrow(RangeError);
+  });
+});
+
+describe("day lock timeouts (design P2)", () => {
+  const key = `iq_daily_facts:timeout-test:${Date.now()}`;
+  const lockIsFree = async () =>
+    (await runLockedDayTransaction(key, "timeout test", async () => "free", { maxLockWaits: 0 })).value === "free";
+
+  it("cuts off a slow statement with DayTimeoutError and releases the lock", async () => {
+    const started = Date.now();
+    const error = await runLockedDayTransaction(key, "timeout test", async (tx) => tx.execute(sql`SELECT pg_sleep(5)`), { statementTimeoutMs: 200 }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DayTimeoutError);
+    expect(error).toMatchObject({ code: "DAY_TIMEOUT", reason: "statement", retriable: false, timeoutMs: 200 });
+    expect(error).not.toBeInstanceOf(DayLockBusyError);
+    expect(Date.now() - started).toBeLessThan(4_000);
+    expect(await lockIsFree()).toBe(true);
+  });
+
+  it("cuts off a holder idle in its transaction and releases the lock", async () => {
+    const error = await runLockedDayTransaction(
+      key,
+      "timeout test",
+      async (tx) => {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        return tx.execute(sql`SELECT 1`);
+      },
+      { idleInTransactionTimeoutMs: 200 },
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DayTimeoutError);
+    expect(error).toMatchObject({ code: "DAY_TIMEOUT", reason: "idle_in_transaction" });
+    expect(await lockIsFree()).toBe(true);
+  });
+
+  it("applies the default budget when none is given", async () => {
+    const [row] = await runLockedDayTransaction(key, "timeout test", async (tx) =>
+      tx.execute<{ statement: string; idle: string }>(sql`SELECT current_setting('statement_timeout') AS statement, current_setting('idle_in_transaction_session_timeout') AS idle`),
+    ).then((r) => r.value);
+    expect(row).toEqual({ statement: "30s", idle: "30s" });
   });
 });
