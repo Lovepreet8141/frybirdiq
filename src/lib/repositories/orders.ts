@@ -1442,6 +1442,16 @@ export async function completeDelivery(input: {
     // "Already paid" is not a failure here — it means someone recorded it
     // first, and the delivery should still close.
     if (!paid.ok && !paid.error.includes("already been paid")) {
+      // Two devices closing the same delivery at once: the other one took
+      // the cash and completed the order after our first read, so the
+      // payment step refuses. The delivery is closed, which is what this
+      // caller asked for — report that, not an error (card ord-4b).
+      const [current] = await database
+        .select({ status: orders.status })
+        .from(orders)
+        .where(and(eq(orders.id, order.id), eq(orders.orgId, input.orgId)))
+        .limit(1);
+      if (current?.status === "COMPLETED") return { ok: true };
       return { ok: false, error: paid.error };
     }
   }
