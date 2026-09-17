@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Bike, Check, ExternalLink, Loader2, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,17 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [outcome, setOutcome] = useState<CloseOutcome | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const wasPending = useRef(false);
+
+  // A disabled button can't hold focus — the browser drops it to <body> the
+  // moment `pending` goes true, and never restores it. Put it back on the
+  // button when the request finishes, so a keyboard user can retry without
+  // re-tabbing from the top of the card.
+  useEffect(() => {
+    if (wasPending.current && !pending) closeButtonRef.current?.focus();
+    wasPending.current = pending;
+  }, [pending]);
 
   const close = (cashCollected: boolean) =>
     startTransition(async () => {
@@ -139,8 +150,10 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
             order still in the bag.
           */}
           <Button
+            ref={closeButtonRef}
             type="button"
             disabled={pending}
+            aria-busy={pending}
             onClick={() => close(!delivery.isPaid)}
             size="lg"
             className="min-h-16 gap-3 text-lg"
