@@ -50,7 +50,7 @@ import { saleSetWhere } from "./analytics";
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** A real "YYYY-MM-DD" IST business date, or a RangeError. */
-function assertBusinessDate(date: string): void {
+export function assertBusinessDate(date: string): void {
   if (!ISO_DATE.test(date) || businessDate(startOfBusinessDay(date)) !== date) {
     throw new RangeError(`iq-facts: "${date}" is not a business date`);
   }
@@ -331,63 +331,39 @@ export function factDayLockKey(orgId: string, date: string): string {
 
 class LockBusy extends Error {}
 
+type DayTransaction = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
+
 /**
- * Rebuilds one org's facts for one IST business day, idempotently (B2).
+ * Runs `work` in a REPEATABLE READ transaction that holds the advisory lock
+ * named by `key`, with the lock taken before the snapshot matters.
  *
- * One REPEATABLE READ transaction, so every metric reads the same snapshot,
- * holding a 64-bit advisory lock on (org, date); delete then insert for
- * (org, date, version), so a category or product that no longer has rows
- * loses its old fact row too. Readers see the old rows or the new ones,
- * never a mix.
- *
- * Lock before snapshot: a REPEATABLE READ snapshot is taken when the first
- * statement starts, so blocking on the lock inside it would compute from data
- * older than the recompute it waited for. Instead the transaction only
- * *tries* the lock; when another recompute holds it, the transaction ends
- * without reading anything, waits for that holder in a separate READ
- * COMMITTED transaction, and starts again with a fresh snapshot. Waiting
- * never uses up an attempt. The only remaining collision is a holder
- * committing in the instant between snapshot and try; that rolls back on the
- * unique key (23505) or as 40001 and retries, logged, up to MAX_ATTEMPTS.
+ * A REPEATABLE READ snapshot is taken when the first statement starts, so
+ * blocking on the lock inside it would compute from data older than the
+ * holder it waited for. Instead the transaction only *tries* the lock; when
+ * another holder has it, the transaction ends without reading anything,
+ * waits for that holder in a separate READ COMMITTED transaction, and starts
+ * again with a fresh snapshot. Waiting never uses up an attempt. The only
+ * remaining collision is a holder committing in the instant between snapshot
+ * and try; that rolls back on a unique key (23505) or as 40001 and retries,
+ * logged, up to MAX_ATTEMPTS. Shared by the facts and trust writers.
  */
-export async function recomputeDay(orgId: string, date: string, opts: { readonly jobRunId?: string | null } = {}): Promise<RecomputeResult> {
-  assertBusinessDate(date);
-  const key = factDayLockKey(orgId, date);
+export async function runLockedDayTransaction<T>(
+  key: string,
+  label: string,
+  work: (tx: DayTransaction) => Promise<T>,
+): Promise<{ readonly value: T; readonly lockWaits: number; readonly attempts: number }> {
   let lockWaits = 0;
   for (let attempt = 1; ; ) {
     try {
-      const rowsWritten = await db().transaction(
+      const value = await db().transaction(
         async (tx) => {
           const [lock] = await tx.execute<{ locked: boolean }>(sql`SELECT pg_try_advisory_xact_lock(hashtextextended(${key}, 0)) AS locked`);
           if (!lock?.locked) throw new LockBusy();
-          const rows = await computeDayFacts(orgId, date, tx);
-          await tx
-            .delete(iqDailyFacts)
-            .where(and(eq(iqDailyFacts.orgId, orgId), eq(iqDailyFacts.businessDate, date), eq(iqDailyFacts.definitionVersion, DEFINITION_VERSION)));
-          if (rows.length > 0) {
-            await tx.insert(iqDailyFacts).values(
-              rows.map((row) => ({
-                orgId,
-                locationId: row.locationId,
-                businessDate: date,
-                metricId: row.metricId,
-                dimensionKey: row.dimensionKey,
-                dimensionValue: row.dimensionValue,
-                unit: METRIC_CATALOG[row.metricId].unit,
-                value: row.value,
-                sourceRowCount: row.sourceRowCount,
-                // Not updated_at: nothing maintains it (REVIEW required change 2). Freshness is the job's recompute policy.
-                sourceWatermark: null,
-                definitionVersion: DEFINITION_VERSION,
-                jobRunId: opts.jobRunId ?? null,
-              })),
-            );
-          }
-          return rows.length;
+          return work(tx);
         },
         { isolationLevel: "repeatable read" },
       );
-      return { orgId, businessDate: date, definitionVersion: DEFINITION_VERSION, rowsWritten, lockWaits, attempts: attempt };
+      return { value, lockWaits, attempts: attempt };
     } catch (error) {
       if (error instanceof LockBusy) {
         lockWaits += 1;
@@ -398,10 +374,47 @@ export async function recomputeDay(orgId: string, date: string, opts: { readonly
         continue;
       }
       if (!isRetryable(error) || attempt >= MAX_ATTEMPTS) throw error;
-      console.warn(`iq-facts: recompute of ${date} for org ${orgId} collided with a concurrent recompute; retrying (attempt ${attempt + 1} of ${MAX_ATTEMPTS})`);
+      console.warn(`${label} collided with a concurrent run; retrying (attempt ${attempt + 1} of ${MAX_ATTEMPTS})`);
       attempt += 1;
     }
   }
+}
+
+/**
+ * Rebuilds one org's facts for one IST business day, idempotently (B2): under
+ * `runLockedDayTransaction`, delete then insert for (org, date, version), so
+ * a category or product that no longer has rows loses its old fact row too.
+ * Readers see the old rows or the new ones, never a mix.
+ */
+export async function recomputeDay(orgId: string, date: string, opts: { readonly jobRunId?: string | null } = {}): Promise<RecomputeResult> {
+  assertBusinessDate(date);
+  const { value: rowsWritten, lockWaits, attempts } = await runLockedDayTransaction(factDayLockKey(orgId, date), `iq-facts: recompute of ${date} for org ${orgId}`, async (tx) => {
+    const rows = await computeDayFacts(orgId, date, tx);
+    await tx
+      .delete(iqDailyFacts)
+      .where(and(eq(iqDailyFacts.orgId, orgId), eq(iqDailyFacts.businessDate, date), eq(iqDailyFacts.definitionVersion, DEFINITION_VERSION)));
+    if (rows.length > 0) {
+      await tx.insert(iqDailyFacts).values(
+        rows.map((row) => ({
+          orgId,
+          locationId: row.locationId,
+          businessDate: date,
+          metricId: row.metricId,
+          dimensionKey: row.dimensionKey,
+          dimensionValue: row.dimensionValue,
+          unit: METRIC_CATALOG[row.metricId].unit,
+          value: row.value,
+          sourceRowCount: row.sourceRowCount,
+          // Not updated_at: nothing maintains it (REVIEW required change 2). Freshness is the job's recompute policy.
+          sourceWatermark: null,
+          definitionVersion: DEFINITION_VERSION,
+          jobRunId: opts.jobRunId ?? null,
+        })),
+      );
+    }
+    return rows.length;
+  });
+  return { orgId, businessDate: date, definitionVersion: DEFINITION_VERSION, rowsWritten, lockWaits, attempts };
 }
 
 export interface DailyFactsRead {
