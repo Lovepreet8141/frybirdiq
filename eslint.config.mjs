@@ -25,8 +25,10 @@ const abs = (p) => path.join(ROOT, p);
 // but is added here too — deps.ts (S8, agent/automation-architect-mu4xnv9l
 // daa167f, not yet merged) reads JOB_SECRET through it, and that read was
 // already fact-checked in the same review (item, "deps.ts:24-26").
-const JOBS_ALLOWLIST_MESSAGE =
-  "Job code (src/lib/jobs/**, src/app/api/jobs/**) may only import from itself, src/lib/iq, or src/lib/repositories/iq-* — not a general repository, alias or relative (ARCHITECT review of daa167f, iq0-s9r item 3).";
+const JOBS_LIB_MESSAGE =
+  "src/lib/jobs may only import from itself, src/lib/iq, or src/lib/repositories/iq-* — not a general repository, alias, relative, or src/lib/env (secrets are injected via JobContext, not read directly — ARCHITECT review of daa167f, iq0-s9r item 3, and ebc0987, iq0-s9c item a).";
+const JOBS_ROUTE_MESSAGE =
+  "src/app/api/jobs may only import from itself, src/lib/jobs, src/lib/iq, src/lib/repositories/iq-*, or src/lib/env (deps.ts reads JOB_SECRET through it) — not a general repository, alias, or relative (ARCHITECT review of daa167f, iq0-s9r item 3, and 45973ab, iq0-s9d).";
 
 const JOB_IMPLEMENTATION_DB_MESSAGE =
   "An individual job (src/lib/jobs/jobs/**, e.g. heartbeat) must reach the database only through ctx from its JobContext — no direct @/db or repository import, even an iq-* one (ARCHITECT review of daa167f, SECURITY condition).";
@@ -48,7 +50,13 @@ const JOB_DB_PACKAGE_MESSAGE =
 // secrets injected via JobContext, so src/lib/jobs itself should not be able
 // to read env directly either.
 const JOBS_LIB_EXCEPT = ["src/lib/jobs/**", "src/lib/iq/**", "src/lib/repositories/iq-*.ts"];
-const JOBS_ROUTE_EXCEPT = [...JOBS_LIB_EXCEPT, "src/lib/env/**"];
+// ARCHITECT re-review of aa24162 (iq0-s9d): merged with the real route
+// (agent/automation-architect-mu4xnv9l 45973ab), route.ts importing its own
+// ./deps failed lint — the route zone's exceptions covered everything a
+// route may reach *outside* itself, but never listed the route's own
+// directory tree, so route.ts (and deps.ts) fell into the same "banned
+// unless excepted" bucket as any other src/** file.
+const JOBS_ROUTE_EXCEPT = [...JOBS_LIB_EXCEPT, "src/app/api/jobs/**", "src/lib/env/**"];
 
 // ARCHITECT review of accdd93 (P2 #1): a forecast figure can be passed off
 // as a fact because every payload schema, InsightSchema, and ObservedSchema
@@ -186,13 +194,13 @@ const eslintConfig = defineConfig([
               target: [abs("src/lib/jobs/**")],
               from: [abs("src/**")],
               except: JOBS_LIB_EXCEPT.map(abs),
-              message: JOBS_ALLOWLIST_MESSAGE,
+              message: JOBS_LIB_MESSAGE,
             },
             {
               target: [abs("src/app/api/jobs/**")],
               from: [abs("src/**")],
               except: JOBS_ROUTE_EXCEPT.map(abs),
-              message: JOBS_ALLOWLIST_MESSAGE,
+              message: JOBS_ROUTE_MESSAGE,
             },
             {
               // Stricter subzone: an individual job may not reach a

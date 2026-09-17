@@ -179,4 +179,16 @@ describe("IQ-0 S9: eslint.config.mjs restricted imports (fixture per rule, run t
     );
     expect(ids).toContain("import/no-restricted-paths");
   });
+
+  // ARCHITECT re-review of aa24162 (iq0-s9d): merged with the real route
+  // (agent/automation-architect-mu4xnv9l 45973ab), route.ts importing its
+  // own ./deps failed lint — the route zone's exceptions covered what a
+  // route may reach outside itself but never listed its own directory tree.
+  it("the job route may import its own ./deps (no false positive)", async () => {
+    const ids = await ruleIdsFor(
+      "app/api/jobs/[job]/route.ts",
+      'import { respondToJobRequest } from "@/lib/jobs/http";\nimport { jobRouteDeps } from "./deps";\nexport const x = { respondToJobRequest, jobRouteDeps };\n',
+    );
+    expect(ids).not.toContain("import/no-restricted-paths");
+  });
 });
