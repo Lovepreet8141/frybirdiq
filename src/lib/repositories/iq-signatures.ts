@@ -46,7 +46,9 @@ function ruleQuery(ruleId: SignatureRuleId, orgId: string): SQL {
         ) doubled`;
 
     // A refunded payment whose refund rows don't account for it, or refund rows
-    // on a payment still marked CAPTURED (P1-1 aftermath).
+    // on a payment still marked CAPTURED (P1-1 aftermath). Only payments marked
+    // refunded or carrying a refund are candidates (RELIABILITY iq2-s5 #2), so
+    // the per-payment sum runs on the small refund set, not on every payment.
     case "sig.refund_unrecorded":
       return sql`
         SELECT count(*)::int AS n FROM payments p
@@ -55,6 +57,10 @@ function ruleQuery(ruleId: SignatureRuleId, orgId: string): SQL {
           FROM refunds r WHERE r.org_id = p.org_id AND r.payment_id = p.id
         ) booked
         WHERE p.org_id = ${orgId}
+          AND (
+            p.status IN ('REFUNDED', 'PARTIALLY_REFUNDED')
+            OR EXISTS (SELECT 1 FROM refunds r0 WHERE r0.org_id = p.org_id AND r0.payment_id = p.id)
+          )
           AND p.updated_at < now() - interval '5 minutes'
           AND (booked.last_refund_at IS NULL OR booked.last_refund_at < now() - interval '5 minutes')
           AND (
@@ -67,25 +73,30 @@ function ruleQuery(ruleId: SignatureRuleId, orgId: string): SQL {
     // but whose follow-up never finished (P2-1). Order level, as the refund
     // follow-up decides. Only orders the lifecycle could move to REFUNDED
     // count as unmoved; a CANCELLED/FAILED order is complete once a refund
-    // money event exists (R2.7).
+    // money event exists (R2.7). Driven from the refund rows, grouped by order
+    // (RELIABILITY iq2-s5 #2): an order with no refund cannot be a lost follow-up.
     case "sig.refund_followup_lost":
       return sql`
-        SELECT count(*)::int AS n FROM orders o
-        WHERE o.org_id = ${orgId}
-          AND EXISTS (SELECT 1 FROM payments p WHERE p.org_id = o.org_id AND p.order_id = o.id AND p.status IN ${EVER_CAPTURED})
-          AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.org_id = o.org_id AND p.order_id = o.id AND p.status IN ('CAPTURED', 'PARTIALLY_REFUNDED'))
-          AND (SELECT max(r.created_at) FROM refunds r WHERE r.org_id = o.org_id AND r.order_id = o.id) < now() - interval '10 minutes'
-          AND (
-            o.status IN ${REFUNDABLE_ORDER_STATUSES}
-            OR (
-              o.status IN ('CANCELLED', 'FAILED')
-              AND NOT EXISTS (
-                SELECT 1 FROM order_events e
-                WHERE e.org_id = o.org_id AND e.order_id = o.id
-                  AND (e.metadata->>'refundId' IS NOT NULL OR e.reason LIKE 'Refund%' OR e.reason LIKE 'Part refunded%')
+        SELECT count(*)::int AS n FROM (
+          SELECT o.id FROM refunds r
+          JOIN orders o ON o.id = r.order_id AND o.org_id = r.org_id
+          WHERE r.org_id = ${orgId}
+          GROUP BY o.id, o.org_id, o.status
+          HAVING max(r.created_at) < now() - interval '10 minutes'
+            AND EXISTS (SELECT 1 FROM payments p WHERE p.org_id = o.org_id AND p.order_id = o.id AND p.status IN ${EVER_CAPTURED})
+            AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.org_id = o.org_id AND p.order_id = o.id AND p.status IN ('CAPTURED', 'PARTIALLY_REFUNDED'))
+            AND (
+              o.status IN ${REFUNDABLE_ORDER_STATUSES}
+              OR (
+                o.status IN ('CANCELLED', 'FAILED')
+                AND NOT EXISTS (
+                  SELECT 1 FROM order_events e
+                  WHERE e.org_id = o.org_id AND e.order_id = o.id
+                    AND (e.metadata->>'refundId' IS NOT NULL OR e.reason LIKE 'Refund%' OR e.reason LIKE 'Part refunded%')
+                )
               )
             )
-          )`;
+        ) lost`;
 
     // An unpaid order older than 10 min with no items or no payment row (P2-3).
     case "sig.half_order":

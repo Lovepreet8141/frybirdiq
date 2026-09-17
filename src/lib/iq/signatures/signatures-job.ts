@@ -12,7 +12,10 @@
  * 2. decides each rule (`pre-refund.ts`);
  * 3. in one fenced chunk, writes a DETECTION for each FIRED rule under its
  *    stable key `sig:<ruleId>`, and expires the ACTIVE finding of each CLEAR
- *    rule. A rule that timed out is not touched (counted `rule_timeout`).
+ *    rule. A rule that timed out is not touched (counted `rule_timeout`), and
+ *    the run then ends PARTIAL with reason RULE_TIMEOUT: a rule that always
+ *    times out has stopped detecting, so it must fail loudly, not look
+ *    COMPLETE (RELIABILITY iq2-s5 #1).
  *
  * Signatures are exact row-state checks, not figures scored for trust:
  * their trust is NOT_MEASURED, and they are never trust-gated (§2).
@@ -31,6 +34,15 @@ export type SignatureWriter = {
   readonly writeInsight: (insight: InsightOf<"DETECTION">, options: { readonly asOf: string }) => Promise<{ readonly outcome: string }>;
   readonly expireInsights: (requests: readonly SignatureExpireRequest[]) => Promise<{ readonly expired: number }>;
 };
+
+/**
+ * The body's result: the runner's JobRunResult, plus PARTIAL with reason
+ * RULE_TIMEOUT. That reason is new to the runner (src/lib/jobs/context.ts,
+ * AUTOMATION-ARCHITECT): a counted failure, HTTP 500, kept across retries.
+ */
+export type SignaturesRunResult =
+  | JobRunResult
+  | { readonly status: "PARTIAL"; readonly reason: "RULE_TIMEOUT"; readonly rowsWritten: number; readonly summary: Readonly<Record<string, number>> };
 
 export type SignaturesJobPorts = {
   readonly orgId: string;
@@ -97,12 +109,15 @@ export async function signatureInsight(
   };
 }
 
-export async function runMoneySignatures(ports: SignaturesJobPorts): Promise<JobRunResult> {
+export async function runMoneySignatures(ports: SignaturesJobPorts): Promise<SignaturesRunResult> {
+  // Before the reads (RELIABILITY iq2-s5 #3): a lower bound on every rule's
+  // snapshot, so a slower, older run can never carry a newer as_of.
+  const now = ports.now();
+  const asOf = istTimestamp(now);
+
   const readings = await ports.readSignatures(PRE_REFUND_SIGNATURES.map((rule) => rule.ruleId));
   const evaluation = evaluateSignatures(readings);
 
-  const now = ports.now();
-  const asOf = istTimestamp(now);
   const periodStart = istTimestamp(new Date(now.getTime() - 60 * 60_000));
   const fired = evaluation.outcomes.filter((o): o is Fired => o.status === "FIRED");
   const insights = await Promise.all(fired.map((o) => signatureInsight(o, { ...ports, asOf, periodStart })));
@@ -119,5 +134,6 @@ export async function runMoneySignatures(ports: SignaturesJobPorts): Promise<Job
   for (const outcome of writes) summary[`insight_${outcome.toLowerCase()}`] = (summary[`insight_${outcome.toLowerCase()}`] ?? 0) + 1;
   summary.insights_expired = expired;
   const rowsWritten = writes.filter((o) => o !== "NOOP").length + expired;
+  if ((summary.rule_timeout ?? 0) > 0) return { status: "PARTIAL", reason: "RULE_TIMEOUT", rowsWritten, summary };
   return { status: "COMPLETE", rowsWritten, summary };
 }

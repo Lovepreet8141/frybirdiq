@@ -58,14 +58,40 @@ describe("runMoneySignatures (IQ-2 S5 job body)", () => {
     expect(result).toEqual({ status: "COMPLETE", rowsWritten: 7, summary: { rules_fired: 2, rules_clear: 5, rule_timeout: 0, insight_inserted: 2, insights_expired: 5 } });
   });
 
-  it("a rule that timed out is neither written nor expired", async () => {
-    const readings = allReadings({ "sig.half_order": 1 });
+  it("a rule that timed out is neither written nor expired, and the run ends PARTIAL RULE_TIMEOUT (RELIABILITY #1)", async () => {
+    const readings = allReadings({ "sig.half_order": 1, "sig.double_capture": 1 });
     readings[3] = { ruleId: "sig.half_order", status: "RULE_TIMEOUT" };
     const { p, written, expired } = ports(readings);
     const result = await runMoneySignatures(p);
-    expect(written).toHaveLength(0);
+    // The rules that did evaluate still land.
+    expect(written.map((i) => i.dedupeKey)).toEqual(["sig:sig.double_capture"]);
     expect(expired[0]!.map((r) => r.dedupeKey)).not.toContain("sig:sig.half_order");
-    expect(result.status === "COMPLETE" && result.summary.rule_timeout).toBe(1);
+    expect(result).toEqual({
+      status: "PARTIAL",
+      reason: "RULE_TIMEOUT",
+      rowsWritten: 6,
+      summary: { rules_fired: 1, rules_clear: 5, rule_timeout: 1, insight_inserted: 1, insights_expired: 5 },
+    });
+  });
+
+  it("takes as_of before reading, so a slow read cannot carry a later as_of (RELIABILITY #3)", async () => {
+    const times = [new Date("2026-09-17T06:10:00Z"), new Date("2026-09-17T07:10:00Z")];
+    const { p, written } = ports(allReadings({ "sig.claim_stuck": 1 }));
+    const order: string[] = [];
+    const clocked: SignaturesJobPorts = {
+      ...p,
+      now: () => {
+        order.push("now");
+        return times.shift()!;
+      },
+      readSignatures: async (ids) => {
+        order.push("read");
+        return p.readSignatures(ids);
+      },
+    };
+    await runMoneySignatures(clocked);
+    expect(order).toEqual(["now", "read"]);
+    expect(written[0]!.period.end).toBe("2026-09-17T11:40:00+05:30");
   });
 
   it("keeps an unchanged finding's content hash stable from one hour to the next", async () => {
