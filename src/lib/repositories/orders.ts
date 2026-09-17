@@ -1428,11 +1428,16 @@ export async function completeDelivery(input: {
   }
 
   if (input.cashCollected) {
+    // `via: "delivery"` is the explicit delivery-cash authorization: a rider
+    // holds `delivery.complete`, not `orders.update`, and recordCashPayment
+    // accepts that only for a DELIVERY order OUT_FOR_DELIVERY, re-checked
+    // under its lock. The rider is the recorded actor (card ord-4).
     const paid = await recordCashPayment({
       orderId: order.id,
       actorUserId: input.actorUserId,
       actorRoles: input.actorRoles,
       orgId: input.orgId,
+      via: "delivery",
     });
     // "Already paid" is not a failure here — it means someone recorded it
     // first, and the delivery should still close.

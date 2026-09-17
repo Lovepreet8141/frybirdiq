@@ -87,7 +87,9 @@ const deliverySchema = z.object({
  *
  * `delivery.complete` rather than `orders.update` — the narrowest permission
  * that lets a rider finish the job they are doing, and one that cannot move
- * any other ticket in the shop.
+ * any other ticket in the shop. The cash taken at the door is booked under
+ * this same permission, but only for a delivery that is out for delivery —
+ * `completeDelivery` passes that authorization explicitly (card ord-4).
  */
 export async function completeDeliveryAction(input: unknown): Promise<StaffActionResult> {
   const parsed = deliverySchema.safeParse(input);

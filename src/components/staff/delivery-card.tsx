@@ -142,17 +142,16 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
             {delivery.isPaid ? "Delivered" : `Delivered · took ${formatINR(delivery.grandTotal)}`}
           </Button>
 
+          {/*
+            No "delivered without cash" button on an unpaid order: an order
+            cannot be closed until money is recorded against it, so that
+            button could only ever fail. A manager records the payment first;
+            the card then shows "Already paid" and plain "Delivered".
+          */}
           {!delivery.isPaid && (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending}
-              onClick={() => close(false)}
-              size="lg"
-              className="min-h-12 text-muted-foreground"
-            >
-              Delivered without taking cash
-            </Button>
+            <p className="text-center text-sm text-muted-foreground">
+              Customer paid another way? Leave this open and call the shop. A manager records the payment, then you can close it.
+            </p>
           )}
         </div>
       ) : (
