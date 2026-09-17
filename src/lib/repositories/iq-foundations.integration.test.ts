@@ -1,7 +1,7 @@
 /**
  * 0034_iq_foundations against the real local Supabase stack.
  *
- * Three things the migration promises and nothing in TypeScript can prove:
+ * Four things the migration promises and nothing in TypeScript can prove:
  *
  * 1. Grants and RLS. anon and authenticated hold no privilege on any iq_*
  *    table except SELECT on iq_insights, iq_recommendations and iq_actions,
@@ -14,8 +14,11 @@
  * 3. The CHECK backstops: no bare `value` on a FORECAST, no executable money
  *    kind, no approval-mode execution without a person's approval, strict
  *    auto-policy limits, and an org delete that still cascades through all of it.
+ * 4. RELIABILITY's schema conditions on iq_actions: one open action per
+ *    kind and params (C1), database-time status stamps (C6), an execute-by on
+ *    APPROVED and HANDOFF exits (B4), and a lease while EXECUTING (C4).
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -45,6 +48,7 @@ const STAFF_READABLE = new Set(["iq_insights", "iq_recommendations", "iq_actions
 const PRIVILEGES = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"] as const;
 
 const HASH = "a".repeat(64);
+const randomHash = () => createHash("sha256").update(randomUUID()).digest("hex");
 const HOUR = 3600_000;
 
 /** Postgres SQLSTATE from a failed Drizzle query (drizzle wraps the driver error in `cause`). */
@@ -169,9 +173,13 @@ describe("0034 — grants and row-level security", () => {
     const rows = await db().execute<{ granted: boolean }>(sql`
       SELECT has_function_privilege(r.role, f.fn, 'EXECUTE') AS granted
       FROM unnest(ARRAY['anon', 'authenticated']) AS r(role)
-      CROSS JOIN unnest(ARRAY['public.iq_insights_freeze_referenced()', 'public.iq_recommendations_reference_insights()']) AS f(fn)
+      CROSS JOIN unnest(ARRAY[
+        'public.iq_insights_freeze_referenced()',
+        'public.iq_recommendations_reference_insights()',
+        'public.iq_actions_stamp_status_change()'
+      ]) AS f(fn)
     `);
-    expect(rows.map((r) => r.granted)).toEqual([false, false, false, false]);
+    expect(rows.map((r) => r.granted)).toEqual([false, false, false, false, false, false]);
   });
 });
 
@@ -358,7 +366,7 @@ describe("0034 — CHECK backstops and cascade", () => {
       tier: "A1",
       mode: "APPROVAL",
       status: "PENDING_APPROVAL",
-      paramsHash: HASH,
+      paramsHash: randomHash(),
       idempotencyKey: `act:${randomUUID()}`,
       origin: "test",
       approvalExpiresAt: new Date(Date.now() + HOUR),
@@ -397,7 +405,9 @@ describe("0034 — CHECK backstops and cascade", () => {
     expect(await sqlState(db().insert(iqActions).values(action({ mode: "AUTO", status: "QUEUED", approvalExpiresAt: null })))).toBe("23514");
     await db()
       .insert(iqActions)
-      .values(action({ tier: "A2", actionKind: "menu.mark_86", status: "APPROVED", approvedBy: randomUUID(), approvedAt: new Date() }));
+      .values(
+        action({ tier: "A2", actionKind: "menu.mark_86", status: "APPROVED", approvedBy: randomUUID(), approvedAt: new Date(), executeBy: new Date(Date.now() + HOUR) }),
+      );
   });
 
   it("auto policy limits are exactly { maxPerDay: 1..50 } and only A1 kinds get a policy", async () => {
@@ -448,6 +458,61 @@ describe("0034 — CHECK backstops and cascade", () => {
     } finally {
       await deleteTestOrg(stranger.orgId);
     }
+  });
+
+  it("only one open action per org, kind and params; a closed one does not block a new proposal (C1)", async () => {
+    const paramsHash = randomHash();
+    const [first] = await db().insert(iqActions).values(action({ paramsHash })).returning({ id: iqActions.id });
+    expect(await sqlState(db().insert(iqActions).values(action({ paramsHash })))).toBe("23505");
+    await db().update(iqActions).set({ status: "REJECTED" }).where(eq(iqActions.id, first!.id));
+    await db().insert(iqActions).values(action({ paramsHash }));
+  });
+
+  it("status_changed_at is database time and moves only when the status does (C6)", async () => {
+    const past = new Date("2020-01-01T00:00:00Z");
+    const [row] = await db()
+      .insert(iqActions)
+      .values(action({ statusChangedAt: past }))
+      .returning({ id: iqActions.id, statusChangedAt: iqActions.statusChangedAt });
+    expect(row!.statusChangedAt.getTime()).toBeGreaterThan(past.getTime());
+
+    const read = async () =>
+      (await db().select({ at: iqActions.statusChangedAt }).from(iqActions).where(eq(iqActions.id, row!.id)))[0]!.at.getTime();
+    const [dbNow] = await db().execute<{ t: string }>(sql`SELECT now()::text AS t`);
+    await db().update(iqActions).set({ errorCode: "noop", statusChangedAt: past }).where(eq(iqActions.id, row!.id));
+    expect(await read()).toBe(row!.statusChangedAt.getTime());
+    await db().update(iqActions).set({ status: "CANCELLED", statusChangedAt: past }).where(eq(iqActions.id, row!.id));
+    expect(await read()).toBeGreaterThanOrEqual(new Date(dbNow!.t).getTime());
+  });
+
+  it("APPROVED needs an execute-by, and APPROVED and HANDOFF rows can expire (B4)", async () => {
+    const approved = { tier: "A2", actionKind: "menu.mark_86", status: "APPROVED", approvedBy: randomUUID(), approvedAt: new Date() } as const;
+    expect(await sqlState(db().insert(iqActions).values(action(approved)))).toBe("23514");
+    const [row] = await db()
+      .insert(iqActions)
+      .values(action({ ...approved, executeBy: new Date(Date.now() + HOUR) }))
+      .returning({ id: iqActions.id });
+    await db().update(iqActions).set({ status: "EXPIRED" }).where(eq(iqActions.id, row!.id));
+
+    const handoff = { actionKind: "price.change", tier: "A3", mode: "HANDOFF", approvalExpiresAt: null } as const;
+    for (const status of ["EXPIRED", "SUPERSEDED", "CANCELLED"] as const) {
+      await db().insert(iqActions).values(action({ ...handoff, status }));
+    }
+  });
+
+  it("EXECUTING and UNDOING hold a lease; no other status does (C4, C5)", async () => {
+    const running = { tier: "A2", actionKind: "menu.mark_86", approvedBy: randomUUID(), approvedAt: new Date() } as const;
+    expect(await sqlState(db().insert(iqActions).values(action({ ...running, status: "EXECUTING" })))).toBe("23514");
+    const lease = { leaseOwner: randomUUID(), leaseExpiresAt: new Date(Date.now() + 300_000) };
+    const [row] = await db()
+      .insert(iqActions)
+      .values(action({ ...running, status: "EXECUTING", ...lease }))
+      .returning({ id: iqActions.id });
+    // Leaving EXECUTING without releasing the lease is refused.
+    expect(await sqlState(db().update(iqActions).set({ status: "SUCCEEDED" }).where(eq(iqActions.id, row!.id)))).toBe("23514");
+    await db().update(iqActions).set({ status: "SUCCEEDED", leaseOwner: null, leaseExpiresAt: null }).where(eq(iqActions.id, row!.id));
+    await db().update(iqActions).set({ status: "UNDOING", ...lease }).where(eq(iqActions.id, row!.id));
+    await db().update(iqActions).set({ status: "UNDO_FAILED", leaseOwner: null, leaseExpiresAt: null }).where(eq(iqActions.id, row!.id));
   });
 
   it("forecast intervals are ordered and non-negative", async () => {

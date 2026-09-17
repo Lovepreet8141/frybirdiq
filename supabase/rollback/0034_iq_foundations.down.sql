@@ -1,5 +1,5 @@
 -- Hand-run only. Reverses 0034: drops the seven iq_* tables, their triggers,
--- policies and grants (all go with the tables), and the two trigger functions.
+-- policies and grants (all go with the tables), and the three trigger functions.
 --
 -- Loses every row in them: job runs, insights, forecasts, recommendations,
 -- actions (including approvals and undo records), outcomes and auto
@@ -27,6 +27,7 @@ DROP TABLE IF EXISTS "iq_forecasts";
 DROP TABLE IF EXISTS "iq_insights";
 DROP TABLE IF EXISTS "iq_job_runs";
 
+DROP FUNCTION IF EXISTS public.iq_actions_stamp_status_change();
 DROP FUNCTION IF EXISTS public.iq_recommendations_reference_insights();
 DROP FUNCTION IF EXISTS public.iq_insights_freeze_referenced();
 

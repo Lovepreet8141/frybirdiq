@@ -80,7 +80,36 @@ export const IQ_ACTION_STATUSES = [
   "CANCELLED",
   "UNDONE",
   "HANDOFF",
+  // RELIABILITY C5: a compensating undo that does not fit one transaction.
+  "UNDOING",
+  "UNDO_FAILED",
 ] as const;
+/** Statuses that block a duplicate proposal (automation cooldown.ts OPEN). */
+export const IQ_OPEN_ACTION_STATUSES = ["QUEUED", "PENDING_APPROVAL", "APPROVED", "EXECUTING", "HANDOFF"] as const;
+/**
+ * The statuses each execution mode may hold. A superset of what
+ * automation/state-machine.ts reaches today: it already admits RELIABILITY's
+ * B4 exits (APPROVED → EXPIRED | CANCELLED, HANDOFF → EXPIRED | SUPERSEDED) and
+ * C5 undo states, so the pure fix lands without a second migration.
+ */
+export const IQ_MODE_STATUSES = {
+  AUTO: ["QUEUED", "EXECUTING", "SUCCEEDED", "FAILED", "CANCELLED", "UNDOING", "UNDONE", "UNDO_FAILED"],
+  APPROVAL: [
+    "PENDING_APPROVAL",
+    "APPROVED",
+    "EXECUTING",
+    "SUCCEEDED",
+    "FAILED",
+    "REJECTED",
+    "EXPIRED",
+    "SUPERSEDED",
+    "CANCELLED",
+    "UNDOING",
+    "UNDONE",
+    "UNDO_FAILED",
+  ],
+  HANDOFF: ["HANDOFF", "CANCELLED", "EXPIRED", "SUPERSEDED"],
+} as const;
 export const IQ_UNDO_KINDS = ["NONE", "REVERT", "COMPENSATING"] as const;
 export const IQ_OUTCOME_SUBJECTS = ["ACTION", "RECOMMENDATION", "FORECAST"] as const;
 export const IQ_OUTCOME_VERDICTS = ["WITHIN", "BETTER", "WORSE", "INCONCLUSIVE", "DATA_MISSING"] as const;
@@ -421,6 +450,8 @@ export const iqActions = pgTable(
     /** Decided once, at creation (automation/policy.ts). */
     mode: text("mode").notNull(),
     status: text("status").notNull(),
+    /** Database time of the last status change, set by trigger; the cooldown reads it (RELIABILITY B2/B3). */
+    statusChangedAt: timestamp("status_changed_at", { withTimezone: true }).notNull().defaultNow(),
     params: jsonb("params").$type<Record<string, unknown>>().notNull().default({}),
     paramsHash: text("params_hash").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
@@ -432,11 +463,16 @@ export const iqActions = pgTable(
     approvedBy: uuid("approved_by"),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     approvalExpiresAt: timestamp("approval_expires_at", { withTimezone: true }),
+    /** An APPROVED action not started by then expires instead of running on stale params (RELIABILITY B4). */
+    executeBy: timestamp("execute_by", { withTimezone: true }),
     decidedBy: uuid("decided_by"),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     attempt: integer("attempt").notNull().default(0),
+    /** Held while EXECUTING or UNDOING; a stale sweep finds expired leases (RELIABILITY C4). */
+    leaseOwner: uuid("lease_owner"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
     targetEntity: text("target_entity"),
     targetId: text("target_id"),
     before: jsonb("before").$type<Record<string, unknown>>(),
@@ -468,6 +504,18 @@ export const iqActions = pgTable(
       .on(table.orgId, table.approvalExpiresAt)
       .where(sql`${table.status} = 'PENDING_APPROVAL'`),
     index("iq_actions_recommendation_idx").on(table.recommendationId),
+    // RELIABILITY C1: two runs proposing the same thing cannot both insert; the loser treats 23505 as a no-op.
+    uniqueIndex("iq_actions_open_params_unique")
+      .on(table.orgId, table.actionKind, table.paramsHash)
+      .where(sql`${table.status} IN (${list(IQ_OPEN_ACTION_STATUSES)})`),
+    index("iq_actions_cooldown_idx").on(table.orgId, table.actionKind, table.paramsHash, table.statusChangedAt.desc()),
+    // RELIABILITY C2: counts today's automatic executions of a kind while the policy row is locked.
+    index("iq_actions_auto_usage_idx")
+      .on(table.orgId, table.actionKind, table.locationId, table.createdAt)
+      .where(sql`${table.mode} = 'AUTO'`),
+    index("iq_actions_stale_lease_idx")
+      .on(table.leaseExpiresAt)
+      .where(sql`${table.status} IN ('EXECUTING', 'UNDOING')`),
     check("iq_actions_tier_check", sql`${table.tier} IN (${list(IQ_TIERS)})`),
     check("iq_actions_mode_check", sql`${table.mode} IN (${list(IQ_EXECUTION_MODES)})`),
     check("iq_actions_status_check", sql`${table.status} IN (${list(IQ_ACTION_STATUSES)})`),
@@ -480,19 +528,24 @@ export const iqActions = pgTable(
           OR (${table.tier} = 'A2' AND ${table.mode} = 'APPROVAL')
           OR (${table.tier} = 'A3' AND ${table.mode} = 'HANDOFF')`,
     ),
-    // state-machine.ts TRANSITIONS: the statuses each mode can ever reach. A3 is HANDOFF or CANCELLED only.
+    // IQ_MODE_STATUSES. A3 (HANDOFF mode) is never executed.
     check(
       "iq_actions_mode_status_check",
-      sql`(${table.mode} = 'AUTO' AND ${table.status} IN ('QUEUED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'UNDONE'))
-          OR (${table.mode} = 'APPROVAL' AND ${table.status} IN ('PENDING_APPROVAL', 'APPROVED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'REJECTED', 'EXPIRED', 'SUPERSEDED', 'CANCELLED', 'UNDONE'))
-          OR (${table.mode} = 'HANDOFF' AND ${table.status} IN ('HANDOFF', 'CANCELLED'))`,
+      sql`(${table.mode} = 'AUTO' AND ${table.status} IN (${list(IQ_MODE_STATUSES.AUTO)}))
+          OR (${table.mode} = 'APPROVAL' AND ${table.status} IN (${list(IQ_MODE_STATUSES.APPROVAL)}))
+          OR (${table.mode} = 'HANDOFF' AND ${table.status} IN (${list(IQ_MODE_STATUSES.HANDOFF)}))`,
     ),
     check("iq_actions_approval_expiry_check", sql`${table.mode} <> 'APPROVAL' OR ${table.approvalExpiresAt} IS NOT NULL`),
     // An approved-mode action past PENDING_APPROVAL on the execute path was approved by a person.
     check(
       "iq_actions_approved_by_check",
-      sql`${table.mode} <> 'APPROVAL' OR ${table.status} NOT IN ('APPROVED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'UNDONE')
+      sql`${table.mode} <> 'APPROVAL' OR ${table.status} NOT IN ('APPROVED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'UNDOING', 'UNDONE', 'UNDO_FAILED')
           OR (${table.approvedBy} IS NOT NULL AND ${table.approvedAt} IS NOT NULL)`,
+    ),
+    check("iq_actions_execute_by_check", sql`${table.status} <> 'APPROVED' OR ${table.executeBy} IS NOT NULL`),
+    check(
+      "iq_actions_lease_check",
+      sql`(${table.status} IN ('EXECUTING', 'UNDOING')) = (${table.leaseOwner} IS NOT NULL AND ${table.leaseExpiresAt} IS NOT NULL)`,
     ),
     // An automatic A1 runs only under a named policy version; nothing else carries one.
     check(

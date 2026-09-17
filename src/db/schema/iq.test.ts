@@ -15,6 +15,7 @@ import {
   IQ_CLAIM_TYPES,
   IQ_EXECUTABLE_KINDS,
   IQ_EXECUTION_MODES,
+  IQ_MODE_STATUSES,
   IQ_SUBJECT_KINDS,
   IQ_TIERS,
   IQ_UNITS,
@@ -47,8 +48,11 @@ describe("iq schema vocabularies match the engine and automation code", () => {
     expect(sorted(IQ_TIERS)).toEqual(sorted(ActionTierSchema.options));
   });
 
-  it("action statuses and execution modes", () => {
-    expect(sorted(IQ_ACTION_STATUSES)).toEqual(sorted(ACTION_STATUSES));
+  // The database admits RELIABILITY's B4/C5 statuses ahead of the state
+  // machine (iq0-s2b), so these are subset checks: every status the code can
+  // produce must be storable. Tighten to equality once the pure side lands.
+  it("every action status and execution mode the code uses is storable", () => {
+    expect(IQ_ACTION_STATUSES).toEqual(expect.arrayContaining([...ACTION_STATUSES]));
     expect(sorted(IQ_EXECUTION_MODES)).toEqual(sorted(EXECUTION_MODES));
   });
 
@@ -61,14 +65,12 @@ describe("iq schema vocabularies match the engine and automation code", () => {
     expect(IQ_EXECUTABLE_KINDS).toEqual(expected);
   });
 
-  it("the mode/status CHECK in 0034 lists exactly the statuses the state machine can reach", () => {
-    // Literal copy of iq_actions_mode_status_check; update both together.
-    const check = {
-      AUTO: ["QUEUED", "EXECUTING", "SUCCEEDED", "FAILED", "CANCELLED", "UNDONE"],
-      APPROVAL: ["PENDING_APPROVAL", "APPROVED", "EXECUTING", "SUCCEEDED", "FAILED", "REJECTED", "EXPIRED", "SUPERSEDED", "CANCELLED", "UNDONE"],
-      HANDOFF: ["HANDOFF", "CANCELLED"],
-    } as const;
-    for (const mode of EXECUTION_MODES) expect(sorted(check[mode])).toEqual(reachable(mode));
+  it("the mode/status CHECK admits every status the state machine can reach in that mode", () => {
+    for (const mode of EXECUTION_MODES) expect(IQ_MODE_STATUSES[mode]).toEqual(expect.arrayContaining(reachable(mode)));
+  });
+
+  it("every mode's statuses are known action statuses", () => {
+    for (const mode of EXECUTION_MODES) expect(IQ_ACTION_STATUSES).toEqual(expect.arrayContaining([...IQ_MODE_STATUSES[mode]]));
   });
 
   it("the tier/mode CHECK in 0034 matches MODES_FOR_TIER", () => {

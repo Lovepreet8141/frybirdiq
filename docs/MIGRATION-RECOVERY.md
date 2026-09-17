@@ -229,8 +229,9 @@ decision `dec-2`.
 - **What it does (FACT):** creates seven tables — `iq_job_runs`,
   `iq_insights`, `iq_forecasts`, `iq_recommendations`, `iq_actions`,
   `iq_outcomes`, `iq_auto_policies` — with text + CHECK vocabularies (no pg
-  enums), two trigger functions (freeze a referenced insight; mark insights
-  referenced when a recommendation is inserted), RLS enabled and forced on all
+  enums), three trigger functions (freeze a referenced insight; mark insights
+  referenced when a recommendation is inserted; stamp
+  `iq_actions.status_changed_at` with database time), RLS enabled and forced on all
   seven, `REVOKE ALL` from `PUBLIC`/`anon`/`authenticated`, and `GRANT SELECT`
   to `authenticated` on `iq_insights`, `iq_recommendations`, `iq_actions` only,
   each with an OWNER/ADMIN/MANAGER read policy. No existing table, row or
@@ -238,11 +239,21 @@ decision `dec-2`.
 - **Down file (FACT):** `supabase/rollback/0034_iq_foundations.down.sql`, one
   `BEGIN`/`COMMIT`, drops the seven tables child-first without `CASCADE`, then
   both functions. Policies and grants go with the tables.
-- **Tested locally (FACT, 2026-09-17, local Postgres 17.6):** applied with
-  `supabase migration up --local` → `iq-foundations.integration.test.ts` 20/20 →
-  down file with `ON_ERROR_STOP` + journal row deleted → 0 `iq_*` tables and
-  functions left, test 16 failed / 4 skipped → re-applied → 20/20. Full
-  integration suite 19 files / 135 tests green after re-apply.
+- **Tested locally (FACT, 2026-09-17, local Postgres 17.6, after folding in
+  RELIABILITY's iq0-s2r conditions):** applied with `supabase migration up
+  --local` → `iq-foundations.integration.test.ts` 24/24 → down file with
+  `ON_ERROR_STOP` + journal row deleted → 0 `iq_*` tables and functions left,
+  test 20 failed / 4 skipped → re-applied → 24/24. Full integration suite
+  19 files / 139 tests green after re-apply.
+- **RELIABILITY conditions held by the schema (FACT):** B1 `mode` stored with
+  tier/mode and auto-policy CHECKs; B4 `execute_by` required on APPROVED, and
+  HANDOFF rows may be EXPIRED or SUPERSEDED; C1 partial unique index on open
+  actions per org, kind and params hash; C4/C5 `lease_owner` +
+  `lease_expires_at` required exactly while EXECUTING or UNDOING, with a stale
+  lease index and UNDOING/UNDO_FAILED statuses; C6 `status_changed_at` set by
+  trigger from `now()`. C2 (per-day auto limit) and C3 (policy re-check) are
+  repository work in S7: the schema adds only `iq_actions_auto_usage_idx` and
+  the org-matched policy FK.
 - **Not tested (FACT):** the production path, `pnpm db:migrate` (drizzle-orm
   migrator, statement-breakpoint split, one transaction). The local stack is
   CLI-managed, so it was applied by the Supabase CLI instead.

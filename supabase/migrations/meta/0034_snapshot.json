@@ -1,5 +1,5 @@
 {
-  "id": "4173fb10-53e8-4162-8688-d80155e1acff",
+  "id": "d3a03f3c-94b9-4fb8-912d-3b896363b9b5",
   "prevId": "45a5903e-e159-4799-9c1b-2892fb296130",
   "version": "7",
   "dialect": "postgresql",
@@ -8967,6 +8967,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "status_changed_at": {
+          "name": "status_changed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
         "params": {
           "name": "params",
           "type": "jsonb",
@@ -9028,6 +9035,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "execute_by": {
+          "name": "execute_by",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "decided_by": {
           "name": "decided_by",
           "type": "uuid",
@@ -9058,6 +9071,18 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
+        },
+        "lease_owner": {
+          "name": "lease_owner",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "target_entity": {
           "name": "target_entity",
@@ -9211,6 +9236,117 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "iq_actions_open_params_unique": {
+          "name": "iq_actions_open_params_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "action_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "params_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"iq_actions\".\"status\" IN ('QUEUED', 'PENDING_APPROVAL', 'APPROVED', 'EXECUTING', 'HANDOFF')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "iq_actions_cooldown_idx": {
+          "name": "iq_actions_cooldown_idx",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "action_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "params_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status_changed_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "iq_actions_auto_usage_idx": {
+          "name": "iq_actions_auto_usage_idx",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "action_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "location_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"iq_actions\".\"mode\" = 'AUTO'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "iq_actions_stale_lease_idx": {
+          "name": "iq_actions_stale_lease_idx",
+          "columns": [
+            {
+              "expression": "lease_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"iq_actions\".\"status\" IN ('EXECUTING', 'UNDOING')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -9320,7 +9456,7 @@
         },
         "iq_actions_status_check": {
           "name": "iq_actions_status_check",
-          "value": "\"iq_actions\".\"status\" IN ('QUEUED', 'PENDING_APPROVAL', 'APPROVED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'REJECTED', 'EXPIRED', 'SUPERSEDED', 'CANCELLED', 'UNDONE', 'HANDOFF')"
+          "value": "\"iq_actions\".\"status\" IN ('QUEUED', 'PENDING_APPROVAL', 'APPROVED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'REJECTED', 'EXPIRED', 'SUPERSEDED', 'CANCELLED', 'UNDONE', 'HANDOFF', 'UNDOING', 'UNDO_FAILED')"
         },
         "iq_actions_kind_tier_check": {
           "name": "iq_actions_kind_tier_check",
@@ -9332,7 +9468,7 @@
         },
         "iq_actions_mode_status_check": {
           "name": "iq_actions_mode_status_check",
-          "value": "(\"iq_actions\".\"mode\" = 'AUTO' AND \"iq_actions\".\"status\" IN ('QUEUED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'UNDONE'))\n          OR (\"iq_actions\".\"mode\" = 'APPROVAL' AND \"iq_actions\".\"status\" IN ('PENDING_APPROVAL', 'APPROVED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'REJECTED', 'EXPIRED', 'SUPERSEDED', 'CANCELLED', 'UNDONE'))\n          OR (\"iq_actions\".\"mode\" = 'HANDOFF' AND \"iq_actions\".\"status\" IN ('HANDOFF', 'CANCELLED'))"
+          "value": "(\"iq_actions\".\"mode\" = 'AUTO' AND \"iq_actions\".\"status\" IN ('QUEUED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'UNDOING', 'UNDONE', 'UNDO_FAILED'))\n          OR (\"iq_actions\".\"mode\" = 'APPROVAL' AND \"iq_actions\".\"status\" IN ('PENDING_APPROVAL', 'APPROVED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'REJECTED', 'EXPIRED', 'SUPERSEDED', 'CANCELLED', 'UNDOING', 'UNDONE', 'UNDO_FAILED'))\n          OR (\"iq_actions\".\"mode\" = 'HANDOFF' AND \"iq_actions\".\"status\" IN ('HANDOFF', 'CANCELLED', 'EXPIRED', 'SUPERSEDED'))"
         },
         "iq_actions_approval_expiry_check": {
           "name": "iq_actions_approval_expiry_check",
@@ -9340,7 +9476,15 @@
         },
         "iq_actions_approved_by_check": {
           "name": "iq_actions_approved_by_check",
-          "value": "\"iq_actions\".\"mode\" <> 'APPROVAL' OR \"iq_actions\".\"status\" NOT IN ('APPROVED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'UNDONE')\n          OR (\"iq_actions\".\"approved_by\" IS NOT NULL AND \"iq_actions\".\"approved_at\" IS NOT NULL)"
+          "value": "\"iq_actions\".\"mode\" <> 'APPROVAL' OR \"iq_actions\".\"status\" NOT IN ('APPROVED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'UNDOING', 'UNDONE', 'UNDO_FAILED')\n          OR (\"iq_actions\".\"approved_by\" IS NOT NULL AND \"iq_actions\".\"approved_at\" IS NOT NULL)"
+        },
+        "iq_actions_execute_by_check": {
+          "name": "iq_actions_execute_by_check",
+          "value": "\"iq_actions\".\"status\" <> 'APPROVED' OR \"iq_actions\".\"execute_by\" IS NOT NULL"
+        },
+        "iq_actions_lease_check": {
+          "name": "iq_actions_lease_check",
+          "value": "(\"iq_actions\".\"status\" IN ('EXECUTING', 'UNDOING')) = (\"iq_actions\".\"lease_owner\" IS NOT NULL AND \"iq_actions\".\"lease_expires_at\" IS NOT NULL)"
         },
         "iq_actions_auto_policy_check": {
           "name": "iq_actions_auto_policy_check",
