@@ -64,6 +64,7 @@ export {
   type PersonalDataFinding,
   type ParsedInsights,
 } from "./insight";
+export { MAX_PARAM_KEYS, ActionParamsSchema, parseActionParams, actionParamsHash, type ActionParams } from "./params";
 export { canonicalJson, contentHashInput, sha256Hex, computeContentHash, hasValidContentHash } from "./content-hash";
 export {
   present,

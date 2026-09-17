@@ -5,7 +5,12 @@ import "server-only";
  *
  * hive/reviews/iq-0 DESIGN.md §2 and DESIGN-v2-DELTA.md §2–§4, over 0034.
  *
- * `proposeRecommendation` is the only writer. In one fenced transaction it:
+ * `proposeRecommendation` is the only writer. Before anything is written it
+ * refuses an action kind outside the catalog, a tier that disagrees with the
+ * catalog, a kind still blocked by an owner decision, and params that are not
+ * a flat scalar record or that carry personal data; it computes the params
+ * hash itself from canonical params and never trusts a caller's (SECURITY
+ * review of ab9c45c, R1/R2). Then, in one fenced transaction, it:
  *   1. refuses a proposal still cooling down after the owner dismissed the
  *      same action (7 days) or let it expire (1 day) — same org, action kind
  *      and params hash, durations from automation/cooldown.ts;
@@ -25,8 +30,9 @@ import "server-only";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { iqRecommendations } from "@/db/schema";
+import { catalogEntry, isActionKind } from "@/lib/iq/automation/catalog";
 import { COOLDOWN_MS, type CooldownReason } from "@/lib/iq/automation/cooldown";
-import { Sha256HexSchema, magnitudeOf, type InsightOf } from "@/lib/iq/engine";
+import { actionParamsHash, magnitudeOf, parseActionParams, type InsightOf } from "@/lib/iq/engine";
 import { assertLease, writeInsight, type IqTx, type IqWriteLease } from "./iq-insights";
 
 export type RecommendationStatus = "PROPOSED" | "APPROVED" | "DISMISSED" | "EXPIRED" | "SUPERSEDED";
@@ -84,16 +90,23 @@ export async function recommendationHistory(
 }
 
 export type ProposeResult =
-  | { readonly outcome: "PROPOSED"; readonly recommendationId: string; readonly insightId: string; readonly supersededRecommendationIds: readonly string[] }
+  | {
+      readonly outcome: "PROPOSED";
+      readonly recommendationId: string;
+      readonly insightId: string;
+      readonly paramsHash: string;
+      readonly supersededRecommendationIds: readonly string[];
+    }
   | { readonly outcome: "NOOP"; readonly insightId: string }
   | { readonly outcome: "OPEN_DUPLICATE"; readonly openRecommendationId: string }
   | { readonly outcome: "COOLDOWN"; readonly reason: CooldownReason; readonly until: Date };
 
 export type ProposeInput = {
   readonly insight: InsightOf<"RECOMMENDATION">;
-  /** The action's parameters, and their hash — the identity the cooldown and the action row share. */
+  /** A flat record of scalars. Its sha256 over canonical JSON is the identity cooldown, duplicates and approval bind to. */
   readonly params: Readonly<Record<string, unknown>>;
-  readonly paramsHash: string;
+  /** Optional: a hash the caller already holds. It is compared with the computed one, never used in its place. */
+  readonly expectedParamsHash?: string;
 };
 
 function isUniqueViolation(error: unknown): boolean {
@@ -103,11 +116,30 @@ function isUniqueViolation(error: unknown): boolean {
 
 export async function proposeRecommendation(tx: IqTx, lease: IqWriteLease, input: ProposeInput): Promise<ProposeResult> {
   await assertLease(tx, lease);
-  const { insight, params, paramsHash } = input;
+  const { insight } = input;
   if (insight.claimType !== "RECOMMENDATION") throw new Error("iq-recommendations: insight is not a RECOMMENDATION");
-  Sha256HexSchema.parse(paramsHash);
   const orgId = lease.orgId;
   const { actionKind } = insight.payload;
+
+  if (!isActionKind(actionKind)) throw new Error(`iq-recommendations: ${actionKind} is not in the action catalog`);
+  const entry = catalogEntry(actionKind);
+  if (entry.tier !== insight.payload.tier) {
+    throw new Error(`iq-recommendations: ${actionKind} is tier ${entry.tier} in the catalog, not ${insight.payload.tier}`);
+  }
+  if (entry.blockedBy !== null) {
+    throw new Error(`iq-recommendations: ${actionKind} cannot be proposed until owner decision ${entry.blockedBy}`);
+  }
+
+  let params: ReturnType<typeof parseActionParams>;
+  try {
+    params = parseActionParams(input.params);
+  } catch (error) {
+    throw new Error(`iq-recommendations: ${(error as Error).message}`);
+  }
+  const paramsHash = await actionParamsHash(params);
+  if (input.expectedParamsHash !== undefined && input.expectedParamsHash !== paramsHash) {
+    throw new Error("iq-recommendations: the caller's params hash does not match the params");
+  }
 
   const history = await recommendationHistory(orgId, actionKind, paramsHash, tx);
   // An open row under the same dedupe key is this claim's earlier version:
@@ -160,6 +192,7 @@ export async function proposeRecommendation(tx: IqTx, lease: IqWriteLease, input
       outcome: "PROPOSED",
       recommendationId: row.id,
       insightId: written.insightId,
+      paramsHash,
       supersededRecommendationIds: written.supersededRecommendationIds ?? [],
     };
   } catch (error) {

@@ -140,7 +140,10 @@ async function supersedeRecommendationsCiting(tx: IqTx, orgId: string, insightId
           OR (jsonb_typeof(i.payload -> 'evidenceInsightIds') = 'array'
               AND EXISTS (
                 SELECT 1 FROM jsonb_array_elements_text(i.payload -> 'evidenceInsightIds') AS e(value)
-                WHERE e.value::uuid = ${insightId}::uuid))
+                -- CASE evaluates in order, so one malformed stored id cannot fail the cast.
+                WHERE CASE WHEN e.value ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                           THEN e.value::uuid = ${insightId}::uuid
+                           ELSE false END))
         )
       FOR UPDATE OF r
     ), closed AS (
