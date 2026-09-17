@@ -1414,6 +1414,29 @@ export async function listDeliveries(orgId: string): Promise<readonly StaffOrder
 }
 
 /**
+ * Why `completeDelivery` refused. A caller decides what to show from this,
+ * never from the message text, which is free to change.
+ *
+ * - `ALREADY_CLOSED`: the order is COMPLETED — another device closed it first.
+ *   The delivery is closed, which is what the rider wanted.
+ * - `NOT_OUT_FOR_DELIVERY`: any other status; it has not left the shop, or is
+ *   past the point a rider can close it.
+ * - `PAYMENT_REFUSED`: the cash could not be recorded, so nothing was closed.
+ * - `TRANSITION_REFUSED`: the status change itself was refused.
+ */
+export type CompleteDeliveryCode =
+  | "NOT_FOUND"
+  | "NOT_A_DELIVERY"
+  | "NOT_OUT_FOR_DELIVERY"
+  | "ALREADY_CLOSED"
+  | "PAYMENT_REFUSED"
+  | "TRANSITION_REFUSED";
+
+export type CompleteDeliveryResult = { ok: true } | { ok: false; code: CompleteDeliveryCode; error: string };
+
+const ALREADY_CLOSED_MESSAGE = "That delivery is already closed.";
+
+/**
  * Closes a delivery: records the cash taken at the door and marks it delivered.
  *
  * One action, because at the door they are one event. Splitting them would let
@@ -1422,6 +1445,9 @@ export async function listDeliveries(orgId: string): Promise<readonly StaffOrder
  *
  * Deliberately narrow: it only touches an order that is already out for
  * delivery. A rider's phone cannot move any other ticket in the shop.
+ *
+ * Every refusal carries a `code` as well as its message, so a caller branches
+ * on the code and never on the wording (card ord-8).
  */
 export async function completeDelivery(input: {
   orderId: string;
@@ -1430,7 +1456,7 @@ export async function completeDelivery(input: {
   orgId: string;
   /** False when the customer had already paid some other way. */
   cashCollected: boolean;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<CompleteDeliveryResult> {
   const database = db();
   const [order] = await database
     .select()
@@ -1438,20 +1464,18 @@ export async function completeDelivery(input: {
     .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
     .limit(1);
 
-  if (!order) return { ok: false, error: "That delivery does not exist." };
+  if (!order) return { ok: false, code: "NOT_FOUND", error: "That delivery does not exist." };
 
   if (order.fulfilment !== "DELIVERY") {
-    return { ok: false, error: "That order is not a delivery." };
+    return { ok: false, code: "NOT_A_DELIVERY", error: "That order is not a delivery." };
+  }
+
+  if (order.status === "COMPLETED") {
+    return { ok: false, code: "ALREADY_CLOSED", error: ALREADY_CLOSED_MESSAGE };
   }
 
   if (order.status !== "OUT_FOR_DELIVERY") {
-    return {
-      ok: false,
-      error:
-        order.status === "COMPLETED"
-          ? "That delivery is already closed."
-          : "That order has not left the shop yet.",
-    };
+    return { ok: false, code: "NOT_OUT_FOR_DELIVERY", error: "That order has not left the shop yet." };
   }
 
   if (input.cashCollected) {
@@ -1479,16 +1503,29 @@ export async function completeDelivery(input: {
         .where(and(eq(orders.id, order.id), eq(orders.orgId, input.orgId)))
         .limit(1);
       if (current?.status === "COMPLETED") return { ok: true };
-      return { ok: false, error: paid.error };
+      return { ok: false, code: "PAYMENT_REFUSED", error: paid.error };
     }
   }
 
-  return advanceOrder({
+  const advanced = await advanceOrder({
     orderId: order.id,
     to: "COMPLETED",
     actorUserId: input.actorUserId,
     orgId: input.orgId,
   });
+  if (advanced.ok) return advanced;
+
+  // Refused after the first read passed. The usual reason is another device
+  // completing it in between (advanceOrder re-checks under its row lock), so
+  // re-read and name that case rather than passing on "An order that is
+  // completed cannot become completed."
+  const [after] = await database
+    .select({ status: orders.status })
+    .from(orders)
+    .where(and(eq(orders.id, order.id), eq(orders.orgId, input.orgId)))
+    .limit(1);
+  if (after?.status === "COMPLETED") return { ok: false, code: "ALREADY_CLOSED", error: ALREADY_CLOSED_MESSAGE };
+  return { ok: false, code: "TRANSITION_REFUSED", error: advanced.error };
 }
 
 /**
