@@ -17,11 +17,12 @@ import "server-only";
 import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { iqDailyTrust, organizations } from "@/db/schema";
-import { BUSINESS_TIMEZONE, addDays, startOfBusinessDay, endOfBusinessDay } from "@/lib/dates";
+import { BUSINESS_TIMEZONE, addDays, businessDate, startOfBusinessDay, endOfBusinessDay } from "@/lib/dates";
 import { type AnyMetricId, TRUST_SIGNAL_IDS, type TrustSignalId, businessDateSql } from "@/lib/iq/metrics";
 import {
   CLOCK_SKEW_LIMIT_MS,
   type MetricTrust,
+  MIDNIGHT_TOLERANCE_MS,
   PLACED_DRIFT_LIMIT_MS,
   PRICE_FRESHNESS_DAYS,
   type SignalScore,
@@ -39,7 +40,7 @@ import {
   metricTrust,
 } from "@/lib/iq/trust";
 import { hasPaidPayment } from "./analytics";
-import { assertBusinessDate, runLockedDayTransaction } from "./iq-facts";
+import { type DayLockOptions, assertBusinessDate, runLockedDayTransaction } from "./iq-facts";
 
 /** Version of the trust definitions written beside `iq_daily_trust` rows. */
 export const TRUST_DEFINITION_VERSION = 1;
@@ -54,9 +55,12 @@ async function one(tx: Reader, query: ReturnType<typeof sql>): Promise<Record<st
   return rows[0] ?? {};
 }
 
-export interface TrustDayOptions {
+export interface TrustDayOptions extends DayLockOptions {
   readonly jobRunId?: string | null;
-  /** The app's clock, for the T5 app-vs-database check. Defaults to now. */
+  /**
+   * The app's clock. Decides whether the date is today (IST), and is compared
+   * with the database clock for T5 — on today only. Defaults to now.
+   */
   readonly appNow?: Date;
 }
 
@@ -87,7 +91,13 @@ export async function scoreTrustDay(orgId: string, date: string, tx: Reader = db
         ) oi`,
   );
   const t1Total = n(t1.total) > 0n ? n(t1.total) : 0n;
-  const t1Covered = t1Total === 0n ? 0n : n(t1.covered) < 0n ? 0n : n(t1.covered) > t1Total ? t1Total : n(t1.covered);
+  const t1Raw = n(t1.covered);
+  const t1Covered = t1Total === 0n ? 0n : t1Raw < 0n ? 0n : t1Raw > t1Total ? t1Total : t1Raw;
+  if (t1Total > 0n && t1Covered !== t1Raw) {
+    console.warn(`iq-trust: T1 covered ${t1Raw} outside 0..${t1Total} for org ${orgId} on ${date}; clamped (negative line_taxable?)`);
+  } else if (t1Total === 0n && n(t1.total) < 0n) {
+    console.warn(`iq-trust: T1 total line value ${n(t1.total)} is negative for org ${orgId} on ${date}; scored as nothing measured`);
+  }
 
   // T1b and T2: SALE movements on the day.
   const moves = await one(
@@ -128,17 +138,27 @@ export async function scoreTrustDay(orgId: string, date: string, tx: Reader = db
   );
 
   // T5: rows anchored on the day, and org-level clock and timezone checks.
+  // business_date is the app clock before the insert, created_at the DB clock
+  // at the insert, so an order whose request spans IST midnight can differ by
+  // a day honestly. Count a mismatch only beyond MIDNIGHT_TOLERANCE_MS of it.
+  const createdDayStart = `((o.created_at AT TIME ZONE '${BUSINESS_TIMEZONE}')::date::timestamp AT TIME ZONE '${BUSINESS_TIMEZONE}')`;
+  const businessDateMismatch = sql`(o.business_date <> ${sql.raw(businessDateSql("o.created_at"))}
+    AND least(extract(epoch FROM o.created_at - ${sql.raw(createdDayStart)}),
+              extract(epoch FROM ${sql.raw(createdDayStart)} + interval '1 day' - o.created_at)) * 1000 > ${MIDNIGHT_TOLERANCE_MS})`;
   const appNow = opts.appNow ?? new Date();
+  // Clock skew and the timezone setting describe the system now, so they are
+  // stamped only on today's row; a historical recompute never inherits them.
+  const scoringToday = businessDate(appNow) === date;
   const t5 = await one(
     tx,
     sql`SELECT
           (SELECT count(*) FROM orders o WHERE o.org_id = ${orgId} AND o.created_at >= ${from} AND o.created_at < ${to})::int AS orders,
           (SELECT count(*) FROM orders o WHERE o.org_id = ${orgId} AND o.created_at >= ${from} AND o.created_at < ${to}
-             AND (o.business_date <> ${sql.raw(businessDateSql("o.created_at"))}
+             AND (${businessDateMismatch}
                   OR (o.placed_at IS NOT NULL AND abs(extract(epoch FROM o.placed_at - o.created_at)) * 1000 > ${PLACED_DRIFT_LIMIT_MS})
                   OR o.created_at > clock_timestamp()))::int AS bad_orders,
           (SELECT count(*) FROM orders o WHERE o.org_id = ${orgId} AND o.created_at >= ${from} AND o.created_at < ${to}
-             AND o.business_date <> ${sql.raw(businessDateSql("o.created_at"))})::int AS business_date_mismatch,
+             AND ${businessDateMismatch})::int AS business_date_mismatch,
           (SELECT count(*) FROM orders o WHERE o.org_id = ${orgId} AND o.created_at >= ${from} AND o.created_at < ${to}
              AND o.placed_at IS NOT NULL AND abs(extract(epoch FROM o.placed_at - o.created_at)) * 1000 > ${PLACED_DRIFT_LIMIT_MS})::int AS placed_drift,
           (SELECT count(*) FROM inventory_movements m WHERE m.org_id = ${orgId} AND m.occurred_at >= ${from} AND m.occurred_at < ${to})::int AS movements,
@@ -148,8 +168,8 @@ export async function scoreTrustDay(orgId: string, date: string, tx: Reader = db
           (SELECT o.timezone FROM ${organizations} o WHERE o.id = ${orgId}) AS timezone,
           (extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS db_now_ms`,
   );
-  const clockSkewMs = Math.abs(Number(t5.db_now_ms) - appNow.getTime());
-  const timezoneMismatch = t5.timezone !== BUSINESS_TIMEZONE;
+  const clockSkewMs = scoringToday ? Math.abs(Number(t5.db_now_ms) - appNow.getTime()) : 0;
+  const timezoneMismatch = scoringToday && t5.timezone !== BUSINESS_TIMEZONE;
   const t5Checked = BigInt(int(t5.orders) + int(t5.movements));
   const t5Clean = t5Checked - BigInt(int(t5.bad_orders) + int(t5.future_movements));
   const orgChecksPass = !timezoneMismatch && clockSkewMs <= CLOCK_SKEW_LIMIT_MS;
@@ -161,15 +181,19 @@ export async function scoreTrustDay(orgId: string, date: string, tx: Reader = db
           (count(*) FILTER (WHERE captured_n > 1))::int AS multi_captured,
           (count(*) FILTER (WHERE partial))::int AS partially_refunded,
           (count(*) FILTER (WHERE cancelled_no_refund))::int AS cancelled_captured_no_refund,
+          (count(*) FILTER (WHERE failed_captured))::int AS failed_with_capture,
           (count(*) FILTER (WHERE mismatch))::int AS captured_not_grand_total,
-          (count(*) FILTER (WHERE captured_n > 1 OR partial OR cancelled_no_refund OR mismatch))::int AS anomalous
+          (count(*) FILTER (WHERE captured_n > 1 OR partial OR cancelled_no_refund OR failed_captured OR mismatch))::int AS anomalous
         FROM (
           SELECT
             (SELECT count(*) FROM payments p WHERE p.order_id = o.id AND p.status = 'CAPTURED') AS captured_n,
             EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id AND p.status = 'PARTIALLY_REFUNDED') AS partial,
             (o.status = 'CANCELLED'
               AND EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id AND p.status IN ('CAPTURED', 'PARTIALLY_REFUNDED'))
+              -- TODO(ref-1): SUCCEEDED refunds only, once refunds carry a status.
               AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.order_id = o.id)) AS cancelled_no_refund,
+            (o.status = 'FAILED'
+              AND EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id AND p.status IN ('CAPTURED', 'PARTIALLY_REFUNDED'))) AS failed_captured,
             (o.status NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')
               AND EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id AND p.status IN ('CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED'))
               AND (SELECT coalesce(sum(p.amount), 0) FROM payments p WHERE p.order_id = o.id AND p.status IN ('CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED')) <> o.grand_total) AS mismatch
@@ -243,6 +267,7 @@ export async function scoreTrustDay(orgId: string, date: string, tx: Reader = db
         business_date_mismatch: int(t5.business_date_mismatch),
         placed_drift: int(t5.placed_drift),
         future_rows: int(t5.future_rows),
+        org_checks_applied: scoringToday ? 1 : 0,
         timezone_mismatch: timezoneMismatch ? 1 : 0,
         clock_skew_ms: clockSkewMs,
       },
@@ -257,6 +282,7 @@ export async function scoreTrustDay(orgId: string, date: string, tx: Reader = db
         multi_captured: int(t6.multi_captured),
         partially_refunded: int(t6.partially_refunded),
         cancelled_captured_no_refund: int(t6.cancelled_captured_no_refund),
+        failed_with_capture: int(t6.failed_with_capture),
         captured_not_grand_total: int(t6.captured_not_grand_total),
       },
     },
@@ -312,7 +338,7 @@ export async function computeTrustDay(orgId: string, date: string, opts: TrustDa
       })),
     );
     return scored;
-  });
+  }, opts);
   return { orgId, businessDate: date, definitionVersion: TRUST_DEFINITION_VERSION, scores, lockWaits, attempts };
 }
 

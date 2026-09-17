@@ -101,11 +101,17 @@ export function gradeWasteLogging(loggedDays: bigint, salesDays: bigint): TrustG
 export const CLOCK_SKEW_LIMIT_MS = 5_000;
 /** placed_at vs created_at beyond this is a T5 failure. */
 export const PLACED_DRIFT_LIMIT_MS = 120_000;
+/**
+ * A business_date one day off created_at is honest within this of IST
+ * midnight: the app clock may lag the database by CLOCK_SKEW_LIMIT_MS and a
+ * request may take up to PLACED_DRIFT_LIMIT_MS between the two stamps.
+ */
+export const MIDNIGHT_TOLERANCE_MS = CLOCK_SKEW_LIMIT_MS + PLACED_DRIFT_LIMIT_MS;
 
 /**
  * T5 clock and timezone sanity: rows that pass ÷ rows checked, with org-level
- * checks (timezone setting, app vs DB clock). Any failure is LOW. Nothing
- * checked and org checks pass is UNKNOWN.
+ * checks (timezone setting, app vs DB clock) applied to today only. Any
+ * failure is LOW. Nothing checked and org checks pass is UNKNOWN.
  */
 export function gradeClockSanity(cleanRows: bigint, checkedRows: bigint, orgChecksPass: boolean): TrustGrade {
   assertCounts(cleanRows, checkedRows);
@@ -117,8 +123,9 @@ export function gradeClockSanity(cleanRows: bigint, checkedRows: bigint, orgChec
 /**
  * T6 payment integrity: orders without an anomaly ÷ orders checked. Any
  * anomaly — more than one CAPTURED payment (D3), a partial refund, a
- * cancelled order with a capture and no refund, captured ≠ grand total — is
- * LOW (REVIEW required change 3).
+ * cancelled order with a capture and no refund, a FAILED order with a
+ * capture, captured ≠ grand total — is LOW (REVIEW required change 3). After
+ * dec-9 a partial refund may stop being a defect.
  */
 export function gradePaymentIntegrity(cleanOrders: bigint, checkedOrders: bigint): TrustGrade {
   assertCounts(cleanOrders, checkedOrders);

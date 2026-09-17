@@ -5,17 +5,20 @@
  * trust names its limiting signal (I2).
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, count, eq } from "drizzle-orm";
+import { and, count, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { iqDailyTrust, ingredientPrices } from "@/db/schema";
 import { paise } from "@/lib/money";
-import { computeTrustDay, getMetricTrust } from "./iq-trust";
+import { businessDate } from "@/lib/dates";
+import { DayLockBusyError } from "./iq-facts";
+import { computeTrustDay, getMetricTrust, trustDayLockKey } from "./iq-trust";
 import { createTestIngredient, createTestProduct, createTestRecipe, type TestOrg, warmPool } from "./__test-support__/fixtures";
 import {
   createTwoTestOrgs,
   istInstant,
   seedExpense,
   seedMovement,
+  seedRefund,
   seedSale,
   seedSaleMovements,
   seedWasteEntry,
@@ -25,6 +28,11 @@ import {
 const CLEAN = "2026-09-02";
 const DOUBLE = "2026-09-03";
 const SKEW = "2026-09-04";
+const STRADDLE = "2026-09-06";
+const T6_PARTIAL = "2026-09-10";
+const T6_CANCELLED = "2026-09-11";
+const T6_CAPTURED_REFUNDED = "2026-09-12";
+const T6_FAILED = "2026-09-13";
 
 async function price(orgId: string, ingredientId: string, at: Date) {
   await db().insert(ingredientPrices).values({
@@ -69,6 +77,17 @@ async function seed(org: TestOrg) {
     placedAt: istInstant(SKEW, "12:10"),
     lines: [{ productId: burger.id, unitPricePaise: 17_900n }],
   });
+
+  // STRADDLE: app clock still on the 5th when the DB stamped 00:00:30 on the 6th.
+  await seedSale(org, { at: istInstant(STRADDLE, "00:00:30"), businessDate: "2026-09-05", placedAt: istInstant(STRADDLE, "00:00:25"), lines: [{ productId: burger.id, unitPricePaise: 17_900n }] });
+
+  // T6 anomalies, one order per day.
+  const partial = await seedSale(org, { at: istInstant(T6_PARTIAL), lines: [{ productId: burger.id, unitPricePaise: 17_900n }] });
+  await seedRefund(partial.payments[0]!, { at: istInstant(T6_PARTIAL, "13:00"), amountPaise: 5_000n });
+  await seedSale(org, { at: istInstant(T6_CANCELLED), status: "CANCELLED", lines: [{ productId: burger.id, unitPricePaise: 17_900n }] });
+  const capturedRefunded = await seedSale(org, { at: istInstant(T6_CAPTURED_REFUNDED), lines: [{ productId: burger.id, unitPricePaise: 17_900n }], payments: [{}, {}] });
+  await seedRefund(capturedRefunded.payments[1]!, { at: istInstant(T6_CAPTURED_REFUNDED, "13:00"), amountPaise: capturedRefunded.order.grandTotal });
+  await seedSale(org, { at: istInstant(T6_FAILED), status: "FAILED", lines: [{ productId: burger.id, unitPricePaise: 17_900n }] });
 }
 
 const gradesOf = (result: Awaited<ReturnType<typeof computeTrustDay>>) => Object.fromEntries(result.scores.map((s) => [s.signalId, s.grade]));
@@ -131,11 +150,57 @@ describe("IQ daily trust (IQ-1 S7)", () => {
     expect(t5.detail).toMatchObject({ orders_checked: 1, business_date_mismatch: 1, placed_drift: 1, timezone_mismatch: 0 });
   });
 
-  it("grades an app clock more than 5 s off the database T5 LOW, and recovers on recompute", async () => {
-    const skewed = scoreOf(await computeTrustDay(orgs.a.orgId, CLEAN, { appNow: new Date(Date.now() - 60_000) }), "t5_clock_sanity");
-    expect(skewed.grade).toBe("LOW");
-    expect(skewed.detail.clock_skew_ms).toBeGreaterThan(5_000);
-    expect(scoreOf(await computeTrustDay(orgs.a.orgId, CLEAN), "t5_clock_sanity").grade).toBe("HIGH");
+  it("stamps app/DB clock skew on today only; a historical recompute under skew leaves the past day unchanged", async () => {
+    const skewedNow = new Date(Date.now() - 60_000);
+    const past = scoreOf(await computeTrustDay(orgs.a.orgId, CLEAN, { appNow: skewedNow }), "t5_clock_sanity");
+    expect(past.grade).toBe("HIGH");
+    expect(past.detail).toMatchObject({ org_checks_applied: 0, clock_skew_ms: 0 });
+
+    const today = businessDate(skewedNow);
+    const todays = scoreOf(await computeTrustDay(orgs.a.orgId, today, { appNow: skewedNow }), "t5_clock_sanity");
+    expect(todays.grade).toBe("LOW");
+    expect(todays.detail.org_checks_applied).toBe(1);
+    expect(todays.detail.clock_skew_ms).toBeGreaterThan(5_000);
+  });
+
+  it("keeps an order whose request straddles IST midnight HIGH on T5", async () => {
+    const t5 = scoreOf(await computeTrustDay(orgs.a.orgId, STRADDLE), "t5_clock_sanity");
+    expect(t5.detail).toMatchObject({ orders_checked: 1, business_date_mismatch: 0 });
+    expect(t5.grade).toBe("HIGH");
+  });
+
+  it.each([
+    ["a partial refund", T6_PARTIAL, { partially_refunded: 1 }],
+    ["a cancelled order with a capture and no refund", T6_CANCELLED, { cancelled_captured_no_refund: 1 }],
+    ["CAPTURED + REFUNDED on one order", T6_CAPTURED_REFUNDED, { multi_captured: 0, captured_not_grand_total: 1 }],
+    ["a FAILED order with a capture", T6_FAILED, { failed_with_capture: 1 }],
+  ] as const)("grades T6 LOW for %s", async (_label, date, expected) => {
+    const t6 = scoreOf(await computeTrustDay(orgs.a.orgId, date), "t6_payment_integrity");
+    expect(t6).toMatchObject({ grade: "LOW", numerator: 0n, denominator: 1n });
+    expect(t6.detail).toMatchObject(expected);
+  });
+
+  it("gives up with a retriable DayLockBusyError when the day stays locked past the budget", async () => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let held!: () => void;
+    const isHeld = new Promise<void>((resolve) => (held = resolve));
+    const holder = db().transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${trustDayLockKey(orgs.a.orgId, CLEAN)}, 0))`);
+      held();
+      await released;
+    });
+    await isHeld;
+    try {
+      await expect(computeTrustDay(orgs.a.orgId, CLEAN, { maxLockWaits: 0 })).rejects.toMatchObject({ name: "DayLockBusyError", retriable: true, reason: "max_waits", lockWaits: 0 });
+      const started = Date.now();
+      await expect(computeTrustDay(orgs.a.orgId, CLEAN, { lockWaitTimeoutMs: 200 })).rejects.toBeInstanceOf(DayLockBusyError);
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      release();
+      await holder;
+    }
+    expect((await computeTrustDay(orgs.a.orgId, CLEAN)).lockWaits).toBe(0);
   });
 
   it("grades T7 MEDIUM with a DIRECT expense earlier in the month only, LOW with none", async () => {

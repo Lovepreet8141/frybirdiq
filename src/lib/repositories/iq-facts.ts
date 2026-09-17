@@ -331,6 +331,33 @@ export function factDayLockKey(orgId: string, date: string): string {
 
 class LockBusy extends Error {}
 
+export interface DayLockOptions {
+  /** Waits for other holders before giving up with `DayLockBusyError`. Default 20. 0 = never wait. */
+  readonly maxLockWaits?: number;
+  /** How long one wait may block before giving up with `DayLockBusyError`. Default 60 s. */
+  readonly lockWaitTimeoutMs?: number;
+}
+
+const DEFAULT_MAX_LOCK_WAITS = 20;
+const DEFAULT_LOCK_WAIT_TIMEOUT_MS = 60_000;
+
+/**
+ * The day's lock stayed busy past the caller's budget: too many waits, or one
+ * wait longer than the timeout. Nothing was written. Retriable — a job should
+ * reschedule the day rather than count it as a failed computation.
+ */
+export class DayLockBusyError extends Error {
+  readonly retriable = true;
+  constructor(
+    readonly key: string,
+    readonly lockWaits: number,
+    readonly reason: "max_waits" | "timeout",
+  ) {
+    super(`day lock ${key} still busy after ${lockWaits} wait(s) (${reason})`);
+    this.name = "DayLockBusyError";
+  }
+}
+
 type DayTransaction = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
 
 /**
@@ -351,7 +378,10 @@ export async function runLockedDayTransaction<T>(
   key: string,
   label: string,
   work: (tx: DayTransaction) => Promise<T>,
+  options: DayLockOptions = {},
 ): Promise<{ readonly value: T; readonly lockWaits: number; readonly attempts: number }> {
+  const maxLockWaits = options.maxLockWaits ?? DEFAULT_MAX_LOCK_WAITS;
+  const timeoutMs = Math.max(1, Math.floor(options.lockWaitTimeoutMs ?? DEFAULT_LOCK_WAIT_TIMEOUT_MS));
   let lockWaits = 0;
   for (let attempt = 1; ; ) {
     try {
@@ -366,11 +396,21 @@ export async function runLockedDayTransaction<T>(
       return { value, lockWaits, attempts: attempt };
     } catch (error) {
       if (error instanceof LockBusy) {
+        // A cap on waits and on each wait, so a job cannot starve behind a stuck holder.
+        if (lockWaits >= maxLockWaits) throw new DayLockBusyError(key, lockWaits, "max_waits");
         lockWaits += 1;
-        // Blocks until the holder commits or rolls back, then lets go at once.
-        await db().transaction(async (tx) => {
-          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
-        });
+        try {
+          // Blocks until the holder commits or rolls back, then lets go at once.
+          await db().transaction(async (tx) => {
+            await tx.execute(sql.raw(`SET LOCAL lock_timeout = '${timeoutMs}ms'`));
+            await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+          });
+        } catch (waitError) {
+          const e = waitError as { code?: string; cause?: { code?: string } };
+          // 55P03 lock_not_available: lock_timeout expired.
+          if ((e.cause?.code ?? e.code) === "55P03") throw new DayLockBusyError(key, lockWaits, "timeout");
+          throw waitError;
+        }
         continue;
       }
       if (!isRetryable(error) || attempt >= MAX_ATTEMPTS) throw error;
@@ -386,7 +426,7 @@ export async function runLockedDayTransaction<T>(
  * a category or product that no longer has rows loses its old fact row too.
  * Readers see the old rows or the new ones, never a mix.
  */
-export async function recomputeDay(orgId: string, date: string, opts: { readonly jobRunId?: string | null } = {}): Promise<RecomputeResult> {
+export async function recomputeDay(orgId: string, date: string, opts: { readonly jobRunId?: string | null } & DayLockOptions = {}): Promise<RecomputeResult> {
   assertBusinessDate(date);
   const { value: rowsWritten, lockWaits, attempts } = await runLockedDayTransaction(factDayLockKey(orgId, date), `iq-facts: recompute of ${date} for org ${orgId}`, async (tx) => {
     const rows = await computeDayFacts(orgId, date, tx);
@@ -413,7 +453,7 @@ export async function recomputeDay(orgId: string, date: string, opts: { readonly
       );
     }
     return rows.length;
-  });
+  }, opts);
   return { orgId, businessDate: date, definitionVersion: DEFINITION_VERSION, rowsWritten, lockWaits, attempts };
 }
 
