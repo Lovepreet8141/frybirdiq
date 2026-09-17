@@ -59,7 +59,7 @@ export const IQ_SUBJECT_KINDS = [
   "JOB",
 ] as const;
 export const IQ_TRUST_STATES = ["MEASURED", "NOT_MEASURED", "INSUFFICIENT_DATA"] as const;
-/** Why a row left ACTIVE (migration 0038): EXPIRED as CLEARED or CLOSING_TIME, else its own status. */
+/** Why a row left ACTIVE (migration 0037): EXPIRED as CLEARED or CLOSING_TIME, else its own status. */
 export const IQ_INSIGHT_STATUS_REASONS = ["CLEARED", "CLOSING_TIME", "SUPERSEDED", "RETRACTED"] as const;
 /** engine/evidence.ts IdentifierSchema: metric ids, template ids, slot names. */
 export const IQ_IDENTIFIER_PATTERN = "^[a-z0-9][a-z0-9_.:-]*$";
@@ -67,7 +67,7 @@ export const IQ_IDENTIFIER_PATTERN = "^[a-z0-9][a-z0-9_.:-]*$";
 export const IQ_CODE_PATTERN = "^[A-Z][A-Z0-9_]*$";
 /** engine/insight.ts PayloadPathSchema: a copy slot's dotted payload path. */
 export const IQ_PAYLOAD_PATH_PATTERN = "^[A-Za-z0-9_]+([.][A-Za-z0-9_]+)*$";
-/** The placeholder copy existing rows receive in 0038; every writer sets its own. */
+/** The placeholder copy existing rows receive in 0037; every writer sets its own. */
 export const IQ_PLACEHOLDER_COPY = { templateId: "none", slots: {} } as const;
 export const IQ_UNITS = ["paise", "count", "bps", "grams", "ml", "pieces", "seconds"] as const;
 export const IQ_FORECAST_TARGETS = ["ITEM", "INGREDIENT", "ORDERS", "REVENUE"] as const;
@@ -233,17 +233,17 @@ export const iqInsights = pgTable(
     trustState: text("trust_state").notNull().default("NOT_MEASURED"),
     trustScore: integer("trust_score"),
     trustAsOf: timestamp("trust_as_of", { withTimezone: true }),
-    /** TrustRef.metricIds (MEASURED); empty otherwise. Migration 0038. */
+    /** TrustRef.metricIds (MEASURED); empty otherwise. Migration 0037. */
     trustMetricIds: text("trust_metric_ids").array().notNull().default(sql`'{}'::text[]`),
-    /** TrustRef.reasons (MEASURED, INSUFFICIENT_DATA); empty for NOT_MEASURED. Migration 0038. */
+    /** TrustRef.reasons (MEASURED, INSUFFICIENT_DATA); empty for NOT_MEASURED. Migration 0037. */
     trustReasons: text("trust_reasons").array().notNull().default(sql`'{}'::text[]`),
-    /** engine Copy: `{ templateId, slots }`. Frozen with the claim once referenced. Migration 0038. */
+    /** engine Copy: `{ templateId, slots }`. Frozen with the claim once referenced. Migration 0037. */
     copy: jsonb("copy").$type<{ templateId: string; slots: Record<string, string> }>().notNull().default(IQ_PLACEHOLDER_COPY),
     /**
      * End of the period or bucket the rule evaluated. No default on purpose
      * (RELIABILITY U2): a writer that forgot it would store write time, later
      * than any period end, and every correct later write would be refused as
-     * stale. Existing rows took period_end in 0038.
+     * stale. Existing rows took period_end in 0037.
      */
     asOf: timestamp("as_of", { withTimezone: true }).notNull(),
     statusReason: text("status_reason"),
@@ -329,7 +329,7 @@ export const iqInsights = pgTable(
             ELSE ${table.status} = 'EXPIRED'
           END)`,
     ),
-    // ARCHITECT P3: payment-ledger findings are recognisable by both keys, which RLS relies on (0038).
+    // ARCHITECT P3: payment-ledger findings are recognisable by both keys, which RLS relies on (0037).
     check(
       "iq_insights_ledger_producer_check",
       sql`(${table.dedupeKey} LIKE 'recon:%') = (${table.producer} LIKE 'recon.%')

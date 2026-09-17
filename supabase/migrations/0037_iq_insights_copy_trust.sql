@@ -1,10 +1,8 @@
 -- IQ-2 S1: iq_insights carries what present() needs and what the
--- expire-on-clear guard needs. Requires 0034. Number 0038 because the refund
--- release holds 0037 (whichever merges second renumbers; iq.test.ts checks
--- journal `when` order). hive reviews/iq-2 DESIGN.md S1 + Revision 2 (R2.2,
--- R2.3, R2.11); schema in src/db/schema/iq.ts. Recovery:
+-- expire-on-clear guard needs. Requires 0034. hive reviews/iq-2 DESIGN.md S1 +
+-- Revision 2 (R2.2, R2.3, R2.11); schema in src/db/schema/iq.ts. Recovery:
 -- docs/MIGRATION-RECOVERY.md §4d and
--- supabase/rollback/0038_iq_insights_copy_trust.down.sql.
+-- supabase/rollback/0037_iq_insights_copy_trust.down.sql.
 --
 -- - copy jsonb NOT NULL, placeholder default {"templateId":"none","slots":{}}
 --   for existing rows (production holds none, dec-2); strict shape CHECK.
@@ -15,8 +13,10 @@
 -- Hand-written at the end: the 0034 freeze function now covers copy, and the
 -- iq_insights read policy hides recon./sig. findings from ADMIN.
 --
--- Journal `when` set by hand to 1790200000000 (0036 is 1790000000000; 0037's
--- slot is left for the refund release).
+-- Journal `when` set by hand to 1790200000000 (above 0036's 1790000000000).
+-- Next free number, no gap (ARCHITECT iq2-s1r): drizzle applies an entry only
+-- when its `when` is above the last applied one, so a hole filled later would
+-- be skipped. The refund release takes the next free number when it merges.
 
 -- Existing MEASURED or INSUFFICIENT_DATA rows cannot be given the metric ids
 -- or reasons the new CHECK requires. They are derived: delete them and let
@@ -24,7 +24,7 @@
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM iq_insights WHERE trust_state <> 'NOT_MEASURED') THEN
-    RAISE EXCEPTION '0038: iq_insights has MEASURED or INSUFFICIENT_DATA rows without trust detail; delete them (derived, the jobs rewrite them) and run 0038 again (docs/MIGRATION-RECOVERY.md 4d)'
+    RAISE EXCEPTION '0037: iq_insights has MEASURED or INSUFFICIENT_DATA rows without trust detail; delete them (derived, the jobs rewrite them) and run 0037 again (docs/MIGRATION-RECOVERY.md 4d)'
       USING ERRCODE = '55000';
   END IF;
 END $$;

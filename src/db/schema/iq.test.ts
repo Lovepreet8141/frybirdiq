@@ -36,7 +36,11 @@ import {
   IQ_TIERS,
   IQ_UNITS,
 } from "./iq";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import journal from "../../../supabase/migrations/meta/_journal.json";
+
+const MIGRATIONS_DIR = join(__dirname, "../../../supabase/migrations");
 
 const sorted = (values: readonly string[]) => [...values].sort();
 
@@ -102,7 +106,7 @@ describe("iq schema vocabularies match the engine and automation code", () => {
   });
 });
 
-describe("0038 insight CHECK patterns match the engine schemas", () => {
+describe("0037 insight CHECK patterns match the engine schemas", () => {
   const agree = (pattern: string, accepts: (v: string) => boolean, samples: readonly string[]) => {
     const re = new RegExp(pattern);
     for (const v of samples) expect([v, re.test(v)]).toEqual([v, accepts(v)]);
@@ -129,5 +133,17 @@ describe("migration journal", () => {
       expect(entry.idx).toBe(i);
       if (i > 0) expect(entry.when).toBeGreaterThan(journal.entries[i - 1]!.when);
     });
+  });
+
+  // A numbering hole (0036, then 0038 "leaving 0037 for later") is how an entry
+  // gets skipped: the later 0037 would carry a lower `when` than one already
+  // applied. Every tag's number is its idx, and the file is there.
+  it("has no gaps: each tag's number is its idx and its SQL file exists", () => {
+    journal.entries.forEach((entry, i) => {
+      expect([entry.tag, entry.tag.slice(0, 4)]).toEqual([entry.tag, String(i).padStart(4, "0")]);
+      expect([entry.tag, existsSync(join(MIGRATIONS_DIR, `${entry.tag}.sql`))]).toEqual([entry.tag, true]);
+    });
+    const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql"));
+    expect(files.length).toBe(journal.entries.length);
   });
 });

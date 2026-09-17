@@ -1,5 +1,5 @@
 /**
- * 0038_iq_insights_copy_trust against the real local Supabase stack.
+ * 0037_iq_insights_copy_trust against the real local Supabase stack.
  *
  * - The new columns' CHECKs: copy shape, trust detail per state,
  *   status_reason tied to status, recon/sig keys tied to producers, and
@@ -44,9 +44,9 @@ function localSupabaseEnv() {
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
   if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/.test(url)) {
-    throw new Error("iq-insights-0038: NEXT_PUBLIC_SUPABASE_URL is not the local `supabase start` API. Refusing to run.");
+    throw new Error("iq-insights-0037: NEXT_PUBLIC_SUPABASE_URL is not the local `supabase start` API. Refusing to run.");
   }
-  if (!anonKey || !serviceKey) throw new Error("iq-insights-0038: local anon/service keys missing from .env.test.local.");
+  if (!anonKey || !serviceKey) throw new Error("iq-insights-0037: local anon/service keys missing from .env.test.local.");
   return { url, anonKey, serviceKey };
 }
 
@@ -76,11 +76,11 @@ function insight(org: TestOrg, overrides: Partial<InsightRow> = {}): InsightRow 
 
 async function insert(values: InsightRow): Promise<string> {
   const [row] = await db().insert(iqInsights).values(values).returning({ id: iqInsights.id });
-  if (!row) throw new Error("iq-insights-0038: insert returned no row");
+  if (!row) throw new Error("iq-insights-0037: insert returned no row");
   return row.id;
 }
 
-describe("0038 — column CHECKs", () => {
+describe("0037 — column CHECKs", () => {
   let org: TestOrg;
 
   beforeAll(async () => {
@@ -176,7 +176,7 @@ describe("0038 — column CHECKs", () => {
   });
 });
 
-describe("0038 — freeze covers copy; trust and as_of stay writable", () => {
+describe("0037 — freeze covers copy; trust and as_of stay writable", () => {
   let org: TestOrg;
 
   beforeAll(async () => {
@@ -229,7 +229,7 @@ describe("0038 — freeze covers copy; trust and as_of stay writable", () => {
   });
 });
 
-sharedStackOnly("0038 — who reads which insights through PostgREST (R2.2)", () => {
+sharedStackOnly("0037 — who reads which insights through PostgREST (R2.2)", () => {
   let admin: SupabaseClient;
   const sessions = new Map<string, SupabaseClient>();
   const userIds: string[] = [];
@@ -251,14 +251,14 @@ sharedStackOnly("0038 — who reads which insights through PostgREST (R2.2)", ()
     const password = `pw-${randomUUID()}`;
     const suffix = randomUUID().slice(0, 8);
     for (const role of ["OWNER", "MANAGER", "ADMIN", "CASHIER", "ANALYST"] as const) {
-      const email = `${role.toLowerCase()}-${suffix}@iq-insights-0038.test`;
+      const email = `${role.toLowerCase()}-${suffix}@iq-insights-0037.test`;
       const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
-      if (error || !data.user) throw new Error(`iq-insights-0038: createUser failed: ${error?.message}`);
+      if (error || !data.user) throw new Error(`iq-insights-0037: createUser failed: ${error?.message}`);
       userIds.push(data.user.id);
       await db().insert(memberships).values({ orgId: org.orgId, userId: data.user.id, role });
       const client = createClient(url, anonKey, noSession);
       const signedIn = await client.auth.signInWithPassword({ email, password });
-      if (signedIn.error) throw new Error(`iq-insights-0038: sign-in failed: ${signedIn.error.message}`);
+      if (signedIn.error) throw new Error(`iq-insights-0037: sign-in failed: ${signedIn.error.message}`);
       sessions.set(role, client);
     }
   });

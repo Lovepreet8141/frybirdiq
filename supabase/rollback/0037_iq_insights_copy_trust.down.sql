@@ -1,17 +1,17 @@
--- Hand-run only. Reverses 0038: restores 0034's iq_insights read policy and
+-- Hand-run only. Reverses 0037: restores 0034's iq_insights read policy and
 -- freeze function, then drops the constraints and the five columns.
 --
 -- Loses each insight's copy, trust metric ids and reasons, as_of and
 -- status_reason. Insights are derived; the jobs rewrite them. Deploy code that
 -- no longer reads or writes these columns first (src/lib/repositories/
--- iq-insights.ts writes them after 0038).
+-- iq-insights.ts writes them after 0037).
 --
 -- Run with
---   psql -v ON_ERROR_STOP=1 -f supabase/rollback/0038_iq_insights_copy_trust.down.sql
--- then delete the 0038 row from drizzle.__drizzle_migrations (production:
--- created_at = 1790200000000), or version '0038' from
+--   psql -v ON_ERROR_STOP=1 -f supabase/rollback/0037_iq_insights_copy_trust.down.sql
+-- then delete the 0037 row from drizzle.__drizzle_migrations (production:
+-- created_at = 1790200000000), or version '0037' from
 -- supabase_migrations.schema_migrations on a CLI-managed local stack.
--- That delete is outside this transaction; 0038 must be the newest applied
+-- That delete is outside this transaction; 0037 must be the newest applied
 -- migration, or Drizzle will never re-apply it.
 
 BEGIN;
