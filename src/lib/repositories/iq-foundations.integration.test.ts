@@ -45,6 +45,8 @@ const IQ_TABLES = [
   "iq_outcomes",
   "iq_auto_policies",
 ] as const;
+/** 0034's own tables; later migrations add more iq_* tables with their own tests. */
+const IQ_TABLE_ARRAY = sql.raw(`ARRAY[${IQ_TABLES.map((t) => `'${t}'`).join(", ")}]::text[]`);
 const STAFF_READABLE = new Set(["iq_insights", "iq_recommendations", "iq_actions"]);
 const PRIVILEGES = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"] as const;
 
@@ -150,10 +152,10 @@ describe("0034 — grants and row-level security", () => {
     }
   });
 
-  it("RLS is enabled and forced on every iq_* table, with only the three staff SELECT policies", async () => {
+  it("RLS is enabled and forced on every 0034 table, with only the three staff SELECT policies", async () => {
     const tables = await db().execute<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>(sql`
       SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
-      WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' AND relname LIKE 'iq\\_%'
+      WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' AND relname = ANY(${IQ_TABLE_ARRAY})
       ORDER BY relname
     `);
     expect(tables.map((t) => t.relname)).toEqual([...IQ_TABLES].sort());
@@ -161,7 +163,7 @@ describe("0034 — grants and row-level security", () => {
 
     const policies = await db().execute<{ tablename: string; policyname: string; cmd: string; roles: string[] }>(sql`
       SELECT tablename, policyname, cmd, roles::text[] AS roles FROM pg_policies
-      WHERE schemaname = 'public' AND tablename LIKE 'iq\\_%' ORDER BY tablename
+      WHERE schemaname = 'public' AND tablename = ANY(${IQ_TABLE_ARRAY}) ORDER BY tablename
     `);
     expect(policies.map((p) => [p.tablename, p.policyname, p.cmd, p.roles])).toEqual([
       ["iq_actions", "iq_actions_staff_read", "SELECT", ["authenticated"]],

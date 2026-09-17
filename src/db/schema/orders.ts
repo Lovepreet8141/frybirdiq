@@ -192,6 +192,8 @@ export const orders = pgTable(
     // The counter and the dashboard both read "today's orders"; this is what
     // makes that a lookup rather than a scan.
     index("orders_org_business_date_idx").on(table.orgId, table.businessDate),
+    // IQ-1 P1: the fact jobs select a business day as a created_at range.
+    index("orders_org_created_idx").on(table.orgId, table.createdAt),
     index("orders_org_status_idx").on(table.orgId, table.status),
     index("orders_location_placed_idx").on(table.locationId, table.placedAt),
     // Revenue split by channel is the reporting question this column exists
@@ -339,6 +341,10 @@ export const payments = pgTable(
   (table) => [
     unique("payments_provider_payment_unique").on(table.provider, table.providerPaymentId),
     index("payments_order_idx").on(table.orderId),
+    // IQ-1 P1: the sale set's EXISTS over money actually taken.
+    index("payments_order_captured_idx")
+      .on(table.orderId)
+      .where(sql`${table.status} IN ('CAPTURED', 'PARTIALLY_REFUNDED')`),
   ],
 );
 

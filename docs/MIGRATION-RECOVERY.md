@@ -313,6 +313,47 @@ Added 2026-09-17. Requires 0034. 0034 was already merged into
   production and alerts read the count, fix forward instead.
 - **Journal (FACT):** `when` set by hand to 1789900000000, above 0034.
 
+## 4c. 0036 `iq_facts` (not deployed; `agent/database-iq1-s3`, card iq1-s3)
+
+Added 2026-09-17. Requires 0034 and 0035. Production run is owner gate 1 and
+decision `dec-2`; production backfill of facts is a separate approved step.
+
+### Classification — **Reversible (derived data only)**
+- **What it does (FACT):** creates `iq_daily_facts`, `iq_intraday_facts`,
+  `iq_daily_trust` — additive per-day (and per 15-minute bucket) metric values
+  and trust grades, text + CHECK only, `UNIQUE NULLS NOT DISTINCT` keys
+  including `definition_version`; RLS enabled and forced, `REVOKE ALL` from
+  `PUBLIC`/`anon`/`authenticated`, `GRANT SELECT` to `authenticated` with a
+  policy for OWNER and MANAGER of the row's org. Adds three plain indexes on
+  existing tables: `orders (org_id, created_at)`, `payments (order_id) WHERE
+  status IN ('CAPTURED','PARTIALLY_REFUNDED')`, `inventory_movements (org_id,
+  type, occurred_at)`. No existing row or grant changes.
+- **Policy choice (FACT, RECOMMENDATION for SECURITY-TENANCY to confirm):** the
+  design said "select org members"; the policy is OWNER + MANAGER, matching
+  `finance.view` in `src/domain/permissions.ts`, because these rows are revenue,
+  food cost and expense figures. ADMIN, CASHIER and ANALYST read nothing
+  (tested through PostgREST). The app is unaffected: it reads as `postgres`.
+- **Down file (FACT):** `supabase/rollback/0036_iq_facts.down.sql`, one
+  `BEGIN`/`COMMIT`, drops the three tables and the three indexes. Journal-row
+  delete is a manual step outside the transaction.
+- **Tested locally (FACT, 2026-09-17, local Postgres 17.6):** applied with
+  `supabase migration up --local` → `iq-facts-schema.integration.test.ts` 11/11 →
+  down + journal row deleted → 0 of the 6 objects left, 8 failed / 3 skipped →
+  re-applied → 11/11. Full integration suite 23 files / 163 tests green.
+  Drizzle migrator path not tested (CLI-managed local stack).
+- **Reason:** facts and trust grades are derived from orders, payments,
+  refunds, movements and expenses, and `recomputeDay` rebuilds any day. The
+  only thing a drop loses is what a past report showed before a restatement.
+  Dropping the indexes loses no data.
+- **Data at risk:** stored facts and grades (recomputable). Today: none.
+- **Deploy note (FACT):** the three `CREATE INDEX` statements are not
+  `CONCURRENTLY` (Drizzle runs migrations in one transaction), so each blocks
+  writes to `orders`, `payments` or `inventory_movements` while it builds.
+  RECOMMENDATION: run between services; read-only row counts first.
+- **Pre-deploy (read-only):** `SHOW server_version_num` ≥ 150000 (NULLS NOT
+  DISTINCT), as for 0034.
+- **Journal (FACT):** `when` set by hand to 1790000000000, above 0035.
+
 ---
 
 ## 5. Rollback files 0022–0026: the known-safe procedure
