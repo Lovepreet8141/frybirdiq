@@ -23,6 +23,8 @@ import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
 import { handleJobRequest, type ClaimRequest } from "@/lib/jobs/handle";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 import { createJobRunStore, type JobTx } from "./iq-job-runs";
+import { jobRouteDeps } from "@/app/api/jobs/[job]/deps";
+import { POST } from "@/app/api/jobs/[job]/route";
 
 const PERIOD = "2026-09-17T10";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -334,5 +336,78 @@ describe("one heartbeat request end to end", () => {
       expect(row).toMatchObject({ status: "SUCCEEDED", attempt: 1, failures: 0, summary: { fencedCommits: 1 } });
     }
     expect(await handleJobRequest(request, deps)).toMatchObject({ status: 200, body: { counts: { NOOP: 2 } } });
+  });
+});
+
+describe("the job route (S8) on the local stack", () => {
+  const SECRET = "r".repeat(40);
+  // Its own org: the end-to-end test above already ran this hour's heartbeat for the file's orgs.
+  let routeOrg: TestOrg;
+  beforeAll(async () => {
+    routeOrg = await createTestOrg();
+  });
+  afterAll(async () => {
+    await deleteTestOrg(routeOrg.orgId);
+  });
+  const routeRequest = (headers: Record<string, string>) =>
+    new Request("http://127.0.0.1:3000/api/jobs/heartbeat", { method: "POST", headers });
+  const localHeaders = (secret = SECRET) => ({ "x-forwarded-for": "127.0.0.1", host: JOB_HOST, authorization: `Bearer ${secret}` });
+  const params = (job: string) => ({ params: Promise.resolve({ job }) });
+
+  const withSecret = async <T>(secret: string | undefined, run: () => Promise<T>): Promise<T> => {
+    const saved = { current: process.env.JOB_SECRET, previous: process.env.JOB_SECRET_PREVIOUS };
+    if (secret === undefined) delete process.env.JOB_SECRET;
+    else process.env.JOB_SECRET = secret;
+    delete process.env.JOB_SECRET_PREVIOUS;
+    try {
+      return await run();
+    } finally {
+      if (saved.current === undefined) delete process.env.JOB_SECRET;
+      else process.env.JOB_SECRET = saved.current;
+      if (saved.previous !== undefined) process.env.JOB_SECRET_PREVIOUS = saved.previous;
+    }
+  };
+
+  const heartbeatRows = () => db().select({ id: iqJobRuns.id }).from(iqJobRuns).where(eq(iqJobRuns.job, "heartbeat"));
+
+  it("POST answers an empty 404 when JOB_SECRET is unset, the bearer is wrong or missing, the Host is foreign, or the job is unknown — and writes nothing", async () => {
+    const before = (await heartbeatRows()).length;
+    const cases: [string | undefined, Record<string, string>, string][] = [
+      [undefined, localHeaders(), "heartbeat"],
+      [SECRET, localHeaders("w".repeat(40)), "heartbeat"],
+      [SECRET, { "x-forwarded-for": "127.0.0.1", host: JOB_HOST }, "heartbeat"],
+      [SECRET, { ...localHeaders(), host: "frybirdiq.tech" }, "heartbeat"],
+      [SECRET, localHeaders(), "no_such_job"],
+    ];
+    for (const [secret, headers, job] of cases) {
+      const response = await withSecret(secret, () => POST(routeRequest(headers), params(job)));
+      expect([job, response.status, await response.text()]).toEqual([job, 404, ""]);
+    }
+    expect((await heartbeatRows()).length).toBe(before);
+  });
+
+  it("a heartbeat run through the route's own dependencies writes one SUCCEEDED row per org; a re-run is a no-op", async () => {
+    await withSecret(SECRET, async () => {
+      const deps = jobRouteDeps();
+      // Only this file's org, so the shared local database gains no rows for anyone else's orgs.
+      deps.store.listOrgIds = async () => [routeOrg.orgId];
+      const { respondToJobRequest } = await import("@/lib/jobs/http");
+
+      const first = await respondToJobRequest(routeRequest(localHeaders()), "heartbeat", () => deps);
+      expect(first.status).toBe(200);
+      const report = (await first.json()) as { periods: string[]; counts: Record<string, number> };
+      expect(report.counts.SUCCEEDED).toBe(1);
+
+      const rows = await db()
+        .select()
+        .from(iqJobRuns)
+        .where(and(eq(iqJobRuns.job, "heartbeat"), eq(iqJobRuns.orgId, routeOrg.orgId), eq(iqJobRuns.periodKey, report.periods[0]!)));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ status: "SUCCEEDED", attempt: 1, failures: 0, codeVersion: "unversioned", trigger: "TIMER" });
+
+      const again = await respondToJobRequest(routeRequest(localHeaders()), "heartbeat", () => deps);
+      expect(again.status).toBe(200);
+      expect(((await again.json()) as { counts: Record<string, number> }).counts.NOOP).toBe(1);
+    });
   });
 });
