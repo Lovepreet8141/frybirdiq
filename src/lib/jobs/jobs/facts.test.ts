@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { JobContext } from "../context";
 import { DayLockBusy, type DayLockBudget, type FactsParity, type JobReadRepos, type JobWriteRepos } from "../repos";
@@ -10,8 +10,10 @@ type Options = {
   stopAfter?: number;
   historyStart?: string | null;
   parity?: FactsParity;
-  /** A day whose lock stays busy past the budget. */
+  /** A day whose facts lock stays busy past the budget. */
   busyOn?: string;
+  /** A day whose trust lock stays busy past the budget. */
+  trustBusyOn?: string;
   remainingMs?: number;
 };
 
@@ -21,13 +23,21 @@ function fakeContext(options: Options) {
   const cursors: (string | undefined)[] = [];
   const parityCalls: [string, string][] = [];
   const budgets: DayLockBudget[] = [];
+  const steps: string[] = [];
   let commits = 0;
   const writers: JobWriteRepos = {
     recomputeDay: async (date, budget) => {
       budgets.push(budget);
       if (date === options.busyOn) throw new DayLockBusy(date);
       recomputed.push(date);
+      steps.push(`facts ${date}`);
       return { orgId: "org", businessDate: date, definitionVersion: 1, rowsWritten: 20, lockWaits: date.endsWith("-05") ? 1 : 0, attempts: 1 };
+    },
+    computeTrustDay: async (date, budget) => {
+      budgets.push(budget);
+      if (date === options.trustBusyOn) throw new DayLockBusy(date);
+      steps.push(`trust ${date}`);
+      return { orgId: "org", businessDate: date, definitionVersion: 1, scores: [{}, {}, {}] as never, lockWaits: 0, attempts: 1 };
     },
     writeInsight: async () => {
       throw new Error("not used");
@@ -69,7 +79,7 @@ function fakeContext(options: Options) {
     shouldStop: () => options.stopAfter !== undefined && commits >= options.stopAfter,
     remainingMs: () => options.remainingMs ?? 240_000,
   };
-  return { ctx, recomputed, cursors, parityCalls, budgets };
+  return { ctx, recomputed, cursors, parityCalls, budgets, steps };
 }
 
 describe("iq-facts-nightly", () => {
@@ -91,9 +101,11 @@ describe("iq-facts-nightly", () => {
         days_planned: 47,
         days_recomputed: 47,
         rows_written: 940,
+        trust_signals_written: 141,
         lock_waits: 2,
         retries: 0,
         lock_busy_days: 0,
+        parity_ok: 1,
         parity_checks: 2,
         parity_mismatches: 0,
         parity_missing_days: 0,
@@ -115,10 +127,33 @@ describe("iq-facts-nightly", () => {
     expect(f.recomputed).toEqual(["2026-09-11", "2026-09-12", "2026-09-13", "2026-09-14", "2026-09-15", "2026-09-16"]);
   });
 
-  it("records parity mismatches and missing days as counts", async () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("records a parity mismatch as parity_ok 0 and still succeeds, logging metric ids and dates only (RELIABILITY E)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const f = fakeContext({ periodKey: "2026-09-16", parity: { ok: false, mismatchedMetrics: ["revenue_net", "orders_paid"], missingDays: 1 } });
     const result = await runFactsNightly(f.ctx);
-    expect(result.summary).toMatchObject({ parity_checks: 2, parity_mismatches: 4, parity_missing_days: 2 });
+    expect(result.status).toBe("COMPLETE");
+    expect(result.summary).toMatchObject({ parity_ok: 0, parity_checks: 2, parity_mismatches: 4, parity_missing_days: 2 });
+    expect(warn).toHaveBeenCalledTimes(2);
+    const message = String(warn.mock.calls[0]![0]);
+    expect(message).toContain("revenue_net, orders_paid");
+    expect(message).toContain("2026-08-01..2026-08-31");
+    expect(message).not.toMatch(/\d{4,}(?![-\d])/); // no figures, only dates
+  });
+
+  it("scores each day's trust right after its facts, in the same chunk", async () => {
+    const f = fakeContext({ periodKey: "2026-09-16", resumeCursor: "2026-09-14" });
+    await runFactsNightly(f.ctx);
+    expect(f.steps).toEqual(["facts 2026-09-15", "trust 2026-09-15", "facts 2026-09-16", "trust 2026-09-16"]);
+    expect(f.cursors).toEqual(["2026-09-15", "2026-09-16"]);
+  });
+
+  it("stops with DAY_LOCK_BUSY when a day's trust lock is busy, without saving that day as the cursor", async () => {
+    const f = fakeContext({ periodKey: "2026-09-16", resumeCursor: "2026-09-13", trustBusyOn: "2026-09-15" });
+    const result = await runFactsNightly(f.ctx);
+    expect(result).toMatchObject({ status: "PARTIAL", reason: "DAY_LOCK_BUSY", summary: { days_recomputed: 1, lock_busy_days: 1 } });
+    expect(f.cursors).toEqual(["2026-09-14"]);
   });
 });
 
@@ -151,22 +186,25 @@ describe("iq-facts-backfill", () => {
 });
 
 describe("day lock budget (RELIABILITY, iq1-s7b)", () => {
-  it("allows 3 waits, each at most 60 s and together inside the deadline less 30 s", () => {
-    expect(dayLockBudget(240_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 60_000 });
-    expect(dayLockBudget(120_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 30_000 });
-    expect(dayLockBudget(34_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 1_333 });
-    for (const remaining of [240_000, 120_000, 34_000]) {
+  it("allows 3 waits per locked step, each at most 60 s, with both steps' waits together inside the deadline less 30 s", () => {
+    expect(dayLockBudget(480_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 60_000 });
+    expect(dayLockBudget(240_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 35_000 });
+    expect(dayLockBudget(36_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 1_000 });
+    for (const remaining of [480_000, 240_000, 120_000, 36_000]) {
       const budget = dayLockBudget(remaining)!;
-      expect(budget.maxLockWaits * budget.lockWaitTimeoutMs).toBeLessThanOrEqual(remaining - 30_000);
+      expect(2 * budget.maxLockWaits * budget.lockWaitTimeoutMs).toBeLessThanOrEqual(remaining - 30_000);
     }
-    expect(dayLockBudget(32_999)).toBeNull();
+    expect(dayLockBudget(35_999)).toBeNull();
     expect(dayLockBudget(0)).toBeNull();
   });
 
-  it("passes the budget sized to the time left with each day", async () => {
+  it("passes the budget sized to the time left to both locked steps of the day", async () => {
     const f = fakeContext({ periodKey: "2026-09-17T10:15", remainingMs: 90_000 });
     await runFactsIntraday(f.ctx);
-    expect(f.budgets).toEqual([{ maxLockWaits: 3, lockWaitTimeoutMs: 20_000 }]);
+    expect(f.budgets).toEqual([
+      { maxLockWaits: 3, lockWaitTimeoutMs: 10_000 },
+      { maxLockWaits: 3, lockWaitTimeoutMs: 10_000 },
+    ]);
   });
 
   it("stops with PARTIAL DAY_LOCK_BUSY on a busy day, keeping the days before it and not saving that day as the cursor", async () => {

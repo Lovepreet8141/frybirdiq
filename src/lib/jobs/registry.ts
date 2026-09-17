@@ -10,7 +10,12 @@
  * Heavy jobs: `heavyRunLive` is check-then-claim, so two different heavy jobs
  * starting together could both run. With one heavy job registered that
  * cannot happen; registering a second needs a lock first (RELIABILITY, s7b),
- * and a test holds that line.
+ * and a test holds that line. TODO: make iq-facts-backfill heavy once heavy
+ * exclusion takes a lock (RELIABILITY iq1-s8r D).
+ *
+ * Heavy jobs stay off the backup window, 22:00–22:45 UTC (RELIABILITY S10
+ * condition): a test checks that a heavy job's timer start plus every systemd
+ * retry ends before 22:00 UTC.
  *
  * Timing, identical for every job in IQ-0:
  *   lease 300s  — another attempt may take over after this much silence
@@ -61,12 +66,12 @@ export const JOB_REGISTRY = {
     concurrency: "light",
     run: runHeartbeat,
   },
-  /** IQ-1 facts, 03:00 IST (21:30 UTC) for yesterday's period. */
+  /** IQ-1 facts, 02:00 IST (20:30 UTC) for yesterday's period — clear of the 22:00 UTC backup with all retries. */
   "iq-facts-nightly": {
     name: "iq-facts-nightly",
     periodKind: "day",
     target: "previous",
-    onCalendarUtc: "*-*-* 21:30:00 UTC",
+    onCalendarUtc: "*-*-* 20:30:00 UTC",
     ...DEFAULT_TIMING,
     // Each night already covers the current and previous month.
     catchUpPeriods: 0,

@@ -16,6 +16,7 @@
  */
 import type * as Facts from "@/lib/repositories/iq-facts";
 import type * as Insights from "@/lib/repositories/iq-insights";
+import type * as Trust from "@/lib/repositories/iq-trust";
 import type * as Recommendations from "@/lib/repositories/iq-recommendations";
 
 /** `(org, ...rest) => R` becomes `(...rest) => R`. */
@@ -66,6 +67,8 @@ export class DayLockBusy extends Error {
 export type JobWriteRepos = {
   /** Rebuilds one IST business day's facts for this org, recorded against this run. Idempotent. Throws `DayLockBusy`. */
   readonly recomputeDay: (date: string, budget: DayLockBudget) => ReturnType<typeof Facts.recomputeDay>;
+  /** Scores and stores one IST business day's trust signals for this org, recorded against this run. Idempotent. Throws `DayLockBusy`. */
+  readonly computeTrustDay: (date: string, budget: DayLockBudget) => ReturnType<typeof Trust.computeTrustDay>;
   readonly writeInsight: WithoutTxAndLease<typeof Insights.writeInsight>;
   readonly proposeRecommendation: WithoutTxAndLease<typeof Recommendations.proposeRecommendation>;
 };

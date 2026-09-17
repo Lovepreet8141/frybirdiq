@@ -26,7 +26,7 @@ import { handleJobRequest, type ClaimRequest } from "@/lib/jobs/handle";
 import { DEFAULT_TIMING, type JobDefinition } from "@/lib/jobs/registry";
 import { nightlyDates, remainingAfter } from "@/lib/jobs/facts-plan";
 import { periodKeyAt, shiftPeriod } from "@/lib/jobs/period";
-import { iqDailyFacts, organizations } from "@/db/schema";
+import { iqDailyFacts, iqDailyTrust, organizations } from "@/db/schema";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 import { seedExpense } from "./__test-support__/iq-fixtures";
 import { factDayLockKey, readDailyFacts } from "./iq-facts";
@@ -527,7 +527,7 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
     expect(seen).toMatchObject({
       ctxKeys: ["attempt", "commit", "orgId", "period", "periodKey", "remainingMs", "repos", "resumeCursor", "runId", "shouldStop", "trigger"],
       readKeys: ["checkFactsParity", "factsHistoryStart", "getInsight", "listInsights", "listOpenRecommendations", "readFactFigures"],
-      writeKeys: ["proposeRecommendation", "recomputeDay", "writeInsight"],
+      writeKeys: ["computeTrustDay", "proposeRecommendation", "recomputeDay", "writeInsight"],
       listedOrgs: [org.orgId],
       listedHasA: true,
       listedHasB: false,
@@ -595,10 +595,19 @@ describe("IQ-1 facts jobs through the runner (iq1-s8) on the local stack", () =>
     expect(row!.summary).toMatchObject({
       days_planned: planned.length,
       days_recomputed: planned.length,
+      parity_ok: 1,
       parity_checks: 2,
       parity_mismatches: 0,
       parity_missing_days: 0,
     });
+    // Trust is scored for every day, after its facts, recorded against the same run.
+    const trustRows = await db()
+      .selectDistinct({ date: iqDailyTrust.businessDate, jobRunId: iqDailyTrust.jobRunId })
+      .from(iqDailyTrust)
+      .where(eq(iqDailyTrust.orgId, a.orgId));
+    expect(trustRows.map((t) => t.date).sort()).toEqual(planned);
+    expect(new Set(trustRows.map((t) => t.jobRunId))).toEqual(new Set([row!.id]));
+    expect(row!.summary.trust_signals_written).toBeGreaterThan(0);
 
     const facts = await readDailyFacts(a.orgId, planned[0]!, yesterday);
     expect(facts.missingDates).toEqual([]);
@@ -608,6 +617,7 @@ describe("IQ-1 facts jobs through the runner (iq1-s8) on the local stack", () =>
 
     // Org B was not touched by org A's run.
     expect(await factRows(b.orgId)).toBe(0);
+    expect((await db().select({ id: iqDailyTrust.id }).from(iqDailyTrust).where(eq(iqDailyTrust.orgId, b.orgId))).length).toBe(0);
 
     const rowsBefore = await factRows(a.orgId);
     expect(await runJob("iq-facts-nightly", [a.orgId], { period: yesterday })).toMatchObject({ status: 200, body: { counts: { NOOP: 1 } } });
@@ -662,9 +672,9 @@ describe("IQ-1 facts jobs through the runner (iq1-s8) on the local stack", () =>
     });
     await holding;
 
-    // 34 s left of the deadline: the budget is 3 waits of 1.333 s.
+    // 40 s left of the deadline: the budget is 3 waits of 1.666 s per locked step.
     let calls = 0;
-    const lateClock = () => (calls++ === 0 ? 0 : 206_000);
+    const lateClock = () => (calls++ === 0 ? 0 : 200_000);
     const started = performance.now();
     try {
       const busy = await runJob("iq-facts-nightly", [e.orgId], { period: yesterday, clock: lateClock });

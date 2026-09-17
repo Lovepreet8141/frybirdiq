@@ -26,13 +26,31 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
     expect(heavyJobNames({ a: fake("a", "heavy"), b: fake("b", "light"), c: fake("c", "heavy") })).toEqual(["a", "c"]);
   });
 
+  it("keeps every heavy job, with all its systemd retries, clear of the 22:00-22:45 UTC backup window", () => {
+    // deploy (S10): curl -m 290 per attempt, Restart=on-failure, RestartSec=360, 3 restarts.
+    const CURL_MAX_SECONDS = 290;
+    const RESTART_SEC = 360;
+    const RESTARTS = 3;
+    const BACKUP_START_MINUTE = 22 * 60;
+    const BACKUP_END_MINUTE = 22 * 60 + 45;
+    for (const name of HEAVY_JOB_NAMES) {
+      const calendar = JOB_REGISTRY[name as keyof typeof JOB_REGISTRY].onCalendarUtc;
+      const match = /^\*-\*-\* (\d{2}):(\d{2}):00 UTC$/.exec(calendar ?? "");
+      expect(match, `${name} needs a fixed daily UTC start`).not.toBeNull();
+      const startMinute = Number(match![1]) * 60 + Number(match![2]);
+      const worstCaseEndMinute = startMinute + ((RESTARTS + 1) * CURL_MAX_SECONDS + RESTARTS * RESTART_SEC) / 60;
+      const overlaps = startMinute < BACKUP_END_MINUTE && worstCaseEndMinute > BACKUP_START_MINUTE;
+      expect(overlaps, `${name} ${calendar} could run until minute ${worstCaseEndMinute}`).toBe(false);
+    }
+  });
+
   it("registers at most one heavy job until heavy exclusion takes a lock (RELIABILITY, s7b)", () => {
     // heavyRunLive is check-then-claim: two different heavy jobs starting together could both run.
     expect(HEAVY_JOB_NAMES.length).toBeLessThanOrEqual(1);
   });
 
   it("schedules the facts jobs as designed: nightly 03:00 IST for yesterday, intraday every IST quarter for today, backfill by hand", () => {
-    expect(JOB_REGISTRY["iq-facts-nightly"]).toMatchObject({ periodKind: "day", target: "previous", onCalendarUtc: "*-*-* 21:30:00 UTC", catchUpPeriods: 0 });
+    expect(JOB_REGISTRY["iq-facts-nightly"]).toMatchObject({ periodKind: "day", target: "previous", onCalendarUtc: "*-*-* 20:30:00 UTC", catchUpPeriods: 0 });
     expect(JOB_REGISTRY["iq-facts-intraday"]).toMatchObject({
       periodKind: "quarter_hour",
       target: "current",

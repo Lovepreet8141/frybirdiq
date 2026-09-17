@@ -45,6 +45,8 @@ export type JobRunRow = {
   readonly leaseExpiresAt: Date;
   /** The cursor saved with the last committed chunk; the next attempt resumes here. */
   readonly cursor: string | null;
+  /** error_code of the last finished attempt (e.g. DEADLINE, DAY_LOCK_BUSY), or null. */
+  readonly errorCode: string | null;
 };
 
 export type ClaimRead = { readonly inserted: true; readonly row: JobRunRow } | { readonly inserted: false; readonly row: JobRunRow };
@@ -68,6 +70,8 @@ export type ClaimDecision =
       /** A zombie's lost lease counts as a failure; a FAILED row was counted when it finished. */
       readonly nextFailures: number;
       readonly resumeCursor: string | null;
+      /** Why the previous attempt ended; a takeover clears it on the row, so it is carried here. */
+      readonly previousErrorCode: string | null;
     }
   | { readonly kind: "EXHAUSTED"; readonly closeZombie: ExpectedRow | null };
 
@@ -94,6 +98,7 @@ export function decideClaim(read: ClaimRead, maxAttempts: number, dbNow: Date): 
         nextAttempt: row.attempt + 1,
         nextFailures: failures,
         resumeCursor: row.cursor,
+        previousErrorCode: row.status === "FAILED" ? row.errorCode : null,
       };
     }
   }

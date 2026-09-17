@@ -83,6 +83,7 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
       leaseOwner: r.leaseOwner,
       leaseExpiresAt: new Date(r.leaseExpiresAt),
       cursor: r.cursor,
+      errorCode: r.errorCode,
     };
   }
 
@@ -142,6 +143,7 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
       leaseOwner: next.leaseOwner,
       trigger: next.trigger,
       leaseExpiresAt: new Date(this.nowMs + next.leaseSeconds * 1000),
+      errorCode: null,
     });
     return this.view(row);
   }

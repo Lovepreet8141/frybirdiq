@@ -258,6 +258,7 @@ async function runUnit<W>(
   const decision = decideClaim(read, def.maxAttempts, dbNow);
 
   let row: JobRunRow;
+  let previousErrorCode: string | null = null;
   switch (decision.kind) {
     case "NOOP":
       return "NOOP";
@@ -277,6 +278,7 @@ async function runUnit<W>(
       });
       if (taken === null) return "BUSY";
       row = taken;
+      previousErrorCode = decision.previousErrorCode;
       break;
     }
     case "RUN":
@@ -358,17 +360,20 @@ async function runUnit<W>(
     };
     reported = "FAILED";
   } else if (result.status === "PARTIAL") {
-    // A deadline cut whose committed cursor moved is progress, not a failure (reviews M2, J1);
-    // a stop on a busy day lock is contention, never a failure (RELIABILITY, iq1-s7b).
+    // A deadline cut whose committed cursor moved is progress, not a failure (reviews M2, J1).
+    // A stop on a busy day lock is contention (RELIABILITY, iq1-s7b) — once. Two in a row
+    // without progress count, so a lock that never frees eventually exhausts the run and
+    // systemd's OnFailure fires (RELIABILITY F, iq1-s8r).
     const progressed = committedCursor !== startCursor;
     const lockBusy = result.reason === "DAY_LOCK_BUSY";
+    const repeatedLockBusy = lockBusy && !progressed && previousErrorCode === "DAY_LOCK_BUSY";
     outcome = {
       status: "DEADLINE",
       errorCode: lockBusy ? "DAY_LOCK_BUSY" : "DEADLINE",
       rowsWritten: result.rowsWritten,
       summary: result.summary,
       cursor: committedCursor,
-      failures: progressed || lockBusy ? row.failures : row.failures + 1,
+      failures: progressed || (lockBusy && !repeatedLockBusy) ? row.failures : row.failures + 1,
     };
     reported = "PARTIAL";
   } else {

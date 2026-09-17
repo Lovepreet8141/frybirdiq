@@ -13,6 +13,7 @@ const row = (overrides: Partial<JobRunRow> = {}): JobRunRow => ({
   leaseOwner: "owner-1",
   leaseExpiresAt: at(120),
   cursor: null,
+  errorCode: null,
   ...overrides,
 });
 
@@ -46,6 +47,7 @@ describe("claim decision table (DESIGN §3)", () => {
       nextAttempt: 3,
       nextFailures: 2,
       resumeCursor: "c-42",
+      previousErrorCode: null,
     });
   });
 
@@ -56,6 +58,7 @@ describe("claim decision table (DESIGN §3)", () => {
       nextAttempt: 2,
       nextFailures: 1,
       resumeCursor: null,
+      previousErrorCode: null,
     });
   });
 
@@ -65,6 +68,17 @@ describe("claim decision table (DESIGN §3)", () => {
       nextAttempt: 10,
       nextFailures: 0,
       resumeCursor: "c-9",
+    });
+  });
+
+  it("carries the previous attempt's error code into a takeover of a FAILED row, never of a zombie", () => {
+    expect(decideClaim(existing({ status: "FAILED", errorCode: "DAY_LOCK_BUSY" }), 3, now)).toMatchObject({
+      kind: "TAKEOVER",
+      previousErrorCode: "DAY_LOCK_BUSY",
+    });
+    expect(decideClaim(existing({ leaseExpiresAt: at(-1), errorCode: "DAY_LOCK_BUSY" }), 3, now)).toMatchObject({
+      kind: "TAKEOVER",
+      previousErrorCode: null,
     });
   });
 
