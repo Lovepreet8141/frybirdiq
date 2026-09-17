@@ -9,7 +9,7 @@ import { and, eq, like } from "drizzle-orm";
 import { db } from "@/db";
 import { loyaltyAccounts, loyaltyTransactions, orders } from "@/db/schema";
 import { reversePointsForOrder } from "./loyalty";
-import { createTestCustomer, createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
+import { createTestCustomer, createTestOrg, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
 import { fromRupees } from "@/lib/money";
 
 /** A minimal, directly-inserted order row — reversePointsForOrder only ever reads pointsEarned/customerId off it. */
@@ -91,6 +91,28 @@ describe("reversePointsForOrder", () => {
 
     await reversePointsForOrder({ orgId: org.orgId, orderId, reason: "first attempt" });
     await reversePointsForOrder({ orgId: org.orgId, orderId, reason: "retried attempt" });
+
+    const [account] = await db().select({ pointsBalance: loyaltyAccounts.pointsBalance }).from(loyaltyAccounts).where(eq(loyaltyAccounts.customerId, customer.id));
+    expect(account?.pointsBalance).toBe(80); // 100 - 20, once — not 60
+
+    const reversalRows = await db()
+      .select()
+      .from(loyaltyTransactions)
+      .where(and(eq(loyaltyTransactions.orgId, org.orgId), eq(loyaltyTransactions.orderId, orderId), like(loyaltyTransactions.reason, "Reversed —%")));
+    expect(reversalRows).toHaveLength(1);
+  });
+
+  it("loy-1: two concurrent reversals of the same order claw back exactly once, with exactly one ledger row", async () => {
+    const customer = await createTestCustomer(org.orgId);
+    await seedLoyaltyAccount(org.orgId, customer.id, 100);
+    const orderId = await createTestOrderWithPointsEarned(org, customer.id, 20);
+
+    await warmPool();
+
+    await Promise.all([
+      reversePointsForOrder({ orgId: org.orgId, orderId, reason: "concurrent caller A" }),
+      reversePointsForOrder({ orgId: org.orgId, orderId, reason: "concurrent caller B" }),
+    ]);
 
     const [account] = await db().select({ pointsBalance: loyaltyAccounts.pointsBalance }).from(loyaltyAccounts).where(eq(loyaltyAccounts.customerId, customer.id));
     expect(account?.pointsBalance).toBe(80); // 100 - 20, once — not 60

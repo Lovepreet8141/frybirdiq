@@ -275,51 +275,78 @@ export async function reverseStampForOrder(input: { orgId: string; orderId: stri
  * ledger entry says; the atomic `GREATEST` on the write is the actual
  * safety net if the real balance had already moved by the time this runs,
  * so the account can never be pushed negative regardless.
+ *
+ * That atomic write protects the *balance* even under a race, but the
+ * idempotency check above it (`already`) was still plain read-then-decide
+ * against autocommitted statements: two concurrent callers for the same
+ * order — a replayed idempotency key, or a future refund follow-up racing
+ * `advanceOrder`'s own post-commit call (`orders.ts`) — could both read
+ * "no reversal yet" before either had committed one, and both proceed to
+ * debit the balance and insert a ledger row. `GREATEST` stops the balance
+ * from going negative but does nothing to stop it being debited *twice*,
+ * and nothing stops two ledger rows.
+ *
+ * Fixed by locking the order row first — the same lock, and the same
+ * order (order row before anything else), that every other mutation of an
+ * order already takes (`advanceOrder`, `settle` in `payments.ts`) — inside
+ * one transaction that also re-checks `already` under that lock. The
+ * second concurrent caller blocks on the lock until the first commits, then
+ * sees the first's ledger row via the now-committed `already` check and
+ * no-ops, rather than reading a stale "not yet reversed" snapshot. No
+ * schema change: this is a lock, not a constraint. Deliberately carries no
+ * status filter on the order — any order with `pointsEarned > 0`, whatever
+ * its current status, is eligible, so a future caller reversing points for
+ * a fully refunded CANCELLED or FAILED order (not just REFUNDED) needs no
+ * change here.
  */
 export async function reversePointsForOrder(input: { orgId: string; orderId: string; reason: string }): Promise<void> {
   const database = db();
-  const [order] = await database
-    .select({ pointsEarned: orders.pointsEarned, customerId: orders.customerId })
-    .from(orders)
-    .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
-    .limit(1);
-  if (!order || order.pointsEarned <= 0 || !order.customerId) return; // never earned any, or a guest order
+  await database.transaction(async (tx) => {
+    const [order] = await tx
+      .select({ pointsEarned: orders.pointsEarned, customerId: orders.customerId })
+      .from(orders)
+      .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
+      .for("update")
+      .limit(1);
+    if (!order || order.pointsEarned <= 0 || !order.customerId) return; // never earned any, or a guest order
 
-  const REVERSAL_PREFIX = "Reversed —";
-  const [already] = await database
-    .select({ id: loyaltyTransactions.id })
-    .from(loyaltyTransactions)
-    .where(and(eq(loyaltyTransactions.orgId, input.orgId), eq(loyaltyTransactions.orderId, input.orderId), like(loyaltyTransactions.reason, `${REVERSAL_PREFIX}%`)))
-    .limit(1);
-  if (already) return;
+    const REVERSAL_PREFIX = "Reversed —";
+    const [already] = await tx
+      .select({ id: loyaltyTransactions.id })
+      .from(loyaltyTransactions)
+      .where(and(eq(loyaltyTransactions.orgId, input.orgId), eq(loyaltyTransactions.orderId, input.orderId), like(loyaltyTransactions.reason, `${REVERSAL_PREFIX}%`)))
+      .limit(1);
+    if (already) return;
 
-  const [account] = await database
-    .select({ id: loyaltyAccounts.id, pointsBalance: loyaltyAccounts.pointsBalance })
-    .from(loyaltyAccounts)
-    .where(eq(loyaltyAccounts.customerId, order.customerId))
-    .limit(1);
-  if (!account) return;
+    const [account] = await tx
+      .select({ id: loyaltyAccounts.id, pointsBalance: loyaltyAccounts.pointsBalance })
+      .from(loyaltyAccounts)
+      .where(eq(loyaltyAccounts.customerId, order.customerId))
+      .limit(1);
+    if (!account) return;
 
-  const reclaimed = pointsReclaimable(account.pointsBalance, order.pointsEarned);
-  if (reclaimed <= 0) return; // nothing left on the account to take back
+    const reclaimed = pointsReclaimable(account.pointsBalance, order.pointsEarned);
+    if (reclaimed <= 0) return; // nothing left on the account to take back
 
-  // The write itself is atomic — correct even if a concurrent spend or a
-  // second reversal races this exact account between the read above and
-  // this statement — matching how the earn path (payments.ts) already
-  // increments this same column, rather than trusting the snapshot read.
-  // `reclaimed` (from that snapshot) still decides the ledger entry below;
-  // GREATEST is the actual safety net if reality had already moved.
-  await database
-    .update(loyaltyAccounts)
-    .set({ pointsBalance: sql`greatest(${loyaltyAccounts.pointsBalance} - ${reclaimed}, 0)`, updatedAt: new Date() })
-    .where(eq(loyaltyAccounts.id, account.id));
+    // The write itself is atomic — correct even if a concurrent spend races
+    // this exact account between the read above and this statement —
+    // matching how the earn path (payments.ts) already increments this same
+    // column, rather than trusting the snapshot read. `reclaimed` (from that
+    // snapshot) still decides the ledger entry below; GREATEST is the actual
+    // safety net if reality had already moved. The order-row lock above is
+    // what stops this whole block from running twice for the same order.
+    await tx
+      .update(loyaltyAccounts)
+      .set({ pointsBalance: sql`greatest(${loyaltyAccounts.pointsBalance} - ${reclaimed}, 0)`, updatedAt: new Date() })
+      .where(eq(loyaltyAccounts.id, account.id));
 
-  await database.insert(loyaltyTransactions).values({
-    orgId: input.orgId,
-    accountId: account.id,
-    points: -reclaimed,
-    reason: `${REVERSAL_PREFIX} ${input.reason}`,
-    orderId: input.orderId,
+    await tx.insert(loyaltyTransactions).values({
+      orgId: input.orgId,
+      accountId: account.id,
+      points: -reclaimed,
+      reason: `${REVERSAL_PREFIX} ${input.reason}`,
+      orderId: input.orderId,
+    });
   });
 }
 
