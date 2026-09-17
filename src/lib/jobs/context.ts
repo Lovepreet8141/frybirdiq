@@ -24,7 +24,7 @@ export type JobContext<Tx = unknown> = {
    * `LeaseLostError`.
    */
   commit<T>(write: (tx: Tx) => Promise<T>, options?: { readonly cursor?: string }): Promise<T>;
-  /** True once the deadline has passed or the lease was lost: commit the cursor and return. */
+  /** True once the deadline has passed or the lease was lost: return PARTIAL now. Commits are refused shortly after. */
   shouldStop(): boolean;
 };
 
@@ -35,9 +35,11 @@ export type JobRunResult =
       readonly summary: Readonly<Record<string, number>>;
     }
   | {
-      /** Stopped at the deadline; the next attempt resumes from `cursor`. */
+      /**
+       * Stopped at the deadline. The next attempt resumes from the cursor of
+       * the last chunk that committed — never from anything claimed here.
+       */
       readonly status: "PARTIAL";
       readonly rowsWritten: number;
       readonly summary: Readonly<Record<string, number>>;
-      readonly cursor: string;
     };

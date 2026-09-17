@@ -129,7 +129,7 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
 
   async takeover(
     expected: ExpectedRow,
-    next: { attempt: number; failures: number; leaseOwner: string; trigger: JobTrigger; leaseSeconds: number },
+    next: { attempt: number; failures: number; leaseOwner: string; trigger: JobTrigger; leaseSeconds: number; deadlineSeconds: number },
   ): Promise<JobRunRow | null> {
     const row = this.matches(expected);
     if (row === null) return null;

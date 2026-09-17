@@ -3,7 +3,14 @@ import { describe, expect, it } from "vitest";
 import { MemoryStore, type MemoryTx } from "./__test-support__/memory-store";
 import { JOB_HOST } from "./auth";
 import type { JobContext, JobRunResult } from "./context";
-import { errorCodeOf, handleJobRequest, scrubErrorMessage, type HandleDeps, type JobRequest } from "./handle";
+import {
+  COMMIT_GRACE_SECONDS,
+  errorCodeOf,
+  handleJobRequest,
+  scrubErrorMessage,
+  type HandleDeps,
+  type JobRequest,
+} from "./handle";
 import { DEFAULT_TIMING, type JobDefinition } from "./registry";
 
 const SECRET = "s".repeat(40);
@@ -261,10 +268,10 @@ describe("deadline", () => {
       job(async (ctx) => {
         cursors.push(ctx.resumeCursor);
         if (ctx.resumeCursor === null) {
-          await ctx.commit(async (tx) => tx.write("chunk-1"));
+          await ctx.commit(async (tx) => tx.write("chunk-1"), { cursor: "after-1" });
           h.clock.ms += DEFAULT_TIMING.deadlineSeconds * 1000;
           expect(ctx.shouldStop()).toBe(true);
-          return { status: "PARTIAL", rowsWritten: 1, summary: { chunks: 1 }, cursor: "after-1" };
+          return { status: "PARTIAL", rowsWritten: 1, summary: { chunks: 1 } };
         }
         await ctx.commit(async (tx) => tx.write("chunk-2"));
         return complete(1);
@@ -411,7 +418,7 @@ describe("RELIABILITY review of ff7b92b", () => {
         await ctx.commit(async (tx) => tx.write(`chunk-${n}`), { cursor: String(n + 1) });
         if (n + 1 === CHUNKS) return complete(CHUNKS);
         h.clock.ms += DEFAULT_TIMING.deadlineSeconds * 1000;
-        return { status: "PARTIAL", rowsWritten: 1, summary: {}, cursor: String(n + 1) };
+        return { status: "PARTIAL", rowsWritten: 1, summary: {} };
       }),
     );
     const statuses: number[] = [];
@@ -423,9 +430,10 @@ describe("RELIABILITY review of ff7b92b", () => {
 
   it("M2 counts a deadline cut with no progress as a failure", async () => {
     const h = harness(
-      job(async () => {
+      job(async (ctx) => {
+        await ctx.commit(async () => undefined, { cursor: "stuck" });
         h.clock.ms += DEFAULT_TIMING.deadlineSeconds * 1000;
-        return { status: "PARTIAL", rowsWritten: 0, summary: {}, cursor: "stuck" };
+        return { status: "PARTIAL", rowsWritten: 0, summary: {} };
       }),
     );
     const outcomes: string[] = [];
@@ -485,5 +493,47 @@ describe("RELIABILITY review of ff7b92b", () => {
     const response = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
     expect(response).toMatchObject({ status: 500, body: { counts: { FAILED: 1, SUCCEEDED: 1 } } });
     expect(h.store.run("test_job", "org-b", HOUR)?.status).toBe("SUCCEEDED");
+  });
+});
+
+describe("RELIABILITY re-review of d19f296", () => {
+  it("J1 records the last committed cursor at a deadline, not one the job only claims", async () => {
+    const h = harness(
+      job(async (ctx) => {
+        await ctx.commit(async (tx) => tx.write("chunk-1"), { cursor: "after-1" });
+        h.clock.ms += DEFAULT_TIMING.deadlineSeconds * 1000;
+        // A job that reports more progress than it committed must not skip work.
+        return { status: "PARTIAL", rowsWritten: 2, summary: {}, cursor: "after-2" } as JobRunResult;
+      }),
+    );
+    await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ errorCode: "DEADLINE", cursor: "after-1", failures: 0 });
+  });
+
+  it("J1 counts a deadline cut with no committed progress as a failure, whatever cursor the job claims", async () => {
+    const h = harness(
+      job(async () => {
+        h.clock.ms += DEFAULT_TIMING.deadlineSeconds * 1000;
+        return { status: "PARTIAL", rowsWritten: 0, summary: {}, cursor: "claimed" } as JobRunResult;
+      }),
+    );
+    await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ errorCode: "DEADLINE", cursor: null, failures: 1 });
+  });
+
+  it("J2 accepts a commit within the grace after the deadline, and refuses one after it", async () => {
+    const h = harness(
+      job(async (ctx) => {
+        h.clock.ms += DEFAULT_TIMING.deadlineSeconds * 1000 + 1;
+        await ctx.commit(async (tx) => tx.write("late-but-in-grace"));
+        h.clock.ms += COMMIT_GRACE_SECONDS * 1000;
+        await ctx.commit(async (tx) => tx.write("ignored-shouldStop"));
+        return complete();
+      }),
+    );
+    const response = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(response).toMatchObject({ status: 500, body: { counts: { FAILED: 1 } } });
+    expect(h.store.committed).toEqual(["late-but-in-grace"]);
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "DEADLINE_EXCEEDED", failures: 1 });
   });
 });
