@@ -1336,7 +1336,7 @@ function systemOrStaff(actorUserId: string | null): string {
 
 /** What one healer run did. */
 export interface RefundHealReport {
-  /** Lost follow-ups picked this run, up to the limit. */
+  /** Lost follow-ups this run attempted, up to the limit. */
   readonly examined: number;
   /** Of those, now carrying their money event: the follow-up finished. */
   readonly healed: number;
@@ -1344,6 +1344,8 @@ export interface RefundHealReport {
   readonly stillOpen: number;
   /** Ids of the refunds still unfinished (ids only, nothing else), so the job can alert when they persist across runs. */
   readonly stillOpenRefundIds: readonly string[];
+  /** Picked but not attempted because `shouldStop` said time was up; the next run reaches them (no failure is recorded). */
+  readonly notReached: number;
 }
 
 /** A refund's follow-up is only presumed lost after this long, so the healer never races a live request. */
@@ -1373,12 +1375,18 @@ export const REFUND_FOLLOWUP_FAILED_ACTION = "refund_followup_failed";
  * actor). Each follow-up is idempotent: a second run, or a live request
  * racing this one, repeats nothing.
  *
+ * Bounded in time (RELIABILITY): `shouldStop` is asked before each refund,
+ * and once it returns true the run ends between refunds. One follow-up can
+ * still take up to about 28 s (advanceOrder, two reversals, the event, and a
+ * facts refresh within its 2 s lock wait and 5 s statements), so a job should
+ * stop with at least that much of its deadline left.
+ *
  * Exported for the scheduled job (AUTOMATION-ARCHITECT registers it). It
  * never calls a payment provider.
  */
 export async function healLostRefundFollowUps(
   input: { readonly orgId: string; readonly olderThanMs?: number; readonly limit?: number; readonly retryAfterMs?: number; readonly now?: Date },
-  opts: { readonly factsRefresh?: FactsRefreshSteps } = {},
+  opts: { readonly factsRefresh?: FactsRefreshSteps; readonly shouldStop?: () => boolean } = {},
 ): Promise<RefundHealReport> {
   const database = db();
   const now = input.now ?? new Date();
@@ -1403,7 +1411,10 @@ export async function healLostRefundFollowUps(
     .limit(limit);
 
   const stillOpenRefundIds: string[] = [];
+  let examined = 0;
   for (const row of lost) {
+    if (opts.shouldStop?.()) break;
+    examined += 1;
     let errorName: string | null = null;
     try {
       await followUpRefund({ orgId: input.orgId, actorUserId: row.actorUserId, refundId: row.id }, opts.factsRefresh);
@@ -1435,5 +1446,5 @@ export async function healLostRefundFollowUps(
     console.warn(`payments: refund healer could not finish refund ${row.id} (${errorName ?? "not finished"}); retrying after the back-off`);
   }
 
-  return { examined: lost.length, healed: lost.length - stillOpenRefundIds.length, stillOpen: stillOpenRefundIds.length, stillOpenRefundIds };
+  return { examined, healed: examined - stillOpenRefundIds.length, stillOpen: stillOpenRefundIds.length, stillOpenRefundIds, notReached: lost.length - examined };
 }
