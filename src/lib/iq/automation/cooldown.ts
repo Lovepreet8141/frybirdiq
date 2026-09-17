@@ -1,50 +1,63 @@
 /**
  * Cooldown — when the engine may propose the same action again.
  *
- * DESIGN-v2-DELTA.md §4: dismissed 7 days, expired 1 day. "The same action"
- * is the same org, action kind and params hash; the repository reads the
- * latest decided row through the (org_id, action_kind, params_hash,
- * decided_at desc) index and passes it in.
+ * DESIGN-v2-DELTA.md §4 with the RELIABILITY review of d250328. "The same
+ * action" is the same org, action kind and params hash. The repository reads
+ * two things and passes both:
  *
- * - REJECTED or UNDONE: a person said no. Quiet for 7 days.
- * - EXPIRED: nobody looked in time. It may come back after 1 day.
- * - still open (queued, pending, approved, executing, handed off): proposing
- *   it again would be a duplicate.
- * - anything else (succeeded, failed, superseded, cancelled): no cooldown;
- *   whether it is still worth doing is the rule's call, not this one's.
+ * - `open`: any row still in flight (OPEN_ACTION_STATUSES). One exists → a
+ *   new proposal would be a duplicate, however old the closed rows are.
+ * - `latestClosed`: otherwise, the most recently closed row.
+ *
+ * Cooldown after a closed row:
+ * - REJECTED, UNDONE, CANCELLED: a person said no (CANCELLED is also the only
+ *   way to dismiss an A3 handoff). 7 days.
+ * - EXPIRED: nobody looked in time. 1 day.
+ * - FAILED: the executor could not do it. 1 day, so a failing action does not
+ *   ask the owner again on every run.
+ * - SUCCEEDED, SUPERSEDED: none; whether it is worth doing again is the rule's call.
+ *
+ * Reading is not enough on its own: two runs can both read nothing. The
+ * partial UNIQUE index on open rows is what finally refuses the second insert.
  */
-import type { ActionStatus } from "./state-machine";
+import type { ClosedActionStatus, OpenActionStatus } from "./state-machine";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const COOLDOWN_MS = {
   dismissed: 7 * DAY_MS,
   expired: 1 * DAY_MS,
+  failed: 1 * DAY_MS,
 } as const;
 
-const OPEN: ReadonlySet<ActionStatus> = new Set(["QUEUED", "PENDING_APPROVAL", "APPROVED", "EXECUTING", "HANDOFF"]);
-
-export type LatestAction = {
-  readonly status: ActionStatus;
-  /** When the row reached its current status. */
-  readonly decidedAt: Date;
+export type ProposalHistory = {
+  readonly open: { readonly status: OpenActionStatus } | null;
+  readonly latestClosed: { readonly status: ClosedActionStatus; readonly decidedAt: Date } | null;
 };
+
+export type CooldownReason = "DISMISSED_COOLDOWN" | "EXPIRED_COOLDOWN" | "FAILED_COOLDOWN";
 
 export type ProposalCheck =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: "OPEN_DUPLICATE" }
-  | { readonly ok: false; readonly reason: "DISMISSED_COOLDOWN" | "EXPIRED_COOLDOWN"; readonly until: Date };
+  | { readonly ok: false; readonly reason: CooldownReason; readonly until: Date };
 
-export function mayPropose(latest: LatestAction | null, now: Date): ProposalCheck {
+const COOLDOWN: { readonly [S in ClosedActionStatus]: { reason: CooldownReason; ms: number } | null } = {
+  REJECTED: { reason: "DISMISSED_COOLDOWN", ms: COOLDOWN_MS.dismissed },
+  UNDONE: { reason: "DISMISSED_COOLDOWN", ms: COOLDOWN_MS.dismissed },
+  CANCELLED: { reason: "DISMISSED_COOLDOWN", ms: COOLDOWN_MS.dismissed },
+  EXPIRED: { reason: "EXPIRED_COOLDOWN", ms: COOLDOWN_MS.expired },
+  FAILED: { reason: "FAILED_COOLDOWN", ms: COOLDOWN_MS.failed },
+  SUCCEEDED: null,
+  SUPERSEDED: null,
+};
+
+export function mayPropose(history: ProposalHistory, now: Date): ProposalCheck {
+  if (history.open !== null) return { ok: false, reason: "OPEN_DUPLICATE" };
+  const latest = history.latestClosed;
   if (latest === null) return { ok: true };
-  if (OPEN.has(latest.status)) return { ok: false, reason: "OPEN_DUPLICATE" };
 
-  const cooldown =
-    latest.status === "REJECTED" || latest.status === "UNDONE"
-      ? { reason: "DISMISSED_COOLDOWN" as const, ms: COOLDOWN_MS.dismissed }
-      : latest.status === "EXPIRED"
-        ? { reason: "EXPIRED_COOLDOWN" as const, ms: COOLDOWN_MS.expired }
-        : null;
+  const cooldown = COOLDOWN[latest.status];
   if (cooldown === null) return { ok: true };
 
   const until = new Date(latest.decidedAt.getTime() + cooldown.ms);

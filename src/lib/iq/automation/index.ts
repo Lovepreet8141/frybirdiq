@@ -31,7 +31,9 @@ export {
 } from "./catalog";
 export {
   ACTION_STATUSES,
+  OPEN_ACTION_STATUSES,
   EXECUTION_MODES,
+  EXECUTE_WINDOW_SECONDS,
   INITIAL_STATUS,
   MAX_EXECUTION_ATTEMPTS,
   MODES_FOR_TIER,
@@ -39,7 +41,12 @@ export {
   checkTransition,
   isModeAllowedForTier,
   isTerminal,
+  modeOf,
+  type ActionRow,
   type ActionStatus,
+  type OpenActionStatus,
+  type ClosedActionStatus,
+  type PolicyRef,
   type ExecutionMode,
   type TransitionContext,
   type TransitionRefusal,
@@ -55,4 +62,5 @@ export {
   type ApprovalReason,
   type PolicyDecision,
 } from "./policy";
-export { COOLDOWN_MS, mayPropose, type LatestAction, type ProposalCheck } from "./cooldown";
+export { COOLDOWN_MS, mayPropose, type CooldownReason, type ProposalCheck, type ProposalHistory } from "./cooldown";
+export type { ActionExecutor, ExecutionInput, ExecutionEffect } from "./executor";
