@@ -32,19 +32,24 @@ import "server-only";
  * machine, whatever org they run for).
  */
 
-import { and, eq, gt, inArray, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
-import { iqJobRuns, orders, organizations } from "@/db/schema";
-import { businessDateSql, endOfBusinessDay, startOfBusinessDay } from "@/lib/iq/metrics";
+import { iqDailyTrust, iqJobRuns, orders, organizations } from "@/db/schema";
+import { detectDayFrom, type DayFacts, type DayTrustRow } from "@/lib/iq/detect/day";
+import type { DetectDay } from "@/lib/iq/detect/rules";
+import { observed } from "@/lib/iq/engine/observed-factory";
+import { TRUST_SIGNAL_IDS, businessDateSql, endOfBusinessDay, startOfBusinessDay, type TrustSignalId } from "@/lib/iq/metrics";
+import { TRUST_GRADES, type TrustGrade } from "@/lib/iq/trust";
+import { FACTS_NIGHTLY_JOB, nightlyDates } from "@/lib/jobs/facts-plan";
 import { JOB_RUN_STATUSES, type ClaimRead, type ExpectedRow, type JobRunRow, type JobRunStatus, type JobTrigger } from "@/lib/jobs/claim-decision";
 import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
 import type { ClaimRequest, FinishOutcome, JobRunStore } from "@/lib/jobs/handle";
 import { DayLockBusy, DayTimeout, type FactsParity, type JobReadRepos, type JobWriteRepos } from "@/lib/jobs/repos";
 import { getProfitAndLoss } from "./expenses";
 import { countStuckRefundFollowUps, healLostRefundFollowUps } from "./payments";
-import { DayLockBusyError, DayTimeoutError, readDailyFacts, recomputeDay } from "./iq-facts";
-import { getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
-import { computeTrustDay } from "./iq-trust";
+import { DayLockBusyError, DayTimeoutError, purgeIntradayFacts, readDailyFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
+import { expireInsights, getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
+import { TRUST_DEFINITION_VERSION, computeTrustDay } from "./iq-trust";
 import { listOpenRecommendations, proposeRecommendation } from "./iq-recommendations";
 
 /** The first IST business day an org has history for: its opened_on date, else the day of its first order. */
@@ -103,6 +108,79 @@ async function checkFactsParity(orgId: string, from: string, to: string): Promis
   return { ok: previous!.ok, mismatchedMetrics: previous!.mismatchedMetrics, missingDays: previous!.missingDays };
 }
 
+/**
+ * Whether daily facts for `date` are final (IQ-2 R2.8; RELIABILITY C4 and U1):
+ * some SUCCEEDED iq-facts-nightly run of this org planned `date` and finished
+ * after the day closed. Any such run counts, not only the one keyed to `date`,
+ * so a night whose own facts run exhausted is unblocked by the next night's run
+ * (which rebuilds the current and previous month) instead of failing forever.
+ */
+async function factsReadyFor(orgId: string, date: string): Promise<boolean> {
+  const runs = await db()
+    .select({ periodKey: iqJobRuns.periodKey })
+    .from(iqJobRuns)
+    .where(
+      and(
+        eq(iqJobRuns.orgId, orgId),
+        eq(iqJobRuns.job, FACTS_NIGHTLY_JOB),
+        eq(iqJobRuns.status, "SUCCEEDED"),
+        gte(iqJobRuns.periodKey, date),
+        gte(iqJobRuns.finishedAt, endOfBusinessDay(date)),
+      ),
+    );
+  return runs.some((run) => nightlyDates(run.periodKey).includes(date));
+}
+
+/**
+ * The detectors' view of each date (IQ-2 S3 `DetectDay`). This repository does
+ * only the org-scoped reads — each day's summed daily facts and the day's
+ * iq_daily_trust rows — and hands them to IQ-ENGINE's pure `detectDayFrom`,
+ * which owns the figures and the trust rule (ARCHITECT review of 56fc9ba).
+ *
+ * Facts are read per date: `readDailyFacts` sums over its range, and the dates
+ * are not contiguous (the day, the day before, and 8 same-weekday days), so one
+ * call over min..max would add the days together.
+ */
+async function readDetectDays(orgId: string, dates: readonly string[]): Promise<DetectDay[]> {
+  const unique = [...new Set(dates)];
+  if (unique.length === 0) return [];
+
+  const trustRows = await db()
+    .select({
+      date: iqDailyTrust.businessDate,
+      signalId: iqDailyTrust.signalId,
+      grade: iqDailyTrust.grade,
+      numerator: iqDailyTrust.numerator,
+      denominator: iqDailyTrust.denominator,
+      computedAt: iqDailyTrust.computedAt,
+    })
+    .from(iqDailyTrust)
+    .where(
+      and(
+        eq(iqDailyTrust.orgId, orgId),
+        eq(iqDailyTrust.definitionVersion, TRUST_DEFINITION_VERSION),
+        inArray(iqDailyTrust.businessDate, unique),
+      ),
+    );
+  const knownSignal = (id: string): id is TrustSignalId => (TRUST_SIGNAL_IDS as readonly string[]).includes(id);
+  const knownGrade = (grade: string): grade is TrustGrade => (TRUST_GRADES as readonly string[]).includes(grade);
+
+  const days: DetectDay[] = [];
+  for (const date of dates) {
+    const facts = await readDailyFacts(orgId, date, date);
+    const dayFacts: DayFacts = { computed: facts.computedDates.includes(date), totals: facts.totals, breakdowns: facts.breakdowns };
+    const dayTrust: DayTrustRow[] = [];
+    for (const row of trustRows) {
+      if (row.date !== date || !knownSignal(row.signalId) || !knownGrade(row.grade)) continue;
+      dayTrust.push({ signalId: row.signalId, grade: row.grade, numerator: row.numerator, denominator: row.denominator, computedAt: row.computedAt });
+    }
+    // TODO(IQ-2 S4, FINANCE-LEDGER): parityFlagged comes from S4's per-day recon.facts_parity flag once it exists
+    // (god ruling on iq2-s7: detectDayFrom's false is accepted until then).
+    days.push(detectDayFrom(date, dayFacts, dayTrust, observed));
+  }
+  return days;
+}
+
 /** The iq-* reads a job may make, with `orgId` closed over. */
 export function iqRepos(orgId: string): JobReadRepos {
   return {
@@ -111,6 +189,10 @@ export function iqRepos(orgId: string): JobReadRepos {
     countStuckRefundFollowUps: () => countStuckRefundFollowUps({ orgId }),
     factsHistoryStart: () => factsHistoryStart(orgId),
     checkFactsParity: (from, to) => checkFactsParity(orgId, from, to),
+    factsReadyFor: (date) => factsReadyFor(orgId, date),
+    readDetectDays: (dates) => readDetectDays(orgId, dates),
+    // Blocked by owner decision dec-7 (food-cost target): the rule stays unevaluated until then.
+    readFoodCostTarget: async () => null,
     listInsights: (...args) => listInsights(orgId, ...args),
     getInsight: (...args) => getInsight(orgId, ...args),
     readFactFigures: (...args) => readFactFigures(orgId, ...args),
@@ -145,7 +227,11 @@ export function iqWriteRepos(tx: IqTx, lease: LeaseToken & { readonly orgId: str
     // Same lock discipline as recomputeDay. appNow is left to default: trust decides "today" (T5) itself.
     computeTrustDay: (date, budget) => mapDayLockBusy(date, () => computeTrustDay(lease.orgId, date, { jobRunId: lease.runId, ...budget })),
     writeInsight: (...args) => writeInsight(tx, lease, ...args),
+    expireInsights: (...args) => expireInsights(tx, lease, ...args),
     proposeRecommendation: (...args) => proposeRecommendation(tx, lease, ...args),
+    // Its own locked transaction, like recomputeDay (key intraday:<org>:<date>).
+    rebuildIntradayDay: (date, budget) => mapDayLockBusy(date, () => rebuildIntradayDay(lease.orgId, date, { jobRunId: lease.runId, ...budget })),
+    purgeIntradayFacts: (today) => purgeIntradayFacts(lease.orgId, today),
   };
 }
 
@@ -196,6 +282,10 @@ class PostgresJobRunStore implements JobRunStore<JobWriteRepos> {
   private readonly orgByRun = new Map<string, string>();
 
   constructor(private readonly options: JobRunStoreOptions) {}
+
+  get codeVersion(): string {
+    return this.options.codeVersion;
+  }
 
   async dbNow(): Promise<Date> {
     const [row] = await db().execute<{ now: string | Date }>(sql`SELECT now() AS now`);

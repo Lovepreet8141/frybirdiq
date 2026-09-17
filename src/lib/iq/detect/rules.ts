@@ -80,21 +80,7 @@ export const FIGURE_SIGMA_FLOOR: Readonly<Record<DetectFigureId, bigint>> = {
   online_share: UNIT_FLOOR.bps,
 };
 
-/** For the reader (S7): the stored facts each figure is built from, and how. */
-export const FIGURE_INPUTS: Readonly<Record<DetectFigureId, string>> = {
-  revenue_net: "revenue_net",
-  orders_paid: "orders_paid",
-  aov_net: "aovNetV2(revenue_net, orders_paid); absent when orders_paid = 0",
-  // ANALYTICS-DATA iq2-s3r-ad (c): discount_total is before tax, sales_gross is after discount and points incl. GST —
-  // this is the discount as a share of what customers paid, not of the list price.
-  discount_share: "ratioBpsOrNull(discount_total, sales_gross); absent when sales_gross ≤ 0",
-  orders_cancelled_failed: "orders_cancelled + orders_failed",
-  refunds_amount: "refunds_amount",
-  sales_gross: "sales_gross (GST-inclusive, the basis refunds_amount is on)",
-  waste_cost: "waste_cost",
-  food_cost_pct_theoretical: "foodCostPctTheoretical(food_cost_theoretical, revenue_net); absent when revenue_net ≤ 0",
-  online_share: "channelShare(revenue_net[channel=ONLINE], revenue_net); absent when revenue_net ≤ 0",
-};
+/** How each figure is built from stored facts, and which metrics its trust rests on: `FIGURE_INPUTS` in ./day.ts. */
 
 /** A figure's trust for a day, plus how many of its signals were LOW (read from iq_daily_trust). */
 export type DetectTrust = FigureTrust & { readonly lowSignals: Observed };

@@ -121,6 +121,8 @@ export type ProposeInput = {
   readonly expectedParamsHash?: string;
   /** The content hash of every payload.evidenceInsightIds entry, as the caller read it. */
   readonly evidenceContentHashes: Readonly<Record<string, string>>;
+  /** End of the period the recommender evaluated (IST, +05:30); passed to writeInsight (RELIABILITY C5/U2). */
+  readonly asOf: string;
 };
 
 const REPROPOSABLE: readonly string[] = ["DISMISSED", "EXPIRED"];
@@ -198,7 +200,7 @@ export async function proposeRecommendation(tx: IqTx, lease: IqWriteLease, input
   const stale = await lockEvidence(tx, orgId, pins);
   if (stale.length > 0) return { outcome: "STALE_EVIDENCE", insightIds: stale };
 
-  let written = await writeInsight(tx, lease, insight);
+  let written = await writeInsight(tx, lease, insight, { asOf: input.asOf });
   if (written.outcome === "NOOP") {
     const [existing] = await tx
       .select({ id: iqRecommendations.id, status: iqRecommendations.status })
@@ -207,7 +209,7 @@ export async function proposeRecommendation(tx: IqTx, lease: IqWriteLease, input
     // PROPOSED or APPROVED: the same claim is already in front of the owner or acted on.
     if (existing && !REPROPOSABLE.includes(existing.status)) return { outcome: "NOOP", insightId: written.insightId };
     // Dismissed or expired, and the cooldown above has passed: a fresh row, so a fresh recommendation.
-    if (existing) written = await writeInsight(tx, lease, insight, { replaceIfReferenced: true });
+    if (existing) written = await writeInsight(tx, lease, insight, { asOf: input.asOf, replaceIfReferenced: true });
   }
 
   const { impact, confidence, assumptions, tier, expiresAt } = insight.payload;

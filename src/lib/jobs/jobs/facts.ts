@@ -36,6 +36,8 @@
  */
 import type { JobContext, JobRunResult } from "../context";
 import { dateOfPeriodKey, datesBetween, nightlyDates, parityRanges, remainingAfter } from "../facts-plan";
+import { runIntradayFactsToday } from "@/lib/iq/metrics/intraday-job";
+
 import { DayLockBusy, type DayLockBudget } from "../repos";
 
 export const MAX_LOCK_WAITS = 3;
@@ -53,12 +55,13 @@ const MIN_LOCK_WAIT_MS = 1_000;
 /**
  * The budget for each locked step of one day, or null when there is not enough
  * time left to start the day. The time left less the reserve is shared by the
- * steps; within a step, half goes to lock waits (MAX_LOCK_WAITS of them) and
- * half is the statement / idle timeout (ANALYTICS-DATA iq1-s6d), so a hung
- * statement also ends before the deadline.
+ * `steps` locked steps still to run (facts and trust by default; intraday adds
+ * the bucket rebuild); within a step, half goes to lock waits (MAX_LOCK_WAITS
+ * of them) and half is the statement / idle timeout (ANALYTICS-DATA iq1-s6d),
+ * so a hung statement also ends before the deadline.
  */
-export function dayLockBudget(remainingMs: number): DayLockBudget | null {
-  const perStep = (remainingMs - LOCK_BUDGET_RESERVE_MS) / LOCKED_STEPS_PER_DAY;
+export function dayLockBudget(remainingMs: number, steps: number = LOCKED_STEPS_PER_DAY): DayLockBudget | null {
+  const perStep = (remainingMs - LOCK_BUDGET_RESERVE_MS) / steps;
   const perWait = Math.floor(Math.min(MAX_LOCK_WAIT_MS, perStep / 2 / MAX_LOCK_WAITS));
   const statementTimeout = Math.floor(Math.min(MAX_STATEMENT_TIMEOUT_MS, perStep / 2));
   if (perWait < MIN_LOCK_WAIT_MS || statementTimeout < MIN_LOCK_WAIT_MS) return null;
@@ -73,9 +76,12 @@ export function dayLockBudget(remainingMs: number): DayLockBudget | null {
 type Counts = Record<string, number>;
 
 /** Recomputes `dates` after the cursor, one committed day at a time, until done or told to stop. */
+/** Locked steps in one iq-facts-intraday run: today's facts, trust, and the intraday bucket rebuild (IQ-2 R2.8). */
+export const INTRADAY_LOCKED_STEPS = 3;
+
 type Progress = { readonly done: true; readonly counts: Counts } | { readonly done: false; readonly reason: "DEADLINE" | "DAY_LOCK_BUSY"; readonly counts: Counts };
 
-async function recomputeDays(ctx: JobContext, dates: readonly string[]): Promise<Progress> {
+async function recomputeDays(ctx: JobContext, dates: readonly string[], steps: number = LOCKED_STEPS_PER_DAY): Promise<Progress> {
   const counts: Counts = {
     days_planned: dates.length,
     days_recomputed: 0,
@@ -86,7 +92,7 @@ async function recomputeDays(ctx: JobContext, dates: readonly string[]): Promise
     lock_busy_days: 0,
   };
   for (const date of remainingAfter(dates, ctx.resumeCursor)) {
-    const budget = ctx.shouldStop() ? null : dayLockBudget(ctx.remainingMs());
+    const budget = ctx.shouldStop() ? null : dayLockBudget(ctx.remainingMs(), steps);
     if (budget === null) return { done: false, reason: "DEADLINE", counts };
     let result;
     try {
@@ -146,10 +152,27 @@ export async function runFactsNightly(ctx: JobContext): Promise<JobRunResult> {
   return { status: "COMPLETE", rowsWritten: counts.rows_written ?? 0, summary: counts };
 }
 
-/** Every 15 minutes: today only. No catch-up; the next quarter redoes it anyway. */
+/**
+ * Every 15 minutes: today's daily facts and trust (one chunk), then today's
+ * intraday buckets and the retention purge (ANALYTICS-DATA's body, one chunk).
+ * No catch-up; the next quarter redoes it anyway. The budget is shared by the
+ * three locked steps; intraday counts are reported with an `intraday_` prefix.
+ */
 export async function runFactsIntraday(ctx: JobContext): Promise<JobRunResult> {
-  const progress = await recomputeDays(ctx, [dateOfPeriodKey(ctx.periodKey)]);
-  return progress.done ? { status: "COMPLETE", rowsWritten: progress.counts.rows_written ?? 0, summary: progress.counts } : partial(progress);
+  // If today's facts commit but the bucket step then stops at the DEADLINE, no
+  // cursor moved, so the runner counts a failure. That is harmless: every
+  // quarter is its own period row, so the count never accumulates past one
+  // quarter, and the next quarter rebuilds the whole day anyway.
+  const progress = await recomputeDays(ctx, [dateOfPeriodKey(ctx.periodKey)], INTRADAY_LOCKED_STEPS);
+  if (!progress.done) return partial(progress);
+
+  const intraday = await runIntradayFactsToday(ctx, { budgetFor: (remainingMs) => dayLockBudget(remainingMs, 1) });
+  const summary: Counts = { ...progress.counts };
+  for (const [key, value] of Object.entries(intraday.summary)) summary[`intraday_${key}`] = value;
+  const rowsWritten = (progress.counts.rows_written ?? 0) + intraday.rowsWritten;
+  return intraday.status === "COMPLETE"
+    ? { status: "COMPLETE", rowsWritten, summary }
+    : { status: "PARTIAL", reason: intraday.reason, rowsWritten, summary };
 }
 
 /** By hand: every day from the org's first day of history through the period's day, resumable. */

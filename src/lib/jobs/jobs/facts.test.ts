@@ -16,6 +16,8 @@ type Options = {
   trustBusyOn?: string;
   /** A day whose facts step times out. */
   timeoutOn?: string;
+  /** A day whose intraday bucket rebuild stays lock-busy. */
+  intradayBusyOn?: string;
   remainingMs?: number;
 };
 
@@ -45,7 +47,19 @@ function fakeContext(options: Options) {
     writeInsight: async () => {
       throw new Error("not used");
     },
-
+    expireInsights: async () => {
+      throw new Error("not used");
+    },
+    rebuildIntradayDay: async (date, budget) => {
+      budgets.push(budget);
+      if (date === options.intradayBusyOn) throw new DayLockBusy(date);
+      steps.push(`intraday ${date}`);
+      return { orgId: "org", businessDate: date, definitionVersion: 1, rowsWritten: 8, lockWaits: 0, attempts: 1 };
+    },
+    purgeIntradayFacts: async (today) => {
+      steps.push(`purge ${today}`);
+      return 5;
+    },
     proposeRecommendation: async () => {
       throw new Error("not used");
     },
@@ -57,6 +71,9 @@ function fakeContext(options: Options) {
     factsHistoryStart: async () => options.historyStart ?? null,
     healLostRefundFollowUps: unused,
     countStuckRefundFollowUps: unused,
+    factsReadyFor: unused,
+    readDetectDays: unused,
+    readFoodCostTarget: unused,
     checkFactsParity: async (from, to) => {
       parityCalls.push([from, to]);
       return options.parity ?? { ok: true, mismatchedMetrics: [], missingDays: 0 };
@@ -73,6 +90,7 @@ function fakeContext(options: Options) {
     trigger: "TIMER",
     runId: "run",
     attempt: 1,
+    codeVersion: "test",
     resumeCursor: options.resumeCursor ?? null,
     repos: readers,
     commit: async (write, commitOptions) => {
@@ -212,11 +230,32 @@ describe("day lock budget (RELIABILITY, iq1-s7b)", () => {
     expect(dayLockBudget(0)).toBeNull();
   });
 
-  it("passes the budget sized to the time left to both locked steps of the day", async () => {
+  it("shares the intraday run's budget across its three locked steps: facts, trust, then the bucket rebuild", async () => {
     const f = fakeContext({ periodKey: "2026-09-17T10:15", remainingMs: 90_000 });
     await runFactsIntraday(f.ctx);
-    const budget = { maxLockWaits: 3, lockWaitTimeoutMs: 5_000, statementTimeoutMs: 15_000, idleInTransactionTimeoutMs: 15_000 };
-    expect(f.budgets).toEqual([budget, budget]);
+    // facts and trust: (90 s - 30 s) / 3 steps = 20 s each, half to 3 waits, half to the statement timeout
+    const shared = { maxLockWaits: 3, lockWaitTimeoutMs: 3_333, statementTimeoutMs: 10_000, idleInTransactionTimeoutMs: 10_000 };
+    // the rebuild, the last step, gets what is left for one step
+    const last = { maxLockWaits: 3, lockWaitTimeoutMs: 10_000, statementTimeoutMs: 30_000, idleInTransactionTimeoutMs: 30_000 };
+    expect(f.budgets).toEqual([shared, shared, last]);
+  });
+
+  it("rebuilds today's intraday buckets and purges after today's facts and trust, reporting intraday_ counts", async () => {
+    const f = fakeContext({ periodKey: "2026-09-17T10:15" });
+    const result = await runFactsIntraday(f.ctx);
+    expect(f.steps).toEqual(["facts 2026-09-17", "trust 2026-09-17", "intraday 2026-09-17", "purge 2026-09-17"]);
+    expect(result).toMatchObject({
+      status: "COMPLETE",
+      rowsWritten: 28,
+      summary: { days_recomputed: 1, intraday_days_rebuilt: 1, intraday_rows_written: 8, intraday_rows_purged: 5 },
+    });
+  });
+
+  it("stops PARTIAL DAY_LOCK_BUSY when today's intraday buckets are locked, keeping today's facts", async () => {
+    const f = fakeContext({ periodKey: "2026-09-17T10:15", intradayBusyOn: "2026-09-17" });
+    const result = await runFactsIntraday(f.ctx);
+    expect(result).toMatchObject({ status: "PARTIAL", reason: "DAY_LOCK_BUSY", summary: { days_recomputed: 1, intraday_lock_busy_days: 1 } });
+    expect(f.steps).toEqual(["facts 2026-09-17", "trust 2026-09-17"]);
   });
 
   it("lets a DAY_TIMEOUT propagate so the run fails, keeping the days before it", async () => {

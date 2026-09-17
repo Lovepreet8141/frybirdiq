@@ -25,7 +25,10 @@
  *   maxAttempts 3 — matches systemd Restart=on-failure ×3
  */
 import type { JobContext, JobRunResult } from "./context";
+import { FACTS_NIGHTLY_JOB } from "./facts-plan";
+import { runDetect } from "./jobs/detect";
 import { runFactsBackfill, runFactsIntraday, runFactsNightly } from "./jobs/facts";
+import { runIntradayBackfillJob } from "./jobs/intraday";
 import { runHeartbeat } from "./jobs/heartbeat";
 import { REFUND_HEAL_JOB, runRefundFollowUpHeal } from "./jobs/refund-heal";
 import type { PeriodKind, PeriodTarget } from "./period";
@@ -68,8 +71,8 @@ export const JOB_REGISTRY = {
     run: runHeartbeat,
   },
   /** IQ-1 facts, 02:00 IST (20:30 UTC) for yesterday's period — clear of the 22:00 UTC backup with all retries. */
-  "iq-facts-nightly": {
-    name: "iq-facts-nightly",
+  [FACTS_NIGHTLY_JOB]: {
+    name: FACTS_NIGHTLY_JOB,
     periodKind: "day",
     target: "previous",
     onCalendarUtc: "*-*-* 20:30:00 UTC",
@@ -79,7 +82,7 @@ export const JOB_REGISTRY = {
     concurrency: "heavy",
     run: runFactsNightly,
   },
-  /** IQ-1 facts for today, every 15 minutes (IST quarters line up with UTC quarters). */
+  /** IQ-1 facts and IQ-2 intraday buckets for today, every 15 minutes (IST quarters line up with UTC quarters). */
   "iq-facts-intraday": {
     name: "iq-facts-intraday",
     periodKind: "quarter_hour",
@@ -101,6 +104,43 @@ export const JOB_REGISTRY = {
     concurrency: "light",
     run: runFactsBackfill,
   },
+  /**
+   * IQ-2 baseline detectors for yesterday, 21:15 UTC (02:45 IST), after
+   * nightly facts. Fails closed with UPSTREAM_NOT_READY until facts for the
+   * day are final; catch-up 1 re-evaluates a night missed that way (R2.8, U1).
+   * Its 60 s deadline keeps start + retries clear of 21:45–23:00 UTC.
+   */
+  "iq-detect-daily": {
+    name: "iq-detect-daily",
+    periodKind: "day",
+    target: "previous",
+    onCalendarUtc: "*-*-* 21:15:00 UTC",
+    ...DEFAULT_TIMING,
+    deadlineSeconds: 60,
+    catchUpPeriods: 1,
+    concurrency: "light",
+    run: runDetect,
+  },
+  /** IQ-2 intraday buckets for the 8 weeks before the period's day, started by hand; resumable. */
+  "iq-intraday-backfill": {
+    name: "iq-intraday-backfill",
+    periodKind: "day",
+    target: "previous",
+    onCalendarUtc: null,
+    ...DEFAULT_TIMING,
+    catchUpPeriods: 0,
+    concurrency: "light",
+    run: runIntradayBackfillJob,
+  },
+  // TODO(IQ-2 S7, AUTOMATION-ARCHITECT): register these when their bodies land (R2.1, R2.8):
+  // - iq-reconcile-nightly  (FINANCE-LEDGER src/lib/iq/reconcile/reconcile-job.ts): day/previous, 21:00 UTC,
+  //   light, catch-up 1, facts-ready gate -> UPSTREAM_NOT_READY, statement 10 s per rule.
+  // - iq-money-signatures   (PAYMENT-SAFETY src/lib/iq/signatures/signatures-job.ts): hour/current, :10 hourly,
+  //   light, catch-up 0, <= 15 s per org.
+  // - iq-service-pulse      (IQ-ENGINE src/lib/iq/detect/pulse-job.ts, S9): quarter_hour, :05/:20/:35/:50,
+  //   light, catch-up 0; fresh-input rule C8/U3 needs an intraday-writer-run port.
+  // - iq-brief-daily        (BUSINESS-INTELLIGENCE src/lib/iq/brief/brief-job.ts, S10): day/previous, 02:00 UTC,
+  //   facts-ready gate, catch-up 0, <= 30 s.
   /**
    * ref-b7: lost refund follow-ups, every 15 minutes at :07 (clear of the :00
    * quarter jobs), light, no catch-up — the next quarter picks up anything

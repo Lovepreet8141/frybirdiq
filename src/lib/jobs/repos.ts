@@ -14,6 +14,8 @@
  * iq-* repositories they wrap (minus the org, transaction and lease), so the
  * two cannot drift apart. Nothing here reaches a database.
  */
+import type { DetectDay } from "@/lib/iq/detect/rules";
+import type { Observed } from "@/lib/iq/engine";
 import type * as Facts from "@/lib/repositories/iq-facts";
 import type * as Insights from "@/lib/repositories/iq-insights";
 import type * as Trust from "@/lib/repositories/iq-trust";
@@ -64,6 +66,16 @@ export type JobReadRepos = {
   readonly factsHistoryStart: () => Promise<string | null>;
   /** Compares Σ daily facts with getProfitAndLoss for [from, to] (IST dates, inclusive). */
   readonly checkFactsParity: (from: string, to: string) => Promise<FactsParity>;
+  /**
+   * Whether daily facts for `date` are final (IQ-2 R2.8 gate; RELIABILITY U1):
+   * some SUCCEEDED iq-facts-nightly run planned `date` and finished after the
+   * day closed. Not only the run keyed to `date` — a later night rebuilds it too.
+   */
+  readonly factsReadyFor: (date: string) => Promise<boolean>;
+  /** The detectors' view of each date: figures from daily facts, trust from daily trust (IQ-2 S3 `DetectDay`). */
+  readonly readDetectDays: (dates: readonly string[]) => Promise<readonly DetectDay[]>;
+  /** The owner's food-cost target for the date's month; null until owner decision dec-7. */
+  readonly readFoodCostTarget: (date: string) => Promise<Observed | null>;
   readonly listInsights: WithoutOrg<typeof Insights.listInsights>;
   readonly getInsight: WithoutOrg<typeof Insights.getInsight>;
   readonly readFactFigures: WithoutOrg<typeof Insights.readFactFigures>;
@@ -117,5 +129,11 @@ export type JobWriteRepos = {
   /** Scores and stores one IST business day's trust signals for this org, recorded against this run. Idempotent. Throws `DayLockBusy` or `DayTimeout`. */
   readonly computeTrustDay: (date: string, budget: DayLockBudget) => ReturnType<typeof Trust.computeTrustDay>;
   readonly writeInsight: WithoutTxAndLease<typeof Insights.writeInsight>;
+  /** Expires ACTIVE insights for keys this chunk evaluated and found clear (CAS on as_of; RELIABILITY C5/C6). */
+  readonly expireInsights: WithoutTxAndLease<typeof Insights.expireInsights>;
   readonly proposeRecommendation: WithoutTxAndLease<typeof Recommendations.proposeRecommendation>;
+  /** Rebuilds all of one IST day's intraday buckets for this org. Idempotent. Throws `DayLockBusy` or `DayTimeout`. */
+  readonly rebuildIntradayDay: (date: string, budget: DayLockBudget) => ReturnType<typeof Facts.rebuildIntradayDay>;
+  /** Deletes this org's intraday facts older than the retention for `today`; rows removed. */
+  readonly purgeIntradayFacts: (today: string) => Promise<number>;
 };

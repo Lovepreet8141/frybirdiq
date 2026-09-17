@@ -42,6 +42,14 @@ export {
   type GateDecision,
   type TrustGradeInput,
 } from "./trust-gate";
+export {
+  LEDGER_PRODUCER_PREFIXES,
+  isLedgerInsight,
+  presentFor,
+  viewerFor,
+  type InsightViewer,
+  type ViewerPresentations,
+} from "./present-for";
 export { divRoundHalfAway, integerMedian, observedMedian, observedShare } from "./observed-stats";
 export {
   CLAIM_TYPES,

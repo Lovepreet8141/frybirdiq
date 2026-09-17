@@ -17,6 +17,8 @@ export type JobContext<W = JobWriteRepos> = {
   readonly trigger: JobTrigger;
   readonly runId: string;
   readonly attempt: number;
+  /** The deployed commit this run records (iq_job_runs.code_version, insight producedBy). */
+  readonly codeVersion: string;
   /** Where an earlier attempt stopped at its deadline, or null to start from the beginning. */
   readonly resumeCursor: string | null;
   /** Reads, bound to this run's org. */
@@ -49,11 +51,14 @@ export type JobRunResult =
       /**
        * Why it stopped. DEADLINE counts as a failure unless a chunk committed;
        * DAY_LOCK_BUSY never does — another recompute of the same day was
-       * running, which is contention, not a fault. REFUNDS_STILL_OPEN is an
-       * alert (refund follow-ups unfinished on consecutive runs) and counts,
-       * so systemd's OnFailure fires.
+       * running, which is contention, not a fault (a second one in a row
+       * without progress does). UPSTREAM_NOT_READY never does: the input
+       * this run depends on is not final yet, and the next scheduled catch-up
+       * must still be able to take the period over (RELIABILITY iq2-s7).
+       * REFUNDS_STILL_OPEN is an alert (stuck refund follow-ups, state-based)
+       * and counts, so systemd's OnFailure fires.
        */
-      readonly reason?: "DEADLINE" | "DAY_LOCK_BUSY" | "REFUNDS_STILL_OPEN";
+      readonly reason?: "DEADLINE" | "DAY_LOCK_BUSY" | "UPSTREAM_NOT_READY" | "REFUNDS_STILL_OPEN";
       readonly rowsWritten: number;
       readonly summary: Readonly<Record<string, number>>;
     };
