@@ -6,12 +6,14 @@
  * (D-1, target previous), reads go through ctx.repos, and the fired writes and
  * clear expiries go through one fenced chunk. The body throws
  * UpstreamNotReady (code UPSTREAM_NOT_READY) when facts for the day are not
- * final; it is not caught, so the run fails closed with that error code
- * (RELIABILITY C4) and the timer's catch-up period retries it the next night.
+ * final; the adapter turns it into PARTIAL reason UPSTREAM_NOT_READY. The run
+ * still answers 500 and writes nothing (fail closed, RELIABILITY C4), but no
+ * failure is counted, so however often systemd retries that night the next
+ * night's catch-up unit can still take the period over (RELIABILITY iq2-s7).
  */
 import { randomUUID } from "node:crypto";
 
-import { runDetectDaily } from "@/lib/iq/detect/detect-job";
+import { UpstreamNotReady, runDetectDaily } from "@/lib/iq/detect/detect-job";
 
 import type { JobContext, JobRunResult } from "../context";
 import { dateOfPeriodKey } from "../facts-plan";
@@ -32,6 +34,15 @@ export class CodeVersionUnknown extends Error {
 export async function runDetect(ctx: JobContext): Promise<JobRunResult> {
   // Fail before reading anything, with a code that says why, rather than at the write.
   if (!GIT_SHA.test(ctx.codeVersion)) throw new CodeVersionUnknown();
+  try {
+    return await evaluate(ctx);
+  } catch (error) {
+    if (!(error instanceof UpstreamNotReady)) throw error;
+    return { status: "PARTIAL", reason: "UPSTREAM_NOT_READY", rowsWritten: 0, summary: { upstream_not_ready: 1 } };
+  }
+}
+
+function evaluate(ctx: JobContext): Promise<JobRunResult> {
   return runDetectDaily({
     orgId: ctx.orgId,
     runId: ctx.runId,

@@ -159,6 +159,10 @@ export async function runFactsNightly(ctx: JobContext): Promise<JobRunResult> {
  * three locked steps; intraday counts are reported with an `intraday_` prefix.
  */
 export async function runFactsIntraday(ctx: JobContext): Promise<JobRunResult> {
+  // If today's facts commit but the bucket step then stops at the DEADLINE, no
+  // cursor moved, so the runner counts a failure. That is harmless: every
+  // quarter is its own period row, so the count never accumulates past one
+  // quarter, and the next quarter rebuilds the whole day anyway.
   const progress = await recomputeDays(ctx, [dateOfPeriodKey(ctx.periodKey)], INTRADAY_LOCKED_STEPS);
   if (!progress.done) return partial(progress);
 

@@ -77,9 +77,9 @@ describe("iq-detect-daily adapter (IQ-2 R2.1, R2.8)", () => {
     expect(f.calls).toEqual([]);
   });
 
-  it("fails closed with UPSTREAM_NOT_READY before reading anything when facts are not final (C4)", async () => {
+  it("stops PARTIAL UPSTREAM_NOT_READY before reading or writing anything when facts are not final (C4, iq2-s7 blocker)", async () => {
     const f = fakeContext({ factsReady: false });
-    await expect(runDetect(f.ctx)).rejects.toMatchObject({ code: "UPSTREAM_NOT_READY" });
+    expect(await runDetect(f.ctx)).toEqual({ status: "PARTIAL", reason: "UPSTREAM_NOT_READY", rowsWritten: 0, summary: { upstream_not_ready: 1 } });
     expect(f.calls).toEqual(["factsReady 2026-09-11"]);
     expect(f.commits()).toBe(0);
   });

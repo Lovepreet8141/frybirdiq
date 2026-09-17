@@ -803,8 +803,8 @@ describe("IQ-2 jobs through the runner (iq2-s7) on the local stack", () => {
     const g = await freshOrg();
     const other = await freshOrg();
 
-    expect(await run("iq-detect-daily", [g.orgId], { period: yesterday })).toMatchObject({ status: 500, body: { counts: { FAILED: 1 } } });
-    expect(await runRow("iq-detect-daily", g.orgId, yesterday)).toMatchObject({ status: "FAILED", errorCode: "UPSTREAM_NOT_READY", failures: 1 });
+    expect(await run("iq-detect-daily", [g.orgId], { period: yesterday })).toMatchObject({ status: 500, body: { counts: { PARTIAL: 1 } } });
+    expect(await runRow("iq-detect-daily", g.orgId, yesterday)).toMatchObject({ status: "FAILED", errorCode: "UPSTREAM_NOT_READY", failures: 0 });
 
     expect(await run("iq-facts-nightly", [g.orgId], { period: yesterday })).toMatchObject({ status: 200 });
     const detected = await run("iq-detect-daily", [g.orgId], { period: yesterday });
@@ -834,6 +834,26 @@ describe("IQ-2 jobs through the runner (iq2-s7) on the local stack", () => {
     expect(await iqRepos(early.orgId).factsReadyFor(d2)).toBe(false);
     expect(await run("iq-detect-daily", [early.orgId], { period: d2 })).toMatchObject({ status: 500 });
     expect(await runRow("iq-detect-daily", early.orgId, d2)).toMatchObject({ errorCode: "UPSTREAM_NOT_READY" });
+  });
+
+  it("three not-ready attempts, then facts succeed, then the next night's scheduled catch-up evaluates D-1 (RELIABILITY iq2-s7 blocker)", async () => {
+    const n = await freshOrg();
+    const dMinus1 = shiftPeriod("day", yesterday, -1);
+
+    // Night of D-1: facts are late, so systemd's run and its retries all find them not ready.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect(await run("iq-detect-daily", [n.orgId], { period: dMinus1 })).toMatchObject({ status: 500, body: { counts: { PARTIAL: 1 } } });
+    }
+    expect(await runRow("iq-detect-daily", n.orgId, dMinus1)).toMatchObject({ status: "FAILED", errorCode: "UPSTREAM_NOT_READY", attempt: 3, failures: 0 });
+
+    // Facts then succeed: the next night's facts run covers D-1 as well.
+    await factsRunRow(n, yesterday, new Date());
+
+    // Next night's timer run: catch-up unit D-1 first, then yesterday.
+    const scheduled = await run("iq-detect-daily", [n.orgId]);
+    expect(scheduled.body!.periods).toEqual([dMinus1, yesterday]);
+    expect(scheduled).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 2, EXHAUSTED: 0 } } });
+    expect(await runRow("iq-detect-daily", n.orgId, dMinus1)).toMatchObject({ status: "SUCCEEDED", attempt: 4, failures: 0, errorCode: null });
   });
 
   /** A fired detection from the detect fixtures, re-keyed, produced by this run. */

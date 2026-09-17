@@ -590,6 +590,15 @@ describe("DAY_LOCK_BUSY partials (RELIABILITY, iq1-s7b)", () => {
     expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "DAY_TIMEOUT", failures: 1 });
   });
 
+  it("never counts UPSTREAM_NOT_READY as a failure, however many attempts, so a later catch-up can take the period over (iq2-s7)", async () => {
+    const h = harness(job(async () => ({ status: "PARTIAL", reason: "UPSTREAM_NOT_READY", rowsWritten: 0, summary: {} })));
+    for (let i = 0; i < 5; i++) {
+      const response = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+      expect(response).toMatchObject({ status: 500, body: { counts: { PARTIAL: 1 } } });
+    }
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "UPSTREAM_NOT_READY", failures: 0, attempt: 5 });
+  });
+
   it("still counts a plain deadline cut without progress as a failure", async () => {
     const h = harness(job(async () => ({ status: "PARTIAL", reason: "DEADLINE", rowsWritten: 0, summary: {} })));
     await handleJobRequest(request({ jobParam: "test_job" }), h.deps);

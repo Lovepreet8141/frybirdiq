@@ -259,6 +259,8 @@ async function readDetectDays(orgId: string, dates: readonly string[]): Promise<
         };
       }
     }
+    // TODO(IQ-2 S4, FINANCE-LEDGER): set parityFlagged from S4's per-day recon.facts_parity flag once it exists
+    // (god ruling on iq2-s7: false is accepted until then).
     days.push({ date, hasFacts, parityFlagged: false, figures, trust });
   }
   return days;

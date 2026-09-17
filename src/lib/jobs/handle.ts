@@ -63,7 +63,7 @@ export type FinishOutcome =
   | {
       /** Stored as status FAILED with this error_code; `cursor` is the one already committed (unchanged). */
       readonly status: "DEADLINE";
-      readonly errorCode: "DEADLINE" | "DAY_LOCK_BUSY";
+      readonly errorCode: "DEADLINE" | "DAY_LOCK_BUSY" | "UPSTREAM_NOT_READY";
       readonly rowsWritten: number;
       readonly summary: Summary;
       readonly cursor: string | null;
@@ -367,16 +367,20 @@ async function runUnit<W>(
     // A stop on a busy day lock is contention (RELIABILITY, iq1-s7b) — once. Two in a row
     // without progress count, so a lock that never frees eventually exhausts the run and
     // systemd's OnFailure fires (RELIABILITY F, iq1-s8r).
+    // An upstream that is not final yet never counts: systemd's retries that night would
+    // otherwise exhaust the period, and the next night's catch-up could never take it over
+    // (RELIABILITY iq2-s7 blocker). The run still answers 500, so OnFailure still fires.
     const progressed = committedCursor !== startCursor;
     const lockBusy = result.reason === "DAY_LOCK_BUSY";
+    const upstreamNotReady = result.reason === "UPSTREAM_NOT_READY";
     const repeatedLockBusy = lockBusy && !progressed && previousErrorCode === "DAY_LOCK_BUSY";
     outcome = {
       status: "DEADLINE",
-      errorCode: lockBusy ? "DAY_LOCK_BUSY" : "DEADLINE",
+      errorCode: result.reason ?? "DEADLINE",
       rowsWritten: result.rowsWritten,
       summary: result.summary,
       cursor: committedCursor,
-      failures: progressed || (lockBusy && !repeatedLockBusy) ? row.failures : row.failures + 1,
+      failures: progressed || upstreamNotReady || (lockBusy && !repeatedLockBusy) ? row.failures : row.failures + 1,
     };
     reported = "PARTIAL";
   } else {
