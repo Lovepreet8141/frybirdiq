@@ -377,7 +377,7 @@ mkdir -p /etc/frybird
 umask 077
 head -c48 /dev/urandom | base64 > /tmp/frybird-job-secret   # >=32 chars, never echoed
 printf 'Authorization: Bearer %s' "$(cat /tmp/frybird-job-secret)" > /etc/frybird/jobs.header
-printf 'JOB_SECRET=%s\n' "$(cat /tmp/frybird-job-secret)" >> /etc/frybird/env
+printf '\nJOB_SECRET=%s\n' "$(cat /tmp/frybird-job-secret)" >> /etc/frybird/env
 shred -u /tmp/frybird-job-secret
 chown root:root /etc/frybird/jobs.header
 chmod 600 /etc/frybird/jobs.header
@@ -391,7 +391,12 @@ way it can a literal CLI argument — even so, avoid retyping the secret on any
 command line). Appending with `>>` before the `shred` means `/etc/frybird/env`
 never needs to be opened in an editor and the secret never has to be typed
 or pasted a second time; if it already has a `JOB_SECRET=` line from an
-earlier setup, remove that line first so the file doesn't carry two.
+earlier setup, remove that line first so the file doesn't carry two. The
+leading `\n` in the second `printf` guards against the file's last line not
+already ending in one — without it, a missing trailing newline would glue
+`JOB_SECRET=...` onto whatever the previous line was instead of starting a
+new one. A resulting blank line is harmless; `EnvironmentFile=` (used by
+`deploy/frybird.service`) ignores empty lines.
 
 `jobs.header` holds the literal header line the unit sends
 (`LoadCredential=job-header:/etc/frybird/jobs.header` in
@@ -489,18 +494,24 @@ that out.
 ### 9.5 Verify (read-only)
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://frybirdiq.tech/api/jobs/heartbeat   # expect 404
-curl -s -o /dev/null -w '%{http_code}\n' http://frybirdiq.tech/api/jobs/heartbeat    # expect 404 (or 301 to https, then 404)
-nginx -T 2>/dev/null | grep -c 'location \^~ /api/jobs/'                             # expect 2 — one per listener (§5a)
+curl -s -o /dev/null -w '%{http_code}\n' https://frybirdiq.tech/api/jobs/heartbeat   # expect 404 — the real proof
+curl -s -o /dev/null -w '%{http_code}\n' http://frybirdiq.tech/api/jobs/heartbeat    # expect 301 to https (port 80 only redirects)
+nginx -T 2>/dev/null | grep -c 'location \^~ /api/jobs/'                             # expect 1 (live: one 443 server holds `location /`; port 80 is redirect-only)
 systemctl is-active frybird-job-heartbeat.timer
 journalctl -u frybird-job@heartbeat -u frybird-job-failed@heartbeat --since -1d -p warning
 ```
 
-The `nginx -T` count catches exactly the failure mode in §5a: certbot forks
-the 80 block into a 443 block once, at cert-issue time, and a `location`
-added to this file afterwards never reaches the already-forked 443 block by
-itself. 1 means the 443 block is missing it; hand-copy it in (§5a) and
-re-check.
+The `nginx -T` count is a sanity check on top of the https curl, not a
+substitute for it — it catches the failure mode in §5a (certbot forks the
+80 block into a 443 block once, at cert-issue time, and a `location` added
+to this file afterwards never reaches the already-forked 443 block by
+itself): 0 means it's missing from the 443 server entirely; hand-copy it in
+(§5a) and re-check. This VPS's live config only has the job block in the
+443 server (port 80 is a plain redirect with no locations of its own), so
+1 is the expected count here — a 2 would mean it was also added to the 80
+block, which isn't wrong, just unnecessary. Confirm which server block(s)
+hold it with `nginx -T | grep -B5 'location \^~ /api/jobs/'` before assuming
+either way.
 
 ## What this does not have yet
 
