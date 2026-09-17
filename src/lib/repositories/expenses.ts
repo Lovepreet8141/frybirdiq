@@ -10,14 +10,17 @@ import "server-only";
  * first refund would make them.
  */
 
-import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { accounts, expenseCategories, expenses, targets } from "@/db/schema";
 import { type DateRange, addDays, businessDate, daysInRange, endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
-import { type Bps, type Paise, ZERO, add, paise, ratioBps } from "@/lib/money";
+import { type Bps, type Paise, ZERO, add, paise, ratioBps, subtract } from "@/lib/money";
 import { netRevenueOf, profit, type ProfitResult } from "@/lib/iq/profit";
 import { paidOrders } from "@/lib/repositories/analytics";
+import { type DailyFactsRead, DayLockBusyError, type DayLockOptions, DayTimeoutError, readDailyFacts, recomputeDay } from "@/lib/repositories/iq-facts";
+import { type MetricTrustRead, computeTrustDay, getMetricTrust } from "@/lib/repositories/iq-trust";
+import { type FoodCostComparison, getFoodCostComparison } from "@/lib/repositories/stock";
 
 export interface ExpenseRow {
   readonly id: string;
@@ -102,9 +105,14 @@ export async function getProfitAndLoss(orgId: string, range: DateRange): Promise
   // netRevenueOf, not a sum of grandTotal — every margin figure below
   // (`profit()`) is only correct against net-of-tax revenue. See its own
   // doc comment in src/lib/iq/profit.ts.
-  const revenue = netRevenueOf(paid);
-  const orderCount = paid.length;
+  return shapeProfitAndLoss(range, netRevenueOf(paid), paid.length, totals, target);
+}
 
+/**
+ * The statement from its inputs. One shaping for the live query and the daily
+ * facts, so the two paths cannot lay out the same figures differently.
+ */
+function shapeProfitAndLoss(range: DateRange, revenue: Paise, orderCount: number, totals: readonly CategoryTotal[], target: Bps | null): ProfitAndLoss {
   const operating = totals.filter((t) => !t.isNonOperating);
   const direct = operating.filter((t) => t.behaviour === "DIRECT");
   const fixed = operating.filter((t) => t.behaviour === "FIXED");
@@ -254,4 +262,240 @@ export async function listAccounts(orgId: string) {
     .from(accounts)
     .where(and(eq(accounts.orgId, orgId), eq(accounts.isActive, true)))
     .orderBy(asc(accounts.name));
+}
+
+/* ------------------------------------------------------------------ */
+/* P&L from the IQ daily facts (IQ-1 S9)                                */
+/* ------------------------------------------------------------------ */
+
+/** Where a report's figures came from. */
+export type PnlSource = "facts" | "live";
+
+/**
+ * Why a report read live rather than from the facts:
+ * - `open_day`: the range reaches today (IST). A day's facts are its nightly
+ *   close; a day still trading has none that are complete.
+ * - `missing_days`: some day in the range was never computed.
+ * - `stale_facts`: the facts name an expense category the org no longer has.
+ * - `no_fact_tables`: this database has no facts tables yet (production
+ *   until owner decision dec-2).
+ */
+export type PnlLiveReason = "open_day" | "missing_days" | "stale_facts" | "no_fact_tables";
+
+/** A figure's trust over the range (review I2): lowest signal grade, the signal holding it down, and its day. */
+export interface PnlTrust {
+  readonly revenue: MetricTrustRead;
+  readonly netProfit: MetricTrustRead;
+  readonly foodCostRecordedPurchases: MetricTrustRead;
+  readonly foodCostRecipe: MetricTrustRead;
+}
+
+export interface ProfitAndLossReport {
+  readonly pnl: ProfitAndLoss;
+  readonly foodCost: FoodCostComparison;
+  readonly source: PnlSource;
+  /** Null on the facts path. */
+  readonly liveReason: PnlLiveReason | null;
+  /** Only facts are graded; null on the live path, which shows no trust badge. */
+  readonly trust: PnlTrust | null;
+}
+
+/** The facts readers and the clock, injectable so the fallback can be proven without dropping tables. */
+export interface PnlReportSources {
+  readonly readFacts: (orgId: string, from: string, to: string) => Promise<DailyFactsRead>;
+  readonly readTrust: typeof getMetricTrust;
+  readonly now: () => Date;
+}
+
+const FACT_SOURCES: PnlReportSources = { readFacts: readDailyFacts, readTrust: getMetricTrust, now: () => new Date() };
+
+/** Postgres undefined_table, on the error or the driver error Drizzle wraps. */
+function isUndefinedTable(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && typeof current === "object" && current !== null; depth++) {
+    if ((current as { code?: unknown }).code === "42P01") return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * The P&L page's figures: from the daily facts when every day of the range is
+ * a closed, computed day, with each figure's trust; otherwise the live
+ * queries, exactly as before facts existed, with no trust. Both paths shape
+ * the statement through `shapeProfitAndLoss`, and the facts are proven equal
+ * to the live figures to the paisa (expenses-pnl-facts.integration.test.ts).
+ */
+export async function getProfitAndLossReport(orgId: string, range: DateRange, sources: PnlReportSources = FACT_SOURCES): Promise<ProfitAndLossReport> {
+  const live = async (liveReason: PnlLiveReason): Promise<ProfitAndLossReport> => {
+    const [pnl, foodCost] = await Promise.all([getProfitAndLoss(orgId, range), getFoodCostComparison(orgId, range)]);
+    return { pnl, foodCost, source: "live", liveReason, trust: null };
+  };
+
+  const { from, to } = businessDateBounds(range);
+  if (to >= businessDate(sources.now())) return live("open_day");
+
+  let facts: DailyFactsRead;
+  let trust: PnlTrust;
+  try {
+    facts = await sources.readFacts(orgId, from, to);
+    if (facts.missingDates.length > 0) return live("missing_days");
+    const [revenue, netProfit, foodCostRecordedPurchases, foodCostRecipe] = await Promise.all([
+      sources.readTrust(orgId, "revenue_net", from, to),
+      sources.readTrust(orgId, "net_profit", from, to),
+      sources.readTrust(orgId, "food_cost_pct_recorded_purchases", from, to),
+      sources.readTrust(orgId, "food_cost_pct_theoretical", from, to),
+    ]);
+    trust = { revenue, netProfit, foodCostRecordedPurchases, foodCostRecipe };
+  } catch (error) {
+    if (isUndefinedTable(error)) return live("no_fact_tables");
+    throw error;
+  }
+
+  const pnl = await profitAndLossFromFacts(orgId, range, facts);
+  if (pnl === null) return live("stale_facts");
+  return { pnl, foodCost: foodCostFromFacts(facts), source: "facts", liveReason: null, trust };
+}
+
+/**
+ * The statement from summed facts. Expense amounts are summed per category
+ * across the three expense metrics, then grouped by the category's current
+ * behaviour and order — the same grouping `expenseTotals` gives the live path.
+ * Null when a category in the facts no longer exists.
+ */
+async function profitAndLossFromFacts(orgId: string, range: DateRange, facts: DailyFactsRead): Promise<ProfitAndLoss | null> {
+  const amounts = new Map<string, bigint>();
+  for (const metricId of ["expense_direct", "expense_operating", "expense_nonoperating"] as const) {
+    for (const [categoryId, amount] of Object.entries(facts.breakdowns[metricId]?.expense_category ?? {})) {
+      amounts.set(categoryId, (amounts.get(categoryId) ?? 0n) + amount);
+    }
+  }
+  const ids = [...amounts.keys()];
+
+  const [categories, target] = await Promise.all([
+    ids.length === 0
+      ? Promise.resolve([])
+      : db()
+          .select({ id: expenseCategories.id, name: expenseCategories.name, behaviour: expenseCategories.behaviour, isNonOperating: expenseCategories.isNonOperating })
+          .from(expenseCategories)
+          .where(and(eq(expenseCategories.orgId, orgId), inArray(expenseCategories.id, ids)))
+          .orderBy(asc(expenseCategories.sortOrder), asc(expenseCategories.name)),
+    monthTarget(orgId, range),
+  ]);
+  if (categories.length !== ids.length) return null;
+
+  const totals: CategoryTotal[] = categories.map((category) => ({
+    categoryId: category.id,
+    name: category.name,
+    behaviour: category.behaviour,
+    isNonOperating: category.isNonOperating,
+    amount: paise(amounts.get(category.id) ?? 0n),
+  }));
+  const revenue = paise(facts.totals.revenue_net ?? 0n);
+  return shapeProfitAndLoss(range, revenue, Number(facts.totals.orders_paid ?? 0n), totals, target);
+}
+
+function foodCostFromFacts(facts: DailyFactsRead): FoodCostComparison {
+  const theoreticalCost = paise(facts.totals.food_cost_theoretical ?? 0n);
+  const actualCost = paise(facts.totals.food_cost_actual ?? 0n);
+  return { theoreticalCost, actualCost, varianceCost: subtract(actualCost, theoreticalCost), saleMovementCount: Number(facts.totals.sale_lines_total ?? 0n) };
+}
+
+/* ------------------------------------------------------------------ */
+/* Expense writes keep the daily facts current                          */
+/* ------------------------------------------------------------------ */
+
+export interface NewExpense {
+  readonly categoryId: string;
+  readonly description: string;
+  readonly amount: Paise;
+  /** IST business date the money was paid. */
+  readonly paidOn: string;
+  readonly accountId: string | null;
+  readonly reference: string | null;
+}
+
+/**
+ * Records an expense, then refreshes the daily facts and trust for its day.
+ * The caller has already validated the input and checked the category
+ * belongs to `orgId`. The insert is the action; the refresh is best effort
+ * and never fails it.
+ */
+export async function createExpense(orgId: string, input: NewExpense): Promise<{ readonly id: string }> {
+  const [row] = await db()
+    .insert(expenses)
+    .values({ orgId, ...input })
+    .returning({ id: expenses.id });
+  if (!row) throw new Error("expenses: insert returned no row");
+  await refreshFactsForDays(orgId, [input.paidOn]);
+  return row;
+}
+
+/**
+ * The budget for a refresh inside the owner's request: at most one short wait
+ * for a day another run holds (the nightly job), and short statements. Past
+ * it the refresh skips; the save has already happened.
+ */
+export const EXPENSE_REFRESH_BUDGET: DayLockOptions = { maxLockWaits: 1, lockWaitTimeoutMs: 2_000, statementTimeoutMs: 5_000 };
+
+let factTablesPresent: Promise<boolean> | null = null;
+
+/**
+ * Whether this database has the IQ facts and trust tables, checked once per
+ * process with `to_regclass`. Production has neither until owner decision
+ * dec-2; the migration that adds them ships with a deploy, which restarts the
+ * process, so a cached "absent" never outlives it. A failed check is not
+ * cached.
+ */
+function factTablesExist(): Promise<boolean> {
+  factTablesPresent ??= db()
+    .execute<{ present: boolean }>(sql`SELECT to_regclass('public.iq_daily_facts') IS NOT NULL AND to_regclass('public.iq_daily_trust') IS NOT NULL AS present`)
+    .then((rows) => rows[0]?.present === true)
+    .catch(() => {
+      factTablesPresent = null;
+      return false;
+    });
+  return factTablesPresent;
+}
+
+export interface FactsRefreshSteps {
+  readonly tablesExist: () => Promise<boolean>;
+  readonly recompute: (orgId: string, date: string) => Promise<unknown>;
+  readonly scoreTrust: (orgId: string, date: string) => Promise<unknown>;
+}
+
+const REFRESH_STEPS: FactsRefreshSteps = {
+  tablesExist: factTablesExist,
+  recompute: (orgId, date) => recomputeDay(orgId, date, EXPENSE_REFRESH_BUDGET),
+  scoreTrust: (orgId, date) => computeTrustDay(orgId, date, EXPENSE_REFRESH_BUDGET),
+};
+
+/**
+ * Rebuilds the IQ daily facts, then trust, for each IST day a committed write
+ * touched — both the old and the new `paid_on` when an expense moves — so a
+ * closed month's P&L, which reads facts, shows the change at once instead of
+ * after the nightly run. Call after the write's transaction commits.
+ *
+ * Best effort and bounded (EXPENSE_REFRESH_BUDGET), never failing the write:
+ * - no facts tables (production until dec-2): nothing is computed, nothing logged;
+ * - the day is busy past the budget or a statement times out (DayLockBusyError,
+ *   DayTimeoutError): skipped at debug level, the nightly recompute heals it;
+ * - anything else: logged with the error's name and code only, never a value.
+ */
+export async function refreshFactsForDays(orgId: string, dates: readonly string[], steps: FactsRefreshSteps = REFRESH_STEPS): Promise<void> {
+  if (!(await steps.tablesExist())) return;
+  for (const date of [...new Set(dates)].sort()) {
+    try {
+      await steps.recompute(orgId, date);
+      await steps.scoreTrust(orgId, date);
+    } catch (error) {
+      if (isUndefinedTable(error)) return;
+      if (error instanceof DayLockBusyError || error instanceof DayTimeoutError) {
+        console.debug(`expenses: facts refresh for ${date} skipped (${error.code}); the nightly recompute will heal it`);
+        continue;
+      }
+      const code = typeof error === "object" && error !== null ? ((error as { code?: unknown; cause?: { code?: unknown } }).cause?.code ?? (error as { code?: unknown }).code) : undefined;
+      console.warn(`expenses: facts refresh for ${date} failed (${error instanceof Error ? error.name : "unknown"}${typeof code === "string" ? ` ${code}` : ""}); the nightly recompute will retry`);
+    }
+  }
 }

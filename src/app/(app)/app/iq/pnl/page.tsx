@@ -11,9 +11,10 @@ import { EmptyState } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { getStaff, staffCan } from "@/lib/auth";
 import { type RangeKey, resolveRange } from "@/lib/dates";
+import { trustBadge } from "@/lib/finance/trust-badge";
+import { metricLabel } from "@/lib/iq/metrics";
 import { type Paise, formatBps, formatINR, ratioBps } from "@/lib/money";
-import { type CategoryTotal, foodCostWeeklySeries, getProfitAndLoss } from "@/lib/repositories/expenses";
-import { getFoodCostComparison } from "@/lib/repositories/stock";
+import { type CategoryTotal, foodCostWeeklySeries, getProfitAndLossReport } from "@/lib/repositories/expenses";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Profit and loss — FRYBIRD IQ", robots: { index: false, follow: false } };
@@ -50,11 +51,22 @@ function Section({ title, rows, revenue, total }: { title: string; rows: readonl
   );
 }
 
+/** Owner-facing names (review I4), one per figure, shared with the Overview and the brief. */
+const NET_SALES = metricLabel("revenue_net");
+const FOOD_COST_RECIPE = metricLabel("food_cost_pct_theoretical");
+const FOOD_COST_RECORDED = metricLabel("food_cost_pct_recorded_purchases");
+
 /**
  * ANALYTICS › Food cost & P&L. Revenue is the dashboard's (paid orders);
  * costs are the recorded expenses; the statement is `profit()` in
  * `src/lib/iq/profit`. Nothing here is typed in twice or computed a second
  * way.
+ *
+ * A closed, fully computed period reads the IQ daily facts and shows each
+ * figure's trust, naming what holds it down (IQ-1 S9, review I2). Any other
+ * period — this month so far, a day not yet computed, a database without
+ * facts — reads live, with no trust line. The weekly chart is a rolling eight
+ * weeks and always reads live.
  */
 export default async function PnlPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
   const staff = await getStaff();
@@ -64,13 +76,13 @@ export default async function PnlPage({ searchParams }: { searchParams: Promise<
   const { range: requested } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "mtd") as RangeKey;
   const range = resolveRange(key);
-  const [pnl, foodCost, foodCostComparison, canRecord, canSeeCustomers] = await Promise.all([
-    getProfitAndLoss(staff.orgId, range),
+  const [report, foodCost, canRecord, canSeeCustomers] = await Promise.all([
+    getProfitAndLossReport(staff.orgId, range),
     foodCostWeeklySeries(staff.orgId),
-    getFoodCostComparison(staff.orgId, range),
     staffCan("finance.manage"),
     staffCan("customers.view"),
   ]);
+  const { pnl, foodCost: foodCostComparison, trust } = report;
   const { result } = pnl;
 
   const directTotal = pnl.direct.reduce((sum, row) => sum + row.amount, 0n) as Paise;
@@ -105,16 +117,26 @@ export default async function PnlPage({ searchParams }: { searchParams: Promise<
 
       <DataTrust
         items={[
-          { tone: "gain", text: `Revenue ${formatINR(pnl.revenue, "whole")} across ${pnl.orderCount} paid ${pnl.orderCount === 1 ? "order" : "orders"}` },
+          { tone: "gain", text: `${NET_SALES} ${formatINR(pnl.revenue, "whole")} across ${pnl.orderCount} paid ${pnl.orderCount === 1 ? "order" : "orders"}` },
           pnl.hasExpenses ? { tone: "gain", text: "Costs from recorded expenses, by category" } : { tone: "flag", text: "No expenses recorded for this period — costs and profit cannot be shown" },
           hasConsumptionData
             ? { tone: "gain", text: `Theoretical and actual food cost from ${foodCostComparison.saleMovementCount} recipe-driven sale ${foodCostComparison.saleMovementCount === 1 ? "movement" : "movements"}` }
             : { tone: "flag", text: "No recipe-driven consumption recorded yet — theoretical vs actual food cost needs at least one accepted order" },
         ]}
       />
+      {trust && (
+        <DataTrust
+          items={[
+            trustBadge(NET_SALES, trust.revenue),
+            trustBadge("Net profit", trust.netProfit),
+            trustBadge(FOOD_COST_RECORDED, trust.foodCostRecordedPurchases),
+            trustBadge(FOOD_COST_RECIPE, trust.foodCostRecipe),
+          ]}
+        />
+      )}
 
       <Panel>
-        <PanelHeader title="Theoretical vs actual food cost" description="Recipes × sales, against everything that actually left the shelf." meta={range.label} />
+        <PanelHeader title={`${FOOD_COST_RECIPE}: theoretical vs actual`} description="Recipes × sales, against everything that actually left the shelf." meta={range.label} />
         <PanelBody className="pt-0">
           {!hasConsumptionData ? (
             <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground">
@@ -165,11 +187,11 @@ export default async function PnlPage({ searchParams }: { searchParams: Promise<
       ) : (
         <>
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <KpiTile label="Revenue" value={formatINR(pnl.revenue, "whole")} note={`${pnl.orderCount} paid ${pnl.orderCount === 1 ? "order" : "orders"}`} />
+            <KpiTile label={NET_SALES} value={formatINR(pnl.revenue, "whole")} note={`${pnl.orderCount} paid ${pnl.orderCount === 1 ? "order" : "orders"}`} />
             <KpiTile label="Gross profit" value={formatINR(result.grossProfit, "whole")} note={result.grossMarginBps === null ? "No sales yet" : `${formatBps(result.grossMarginBps, 1)} margin after direct costs`} />
             <KpiTile label="Net profit" value={formatINR(result.netProfit, "whole")} note={result.netMarginBps === null ? "No sales yet" : `${formatBps(result.netMarginBps, 1)} margin after operating expenses`} emphasis />
             <KpiTile
-              label="Food cost"
+              label={FOOD_COST_RECORDED}
               value={result.foodCostBps === null ? "—" : formatBps(result.foodCostBps, 1)}
               missing={result.foodCostBps === null}
               meta={pnl.foodCostTargetBps !== null ? `target ${formatBps(pnl.foodCostTargetBps, 1)}` : undefined}
@@ -206,7 +228,7 @@ export default async function PnlPage({ searchParams }: { searchParams: Promise<
                   </thead>
                   <tbody>
                     <tr className="font-semibold">
-                      <td className="py-2">Revenue</td>
+                      <td className="py-2">{NET_SALES}</td>
                       <td className="tabular py-2 text-right">{formatINR(pnl.revenue, "whole")}</td>
                       <td className="tabular py-2 text-right text-muted-foreground">100.0%</td>
                     </tr>
