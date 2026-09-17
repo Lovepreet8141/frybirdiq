@@ -15,8 +15,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { loyaltyAccounts, loyaltyRewards, loyaltyStampEvents, orders } from "@/db/schema";
-import { redeemStampRewardInTx, reverseStampForOrder } from "./loyalty";
+import { awardStampForOrderInTx, redeemStampRewardInTx, reverseStampForOrder } from "./loyalty";
 import { createTestCustomer, createTestOrg, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
+import { ZERO, paise } from "@/lib/money";
+import type { StampConfig } from "@/lib/loyalty/stamps";
 
 async function seedAvailableReward(org: TestOrg, customerId: string) {
   const [account] = await db().insert(loyaltyAccounts).values({ orgId: org.orgId, customerId }).returning({ id: loyaltyAccounts.id });
@@ -372,5 +374,139 @@ describe("reverseStampForOrder", () => {
       const looksReversed = row?.status === "REVERSED" && row.redeemedOrderId === null && row.redeemedAt === null && row.reversedAt !== null;
       expect(looksRedeemed || looksReversed, `trial ${trial}: got status=${row?.status} redeemedOrderId=${row?.redeemedOrderId} redeemedAt=${row?.redeemedAt} reversedAt=${row?.reversedAt}`).toBe(true);
     }
+  });
+
+  it("loy-1c: a refund reversal races a same-customer settle that redeems the same reward — both commit, no deadlock", async () => {
+    // Reproduces POS-ORDERS' 816fff trace exactly: `settle()` (payments.ts)
+    // locks order -> account -> stamp/reward rows. Before loy-1c,
+    // reverseStampForOrder locked order -> stamp/reward rows -> account —
+    // inverted. Order B below plays settle()'s role by hand (this file
+    // can't call payments.ts, and doesn't need to: the lock *order* is
+    // what's under test, not settle()'s own logic), taking its locks in
+    // settle()'s real order and pausing right before it would touch the
+    // reward — the exact window where the old code let the reversal grab
+    // the reward first, then deadlock waiting on the account order B
+    // already held.
+    const customer = await createTestCustomer(org.orgId);
+    const accountId = await seedAccount(customer.id);
+    const [reward] = await db().insert(loyaltyRewards).values({ orgId: org.orgId, accountId, status: "AVAILABLE" }).returning({ id: loyaltyRewards.id });
+    if (!reward) throw new Error("fixture");
+
+    const orderA = await createTestOrder(org); // about to be refunded — owns the reward
+    const orderB = await createTestOrder(org); // a different order of the SAME customer, settling and redeeming that reward
+    await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: orderA, rewardId: reward.id });
+
+    await warmPool();
+
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((resolve) => (locked = resolve));
+
+    const settleB = db().transaction(async (tx) => {
+      await tx.select({ id: orders.id }).from(orders).where(eq(orders.id, orderB)).for("update");
+      await tx.select({ id: loyaltyAccounts.id }).from(loyaltyAccounts).where(eq(loyaltyAccounts.id, accountId)).for("update");
+      locked();
+      await released; // pause holding order B + the account, exactly like settle() mid-transaction
+      const redeemed = await redeemStampRewardInTx(tx, { rewardId: reward.id, orgId: org.orgId, orderId: orderB, productSlug: "test-product" });
+      if (!redeemed.redeemed) throw new Error("test: expected order B to win the reward while holding the account lock");
+    });
+    await lockTaken;
+
+    const reversal = reverseStampForOrder({ orgId: org.orgId, orderId: orderA, reason: "concurrent refund racing a same-customer settle" });
+
+    // Only release settleB once the reversal is genuinely blocked on a
+    // lock — which must be the account (order B's holder holds nothing
+    // else yet), proving the reversal reaches the account lock, not the
+    // reward, first.
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const [row] = await db().execute<{ waiting: number }>(
+        sql`SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`,
+      );
+      if ((row?.waiting ?? 0) >= 1) break;
+      if (Date.now() > deadline) throw new Error("test: the reversal never reached a lock wait");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    release();
+    await Promise.all([settleB, reversal]); // throws (e.g. Postgres 40P01) if either aborts — including a deadlock
+
+    const [row] = await db()
+      .select({ status: loyaltyRewards.status, redeemedOrderId: loyaltyRewards.redeemedOrderId })
+      .from(loyaltyRewards)
+      .where(eq(loyaltyRewards.id, reward.id));
+    expect(row?.status).toBe("REDEEMED"); // order B genuinely won the reward
+    expect(row?.redeemedOrderId).toBe(orderB);
+
+    // Order A's own stamp event still correctly reverses even though it
+    // lost the reward race — the "already redeemed by a different order"
+    // branch, not an error.
+    const [event] = await db().select({ reversedAt: loyaltyStampEvents.reversedAt }).from(loyaltyStampEvents).where(eq(loyaltyStampEvents.orderId, orderA));
+    expect(event?.reversedAt).not.toBeNull();
+  });
+
+  it("loy-1c: a refund reversal races a same-customer settle that earns its own stamp — combined pooled stamps still complete exactly one new cycle, no deadlock", async () => {
+    const customer = await createTestCustomer(org.orgId);
+    const accountId = await seedAccount(customer.id);
+    const [reward] = await db().insert(loyaltyRewards).values({ orgId: org.orgId, accountId, status: "AVAILABLE" }).returning({ id: loyaltyRewards.id });
+    if (!reward) throw new Error("fixture");
+
+    const orderA = await createTestOrder(org); // about to be refunded — owns the reward
+    const orderB = await createTestOrder(org); // a different order of the SAME customer, settling and earning its own stamp
+    await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: orderA, rewardId: reward.id });
+    // 6 more stamps riding on the same reward — the org's default
+    // stampsRequired is 7, so voiding it frees these 6, and combined with
+    // order B's own newly-awarded stamp that's exactly 7: one new cycle.
+    for (let i = 0; i < 6; i++) {
+      await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: randomUUID(), rewardId: reward.id });
+    }
+
+    const config: StampConfig = { enabled: true, stampsRequired: 7, minOrderValue: ZERO, maxRewardValue: paise(25000n) };
+
+    await warmPool();
+
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((resolve) => (locked = resolve));
+
+    // Same settle()-shaped lock sequence as the test above — order, then
+    // account — but this time the thing settle() does next is award
+    // order B its own stamp, not redeem this reward.
+    const settleB = db().transaction(async (tx) => {
+      await tx.select({ id: orders.id }).from(orders).where(eq(orders.id, orderB)).for("update");
+      await tx.select({ id: loyaltyAccounts.id }).from(loyaltyAccounts).where(eq(loyaltyAccounts.id, accountId)).for("update");
+      locked();
+      await released;
+      const awarded = await awardStampForOrderInTx(tx, { orgId: org.orgId, customerId: customer.id, orderId: orderB, qualifyingSpend: paise(50000n), config });
+      if (!awarded.awarded) throw new Error("test: expected order B to earn its own stamp while holding the account lock");
+    });
+    await lockTaken;
+
+    const reversal = reverseStampForOrder({ orgId: org.orgId, orderId: orderA, reason: "concurrent refund racing a same-customer settle" });
+
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const [row] = await db().execute<{ waiting: number }>(
+        sql`SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`,
+      );
+      if ((row?.waiting ?? 0) >= 1) break;
+      if (Date.now() > deadline) throw new Error("test: the reversal never reached a lock wait");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    release();
+    await Promise.all([settleB, reversal]); // throws if either aborts — including a deadlock
+
+    const [rewardRow] = await db().select({ status: loyaltyRewards.status }).from(loyaltyRewards).where(eq(loyaltyRewards.id, reward.id));
+    expect(rewardRow?.status).toBe("REVERSED");
+
+    const allRewards = await db().select({ id: loyaltyRewards.id }).from(loyaltyRewards).where(eq(loyaltyRewards.accountId, accountId));
+    const newRewards = allRewards.filter((r) => r.id !== reward.id);
+    expect(newRewards).toHaveLength(1); // exactly one new reward from the combined 6 freed + order B's own 1 = 7 stamps
+
+    const [account] = await db().select({ stampCount: loyaltyAccounts.stampCount }).from(loyaltyAccounts).where(eq(loyaltyAccounts.id, accountId));
+    expect(account?.stampCount).toBe(0); // all 7 consumed into the one new reward, none left dangling
   });
 });

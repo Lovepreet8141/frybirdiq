@@ -211,10 +211,24 @@ export async function awardStampForOrderInTx(
  * (`advanceOrder`, `settle()`) already use. The loser blocks until the
  * winner's transaction commits, then re-reads under the lock and sees
  * `reversedAt` already set, so it no-ops before touching the reward, the
- * pool, or `settleAccount` at all. `settleAccount` additionally takes its
- * own account-row lock (see its own doc comment) for the race this order
- * lock alone cannot reach: a reversal on this order racing an *award* on a
- * genuinely different order of the same customer. No schema change.
+ * pool, or `settleAccount` at all.
+ *
+ * The account row is locked here too, right after that check and before
+ * any stamp/reward write — not left for `settleAccount` to lock later.
+ * `settle()` (payments.ts) takes locks order → account → stamp/reward
+ * rows (the account upsert, then the award and `redeemStampRewardInTx`).
+ * Locking the account only inside `settleAccount`, at the very end of
+ * this function, took them order → stamp/reward rows → account instead —
+ * a genuine lock-order inversion: a refund on this order (holding this
+ * order's lock, waiting on the account) can deadlock against a
+ * same-customer `settle()` on a *different* order (holding that order's
+ * lock and the account, waiting on this order's stamp/reward rows).
+ * Postgres would abort one of them (`40P01`), and if it picked the
+ * reversal, `advanceOrder` had already committed REFUNDED, leaving
+ * loyalty unreversed with nothing left to retry it. Taking the account
+ * lock here first restores order → account → stamps/rewards everywhere;
+ * `settleAccount`'s own lock is then just a harmless re-lock of a row
+ * this transaction already holds. No schema change.
  */
 export async function reverseStampForOrder(input: { orgId: string; orderId: string; reason: string }): Promise<void> {
   const database = db();
@@ -234,6 +248,9 @@ export async function reverseStampForOrder(input: { orgId: string; orderId: stri
       .limit(1);
 
     if (!event || event.reversedAt) return; // never earned a stamp, or already reversed — checked under the order lock, not a stale read.
+
+    const [account] = await tx.select({ id: loyaltyAccounts.id }).from(loyaltyAccounts).where(eq(loyaltyAccounts.id, event.accountId)).for("update").limit(1);
+    if (!account) return;
 
     await tx
       .update(loyaltyStampEvents)
@@ -268,9 +285,6 @@ export async function reverseStampForOrder(input: { orgId: string; orderId: stri
         }
       }
     }
-
-    const [account] = await tx.select().from(loyaltyAccounts).where(eq(loyaltyAccounts.id, event.accountId)).limit(1);
-    if (!account) return;
 
     const [org] = await tx.select().from(organizations).where(eq(organizations.id, input.orgId)).limit(1);
     const config: StampConfig = org
