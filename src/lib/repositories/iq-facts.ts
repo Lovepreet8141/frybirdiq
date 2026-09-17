@@ -149,6 +149,9 @@ export async function computeDayFacts(orgId: string, date: string, tx: Pick<Retu
         gross: sql<string>`coalesce(sum(${orders.grandTotal}), 0)::text`,
         discount: sql<string>`coalesce(sum(${orders.discountTotal}), 0)::text`,
         comp: sql<number>`(count(*) filter (where ${orders.taxableTotal} = 0))::int`,
+        // Still sold, with money returned: a payment partially or fully refunded. There is no
+        // PARTIALLY_REFUNDED order status. Field list: the column must be written qualified.
+        partRefunded: sql<number>`(count(*) filter (where exists (select 1 from payments pr where pr.order_id = "orders"."id" and pr.status in ('PARTIALLY_REFUNDED', 'REFUNDED'))))::int`,
       })
       .from(orders)
       .where(saleSetWhere(orgId, day))
@@ -160,8 +163,7 @@ export async function computeDayFacts(orgId: string, date: string, tx: Pick<Retu
         channel: orders.channel,
         cancelled: sql<number>`(count(*) filter (where ${orders.status} = 'CANCELLED'))::int`,
         failed: sql<number>`(count(*) filter (where ${orders.status} = 'FAILED'))::int`,
-        refunded: sql<number>`(count(*) filter (where exists (select 1 from payments pr where pr.order_id = "orders"."id" and pr.status = 'REFUNDED')))::int`,
-        partRefunded: sql<number>`(count(*) filter (where exists (select 1 from payments pr where pr.order_id = "orders"."id" and pr.status = 'PARTIALLY_REFUNDED')))::int`,
+        refunded: sql<number>`(count(*) filter (where ${orders.status} = 'REFUNDED'))::int`,
       })
       .from(orders)
       .where(and(eq(orders.orgId, orgId), gte(orders.createdAt, day.from), lt(orders.createdAt, day.to)))
@@ -250,6 +252,7 @@ export async function computeDayFacts(orgId: string, date: string, tx: Pick<Retu
     facts.addWithTotal(row.locationId, "sales_gross", big(row.gross), row.count, channel);
     facts.addWithTotal(row.locationId, "discount_total", big(row.discount), row.count, channel);
     facts.addWithTotal(row.locationId, "orders_comp", big(row.comp), row.comp, channel);
+    if (row.partRefunded > 0) facts.addWithTotal(row.locationId, "orders_part_refunded", big(row.partRefunded), row.partRefunded, channel);
   }
 
   for (const row of statuses) {
@@ -258,7 +261,6 @@ export async function computeDayFacts(orgId: string, date: string, tx: Pick<Retu
       ["orders_cancelled", row.cancelled],
       ["orders_failed", row.failed],
       ["orders_refunded", row.refunded],
-      ["orders_part_refunded", row.partRefunded],
     ];
     for (const [metricId, count] of counts) {
       if (count > 0) facts.addWithTotal(row.locationId, metricId, big(count), count, channel);
@@ -307,6 +309,10 @@ export interface RecomputeResult {
   readonly businessDate: string;
   readonly definitionVersion: number;
   readonly rowsWritten: number;
+  /** Times this call found another recompute of the day in progress and waited for it. */
+  readonly lockWaits: number;
+  /** Transaction attempts; more than 1 means a collision forced a retry (logged). */
+  readonly attempts: number;
 }
 
 /** unique_violation or serialization_failure: a concurrent recompute of the same day committed first. */
@@ -318,24 +324,42 @@ function isRetryable(error: unknown): boolean {
 
 const MAX_ATTEMPTS = 3;
 
+/** The advisory lock key text for one org's day. Exported for the concurrency test. */
+export function factDayLockKey(orgId: string, date: string): string {
+  return `iq_daily_facts:${orgId}:${date}`;
+}
+
+class LockBusy extends Error {}
+
 /**
  * Rebuilds one org's facts for one IST business day, idempotently (B2).
  *
- * One REPEATABLE READ transaction, so every metric reads the same snapshot;
- * a 64-bit advisory lock on (org, date) serialises recomputes of the same
- * day; delete then insert for (org, date, version), so a category or product
- * that no longer has rows loses its old fact row too. The lock is the first
- * statement, so a recompute that committed while this one waited is outside
- * its snapshot: its rows then collide on the unique key and the whole
- * recompute retries on a fresh snapshot.
+ * One REPEATABLE READ transaction, so every metric reads the same snapshot,
+ * holding a 64-bit advisory lock on (org, date); delete then insert for
+ * (org, date, version), so a category or product that no longer has rows
+ * loses its old fact row too. Readers see the old rows or the new ones,
+ * never a mix.
+ *
+ * Lock before snapshot: a REPEATABLE READ snapshot is taken when the first
+ * statement starts, so blocking on the lock inside it would compute from data
+ * older than the recompute it waited for. Instead the transaction only
+ * *tries* the lock; when another recompute holds it, the transaction ends
+ * without reading anything, waits for that holder in a separate READ
+ * COMMITTED transaction, and starts again with a fresh snapshot. Waiting
+ * never uses up an attempt. The only remaining collision is a holder
+ * committing in the instant between snapshot and try; that rolls back on the
+ * unique key (23505) or as 40001 and retries, logged, up to MAX_ATTEMPTS.
  */
 export async function recomputeDay(orgId: string, date: string, opts: { readonly jobRunId?: string | null } = {}): Promise<RecomputeResult> {
   assertBusinessDate(date);
-  for (let attempt = 1; ; attempt++) {
+  const key = factDayLockKey(orgId, date);
+  let lockWaits = 0;
+  for (let attempt = 1; ; ) {
     try {
-      return await db().transaction(
+      const rowsWritten = await db().transaction(
         async (tx) => {
-          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`iq_daily_facts:${orgId}:${date}`}, 0))`);
+          const [lock] = await tx.execute<{ locked: boolean }>(sql`SELECT pg_try_advisory_xact_lock(hashtextextended(${key}, 0)) AS locked`);
+          if (!lock?.locked) throw new LockBusy();
           const rows = await computeDayFacts(orgId, date, tx);
           await tx
             .delete(iqDailyFacts)
@@ -359,12 +383,23 @@ export async function recomputeDay(orgId: string, date: string, opts: { readonly
               })),
             );
           }
-          return { orgId, businessDate: date, definitionVersion: DEFINITION_VERSION, rowsWritten: rows.length };
+          return rows.length;
         },
         { isolationLevel: "repeatable read" },
       );
+      return { orgId, businessDate: date, definitionVersion: DEFINITION_VERSION, rowsWritten, lockWaits, attempts: attempt };
     } catch (error) {
+      if (error instanceof LockBusy) {
+        lockWaits += 1;
+        // Blocks until the holder commits or rolls back, then lets go at once.
+        await db().transaction(async (tx) => {
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+        });
+        continue;
+      }
       if (!isRetryable(error) || attempt >= MAX_ATTEMPTS) throw error;
+      console.warn(`iq-facts: recompute of ${date} for org ${orgId} collided with a concurrent recompute; retrying (attempt ${attempt + 1} of ${MAX_ATTEMPTS})`);
+      attempt += 1;
     }
   }
 }
@@ -410,22 +445,28 @@ export async function readDailyFacts(orgId: string, from: string, to: string): P
     lte(iqDailyFacts.businessDate, to),
   );
 
-  const [sums, dates] = await Promise.all([
-    db()
-      .select({
-        metricId: iqDailyFacts.metricId,
-        dimensionKey: iqDailyFacts.dimensionKey,
-        dimensionValue: iqDailyFacts.dimensionValue,
-        value: sql<string>`sum(${iqDailyFacts.value})::text`,
-      })
-      .from(iqDailyFacts)
-      .where(inRange)
-      .groupBy(iqDailyFacts.metricId, iqDailyFacts.dimensionKey, iqDailyFacts.dimensionValue),
-    db()
-      .selectDistinct({ date: iqDailyFacts.businessDate })
-      .from(iqDailyFacts)
-      .where(and(inRange, eq(iqDailyFacts.metricId, "orders_paid"), eq(iqDailyFacts.dimensionKey, ""))),
-  ]);
+  // One read-only snapshot for both queries, so a recompute committing in
+  // between cannot make a day look computed without its sums, or the reverse.
+  const { sums, dates } = await db().transaction(
+    async (tx) => {
+      const sums = await tx
+        .select({
+          metricId: iqDailyFacts.metricId,
+          dimensionKey: iqDailyFacts.dimensionKey,
+          dimensionValue: iqDailyFacts.dimensionValue,
+          value: sql<string>`sum(${iqDailyFacts.value})::text`,
+        })
+        .from(iqDailyFacts)
+        .where(inRange)
+        .groupBy(iqDailyFacts.metricId, iqDailyFacts.dimensionKey, iqDailyFacts.dimensionValue);
+      const dates = await tx
+        .selectDistinct({ date: iqDailyFacts.businessDate })
+        .from(iqDailyFacts)
+        .where(and(inRange, eq(iqDailyFacts.metricId, "orders_paid"), eq(iqDailyFacts.dimensionKey, "")));
+      return { sums, dates };
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
 
   const totals: Partial<Record<MetricId, bigint>> = {};
   const breakdowns: Partial<Record<MetricId, Record<string, Record<string, bigint>>>> = {};

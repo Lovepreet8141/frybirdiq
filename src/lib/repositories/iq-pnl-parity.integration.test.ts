@@ -13,7 +13,7 @@
  * (theoretical, actual, sale movement count) against readDailyFacts.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, count, eq } from "drizzle-orm";
+import { and, count, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { expenses, iqDailyFacts } from "@/db/schema";
 import { type DateRange, addDays, endOfBusinessDay, resolveRange, startOfBusinessDay } from "@/lib/dates";
@@ -21,9 +21,9 @@ import { profit } from "@/lib/iq/profit";
 import { FEES_DIMENSION_VALUE, V1_COMPUTED_METRIC_IDS } from "@/lib/iq/metrics";
 import { paise } from "@/lib/money";
 import { type CategoryTotal, getProfitAndLoss } from "./expenses";
-import { businessDatesOf, readDailyFacts, recomputeDay } from "./iq-facts";
+import { type DailyFactsRead, businessDatesOf, factDayLockKey, readDailyFacts, recomputeDay } from "./iq-facts";
 import { getFoodCostComparison } from "./stock";
-import { createTestIngredient, createTestProduct, type TestOrg } from "./__test-support__/fixtures";
+import { createTestIngredient, createTestProduct, type TestOrg, warmPool } from "./__test-support__/fixtures";
 import {
   type SeededOrder,
   createTwoTestOrgs,
@@ -213,14 +213,108 @@ describe("IQ daily facts — P&L parity (IQ-1 S6)", () => {
     expect(facts.missingDates).toEqual(["2026-09-05", "2026-09-06"]);
   });
 
-  it("is idempotent, and serialises concurrent recomputes of the same day", async () => {
+  it("is idempotent", async () => {
     const rowsFor = async () =>
       (await db().select({ n: count() }).from(iqDailyFacts).where(and(eq(iqDailyFacts.orgId, orgs.a.orgId), eq(iqDailyFacts.businessDate, "2026-09-01"))))[0]?.n;
     const before = await rowsFor();
     const first = await readDailyFacts(orgs.a.orgId, "2026-09-01", "2026-09-01");
-    await Promise.all([recomputeDay(orgs.a.orgId, "2026-09-01"), recomputeDay(orgs.a.orgId, "2026-09-01"), recomputeDay(orgs.a.orgId, "2026-09-01")]);
+    const again = await recomputeDay(orgs.a.orgId, "2026-09-01");
+    expect(again).toMatchObject({ lockWaits: 0, attempts: 1 });
     expect(await rowsFor()).toBe(before);
     expect(await readDailyFacts(orgs.a.orgId, "2026-09-01", "2026-09-01")).toEqual(first);
+  });
+
+  it("waits for a recompute in progress rather than computing a stale snapshot; readers see all old or all new rows", async () => {
+    const orgId = orgs.a.orgId;
+    const date = "2026-09-02";
+    await warmPool(10);
+    const before = await readDailyFacts(orgId, date, date);
+
+    // Hold the day's lock, as a recompute in progress would.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let held!: () => void;
+    const isHeld = new Promise<void>((resolve) => (held = resolve));
+    const holder = db().transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${factDayLockKey(orgId, date)}, 0))`);
+      held();
+      await released;
+    });
+    await isHeld;
+
+    // New source data the waiters must see once they get the lock.
+    const extra = await seedExpense(orgs.a, { behaviour: "DIRECT", amountPaise: 777n, paidOn: date, description: "Concurrency" });
+    const recomputes = Array.from({ length: 5 }, () => recomputeDay(orgId, date));
+
+    // Proof of overlap: all five are blocked on the held lock at the same moment.
+    const waiting = async () =>
+      Number((await db().execute<{ n: string }>(sql`SELECT count(*)::text AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`))[0]?.n ?? 0);
+    for (let tries = 0; (await waiting()) < 5; tries++) {
+      if (tries > 200) throw new Error("recomputes never queued on the lock");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    const reads: DailyFactsRead[] = [];
+    let reading = true;
+    const reader = (async () => {
+      while (reading) reads.push(await readDailyFacts(orgId, date, date));
+    })();
+
+    release();
+    await holder;
+    const results = await Promise.all(recomputes);
+    reading = false;
+    await reader;
+
+    const after = await readDailyFacts(orgId, date, date);
+    expect(after.totals.expense_direct).toBe((before.totals.expense_direct ?? 0n) + 777n);
+    for (const result of results) {
+      expect(result.lockWaits).toBeGreaterThanOrEqual(1);
+      // Waiting costs no attempt; only a commit landing between snapshot and lock can force one retry.
+      expect(result.attempts).toBeLessThanOrEqual(2);
+    }
+    expect(reads.length).toBeGreaterThan(0);
+    for (const read of reads) expect([before, after]).toContainEqual(read);
+
+    await db().delete(expenses).where(and(eq(expenses.id, extra.id), eq(expenses.orgId, orgId)));
+    await recomputeDay(orgId, date);
+    expect(await readDailyFacts(orgId, date, date)).toEqual(before);
+  });
+
+  it("matches hand-computed figures (₹ inclusive of 5% GST, extracted per line)", async () => {
+    const sep = await readDailyFacts(orgs.a.orgId, "2026-09-01", "2026-09-04");
+    const aug = await readDailyFacts(orgs.a.orgId, "2026-08-29", "2026-08-31");
+    const sep02 = await readDailyFacts(orgs.a.orgId, "2026-09-02", "2026-09-02");
+    const sep03 = await readDailyFacts(orgs.a.orgId, "2026-09-03", "2026-09-03");
+
+    // September: 149 + (498 + 30 fee − 10 points) + stamp-free 99 + 399 (partial refund) + 179 (captured twice).
+    expect(sep.totals).toMatchObject({
+      orders_paid: 5n,
+      revenue_net: 119_524n, // 14,190 + 50,286 + 0 + 38,000 + 17,048
+      gst_output: 5_976n, // 710 + 2,514 + 0 + 1,900 + 852
+      sales_gross: 124_500n, // 14,900 + 51,800 + 0 + 39,900 + 17,900
+      discount_total: 9_900n, // the stamp reward; points are tender, not discount
+      units_sold: 6n,
+      orders_comp: 1n,
+      orders_part_refunded: 1n,
+      orders_refunded: 1n,
+      orders_cancelled: 1n,
+      orders_failed: 1n,
+      expense_direct: 98_765n,
+      expense_operating: 1_500_000n,
+      expense_nonoperating: 42_000n,
+    });
+    expect(
+      profit({ revenue: paise(sep.totals.revenue_net ?? 0n), directCosts: paise(sep.totals.expense_direct ?? 0n), operatingExpenses: paise(sep.totals.expense_operating ?? 0n) })
+        .netProfit,
+    ).toBe(-1_479_241n);
+
+    // August: 3 × 99 + 20 dip on the 29th, 199 at 23:59:59.999 on the 31st.
+    expect(aug.totals).toMatchObject({ orders_paid: 2n, revenue_net: 49_143n, gst_output: 2_457n, sales_gross: 51_600n, units_sold: 5n, expense_direct: 123_457n });
+
+    expect(sep02.totals.waste_cost).toBe(870n); // 600 logged + 270 cooked-then-cancelled
+    expect(sep03.totals.orders_part_refunded).toBe(1n);
+    expect(sep03.totals.refunds_amount).toBe(29_900n);
   });
 
   it("keeps each org's facts to its own rows", async () => {

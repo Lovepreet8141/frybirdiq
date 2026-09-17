@@ -232,7 +232,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "net",
     allowedDimensions: ["product"],
     sources: SALE_SET_LINES,
-    description: `Σ order_items.line_taxable by order_items.product_id over the sale set ("${NO_PRODUCT_DIMENSION_VALUE}" when null), plus a "${FEES_DIMENSION_VALUE}" row = revenue_net − Σ line_taxable so products sum to revenue_net.`,
+    description: `Σ order_items.line_taxable by order_items.product_id over the sale set ("${NO_PRODUCT_DIMENSION_VALUE}" when null), plus a "${FEES_DIMENSION_VALUE}" row = revenue_net − Σ line_taxable so products sum to revenue_net. Label that row "Fees and adjustments", not "Delivery fees": any order-level amount outside the lines lands there, and it can be negative.`,
     trustSignals: SALES_TRUST,
   }),
   units_sold: stored({
@@ -250,7 +250,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "tax",
     allowedDimensions: ["channel"],
     sources: SALE_SET,
-    description: "Σ orders.tax_total over the sale set — GST collected for the government, never revenue.",
+    description: "Σ orders.tax_total over the sale set — GST collected for the government, never revenue. Includes delivery-fee GST, which the GST export omits (D9): never show the two side by side until S11.",
     trustSignals: SALES_TRUST,
   }),
   sales_gross: stored({
@@ -314,8 +314,8 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     unit: "count",
     basis: "none",
     allowedDimensions: ["channel"],
-    sources: ["orders", "payments", "refunds"],
-    description: "Orders whose payment is fully REFUNDED, on the order's created_at IST day in v1 (not the refund's day).",
+    sources: ["orders"],
+    description: "Orders in REFUNDED order status, on the order's created_at IST day in v1 (not the refund's day). Read from the order, not its payments: a double-captured order with one payment refunded is still sold and counts in orders_part_refunded.",
     trustSignals: SALES_TRUST,
   }),
   orders_part_refunded: stored({
@@ -323,8 +323,8 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     unit: "count",
     basis: "none",
     allowedDimensions: ["channel"],
-    sources: ["orders", "payments", "refunds"],
-    description: "Orders whose payment is PARTIALLY_REFUNDED, on the order's created_at IST day in v1 (not the refund's day). They stay in the sale set, counted once at full taxable_total (fin-3); the revenue reduction waits on dec-9.",
+    sources: ["orders", "payments"],
+    description: "Sale-set orders (still sold) with a payment PARTIALLY_REFUNDED or REFUNDED, on the order's created_at IST day in v1 (not the refund's day). There is no partial-refund order status. Counted once at full taxable_total (fin-3); the revenue reduction waits on dec-9.",
     trustSignals: SALES_TRUST,
   }),
   refunds_amount: stored({
@@ -333,7 +333,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "gross",
     allowedDimensions: [],
     sources: ["refunds", "payments"],
-    description: "Σ refunds.amount on the refund's own IST day (F1), anchored on refunds.created_at in v1 until ref-1 adds finalized_at (B6). refunds has no status column yet; a row is written only after the provider confirms (payments.ts), so every row is a succeeded refund. Once status exists, SUCCEEDED only.",
+    description: "Σ refunds.amount on the refund's own IST day (F1), anchored on refunds.created_at in v1 until ref-1 adds finalized_at (B6). refunds has no status column yet; a row is written only after the provider confirms (payments.ts), so every row is a succeeded refund. Once status exists, SUCCEEDED only. Switches to SUCCEEDED + finalized_at in the refund (ref-1) release.",
     trustSignals: SALES_TRUST,
   }),
   captured_amount: stored({
@@ -342,7 +342,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "gross",
     allowedDimensions: [],
     sources: ["payments"],
-    description: "Σ payments.amount of payments ever captured (CAPTURED, PARTIALLY_REFUNDED, REFUNDED), anchored on captured_at (F8). Each payment row counts, so a double capture counts twice. Wider than finance.ts \"Captured\", which filters CAPTURED only.",
+    description: "Σ payments.amount of payments ever captured (CAPTURED, PARTIALLY_REFUNDED, REFUNDED), anchored on captured_at (F8). Each payment row counts, so a double capture counts twice. Wider than finance.ts \"Captured\", which filters CAPTURED only. Label it \"Money taken\", never \"Captured\", until finance.ts moves to the same set.",
     trustSignals: SALES_TRUST,
   }),
   expense_direct: stored({
