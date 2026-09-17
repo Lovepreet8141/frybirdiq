@@ -1,127 +1,122 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { ESLint } from "eslint";
 import { describe, expect, it } from "vitest";
 
 /**
- * Static, ESLint-independent guard for the `no-restricted-imports` rules in
- * eslint.config.mjs (IQ-0 S9, extended for S8's iq0-s8r-arch item 2a). ESLint
- * enforces these at lint time; this test re-derives the same violations
- * directly from source text so a future edit to eslint.config.mjs that
- * quietly narrows or drops a rule still fails CI here. See
- * hive/reviews/iq-0/DESIGN.md §3 and the ARCHITECT reviews of accdd93 (P2 #1,
- * iq0-s1r) and daa167f (iq0-s8r-arch, item 2a + SECURITY condition).
+ * Runs the real eslint.config.mjs against one small violating fixture per
+ * IQ-0 S9 rule, via ESLint's Node API — not a hand-rolled regex re-scan of
+ * source text. A regex re-scan cannot see through an aliased import
+ * (`Name as X`), a namespace import (`import * as ns`), or a relative
+ * import resolved against its own directory, and ARCHITECT's review of
+ * 90b5d78 (iq0-s9r) refused exactly that gap. This test instead asks ESLint
+ * itself whether each fixture is an error, so it fails the moment a rule in
+ * eslint.config.mjs is weakened or removed — that file is the one and only
+ * source of truth (do not duplicate it here, or in a separate scan; see
+ * AUTOMATION-ARCHITECT's own scan in src/lib/jobs/registry.test.ts on
+ * agent/automation-architect-mu4xnv9l — this file does not repeat that one
+ * either). See hive/reviews/iq-0/DESIGN.md §3, and the ARCHITECT reviews of
+ * accdd93 (P2 #1, iq0-s1r) and daa167f (iq0-s9r, iq0-s8r-arch item 2a).
+ *
+ * Fixtures use a virtual filePath under `${SRC}/**\/__fixtures__/` that is
+ * never written to disk — ESLint's Node API only needs the path string to
+ * pick the right config block and to resolve relative/aliased specifiers
+ * against; the source text is passed straight to lintText. `__fixtures__`
+ * is excluded from every restriction under test (eslint.config.mjs and this
+ * file agree on that directory name), so a real `pnpm lint` run never
+ * trips over these deliberately-broken snippets.
  */
 
-// The job registry reaches these repositories to do its work — today, only
-// iq-job-runs.ts. Kept in sync by hand with eslint.config.mjs's
-// JOB_REGISTRY_REPOSITORIES; the two are independent on purpose (see the
-// docstring above), so a mismatch is a thing to notice, not merge away.
-const JOB_REGISTRY_REPOSITORY_FILES = ["lib/repositories/iq-job-runs.ts"];
-
 const SRC = fileURLToPath(new URL("../..", import.meta.url));
-const IMPORT_FROM = /from\s+["']([^"']+)["']/g;
+const eslint = new ESLint({ cwd: path.dirname(SRC) });
 
-function listSourceFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const name of readdirSync(dir)) {
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) out.push(...listSourceFiles(path));
-    else if (/\.(ts|tsx)$/.test(name) && !/\.test\.tsx?$/.test(name)) out.push(path);
-  }
-  return out;
+async function ruleIdsFor(relativeFilePath: string, code: string): Promise<string[]> {
+  const [result] = await eslint.lintText(code, { filePath: path.join(SRC, relativeFilePath) });
+  return (result?.messages ?? []).map((m) => m.ruleId).filter((id): id is string => id !== null);
 }
 
-function importSpecifiers(path: string): string[] {
-  return [...readFileSync(path, "utf8").matchAll(IMPORT_FROM)]
-    .map((m) => m[1])
-    .filter((spec): spec is string => spec !== undefined);
-}
-
-function rel(path: string): string {
-  return relative(SRC, path);
-}
-
-describe("IQ-0 S9: restricted imports (mirrors eslint.config.mjs no-restricted-imports)", () => {
-  it("src/lib/iq/engine stays pure: no DB, Next.js, or React import", () => {
-    const banned = /^(next(\/.*)?|react|react-dom|drizzle-orm|postgres|@\/db(\/.*)?|@\/lib\/repositories\/.*|@\/lib\/supabase\/.*)$/;
-    const offenders: string[] = [];
-    for (const file of listSourceFiles(join(SRC, "lib/iq/engine"))) {
-      for (const spec of importSpecifiers(file)) {
-        if (banned.test(spec)) offenders.push(`${rel(file)} -> ${spec}`);
-      }
-    }
-    expect(offenders).toEqual([]);
+describe("IQ-0 S9: eslint.config.mjs restricted imports (fixture per rule, run through real ESLint)", () => {
+  it("src/lib/iq/engine stays pure: no DB import", async () => {
+    const ids = await ruleIdsFor(
+      "lib/iq/engine/__fixtures__/db-import.ts",
+      'import { db } from "@/db";\nexport const x = db;\n',
+    );
+    expect(ids).toContain("no-restricted-imports");
   });
 
-  it("src/lib/jobs, src/app/api/jobs, and the repositories the registry reaches do not import payments/orders/finance writers", () => {
-    const banned = /^@\/lib\/repositories\/(payments|orders|finance)$/;
-    const dirs = [join(SRC, "lib/jobs"), join(SRC, "app/api/jobs")].filter((d) => {
-      try {
-        return statSync(d).isDirectory();
-      } catch {
-        return false;
-      }
-    });
-    const files = [
-      ...dirs.flatMap((dir) => listSourceFiles(dir)),
-      ...JOB_REGISTRY_REPOSITORY_FILES.map((f) => join(SRC, f)).filter((f) => {
-        try {
-          return statSync(f).isFile();
-        } catch {
-          return false;
-        }
-      }),
-    ];
-    const offenders: string[] = [];
-    for (const file of files) {
-      for (const spec of importSpecifiers(file)) {
-        if (banned.test(spec)) offenders.push(`${rel(file)} -> ${spec}`);
-      }
-    }
-    expect(offenders).toEqual([]);
+  it("only src/lib/repositories/iq-*.ts and the engine mint an Observed quantity — barrel import", async () => {
+    const ids = await ruleIdsFor(
+      "lib/__fixtures__/minting-barrel.ts",
+      'import { InsightSchema } from "@/lib/iq/engine";\nexport const x = InsightSchema;\n',
+    );
+    expect(ids).toContain("no-restricted-imports");
   });
 
-  it("src/lib/jobs/jobs/** (an individual job) does not import @/db or a repository directly", () => {
-    const banned = /^(@\/db(\/.*)?|@\/lib\/repositories(\/.*)?)$/;
-    const dir = join(SRC, "lib/jobs/jobs");
-    const offenders: string[] = [];
-    for (const file of listSourceFiles(dir)) {
-      for (const spec of importSpecifiers(file)) {
-        if (banned.test(spec)) offenders.push(`${rel(file)} -> ${spec}`);
-      }
-    }
-    expect(offenders).toEqual([]);
+  it("only src/lib/repositories/iq-*.ts and the engine mint an Observed quantity — aliased import", async () => {
+    const ids = await ruleIdsFor(
+      "lib/__fixtures__/minting-aliased.ts",
+      'import { InsightSchema as Alias } from "@/lib/iq/engine";\nexport const x = Alias;\n',
+    );
+    expect(ids).toContain("no-restricted-imports");
   });
 
-  it("only src/lib/repositories/iq-*.ts and the engine itself mint an Observed quantity", () => {
-    const mintingNames = [
-      "ObservedSchema",
-      "InsightSchema",
-      "FactPayloadSchema",
-      "DetectionPayloadSchema",
-      "ForecastPayloadSchema",
-      "ExplanationPayloadSchema",
-      "RecommendationPayloadSchema",
-      "AutomationPayloadSchema",
-    ];
-    const bannedModule = /^@\/lib\/iq\/engine(\/(observed-factory|insight|claims))?$/;
-    const allowed = (file: string) => rel(file).startsWith(join("lib", "iq", "engine")) || /^lib\/repositories\/iq-[^/]+\.ts$/.test(rel(file));
-    const offenders: string[] = [];
-    for (const file of listSourceFiles(SRC)) {
-      if (allowed(file)) continue;
-      const text = readFileSync(file, "utf8");
-      for (const spec of importSpecifiers(file)) {
-        if (!bannedModule.test(spec)) continue;
-        if (spec !== "@/lib/iq/engine") {
-          offenders.push(`${rel(file)} -> ${spec}`);
-          continue;
-        }
-        const named = mintingNames.filter((n) => new RegExp(`[{,]\\s*${n}\\s*[,}]`).test(text));
-        if (named.length > 0) offenders.push(`${rel(file)} -> @/lib/iq/engine (${named.join(", ")})`);
-      }
-    }
-    expect(offenders).toEqual([]);
+  it("only src/lib/repositories/iq-*.ts and the engine mint an Observed quantity — namespace import", async () => {
+    const ids = await ruleIdsFor(
+      "lib/__fixtures__/minting-namespace.ts",
+      'import * as engine from "@/lib/iq/engine";\nexport const x = engine.InsightSchema;\n',
+    );
+    expect(ids).toContain("no-restricted-imports");
+  });
+
+  it("engine/quantity is banned as a deep import, same as observed-factory/insight/claims", async () => {
+    const ids = await ruleIdsFor(
+      "lib/__fixtures__/minting-quantity.ts",
+      'import { ObservedSchema } from "@/lib/iq/engine/quantity";\nexport const x = ObservedSchema;\n',
+    );
+    expect(ids).toContain("no-restricted-imports");
+  });
+
+  it("job code may not import a repository outside the allowlist (an aliased import)", async () => {
+    const ids = await ruleIdsFor(
+      "lib/jobs/__fixtures__/allowlist-alias.ts",
+      'import { listExpenses } from "@/lib/repositories/expenses";\nexport const x = listExpenses;\n',
+    );
+    expect(ids).toContain("import/no-restricted-paths");
+  });
+
+  it("job code may not import a repository outside the allowlist via a relative path", async () => {
+    // Fixture lives at lib/jobs/__fixtures__/, so "../../repositories/..."
+    // resolves to lib/repositories/... — same target the alias test above
+    // reaches, by a different route.
+    const ids = await ruleIdsFor(
+      "lib/jobs/__fixtures__/allowlist-relative.ts",
+      'import { capturePayment } from "../../repositories/payments";\nexport const x = capturePayment;\n',
+    );
+    expect(ids).toContain("import/no-restricted-paths");
+  });
+
+  it("job code allowlist permits an iq-* repository (no false positive)", async () => {
+    const ids = await ruleIdsFor(
+      "lib/jobs/__fixtures__/allowlist-ok.ts",
+      'import { createJobRunStore } from "@/lib/repositories/iq-job-runs";\nexport const x = createJobRunStore;\n',
+    );
+    expect(ids).not.toContain("import/no-restricted-paths");
+  });
+
+  it("an individual job (src/lib/jobs/jobs/**) may not import even an iq-* repository directly", async () => {
+    const ids = await ruleIdsFor(
+      "lib/jobs/jobs/__fixtures__/no-repo.ts",
+      'import { createJobRunStore } from "@/lib/repositories/iq-job-runs";\nexport const x = createJobRunStore;\n',
+    );
+    expect(ids).toContain("import/no-restricted-paths");
+  });
+
+  it("an individual job (src/lib/jobs/jobs/**) may not import @/db directly", async () => {
+    const ids = await ruleIdsFor(
+      "lib/jobs/jobs/__fixtures__/no-db.ts",
+      'import { db } from "@/db";\nexport const x = db;\n',
+    );
+    expect(ids).toContain("import/no-restricted-paths");
   });
 });

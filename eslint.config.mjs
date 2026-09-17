@@ -1,33 +1,62 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 
-// IQ-0 DESIGN.md §3: "jobs may not import payments/orders/finance writers
-// (lint + import-scan test)." The import-scan half is
-// src/lib/jobs/source-hygiene.test.ts.
-const JOBS_MONEY_WRITER_MESSAGE =
-  "src/lib/jobs and src/app/api/jobs may not import payments/orders/finance writers directly (IQ-0 DESIGN.md §3). Read through a repository the job owns.";
+// eslint-plugin-import's no-restricted-paths resolves each import specifier
+// to an absolute file path before matching it against a zone (so a relative
+// import is checked exactly like an aliased one — no special-casing needed).
+// For a glob-style `from`, `except` globs are matched against that same
+// absolute path too, so every glob here is built from the repo root rather
+// than left relative, which is otherwise a silent no-op (ARCHITECT review of
+// daa167f, iq0-s9r item 2/3, verified against the plugin's own matching
+// logic before relying on it).
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
+const abs = (p) => path.join(ROOT, p);
 
-// ARCHITECT review of accdd93 (P2 #1): a forecast figure can be passed off as
-// a fact because every payload schema and InsightSchema mint an Observed
-// quantity on `.parse()`, not just the sanctioned paths — the engine's own
-// "only observed-factory mints" comment (src/lib/iq/engine/index.ts) is
-// therefore only true if nothing outside the engine imports these directly.
+// IQ-0 DESIGN.md §3 / ARCHITECT review of daa167f (iq0-s9r item 3): a
+// blocklist of specific repository names ("payments", "orders", "finance")
+// lets every other money writer through (expenses, invoice, loyalty,
+// delivery, stock, purchase-orders, promotions, idempotency, the payment
+// provider registry itself). Job code gets an allowlist instead: only what
+// it needs to do its job. @/lib/env is not in the ARCHITECT-specified list
+// but is added here too — deps.ts (S8, agent/automation-architect-mu4xnv9l
+// daa167f, not yet merged) reads JOB_SECRET through it, and that read was
+// already fact-checked in the same review (item, "deps.ts:24-26").
+const JOBS_ALLOWLIST_MESSAGE =
+  "Job code (src/lib/jobs/**, src/app/api/jobs/**) may only import from itself, src/lib/iq, src/lib/repositories/iq-*, or src/lib/env — not a general repository, alias or relative (ARCHITECT review of daa167f, iq0-s9r item 3).";
+
+const JOB_IMPLEMENTATION_DB_MESSAGE =
+  "An individual job (src/lib/jobs/jobs/**, e.g. heartbeat) must reach the database only through ctx from its JobContext — no direct @/db or repository import, even an iq-* one (ARCHITECT review of daa167f, SECURITY condition).";
+
+// ARCHITECT review of accdd93 (P2 #1): a forecast figure can be passed off
+// as a fact because every payload schema, InsightSchema, and ObservedSchema
+// mint an Observed quantity on `.parse()`, not just the sanctioned paths —
+// the engine's own "only observed-factory mints" comment
+// (src/lib/iq/engine/index.ts) is therefore only true if nothing outside the
+// engine imports these directly. ObservedSchema itself lives in quantity.ts
+// (ARCHITECT review of daa167f, iq0-s9r item 1) — ban that deep import too,
+// alongside observed-factory/insight/claims.
 const ENGINE_MINTING_MESSAGE =
   "Only src/lib/repositories/iq-*.ts and the engine itself may import this — it mints an Observed quantity. Read a stored value through a repository instead (ARCHITECT review of accdd93, P2 #1).";
-
-// ARCHITECT review of daa167f (S8, item 2a): the job registry reaches this
-// repository, so the DESIGN.md §3 money-writer ban applies to it too, not
-// just to src/lib/jobs and src/app/api/jobs.
-const JOB_REGISTRY_REPOSITORIES = ["@/lib/repositories/iq-job-runs"];
-
-// ARCHITECT review of daa167f, SECURITY condition: an individual job
-// implementation (src/lib/jobs/jobs/**) must reach the database only through
-// its injected JobContext, never by importing a repository or @/db itself —
-// stricter than the general src/lib/jobs rule, which only bans the money
-// writers.
-const JOB_IMPLEMENTATION_DB_MESSAGE =
-  "src/lib/jobs/jobs/** must not import @/db or a repository directly — use ctx from JobContext (ARCHITECT review of daa167f, SECURITY condition).";
+const ENGINE_MINTING_NAMES = [
+  "ObservedSchema",
+  "InsightSchema",
+  "FactPayloadSchema",
+  "DetectionPayloadSchema",
+  "ForecastPayloadSchema",
+  "ExplanationPayloadSchema",
+  "RecommendationPayloadSchema",
+  "AutomationPayloadSchema",
+];
+const ENGINE_MINTING_MODULES = [
+  "@/lib/iq/engine/observed-factory",
+  "@/lib/iq/engine/insight",
+  "@/lib/iq/engine/claims",
+  "@/lib/iq/engine/quantity",
+];
 
 const eslintConfig = defineConfig([
   ...nextVitals,
@@ -60,148 +89,60 @@ const eslintConfig = defineConfig([
     },
   },
   {
-    // IQ-0 DESIGN.md §3: the job runner runs unattended, per org, with
-    // postgres bypassing RLS — it must not be able to touch money writers a
-    // job was never reviewed against, or mint its own Observed quantity
-    // (same restriction as the general case below — combined here, not
-    // layered, because flat config replaces a rule wholesale per matching
-    // file rather than merging two blocks' `patterns` arrays together).
-    files: ["src/lib/jobs/**/*.{ts,tsx}", "src/app/api/jobs/**/*.{ts,tsx}"],
-    ignores: ["src/lib/jobs/jobs/**", "**/*.test.ts", "**/*.test.tsx", "**/__test-support__/**"],
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          paths: [
-            {
-              name: "@/lib/iq/engine",
-              importNames: [
-                "ObservedSchema",
-                "InsightSchema",
-                "FactPayloadSchema",
-                "DetectionPayloadSchema",
-                "ForecastPayloadSchema",
-                "ExplanationPayloadSchema",
-                "RecommendationPayloadSchema",
-                "AutomationPayloadSchema",
-              ],
-              message: ENGINE_MINTING_MESSAGE,
-            },
-          ],
-          patterns: [
-            {
-              group: ["@/lib/repositories/payments", "@/lib/repositories/orders", "@/lib/repositories/finance"],
-              message: JOBS_MONEY_WRITER_MESSAGE,
-            },
-            {
-              group: ["@/lib/iq/engine/observed-factory", "@/lib/iq/engine/insight", "@/lib/iq/engine/claims"],
-              message: ENGINE_MINTING_MESSAGE,
-            },
-          ],
-        },
-      ],
-    },
-  },
-  {
-    // ARCHITECT review of daa167f, SECURITY condition — stricter than the
-    // block above: an individual job (src/lib/jobs/jobs/**, e.g. heartbeat)
-    // gets all the database access it needs through ctx, so it may not
-    // import @/db or any repository at all, on top of the same
-    // engine-minting restriction every non-engine, non-repository file gets.
-    files: ["src/lib/jobs/jobs/**/*.{ts,tsx}"],
-    ignores: ["**/*.test.ts", "**/*.test.tsx"],
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          paths: [
-            { name: "@/db", message: JOB_IMPLEMENTATION_DB_MESSAGE },
-            {
-              name: "@/lib/iq/engine",
-              importNames: [
-                "ObservedSchema",
-                "InsightSchema",
-                "FactPayloadSchema",
-                "DetectionPayloadSchema",
-                "ForecastPayloadSchema",
-                "ExplanationPayloadSchema",
-                "RecommendationPayloadSchema",
-                "AutomationPayloadSchema",
-              ],
-              message: ENGINE_MINTING_MESSAGE,
-            },
-          ],
-          patterns: [
-            { group: ["@/db/*", "@/lib/repositories", "@/lib/repositories/*"], message: JOB_IMPLEMENTATION_DB_MESSAGE },
-            {
-              group: ["@/lib/iq/engine/observed-factory", "@/lib/iq/engine/insight", "@/lib/iq/engine/claims"],
-              message: ENGINE_MINTING_MESSAGE,
-            },
-          ],
-        },
-      ],
-    },
-  },
-  {
-    // ARCHITECT review of daa167f (item 2a): the job registry reaches this
-    // repository (today, only this one), so it may not import a money
-    // writer either — same rule as src/lib/jobs, applied by name since it
-    // lives in src/lib/repositories/, outside those directories' globs.
-    files: JOB_REGISTRY_REPOSITORIES.map((m) => `${m.replace("@/", "src/")}.ts`),
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          patterns: [
-            {
-              group: ["@/lib/repositories/payments", "@/lib/repositories/orders", "@/lib/repositories/finance"],
-              message: JOBS_MONEY_WRITER_MESSAGE,
-            },
-          ],
-        },
-      ],
-    },
-  },
-  {
-    // ARCHITECT review of accdd93 (P2 #1): restrict who can mint an Observed
-    // quantity to the places already reviewed for it — the engine's own
-    // parseInsights, and the iq-* repositories that read stored rows. Every
-    // other file must go through a repository, not the schema directly.
-    // (Jobs get this same restriction above, combined with their own.)
+    // ARCHITECT review of accdd93 (P2 #1) and daa167f (iq0-s9r item 1):
+    // restrict who can mint an Observed quantity to the places already
+    // reviewed for it — the engine itself, and the iq-* repositories that
+    // read stored rows. One global rule, not duplicated per directory: this
+    // is a different rule key than the job allowlist below, so the two
+    // never fight over the same file the way two `no-restricted-imports`
+    // blocks would (an ESLint flat-config gotcha found and fixed in this
+    // file's first two commits — same rule key + overlapping `files` means
+    // the later block wins wholesale, not a merge).
     files: ["src/**/*.{ts,tsx}"],
-    ignores: [
-      "src/lib/iq/engine/**",
-      "src/lib/repositories/iq-*.ts",
-      "src/lib/jobs/**",
-      "src/app/api/jobs/**",
-      "**/*.test.ts",
-      "**/*.test.tsx",
-      "**/__test-support__/**",
-    ],
+    ignores: ["src/lib/iq/engine/**", "src/lib/repositories/iq-*.ts", "**/*.test.ts", "**/*.test.tsx", "**/__test-support__/**"],
     rules: {
       "no-restricted-imports": [
         "error",
         {
-          paths: [
+          paths: [{ name: "@/lib/iq/engine", importNames: ENGINE_MINTING_NAMES, message: ENGINE_MINTING_MESSAGE }],
+          patterns: [{ group: ENGINE_MINTING_MODULES, message: ENGINE_MINTING_MESSAGE }],
+        },
+      ],
+    },
+  },
+  {
+    // IQ-0 DESIGN.md §3 / ARCHITECT review of daa167f (iq0-s9r items 2-3):
+    // the job runner runs unattended, per org, with postgres bypassing RLS.
+    // An allowlist, not a blocklist: only code job runs actually need.
+    // no-restricted-paths resolves relative imports and aliases to the same
+    // absolute file before matching a zone, so both are caught the same way
+    // (verified against a scratch fixture before relying on it — a plain
+    // named-import blocklist does not do this).
+    files: ["src/**/*.{ts,tsx}"],
+    rules: {
+      "import/no-restricted-paths": [
+        "error",
+        {
+          zones: [
             {
-              name: "@/lib/iq/engine",
-              importNames: [
-                "ObservedSchema",
-                "InsightSchema",
-                "FactPayloadSchema",
-                "DetectionPayloadSchema",
-                "ForecastPayloadSchema",
-                "ExplanationPayloadSchema",
-                "RecommendationPayloadSchema",
-                "AutomationPayloadSchema",
+              target: [abs("src/lib/jobs/**"), abs("src/app/api/jobs/**")],
+              from: [abs("src/**")],
+              except: [
+                abs("src/lib/jobs/**"),
+                abs("src/lib/iq/**"),
+                abs("src/lib/repositories/iq-*.ts"),
+                abs("src/lib/env/**"),
               ],
-              message: ENGINE_MINTING_MESSAGE,
+              message: JOBS_ALLOWLIST_MESSAGE,
             },
-          ],
-          patterns: [
             {
-              group: ["@/lib/iq/engine/observed-factory", "@/lib/iq/engine/insight", "@/lib/iq/engine/claims"],
-              message: ENGINE_MINTING_MESSAGE,
+              // Stricter subzone: an individual job may not reach a
+              // repository at all, not even the iq-* ones the outer zone
+              // allows for wiring code (deps.ts) — it gets everything
+              // through ctx.
+              target: [abs("src/lib/jobs/jobs/**")],
+              from: [abs("src/lib/repositories/**"), abs("src/db/**")],
+              message: JOB_IMPLEMENTATION_DB_MESSAGE,
             },
           ],
         },
