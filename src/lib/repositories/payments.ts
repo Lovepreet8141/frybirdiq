@@ -13,7 +13,7 @@ import "server-only";
  * them and in how the provider is asked to capture. Roadmap 1.1–1.3.
  */
 
-import { and, desc, eq, like, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, loyaltyAccounts, loyaltyTransactions, orderEvents, orders, payments, refunds } from "@/db/schema";
 import { type Role, authorize } from "@/domain/permissions";
@@ -24,7 +24,7 @@ import { awardStampForOrderInTx, qualifyingStampSpend, redeemStampRewardInTx } f
 import { financialYear, invoiceNumber, parseInvoiceNumber } from "@/lib/invoice";
 import { CASH_PROVIDER, type PaymentMethod, type PaymentResult, RAZORPAY_PROVIDER, getProvider } from "@/lib/payments";
 import { withIdempotency } from "./idempotency";
-import { canTransition } from "@/domain/order-status";
+import { canTransition, isTerminal } from "@/domain/order-status";
 import { advanceOrder } from "./orders";
 
 export type RecordPaymentResult =
@@ -246,6 +246,78 @@ interface Settlement {
   readonly orgId?: string;
 }
 
+/**
+ * Payment statuses meaning money was taken against the order at some point.
+ * A refund does not make an order payable again: the refund gave back money
+ * for this order, and booking a fresh capture on top of it is how cash gets
+ * taken twice for one meal (F13, ref-1 DATABASE-RELIABILITY).
+ */
+const MONEY_TAKEN_STATUSES = ["CAPTURED", "PARTIALLY_REFUNDED", "REFUNDED"] as const;
+
+type PriorPayment = { id: string; status: (typeof payments.$inferSelect)["status"]; providerPaymentId: string | null };
+
+type SettlementGate =
+  | { kind: "proceed" }
+  | { kind: "replay"; paymentId: string }
+  /** Another settlement's capture is committed. Stored by withIdempotency when decided inside it — pay-4's behaviour, unchanged. */
+  | { kind: "alreadyPaid" }
+  /** Decided from a refund or the order's status. Never stored: see `SettlementRefused`. */
+  | { kind: "refused"; error: string };
+
+/**
+ * The one decision of whether `settle` may take money for an order. The
+ * pre-transaction fast path and the authoritative re-check under the order
+ * row lock both call this, so the two cannot drift apart.
+ *
+ * Order of the checks matters:
+ *  1. Any refund against the order → refused. Never a replay, even of the
+ *     very settlement that was later refunded: "taken" is no longer true.
+ *  2. A captured payment → the same settlement arriving again is a replay
+ *     (the Checkout handler and the webhook; a cashier's double-tap);
+ *     anything else is "already paid".
+ *  3. PAID/COMPLETED without a capture → "already paid", as before.
+ *  4. Any other terminal status (`TERMINAL_STATUSES` in
+ *     src/domain/order-status.ts: CANCELLED, FAILED, REFUNDED) → refused. No
+ *     transition leaves these, so no money and no loyalty may land on them
+ *     (red-team ord-2 item 4).
+ */
+function settlementGate(orderStatus: OrderRow["status"], prior: readonly PriorPayment[], settlement: Settlement): SettlementGate {
+  if (prior.some((payment) => payment.status === "REFUNDED" || payment.status === "PARTIALLY_REFUNDED")) {
+    // "already been paid" is kept in the wording on purpose: completeDelivery
+    // and the Razorpay webhook both treat that phrase as final, which is
+    // exactly right here — the order was paid, and nothing more is owed.
+    return { kind: "refused", error: "That order has already been paid and refunded, so it cannot take payment again. Ring up a new order instead." };
+  }
+  const captured = prior.find((payment) => payment.status === "CAPTURED");
+  if (captured) {
+    const sameSettlement = settlement.providerPaymentId ? captured.providerPaymentId === settlement.providerPaymentId : !captured.providerPaymentId;
+    return sameSettlement ? { kind: "replay", paymentId: captured.id } : { kind: "alreadyPaid" };
+  }
+  if (orderStatus === "PAID" || orderStatus === "COMPLETED") return { kind: "alreadyPaid" };
+  if (isTerminal(orderStatus)) {
+    return { kind: "refused", error: `That order is ${orderStatus.toLowerCase()}, so it cannot take payment.` };
+  }
+  return { kind: "proceed" };
+}
+
+const ALREADY_PAID = "That order has already been paid.";
+
+/**
+ * A refusal decided under the lock from a refund or the order's status.
+ *
+ * Thrown rather than returned so withIdempotency does not store it: its
+ * catch releases the claim, settle() turns this back into `{ ok: false }`,
+ * and every later call re-derives the answer from the database (the fast
+ * path gives the same refusal) instead of replaying a snapshot forever that
+ * could only ever match the database or contradict it.
+ */
+class SettlementRefused extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SettlementRefused";
+  }
+}
+
 async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
   const database = db();
   const [order] = await database
@@ -279,19 +351,14 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
    * finishing) would hit this and report success without ever completing
    * the invoice, the status, or the loyalty awards it skipped.
    */
-  const [captured] = await database
-    .select({ id: payments.id, providerPaymentId: payments.providerPaymentId })
+  const prior = await database
+    .select({ id: payments.id, status: payments.status, providerPaymentId: payments.providerPaymentId })
     .from(payments)
-    .where(and(eq(payments.orderId, order.id), eq(payments.status, "CAPTURED")))
-    .limit(1);
-  if (captured) {
-    const sameSettlement = settlement.providerPaymentId ? captured.providerPaymentId === settlement.providerPaymentId : !captured.providerPaymentId;
-    if (sameSettlement) return { ok: true, paymentId: captured.id, replayed: true };
-    return { ok: false, error: "That order has already been paid." };
-  }
-  if (order.status === "PAID" || order.status === "COMPLETED") {
-    return { ok: false, error: "That order has already been paid." };
-  }
+    .where(and(eq(payments.orderId, order.id), eq(payments.orgId, order.orgId), inArray(payments.status, MONEY_TAKEN_STATUSES)));
+  const gate = settlementGate(order.status, prior, settlement);
+  if (gate.kind === "replay") return { ok: true, paymentId: gate.paymentId, replayed: true };
+  if (gate.kind === "alreadyPaid") return { ok: false, error: ALREADY_PAID };
+  if (gate.kind === "refused") return { ok: false, error: gate.error };
 
   const amount = settlement.amountDue(order);
 
@@ -307,10 +374,11 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
    * So: the payment is always recorded. The status only moves to PAID when the
    * order is still waiting on payment and has gone nowhere else. Whether an
    * order is paid is answered by the payments table, never by the status.
+   * That decision is made inside the transaction below, from the row as it
+   * is under the lock — not from the read above, which may be stale by then.
    */
-  const movesToPaid = order.status === "PENDING_PAYMENT";
 
-  const { result, replayed } = await withIdempotency(
+  const settled = await withIdempotency(
     {
       key: settlement.idempotencyKey(order),
       operation: "recordPayment",
@@ -350,6 +418,48 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
        * retry after a rollback starts from a genuinely clean slate.
        */
       return database.transaction(async (tx) => {
+        /*
+         * Serialize concurrent settlements of the same order.
+         *
+         * The "already captured" check before withIdempotency runs outside
+         * any transaction, so two settlements arriving together — cash at
+         * the counter while the customer pays online, each under its own
+         * idempotency key — both used to pass it before either committed,
+         * and both captured: one meal, charged twice. Locking the order row
+         * here and re-checking under the lock makes the loser wait for the
+         * winner's commit and then see it.
+         *
+         * Lock order, kept consistent across the codebase: the ORDER row is
+         * always locked first (advanceOrder in orders.ts does the same),
+         * and payment rows are only ever written after it. refundPayment
+         * locks a PAYMENTS row and then merely reads the order without
+         * locking it, so no path takes these two locks in the opposite
+         * order and no cycle exists.
+         */
+        const [locked] = await tx
+          .select()
+          .from(orders)
+          .where(and(eq(orders.id, order.id), eq(orders.orgId, order.orgId)))
+          .for("update")
+          .limit(1);
+        if (!locked) return { ok: false as const, error: "That order does not exist." };
+
+        // The same gate as the pre-transaction fast path — but this one is
+        // authoritative, because it runs under the lock: a capture, a refund
+        // or a cancellation that committed while this call waited is seen.
+        const priorUnderLock = await tx
+          .select({ id: payments.id, status: payments.status, providerPaymentId: payments.providerPaymentId })
+          .from(payments)
+          .where(and(eq(payments.orderId, order.id), eq(payments.orgId, order.orgId), inArray(payments.status, MONEY_TAKEN_STATUSES)));
+        const lockedGate = settlementGate(locked.status, priorUnderLock, settlement);
+        if (lockedGate.kind === "replay") return { ok: true as const, paymentId: lockedGate.paymentId };
+        if (lockedGate.kind === "alreadyPaid") return { ok: false as const, error: ALREADY_PAID };
+        if (lockedGate.kind === "refused") throw new SettlementRefused(lockedGate.error);
+
+        // See the comment above the transaction: decided from the locked
+        // row, so a status that moved since the first read is respected.
+        const movesToPaid = locked.status === "PENDING_PAYMENT";
+
         const method = settlement.methodFor(capturedResult);
         const feeAmount = typeof capturedResult.payload?.fee === "number" ? paise(capturedResult.payload.fee) : paise(0);
         const now = new Date();
@@ -357,7 +467,7 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
         const [existing] = await tx
           .select()
           .from(payments)
-          .where(and(eq(payments.orderId, order.id), eq(payments.provider, settlement.provider), eq(payments.status, "PENDING")))
+          .where(and(eq(payments.orderId, order.id), eq(payments.orgId, order.orgId), eq(payments.provider, settlement.provider), eq(payments.status, "PENDING")))
           .orderBy(desc(payments.createdAt))
           .limit(1);
 
@@ -377,7 +487,7 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
                   failureReason: null,
                   updatedAt: now,
                 })
-                .where(eq(payments.id, existing.id))
+                .where(and(eq(payments.id, existing.id), eq(payments.orgId, order.orgId)))
                 .returning()
             )[0]?.id
           : (
@@ -428,7 +538,7 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
          */
         const issuedAt = now;
         const year = financialYear(issuedAt);
-        const settlingOrder = order; // rebound so the nested closures below keep TS's non-undefined narrowing
+        const settlingOrder = locked; // the row as held under the lock — its invoiceNumber/invoicedAt are current, and the closures below keep TS's non-undefined narrowing
 
         // Recount-and-increment means a fully adversarial burst of N
         // concurrent settlements can force the unluckiest one through up to
@@ -460,7 +570,7 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
                   invoicedAt: settlingOrder.invoicedAt ?? issuedAt,
                   updatedAt: issuedAt,
                 })
-                .where(eq(orders.id, settlingOrder.id));
+                .where(and(eq(orders.id, settlingOrder.id), eq(orders.orgId, settlingOrder.orgId)));
             });
             break;
           } catch (error) {
@@ -509,7 +619,7 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
               });
             }
 
-            await tx.update(orders).set({ pointsEarned: earned }).where(eq(orders.id, order.id));
+            await tx.update(orders).set({ pointsEarned: earned }).where(and(eq(orders.id, order.id), eq(orders.orgId, order.orgId)));
           }
         }
 
@@ -561,8 +671,8 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
         await tx.insert(orderEvents).values({
           orgId: order.orgId,
           orderId: order.id,
-          fromStatus: order.status,
-          toStatus: movesToPaid ? "PAID" : order.status,
+          fromStatus: locked.status,
+          toStatus: movesToPaid ? "PAID" : locked.status,
           actorUserId: settlement.actorUserId,
           reason: settlement.reasonFor(capturedResult.capturedAmount, method),
         });
@@ -575,9 +685,9 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
           action: "payment_captured",
           entity: "orders",
           entityId: order.id,
-          before: { status: order.status },
+          before: { status: locked.status },
           after: {
-            status: movesToPaid ? "PAID" : order.status,
+            status: movesToPaid ? "PAID" : locked.status,
             method,
             provider: settlement.provider,
             amount: capturedResult.capturedAmount.toString(),
@@ -588,8 +698,15 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
         return { ok: true as const, paymentId: paymentId ?? "" };
       });
     },
-  );
+  ).catch((error: unknown) => {
+    // Unwraps a refusal thrown under the lock (see SettlementRefused) after
+    // withIdempotency has released its claim instead of storing it.
+    if (error instanceof SettlementRefused) return error;
+    throw error;
+  });
+  if (settled instanceof SettlementRefused) return { ok: false, error: settled.message };
 
+  const { result, replayed } = settled;
   if (!result.ok) return { ok: false, error: result.error };
   return { ok: true, paymentId: result.paymentId, replayed };
 }
