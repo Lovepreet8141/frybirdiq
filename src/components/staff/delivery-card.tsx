@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Bike, Check, ExternalLink, Loader2, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { type Paise, formatINR } from "@/lib/money";
 import { formatDistance } from "@/lib/delivery";
 import { completeDeliveryAction } from "@/lib/auth/staff-actions";
 import type { OrderStatus } from "@/domain/order-status";
+import { classifyCloseResult, type CloseOutcome } from "./delivery-close";
 
 export interface RiderDelivery {
   id: string;
@@ -38,14 +39,33 @@ export interface RiderDelivery {
 export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<CloseOutcome | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const wasPending = useRef(false);
+
+  // A disabled button can't hold focus — the browser drops it to <body> the
+  // moment `pending` goes true, and never restores it. Put it back on the
+  // button when the request finishes, so a keyboard user can retry without
+  // re-tabbing from the top of the card.
+  useEffect(() => {
+    if (wasPending.current && !pending) closeButtonRef.current?.focus();
+    wasPending.current = pending;
+  }, [pending]);
 
   const close = (cashCollected: boolean) =>
     startTransition(async () => {
-      setError(null);
-      const result = await completeDeliveryAction({ orderId: delivery.id, cashCollected });
-      if (!result.ok) setError(result.error ?? "That didn't work.");
-      router.refresh();
+      setOutcome(null);
+      let result: CloseOutcome;
+      try {
+        result = classifyCloseResult({ thrown: false, result: await completeDeliveryAction({ orderId: delivery.id, cashCollected }) });
+      } catch {
+        result = classifyCloseResult({ thrown: true });
+      }
+      setOutcome(result);
+      // Offline: nothing changed, so there is nothing to refresh yet — the
+      // button just re-enables (via `pending`) for another try. Every other
+      // outcome, including "closed elsewhere", reflects real server state.
+      if (result.kind !== "offline") router.refresh();
     });
 
   const onTheRoad = delivery.status === "OUT_FOR_DELIVERY";
@@ -114,9 +134,11 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
 
       {delivery.notes && <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">{delivery.notes}</p>}
 
-      {error && (
+      {outcome && outcome.kind !== "ok" && (
         <p role="alert" className="rounded-md border-l-2 border-loss bg-loss-soft/60 px-4 py-3 text-sm">
-          {error}
+          {outcome.kind === "offline" && "No connection — try again."}
+          {outcome.kind === "closed-elsewhere" && "Already closed by someone else."}
+          {outcome.kind === "error" && outcome.message}
         </p>
       )}
 
@@ -128,8 +150,10 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
             order still in the bag.
           */}
           <Button
+            ref={closeButtonRef}
             type="button"
             disabled={pending}
+            aria-busy={pending}
             onClick={() => close(!delivery.isPaid)}
             size="lg"
             className="min-h-16 gap-3 text-lg"
