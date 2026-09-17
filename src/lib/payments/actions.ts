@@ -11,6 +11,8 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { readRememberedContact } from "@/lib/cart/remembered-contact";
+import { getCustomer } from "@/lib/customer";
 import { markOnlinePaymentFailed, recordOnlinePayment } from "@/lib/repositories/payments";
 
 export type OnlinePaymentResult = { ok: true; replayed: boolean } | { ok: false; error: string };
@@ -40,14 +42,35 @@ export async function confirmOnlinePaymentAction(input: unknown): Promise<Online
 
 const failureSchema = z.object({
   orderId: z.uuid(),
-  reason: z.string().trim().max(250).default("Payment failed"),
+  /** Accepted for shape compatibility and deliberately ignored — see below. */
+  reason: z.string().trim().max(250).optional(),
 });
 
-/** Checkout's `payment.failed` — noted against the pending payment so the page can say so. Never touches the order. */
+/**
+ * Checkout's `payment.failed` — noted against the pending payment so the page
+ * can say so. Never touches the order.
+ *
+ * Bound to the caller's own order (pay-5): the repository writes only when
+ * the signed-in customer, or the phone this device checked out with (the
+ * httpOnly contact cookie the checkout sets), matches the order. An anonymous
+ * caller holding a bare order UUID changes nothing — the answer is the same
+ * `{ ok: false }` an unknown order gets, so nothing about the order's
+ * existence leaks either.
+ */
 export async function reportOnlinePaymentFailureAction(input: unknown): Promise<{ ok: boolean }> {
   const parsed = failureSchema.safeParse(input);
   if (!parsed.success) return { ok: false };
-  await markOnlinePaymentFailed({ orderId: parsed.data.orderId, reason: parsed.data.reason || "Payment failed" });
-  revalidatePath(`/order/${parsed.data.orderId}`);
-  return { ok: true };
+
+  // The client's `reason` is parsed and thrown away (pay-58b, RED R1): the
+  // order page shows this text to the real customer, and phone-plus-UUID is
+  // not authorship. The repository stores a fixed server-chosen line; the
+  // gateway's own words only ever arrive through the verified webhook.
+  const [customer, contact] = await Promise.all([getCustomer(), readRememberedContact()]);
+  const { ok } = await markOnlinePaymentFailed({
+    orderId: parsed.data.orderId,
+    via: { kind: "customer", customerId: customer?.id ?? null, phone: contact?.phone ?? customer?.phone ?? null },
+  });
+
+  if (ok) revalidatePath(`/order/${parsed.data.orderId}`);
+  return { ok };
 }
