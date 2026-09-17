@@ -214,7 +214,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "none",
     allowedDimensions: ["channel"],
     sources: SALE_SET,
-    description: "Orders in the v1 sale set (parity with analytics.ts paid orders), on the order's created_at IST day.",
+    description: "Orders in the sale set (analytics.ts saleSetWhere, shared with the P&L): a CAPTURED or PARTIALLY_REFUNDED payment, counted once, not CANCELLED/FAILED/REFUNDED, on the order's created_at IST day.",
     trustSignals: SALES_TRUST,
   }),
   revenue_net: stored({
@@ -324,7 +324,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "none",
     allowedDimensions: ["channel"],
     sources: ["orders", "payments", "refunds"],
-    description: "Orders whose payment is PARTIALLY_REFUNDED, on the order's created_at IST day in v1 (not the refund's day). In v1 these leave the sale set whole (D2, trust LOW).",
+    description: "Orders whose payment is PARTIALLY_REFUNDED, on the order's created_at IST day in v1 (not the refund's day). They stay in the sale set, counted once at full taxable_total (fin-3); the revenue reduction waits on dec-9.",
     trustSignals: SALES_TRUST,
   }),
   refunds_amount: stored({
@@ -342,7 +342,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "gross",
     allowedDimensions: [],
     sources: ["payments"],
-    description: "Σ payments.amount ever CAPTURED, Finance semantics (v1), anchored on captured_at (F8).",
+    description: "Σ payments.amount of payments ever captured (CAPTURED, PARTIALLY_REFUNDED, REFUNDED), anchored on captured_at (F8). Each payment row counts, so a double capture counts twice. Wider than finance.ts \"Captured\", which filters CAPTURED only.",
     trustSignals: SALES_TRUST,
   }),
   expense_direct: stored({
