@@ -118,7 +118,7 @@ export function hasPaidPayment(orderId: SQLWrapper) {
  * that means money owed or collected, not money earned — an open order's
  * pipeline value, a single order's amount on an alert.
  */
-export async function paidOrders(orgId: string, range: DateRange) {
+export async function paidOrders(orgId: string, range: Pick<DateRange, "from" | "to">) {
   return db()
     .select({
       id: orders.id,
@@ -130,16 +130,24 @@ export async function paidOrders(orgId: string, range: DateRange) {
       createdAt: orders.createdAt,
     })
     .from(orders)
-    .where(
-      and(
-        eq(orders.orgId, orgId),
-        hasPaidPayment(orders.id),
-        gte(orders.createdAt, range.from),
-        lt(orders.createdAt, range.to),
-        // A refunded or cancelled order is not revenue, whatever was captured.
-        sql`${orders.status} NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')`,
-      ),
-    );
+    .where(saleSetWhere(orgId, range));
+}
+
+/**
+ * The WHERE clause of the sale set, over `orders`: the org's orders created in
+ * [from, to), paid (`hasPaidPayment`), not cancelled/failed/refunded. The one
+ * filter behind `paidOrders` (dashboard, P&L) and the IQ daily facts
+ * (`src/lib/repositories/iq-facts.ts`), so the two cannot drift apart.
+ */
+export function saleSetWhere(orgId: string, range: Pick<DateRange, "from" | "to">) {
+  return and(
+    eq(orders.orgId, orgId),
+    gte(orders.createdAt, range.from),
+    lt(orders.createdAt, range.to),
+    hasPaidPayment(orders.id),
+    // A refunded or cancelled order is not revenue, whatever was captured.
+    sql`${orders.status} NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')`,
+  );
 }
 
 export async function getDashboard(orgId: string, range: DateRange): Promise<Dashboard> {
