@@ -190,8 +190,8 @@ export async function scoreTrustDay(orgId: string, date: string, tx: Reader = db
             EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id AND p.status = 'PARTIALLY_REFUNDED') AS partial,
             (o.status = 'CANCELLED'
               AND EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id AND p.status IN ('CAPTURED', 'PARTIALLY_REFUNDED'))
-              -- TODO(ref-1): SUCCEEDED refunds only, once refunds carry a status.
-              AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.order_id = o.id)) AS cancelled_no_refund,
+              -- Only a SUCCEEDED refund clears it: a RESERVED or FAILED one returned no money.
+              AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.order_id = o.id AND r.status = 'SUCCEEDED')) AS cancelled_no_refund,
             (o.status = 'FAILED'
               AND EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id AND p.status IN ('CAPTURED', 'PARTIALLY_REFUNDED'))) AS failed_captured,
             (o.status NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')
