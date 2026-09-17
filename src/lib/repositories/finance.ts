@@ -17,12 +17,18 @@ import "server-only";
  * writes a payment, a refund, or an audit row.
  */
 
-import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLogs, memberships, orders, payments, refunds } from "@/db/schema";
+import { type REFUND_STATUSES, auditLogs, memberships, orders, payments, refunds } from "@/db/schema";
 import type { OrderChannel } from "@/domain/order-channel";
 import type { DateRange } from "@/lib/dates";
+import { NO_REFUNDS, type PaymentRefunds, type RefundStatus, isStaleReserved, refundDate, refundsByPayment, summariseRefunds } from "@/lib/finance/refunds";
 import { type Paise, ZERO, add, paise } from "@/lib/money";
+
+// The pure rules' statuses and the column's must be the same set.
+type SameRefundStatuses = [RefundStatus] extends [(typeof REFUND_STATUSES)[number]] ? ([(typeof REFUND_STATUSES)[number]] extends [RefundStatus] ? true : never) : never;
+const refundStatusesMatch: SameRefundStatuses = true;
+void refundStatusesMatch;
 
 export type PaymentMethod = (typeof payments.method.enumValues)[number];
 export type PaymentStatus = (typeof payments.status.enumValues)[number];
@@ -39,8 +45,18 @@ export interface PaymentRow {
   readonly feeAmount: Paise;
   readonly capturedBy: string | null;
   readonly at: Date;
-  /** What has already gone back on this payment, so a second refund cannot exceed what is left. */
+  /** What has gone back on this payment: SUCCEEDED refunds only. */
   readonly refunded: Paise;
+  /**
+   * Held by refunds still RESERVED (approved, money not yet back). Never part
+   * of `refunded`, but it does count against what is left to refund:
+   * refundable = amount − refunded − refundReserved.
+   */
+  readonly refundReserved: Paise;
+  /** A RESERVED refund on this payment is past its limit (15 min cash, 60 min online). */
+  readonly refundStuck: boolean;
+  /** Refund attempts on this payment that FAILED; no money moved. */
+  readonly refundFailedCount: number;
   readonly providerPaymentId: string | null;
 }
 
@@ -51,20 +67,40 @@ export interface RefundRow {
   readonly amount: Paise;
   readonly reason: string;
   readonly by: string | null;
+  readonly status: RefundStatus;
+  readonly provider: string;
+  /** When the money went back for SUCCEEDED (`finalized_at`); when it was asked for otherwise. */
   readonly at: Date;
+  /** A RESERVED refund past its provider's limit (15 min cash, 60 min online). */
+  readonly stale: boolean;
 }
 
 export interface PaymentsLedger {
   readonly range: DateRange;
   readonly payments: readonly PaymentRow[];
+  /**
+   * SUCCEEDED refunds finalized in the range, FAILED refunds asked for in the
+   * range, and every RESERVED refund whenever it started — an open refund is
+   * a question for now, not for a period.
+   */
   readonly refunds: readonly RefundRow[];
   /** Captured payments only — pending and failed are listed but never summed. */
   readonly capturedTotal: Paise;
   readonly capturedCount: number;
   readonly feeTotal: Paise;
+  /** Σ SUCCEEDED refunds finalized in the range. RESERVED and FAILED are never in it. */
   readonly refundedTotal: Paise;
+  readonly refundedCount: number;
+  /** Σ RESERVED refunds, open now: held, not returned. */
+  readonly reservedRefundTotal: Paise;
+  readonly reservedRefundCount: number;
+  readonly staleReservedRefundCount: number;
+  readonly failedRefundCount: number;
   readonly byMethod: readonly { method: PaymentMethod; count: number; total: Paise }[];
 }
+
+/** Refund rows listed on the screen; the refund totals are never capped. */
+const REFUND_LIST_LIMIT = 200;
 
 async function staffNames(orgId: string, userIds: readonly string[]): Promise<Map<string, string | null>> {
   if (userIds.length === 0) return new Map();
@@ -81,7 +117,7 @@ async function staffNames(orgId: string, userIds: readonly string[]): Promise<Ma
  * download (roadmap 5.4), where truncating a month's payments silently
  * would make the export wrong rather than merely long.
  */
-export async function getPaymentsLedger(orgId: string, range: DateRange, limit = 500): Promise<PaymentsLedger> {
+export async function getPaymentsLedger(orgId: string, range: DateRange, limit = 500, now: Date = new Date()): Promise<PaymentsLedger> {
   const database = db();
 
   const paymentRows = await database
@@ -105,19 +141,25 @@ export async function getPaymentsLedger(orgId: string, range: DateRange, limit =
     .orderBy(desc(payments.createdAt))
     .limit(limit);
 
-  // Refunds already booked against the payments in view, whenever they were
-  // made — a refund next month still reduces what this month's payment can
-  // give back.
+  // Refunds against the payments in view, whenever they were made — a refund
+  // next month still reduces what this month's payment can give back.
+  // SUCCEEDED is what went back; RESERVED is held; FAILED moved nothing.
   const paymentIds = paymentRows.map((row) => row.id);
-  const refundedByPayment = new Map<string, Paise>();
-  if (paymentIds.length > 0) {
-    const booked = await database
-      .select({ paymentId: refunds.paymentId, amount: refunds.amount })
-      .from(refunds)
-      .where(and(eq(refunds.orgId, orgId), inArray(refunds.paymentId, paymentIds)));
-    for (const row of booked) refundedByPayment.set(row.paymentId, add(refundedByPayment.get(row.paymentId) ?? ZERO, paise(row.amount)));
-  }
+  const byPayment =
+    paymentIds.length > 0
+      ? refundsByPayment(
+          (
+            await database
+              .select({ paymentId: refunds.paymentId, status: refunds.status, amount: refunds.amount, provider: refunds.provider, createdAt: refunds.createdAt })
+              .from(refunds)
+              .where(and(eq(refunds.orgId, orgId), inArray(refunds.paymentId, paymentIds)))
+          ).map((row) => ({ ...row, amount: paise(row.amount) })),
+          now,
+        )
+      : new Map<string, PaymentRefunds>();
 
+  // Each status on its own clock: SUCCEEDED by when the money went back,
+  // FAILED by when it was asked for, RESERVED whenever it started.
   const refundRows = await database
     .select({
       id: refunds.id,
@@ -126,13 +168,24 @@ export async function getPaymentsLedger(orgId: string, range: DateRange, limit =
       amount: refunds.amount,
       reason: refunds.reason,
       actorUserId: refunds.actorUserId,
+      status: refunds.status,
+      provider: refunds.provider,
       createdAt: refunds.createdAt,
+      finalizedAt: refunds.finalizedAt,
     })
     .from(refunds)
-    .innerJoin(orders, eq(orders.id, refunds.orderId))
-    .where(and(eq(refunds.orgId, orgId), gte(refunds.createdAt, range.from), lt(refunds.createdAt, range.to)))
-    .orderBy(desc(refunds.createdAt))
-    .limit(200);
+    .innerJoin(orders, and(eq(orders.id, refunds.orderId), eq(orders.orgId, orgId)))
+    .where(
+      and(
+        eq(refunds.orgId, orgId),
+        or(
+          and(eq(refunds.status, "SUCCEEDED"), gte(refunds.finalizedAt, range.from), lt(refunds.finalizedAt, range.to)),
+          and(eq(refunds.status, "FAILED"), gte(refunds.createdAt, range.from), lt(refunds.createdAt, range.to)),
+          eq(refunds.status, "RESERVED"),
+        ),
+      ),
+    )
+    .orderBy(desc(sql`coalesce(${refunds.finalizedAt}, ${refunds.createdAt})`));
 
   // Who took the money: the capture audit row, keyed by order. Newest wins if
   // a retry wrote two.
@@ -151,7 +204,7 @@ export async function getPaymentsLedger(orgId: string, range: DateRange, limit =
   }
 
   const names = await staffNames(orgId, [
-    ...new Set([...actorByOrder.values(), ...refundRows.map((row) => row.actorUserId).filter((id): id is string => id !== null)]),
+    ...new Set([...actorByOrder.values(), ...refundRows.slice(0, REFUND_LIST_LIMIT).map((row) => row.actorUserId).filter((id): id is string => id !== null)]),
   ]);
   const nameOf = (userId: string | undefined | null) => (userId ? (names.get(userId) ?? "Former staff member") : null);
 
@@ -167,7 +220,10 @@ export async function getPaymentsLedger(orgId: string, range: DateRange, limit =
     feeAmount: paise(row.feeAmount),
     capturedBy: row.status === "CAPTURED" || row.status === "PARTIALLY_REFUNDED" || row.status === "REFUNDED" ? nameOf(actorByOrder.get(row.orderId)) : null,
     at: row.capturedAt ?? row.createdAt,
-    refunded: refundedByPayment.get(row.id) ?? ZERO,
+    refunded: (byPayment.get(row.id) ?? NO_REFUNDS).refunded,
+    refundReserved: (byPayment.get(row.id) ?? NO_REFUNDS).reserved,
+    refundStuck: (byPayment.get(row.id) ?? NO_REFUNDS).stuck,
+    refundFailedCount: (byPayment.get(row.id) ?? NO_REFUNDS).failedCount,
     providerPaymentId: row.providerPaymentId,
   }));
 
@@ -178,15 +234,23 @@ export async function getPaymentsLedger(orgId: string, range: DateRange, limit =
     byMethodMap.set(row.method, { count: found.count + 1, total: add(found.total, row.amount) });
   }
 
-  const refundList: RefundRow[] = refundRows.map((row) => ({
+  // The totals read every matching row; only the list shown is capped.
+  const refundList: RefundRow[] = refundRows.slice(0, REFUND_LIST_LIMIT).map((row) => ({
     id: row.id,
     orderId: row.orderId,
     orderNumber: row.orderNumber,
     amount: paise(row.amount),
     reason: row.reason,
     by: nameOf(row.actorUserId),
-    at: row.createdAt,
+    status: row.status,
+    provider: row.provider,
+    at: refundDate(row),
+    stale: isStaleReserved(row, now),
   }));
+  const refundSummary = summariseRefunds(
+    refundRows.map((row) => ({ status: row.status, amount: paise(row.amount), provider: row.provider, createdAt: row.createdAt, finalizedAt: row.finalizedAt })),
+    now,
+  );
 
   return {
     range,
@@ -195,7 +259,12 @@ export async function getPaymentsLedger(orgId: string, range: DateRange, limit =
     capturedTotal: add(...captured.map((row) => row.amount)),
     capturedCount: captured.length,
     feeTotal: add(...captured.map((row) => row.feeAmount)),
-    refundedTotal: add(...refundList.map((row) => row.amount)),
+    refundedTotal: refundSummary.refundedTotal,
+    refundedCount: refundSummary.refundedCount,
+    reservedRefundTotal: refundSummary.reservedTotal,
+    reservedRefundCount: refundSummary.reservedCount,
+    staleReservedRefundCount: refundSummary.staleReservedCount,
+    failedRefundCount: refundSummary.failedCount,
     byMethod: [...byMethodMap.entries()]
       .map(([method, value]) => ({ method, ...value }))
       .sort((a, b) => (b.total > a.total ? 1 : b.total < a.total ? -1 : 0)),

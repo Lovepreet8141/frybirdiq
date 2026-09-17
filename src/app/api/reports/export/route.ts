@@ -78,11 +78,12 @@ export async function GET(request: Request): Promise<Response> {
     case "payments": {
       const ledger = await getPaymentsLedger(staff.orgId, range, PAYMENTS_EXPORT_LIMIT);
       csv = toCsv(
-        ["order_number", "channel", "status", "method", "provider", "amount", "fee", "captured_by", "at", "refunded", "provider_payment_id"],
+        // refunded = SUCCEEDED refunds only; refund_in_progress = RESERVED, held but not returned (appended so existing columns keep their place).
+        ["order_number", "channel", "status", "method", "provider", "amount", "fee", "captured_by", "at", "refunded", "provider_payment_id", "refund_in_progress"],
         ledger.payments.map((r) => [
           r.orderNumber, r.channel, r.status, r.method, r.provider,
           toPlainDecimal(r.amount), toPlainDecimal(r.feeAmount), r.capturedBy,
-          r.at.toISOString(), toPlainDecimal(r.refunded), r.providerPaymentId,
+          r.at.toISOString(), toPlainDecimal(r.refunded), r.providerPaymentId, toPlainDecimal(r.refundReserved),
         ]),
       );
       break;
