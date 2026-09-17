@@ -115,6 +115,11 @@ function contentColumns(insight: Insight, lease: IqWriteLease) {
     trustState: insight.trust.state,
     trustScore: insight.trust.state === "MEASURED" ? insight.trust.score : null,
     trustAsOf: insight.trust.state === "MEASURED" ? new Date(insight.trust.asOf) : null,
+    // Migration 0037 columns. as_of = the period end until S2 adds an explicit asOf (RELIABILITY C5).
+    trustMetricIds: insight.trust.state === "MEASURED" ? [...insight.trust.metricIds] : [],
+    trustReasons: insight.trust.state === "NOT_MEASURED" ? [] : [...insight.trust.reasons],
+    copy: insight.copy,
+    asOf: new Date(insight.period.end),
     jobRunId: lease.runId,
     jobAttempt: lease.attempt,
     codeVersion: insight.producedBy.codeVersion,
