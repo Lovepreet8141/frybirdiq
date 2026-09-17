@@ -252,16 +252,31 @@ export async function reverseStampForOrder(input: { orgId: string; orderId: stri
     const [account] = await tx.select({ id: loyaltyAccounts.id }).from(loyaltyAccounts).where(eq(loyaltyAccounts.id, event.accountId)).for("update").limit(1);
     if (!account) return;
 
+    // Re-read the event by id now that the account lock is held, and use
+    // only THIS row for everything below — not `event` above. Two
+    // different orders can share one reward id (see this function's own
+    // doc comment above), so between the first read and this lock, a
+    // DIFFERENT reversal for a DIFFERENT order sharing this event's
+    // reward could already have voided that reward and pooled this very
+    // event into a brand new one under the account lock this call just
+    // waited on. `event.rewardId` would then be stale: this call would
+    // CAS against the old, already-REVERSED reward (a silent no-op) while
+    // still marking this event reversed — leaving the NEW reward sitting
+    // AVAILABLE though one of its backing stamps just got reversed under
+    // it: a free item nobody actually earned.
+    const [current] = await tx.select().from(loyaltyStampEvents).where(eq(loyaltyStampEvents.id, event.id)).limit(1);
+    if (!current || current.reversedAt) return; // reversed by someone else while this call waited for the account lock
+
     await tx
       .update(loyaltyStampEvents)
       .set({ reversedAt: new Date(), reversalReason: input.reason, updatedAt: new Date() })
-      .where(eq(loyaltyStampEvents.id, event.id));
+      .where(eq(loyaltyStampEvents.id, current.id));
 
-    if (event.rewardId) {
+    if (current.rewardId) {
       const [reversed] = await tx
         .update(loyaltyRewards)
         .set({ status: "REVERSED", reversedAt: new Date(), reversalReason: input.reason, updatedAt: new Date() })
-        .where(and(eq(loyaltyRewards.id, event.rewardId), eq(loyaltyRewards.status, "AVAILABLE")))
+        .where(and(eq(loyaltyRewards.id, current.rewardId), eq(loyaltyRewards.status, "AVAILABLE")))
         .returning({ id: loyaltyRewards.id });
 
       if (reversed) {
@@ -270,7 +285,7 @@ export async function reverseStampForOrder(input: { orgId: string; orderId: stri
         await tx
           .update(loyaltyStampEvents)
           .set({ rewardId: null, updatedAt: new Date() })
-          .where(and(eq(loyaltyStampEvents.rewardId, event.rewardId), isNull(loyaltyStampEvents.reversedAt)));
+          .where(and(eq(loyaltyStampEvents.rewardId, current.rewardId), isNull(loyaltyStampEvents.reversedAt)));
       } else {
         // Not AVAILABLE by the time this tried to void it. Ordinarily that
         // just means an earlier call already reversed it — a quiet no-op,
@@ -279,9 +294,9 @@ export async function reverseStampForOrder(input: { orgId: string; orderId: stri
         // reward was actually redeemed by a different order that shared its
         // id, in which case a real, paid order is now sitting on a reward
         // this refund cannot touch — surfaced rather than swallowed.
-        const [current] = await tx.select({ status: loyaltyRewards.status }).from(loyaltyRewards).where(eq(loyaltyRewards.id, event.rewardId)).limit(1);
-        if (current?.status === "REDEEMED") {
-          console.error(`loyalty reward: order ${input.orderId} was refunded but its reward ${event.rewardId} had already been redeemed by a different order sharing the same reward id by the time this refund tried to void it — left REDEEMED, nothing reversed`);
+        const [rewardRow] = await tx.select({ status: loyaltyRewards.status }).from(loyaltyRewards).where(eq(loyaltyRewards.id, current.rewardId)).limit(1);
+        if (rewardRow?.status === "REDEEMED") {
+          console.error(`loyalty reward: order ${input.orderId} was refunded but its reward ${current.rewardId} had already been redeemed by a different order sharing the same reward id by the time this refund tried to void it — left REDEEMED, nothing reversed`);
         }
       }
     }
@@ -297,10 +312,11 @@ export async function reverseStampForOrder(input: { orgId: string; orderId: stri
       : { enabled: false, stampsRequired: 7, minOrderValue: ZERO, maxRewardValue: ZERO };
 
     // `settleAccount` takes a real transaction handle, and now always gets
-    // one — this whole function is one transaction, locked on the event
-    // row above, so a concurrent reversal for the same order can never
-    // call `settleAccount` for this account while this one is still running.
-    await settleAccount(tx, event.accountId, input.orgId, config);
+    // one — this whole function is one transaction, locked on the order
+    // row and then the account row above, so a concurrent reversal or
+    // settlement for the same account can never call `settleAccount`
+    // while this one is still running.
+    await settleAccount(tx, current.accountId, input.orgId, config);
   });
 }
 

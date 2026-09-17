@@ -509,4 +509,54 @@ describe("reverseStampForOrder", () => {
     const [account] = await db().select({ stampCount: loyaltyAccounts.stampCount }).from(loyaltyAccounts).where(eq(loyaltyAccounts.id, accountId));
     expect(account?.stampCount).toBe(0); // all 7 consumed into the one new reward, none left dangling
   });
+
+  it("loy-1d: two orders sharing one reward, reversed concurrently — no AVAILABLE reward ends up backed by a reversed stamp", async () => {
+    // RELIABILITY's trace: order A's reversal reads its event (rewardId
+    // R) BEFORE the account lock, then — once it holds the lock — voids
+    // R and pools R's other stamps, including order B's, into a BRAND
+    // NEW reward. Order B's own reversal, woken from the same account
+    // lock right after, must not act on the STALE rewardId (R) it read
+    // before waiting: R is already reversed, so that CAS silently misses,
+    // and the new reward would be left AVAILABLE even though one of its
+    // backing stamps (order B's) is about to be marked reversed anyway —
+    // a free item nobody earned.
+    const customer = await createTestCustomer(org.orgId);
+    const accountId = await seedAccount(customer.id);
+    const [reward] = await db().insert(loyaltyRewards).values({ orgId: org.orgId, accountId, status: "AVAILABLE" }).returning({ id: loyaltyRewards.id });
+    if (!reward) throw new Error("fixture");
+
+    const orderA = await createTestOrder(org);
+    const orderB = await createTestOrder(org); // shares reward `reward` with order A
+    await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: orderA, rewardId: reward.id });
+    await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: orderB, rewardId: reward.id });
+    // 5 more stamps under the same reward. Voiding it (triggered by
+    // whichever of A/B runs first) frees the OTHER order's stamp plus
+    // these 5 — 6 total — and one already-free stamp below brings that
+    // to exactly the org's default stampsRequired (7): reversing ONE of
+    // these two orders alone completes a fresh cycle and pools the
+    // OTHER order's own stamp into it, the setup this bug depends on.
+    for (let i = 0; i < 5; i++) {
+      await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: randomUUID(), rewardId: reward.id });
+    }
+    await db().insert(loyaltyStampEvents).values({ orgId: org.orgId, accountId, orderId: randomUUID() }); // pre-existing free stamp, rewardId null
+
+    await warmPool();
+
+    await withRowHeld(
+      async (tx) => tx.select({ id: loyaltyAccounts.id }).from(loyaltyAccounts).where(eq(loyaltyAccounts.id, accountId)).for("update"),
+      2,
+      () => [
+        reverseStampForOrder({ orgId: org.orgId, orderId: orderA, reason: "concurrent refund A" }),
+        reverseStampForOrder({ orgId: org.orgId, orderId: orderB, reason: "concurrent refund B" }),
+      ],
+    );
+
+    const allRewards = await db().select({ id: loyaltyRewards.id, status: loyaltyRewards.status }).from(loyaltyRewards).where(eq(loyaltyRewards.accountId, accountId));
+    expect(allRewards.every((r) => r.status === "REVERSED"), `expected every reward reversed, got ${JSON.stringify(allRewards)}`).toBe(true);
+
+    for (const r of allRewards.filter((row) => row.status === "AVAILABLE")) {
+      const backing = await db().select({ reversedAt: loyaltyStampEvents.reversedAt }).from(loyaltyStampEvents).where(eq(loyaltyStampEvents.rewardId, r.id));
+      expect(backing.every((e) => e.reversedAt === null), `reward ${r.id} is AVAILABLE but backed by a reversed stamp`).toBe(true);
+    }
+  });
 });
