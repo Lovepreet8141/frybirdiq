@@ -18,3 +18,4 @@ export * from "./receipt";
 export * from "./hardware";
 export * from "./franchise";
 export * from "./iq";
+export * from "./iq-facts";

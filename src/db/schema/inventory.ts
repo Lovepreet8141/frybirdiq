@@ -222,6 +222,8 @@ export const inventoryMovements = pgTable(
     index("inventory_movements_ingredient_idx").on(table.ingredientId, table.occurredAt),
     index("inventory_movements_location_idx").on(table.locationId, table.occurredAt),
     index("inventory_movements_order_idx").on(table.orderId),
+    // IQ-1 P4: food cost and waste by org, movement type and day.
+    index("inventory_movements_org_type_occurred_idx").on(table.orgId, table.type, table.occurredAt),
     // Consumption is idempotent at the database, not only in code.
     uniqueIndex("inventory_movements_sale_line_unique")
       .on(table.orderItemId, table.ingredientId)
