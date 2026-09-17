@@ -16,11 +16,17 @@ import {
 } from "@/lib/iq/automation/state-machine";
 import { ActionTierSchema, CLAIM_TYPES } from "@/lib/iq/engine/claims";
 import { SubjectKindSchema } from "@/lib/iq/engine/insight";
+import { CodeSchema, IdentifierSchema } from "@/lib/iq/engine/evidence";
+import { CopySchema } from "@/lib/iq/engine/insight";
 import { UNITS } from "@/lib/iq/engine/quantity";
 import { JOB_RUN_STATUSES, JOB_TRIGGERS } from "@/lib/jobs/claim-decision";
 import {
   IQ_ACTION_STATUSES,
   IQ_CLAIM_TYPES,
+  IQ_CODE_PATTERN,
+  IQ_IDENTIFIER_PATTERN,
+  IQ_PAYLOAD_PATH_PATTERN,
+  IQ_PLACEHOLDER_COPY,
   IQ_EXECUTABLE_KINDS,
   IQ_JOB_RUN_STATUSES,
   IQ_JOB_TRIGGERS,
@@ -93,6 +99,24 @@ describe("iq schema vocabularies match the engine and automation code", () => {
         expect([kind, hasPolicy, sqlMode(entry.tier, hasPolicy)]).toEqual([kind, hasPolicy, modeOf({ kind: kind as ActionKind, autoPolicy })]);
       }
     }
+  });
+});
+
+describe("0038 insight CHECK patterns match the engine schemas", () => {
+  const agree = (pattern: string, accepts: (v: string) => boolean, samples: readonly string[]) => {
+    const re = new RegExp(pattern);
+    for (const v of samples) expect([v, re.test(v)]).toEqual([v, accepts(v)]);
+  };
+
+  it("identifier, code and payload-path patterns accept and refuse what Zod does", () => {
+    agree(IQ_IDENTIFIER_PATTERN, (v) => IdentifierSchema.safeParse(v).success, ["revenue_net", "recon.cash_gap", "a:b-c", "Revenue", "-x", "a b", "a,b", ""]);
+    agree(IQ_CODE_PATTERN, (v) => CodeSchema.safeParse(v).success, ["LOW_VOLUME", "X1", "low", "_X", "A-B", ""]);
+    const pathOk = (v: string) => CopySchema.safeParse({ templateId: "t", slots: { s: v } }).success;
+    agree(IQ_PAYLOAD_PATH_PATTERN, pathOk, ["value", "interval.p50", "drivers.0.contribution", "a..b", ".a", "a-b", ""]);
+  });
+
+  it("the placeholder copy existing rows receive is a valid engine Copy", () => {
+    expect(CopySchema.safeParse(IQ_PLACEHOLDER_COPY).success).toBe(true);
   });
 });
 

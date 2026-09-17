@@ -59,6 +59,16 @@ export const IQ_SUBJECT_KINDS = [
   "JOB",
 ] as const;
 export const IQ_TRUST_STATES = ["MEASURED", "NOT_MEASURED", "INSUFFICIENT_DATA"] as const;
+/** Why a row left ACTIVE (migration 0038): EXPIRED as CLEARED or CLOSING_TIME, else its own status. */
+export const IQ_INSIGHT_STATUS_REASONS = ["CLEARED", "CLOSING_TIME", "SUPERSEDED", "RETRACTED"] as const;
+/** engine/evidence.ts IdentifierSchema: metric ids, template ids, slot names. */
+export const IQ_IDENTIFIER_PATTERN = "^[a-z0-9][a-z0-9_.:-]*$";
+/** engine/evidence.ts CodeSchema: trust reason codes. */
+export const IQ_CODE_PATTERN = "^[A-Z][A-Z0-9_]*$";
+/** engine/insight.ts PayloadPathSchema: a copy slot's dotted payload path. */
+export const IQ_PAYLOAD_PATH_PATTERN = "^[A-Za-z0-9_]+([.][A-Za-z0-9_]+)*$";
+/** The placeholder copy existing rows receive in 0038; every writer sets its own. */
+export const IQ_PLACEHOLDER_COPY = { templateId: "none", slots: {} } as const;
 export const IQ_UNITS = ["paise", "count", "bps", "grams", "ml", "pieces", "seconds"] as const;
 export const IQ_FORECAST_TARGETS = ["ITEM", "INGREDIENT", "ORDERS", "REVENUE"] as const;
 export const IQ_BACKTEST_METRICS = ["WAPE", "MAE"] as const;
@@ -130,6 +140,19 @@ const executableKindPairs = sql.raw(
 const a1Kinds = Object.entries(IQ_EXECUTABLE_KINDS)
   .filter(([, tier]) => tier === "A1")
   .map(([kind]) => kind);
+
+/**
+ * Every element of a text[] matches `pattern` (which must not admit a comma).
+ * A CHECK cannot unnest, so the array is joined with commas: the join must be
+ * `el(,el)*` or empty, and hold exactly cardinality − 1 commas, so no element
+ * can be empty or smuggle a comma of its own.
+ */
+const elementsMatch = (column: unknown, pattern: string) => {
+  const el = pattern.slice(1, -1);
+  return sql`(array_to_string(${column}, ',') ~ ${sql.raw(`'^(${el}(,${el})*)?$'`)}
+            AND length(array_to_string(${column}, ',')) - length(replace(array_to_string(${column}, ','), ',', '')) = greatest(cardinality(${column}) - 1, 0)
+            AND (array_to_string(${column}, ',') = '') = (cardinality(${column}) = 0))`;
+};
 
 const SHA256 = sql.raw(`'^[0-9a-f]{64}$'`);
 
@@ -210,6 +233,20 @@ export const iqInsights = pgTable(
     trustState: text("trust_state").notNull().default("NOT_MEASURED"),
     trustScore: integer("trust_score"),
     trustAsOf: timestamp("trust_as_of", { withTimezone: true }),
+    /** TrustRef.metricIds (MEASURED); empty otherwise. Migration 0038. */
+    trustMetricIds: text("trust_metric_ids").array().notNull().default(sql`'{}'::text[]`),
+    /** TrustRef.reasons (MEASURED, INSUFFICIENT_DATA); empty for NOT_MEASURED. Migration 0038. */
+    trustReasons: text("trust_reasons").array().notNull().default(sql`'{}'::text[]`),
+    /** engine Copy: `{ templateId, slots }`. Frozen with the claim once referenced. Migration 0038. */
+    copy: jsonb("copy").$type<{ templateId: string; slots: Record<string, string> }>().notNull().default(IQ_PLACEHOLDER_COPY),
+    /**
+     * End of the period or bucket the rule evaluated. No default on purpose
+     * (RELIABILITY U2): a writer that forgot it would store write time, later
+     * than any period end, and every correct later write would be refused as
+     * stale. Existing rows took period_end in 0038.
+     */
+    asOf: timestamp("as_of", { withTimezone: true }).notNull(),
+    statusReason: text("status_reason"),
     jobRunId: uuid("job_run_id").references(() => iqJobRuns.id, { onDelete: "set null" }),
     jobAttempt: integer("job_attempt"),
     codeVersion: text("code_version").notNull(),
@@ -255,6 +292,49 @@ export const iqInsights = pgTable(
     ),
     check("iq_insights_forecast_interval_check", sql`${table.claimType} <> 'FORECAST' OR ${table.payload} ? 'interval'`),
     check("iq_insights_recommendation_expiry_check", sql`${table.claimType} <> 'RECOMMENDATION' OR ${table.expiresAt} IS NOT NULL`),
+    check(
+      "iq_insights_copy_check",
+      sql`CASE WHEN jsonb_typeof(${table.copy}) = 'object'
+            AND (${table.copy} - 'templateId' - 'slots') = '{}'::jsonb
+            AND jsonb_typeof(${table.copy} -> 'templateId') = 'string'
+            AND jsonb_typeof(${table.copy} -> 'slots') = 'object'
+          THEN (${table.copy} ->> 'templateId') ~ ${sql.raw(`'${IQ_IDENTIFIER_PATTERN}'`)}
+            AND char_length(${table.copy} ->> 'templateId') <= 120
+            AND NOT jsonb_path_exists(${table.copy} -> 'slots', ${sql.raw(`'$.keyvalue() ? (!(@.key like_regex "${IQ_IDENTIFIER_PATTERN}"))'`)})
+            AND NOT jsonb_path_exists(${table.copy} -> 'slots', '$.* ? (@.type() != "string")')
+            AND NOT jsonb_path_exists(${table.copy} -> 'slots', ${sql.raw(`'$.* ? (!(@ like_regex "${IQ_PAYLOAD_PATH_PATTERN}"))'`)})
+          ELSE false END`,
+    ),
+    // TrustRefSchema: MEASURED needs a metric id, INSUFFICIENT_DATA a reason, NOT_MEASURED carries neither.
+    check(
+      "iq_insights_trust_detail_check",
+      sql`array_position(${table.trustMetricIds}, NULL) IS NULL
+          AND array_position(${table.trustReasons}, NULL) IS NULL
+          AND cardinality(${table.trustMetricIds}) <= 50
+          AND cardinality(${table.trustReasons}) <= 50
+          AND ${elementsMatch(table.trustMetricIds, IQ_IDENTIFIER_PATTERN)}
+          AND ${elementsMatch(table.trustReasons, IQ_CODE_PATTERN)}
+          AND CASE ${table.trustState}
+            WHEN 'MEASURED' THEN cardinality(${table.trustMetricIds}) >= 1
+            WHEN 'INSUFFICIENT_DATA' THEN cardinality(${table.trustReasons}) >= 1 AND cardinality(${table.trustMetricIds}) = 0
+            ELSE cardinality(${table.trustMetricIds}) = 0 AND cardinality(${table.trustReasons}) = 0
+          END`,
+    ),
+    check(
+      "iq_insights_status_reason_check",
+      sql`${table.statusReason} IS NULL
+          OR (${table.statusReason} IN (${list(IQ_INSIGHT_STATUS_REASONS)}) AND CASE ${table.statusReason}
+            WHEN 'SUPERSEDED' THEN ${table.status} = 'SUPERSEDED'
+            WHEN 'RETRACTED' THEN ${table.status} = 'RETRACTED'
+            ELSE ${table.status} = 'EXPIRED'
+          END)`,
+    ),
+    // ARCHITECT P3: payment-ledger findings are recognisable by both keys, which RLS relies on (0038).
+    check(
+      "iq_insights_ledger_producer_check",
+      sql`(${table.dedupeKey} LIKE 'recon:%') = (${table.producer} LIKE 'recon.%')
+          AND (${table.dedupeKey} LIKE 'sig:%') = (${table.producer} LIKE 'sig.%')`,
+    ),
     check(
       "iq_insights_supersede_check",
       sql`(${table.supersedes} IS NULL OR ${table.supersedes} <> ${table.id}) AND (${table.supersededBy} IS NULL OR (${table.supersededBy} <> ${table.id} AND ${table.status} = 'SUPERSEDED'))`,
