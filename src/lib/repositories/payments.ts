@@ -13,7 +13,7 @@ import "server-only";
  * them and in how the provider is asked to capture. Roadmap 1.1–1.3.
  */
 
-import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, like, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, loyaltyAccounts, loyaltyTransactions, orderEvents, orders, payments, refunds } from "@/db/schema";
 import { type Role, authorize, can } from "@/domain/permissions";
@@ -963,13 +963,14 @@ export async function refundPayment(input: {
     // the manager may be retrying, under a NEW key, a refund whose follow-up
     // was lost — the dialog mints a new key when it reopens. Finish every
     // SUCCEEDED refund on this payment first; each follow-up is idempotent.
-    await healRefundFollowUps({ orgId: input.orgId, actorUserId: input.actorUserId, paymentId: input.paymentId }, opts.factsRefresh);
+    await healPaymentRefundFollowUps({ orgId: input.orgId, actorUserId: input.actorUserId, paymentId: input.paymentId }, opts.factsRefresh);
     return outcome;
   }
 
   // The money has moved and is recorded. A follow-up failure is logged and
-  // left for the next call (or the sweeper) to converge on — never reported
-  // as a failed refund, which would invite a second one.
+  // left for `healLostRefundFollowUps` (the scheduled healer) or a later
+  // attempt on this payment to finish — never reported as a failed refund,
+  // which would invite a second one.
   const fullyRefunded = await runFollowUp({ orgId: input.orgId, actorUserId: input.actorUserId, refundId: outcome.refundId }, opts.factsRefresh);
   return { ok: true, refundId: outcome.refundId, orderId: outcome.orderId, fullyRefunded: fullyRefunded ?? false };
 }
@@ -979,13 +980,13 @@ async function runFollowUp(input: { orgId: string; actorUserId: string; refundId
   try {
     return await followUpRefund(input, factsRefresh);
   } catch (error) {
-    console.warn(`payments: refund follow-up failed (${error instanceof Error ? error.name : "unknown"}); the next attempt on this payment finishes it`);
+    console.warn(`payments: refund follow-up failed (${error instanceof Error ? error.name : "unknown"}); the refund healer or a later attempt on this payment finishes it`);
     return null;
   }
 }
 
 /** Runs the follow-up for every SUCCEEDED refund on a payment that has any — org-scoped, oldest first. */
-async function healRefundFollowUps(input: { orgId: string; actorUserId: string; paymentId: string }, factsRefresh: FactsRefreshSteps | undefined): Promise<void> {
+async function healPaymentRefundFollowUps(input: { orgId: string; actorUserId: string; paymentId: string }, factsRefresh: FactsRefreshSteps | undefined): Promise<void> {
   try {
     const database = db();
     const [payment] = await database
@@ -1241,19 +1242,19 @@ async function reserveAndFinalizeRefund(input: {
 
 /**
  * Everything a SUCCEEDED refund owes the rest of the system, done so that
- * running it again — a replay, a retry after a crash, two calls at once —
- * finishes what is missing and repeats nothing (design Revision 2, B4, S4,
- * S8). Reads refund, payment and order fresh; trusts no snapshot.
+ * running it again — a replay, a retry after a crash, two calls at once, the
+ * healer — finishes what is missing and repeats nothing (design Revision 2,
+ * B4, S4, S8). Reads refund, payment and order fresh; trusts no snapshot.
  *
- * 1. One money event per refund, keyed by `metadata.refundId` under the
- *    refund row's lock, committed before anything else touches the order.
- * 2. A full refund moves the order to REFUNDED where the lifecycle allows.
- * 3. A full refund reverses the order's stamp and points, whatever the
- *    order's status — also when advanceOrder's own reversal never ran (a
- *    crash after its commit) or the order could not move (CANCELLED,
- *    FAILED). Both reversals are idempotent, and they run only after every
- *    transaction here has committed (RELIABILITY condition b526c5).
- * 4. The IQ daily facts for the days the refund touched.
+ * 1. A full refund of the ORDER moves it to REFUNDED where the lifecycle
+ *    allows, then reverses its stamp and points whatever its status (a
+ *    crash after advanceOrder's commit, or a CANCELLED/FAILED order). Both
+ *    reversals are idempotent and run only after every transaction that
+ *    touched the order has committed (RELIABILITY condition b526c5).
+ * 2. The money event, exactly once per refund, keyed by `metadata.refundId`
+ *    under the refund row's lock — written LAST, so its presence means steps
+ *    1 and 2 are done. `healLostRefundFollowUps` relies on exactly that.
+ * 3. The IQ daily facts for the days the refund touched (best effort).
  *
  * Returns whether the ORDER is fully refunded: every payment ever captured
  * on it is REFUNDED.
@@ -1275,8 +1276,18 @@ async function followUpRefund(input: { orgId: string; actorUserId: string; refun
   const fullyRefunded = orderPaymentState(orderPayments.map((row) => row.status)) === "REFUNDED";
   const amount = paise(refund.amount);
 
-  // 1. The money event — exactly once per refund. Worded from this refund
-  // alone (FIN #2): a replay after later refunds must not re-describe it.
+  if (fullyRefunded) {
+    // 1. The order, where the lifecycle allows. A refusal here is a race with
+    // another move (S8) and changes nothing below.
+    if (order.status !== "REFUNDED" && canTransition(order.status, "REFUNDED", order.fulfilment)) {
+      await advanceOrder({ orderId: order.id, to: "REFUNDED", actorUserId: input.actorUserId, orgId: input.orgId, reason: `Refunded — ${refund.reason}` });
+    }
+    // Loyalty, unconditionally for a full refund.
+    await reverseStampForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
+    await reversePointsForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
+  }
+
+  // 2. The money event, last. Worded from this refund alone (FIN #2).
   await database.transaction(async (tx) => {
     await tx.select({ id: refunds.id }).from(refunds).where(eq(refunds.id, refund.id)).for("update");
     const [already] = await tx
@@ -1285,7 +1296,7 @@ async function followUpRefund(input: { orgId: string; actorUserId: string; refun
       .where(and(eq(orderEvents.orderId, order.id), eq(orderEvents.orgId, input.orgId), sql`${orderEvents.metadata}->>'refundId' = ${refund.id}`))
       .limit(1);
     if (already) return;
-    // The status as it is now, not as read before this transaction (POS #4).
+    // The status as it is now, after step 1 (POS #4).
     const [current] = await tx.select({ status: orders.status }).from(orders).where(and(eq(orders.id, order.id), eq(orders.orgId, input.orgId))).limit(1);
     const status = current?.status ?? order.status;
     await tx.insert(orderEvents).values({
@@ -1299,18 +1310,7 @@ async function followUpRefund(input: { orgId: string; actorUserId: string; refun
     });
   });
 
-  if (fullyRefunded) {
-    // 2. The order, where the lifecycle allows. A refusal here is a race with
-    // another move (S8): the money event above already stands, once.
-    if (order.status !== "REFUNDED" && canTransition(order.status, "REFUNDED", order.fulfilment)) {
-      await advanceOrder({ orderId: order.id, to: "REFUNDED", actorUserId: input.actorUserId, orgId: input.orgId, reason: `Refunded — ${refund.reason}` });
-    }
-    // 3. Loyalty, unconditionally for a full refund.
-    await reverseStampForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
-    await reversePointsForOrder({ orgId: input.orgId, orderId: order.id, reason: `Order #${order.orderNumber} refunded` });
-  }
-
-  // 4. Facts: the order's day and the day the refund finalized — never the
+  // 3. Facts: the order's day and the day the refund finalized — never the
   // day it was reserved (an-3). Best effort, bounded, never fails the refund.
   try {
     await refreshFactsForDays(input.orgId, refundFactsDays({ orderCreatedAt: order.createdAt, finalizedAt: refund.finalizedAt }), factsRefresh);
@@ -1319,4 +1319,72 @@ async function followUpRefund(input: { orgId: string; actorUserId: string; refun
   }
 
   return fullyRefunded;
+}
+
+/** What one healer run did. */
+export interface RefundHealReport {
+  /** SUCCEEDED refunds found with no money event, up to the limit. */
+  readonly examined: number;
+  /** Of those, now carrying their money event: the follow-up finished. */
+  readonly healed: number;
+  /** Still unfinished after this run; the next run tries them again. */
+  readonly stillOpen: number;
+}
+
+/** A refund's follow-up is only presumed lost after this long, so the healer never races a live request. */
+export const REFUND_HEAL_AFTER_MS = 5 * 60_000;
+export const REFUND_HEAL_LIMIT = 20;
+
+/**
+ * Finishes refund follow-ups that were lost — the request died, or a
+ * follow-up error was caught and logged — without anyone retrying in the UI
+ * (ref-b7). A full refund leaves no Refund button behind, so nothing else
+ * would ever finish it.
+ *
+ * Picks SUCCEEDED refunds in this org, finalized more than `olderThanMs` ago,
+ * that have no money event (`order_events.metadata.refundId`). The follow-up
+ * writes that event last, so its absence is exactly "not finished". Only
+ * refunds made by the reserve-and-finalize flow (they carry an idempotency
+ * key); refunds recorded before it are history and are never rewritten.
+ * Oldest first, at most `limit` per call; each follow-up is idempotent, so a
+ * second run, or a live request racing this one, repeats nothing.
+ *
+ * Exported for the scheduled job (AUTOMATION-ARCHITECT registers it); it
+ * never calls a payment provider.
+ */
+export async function healLostRefundFollowUps(
+  input: { readonly orgId: string; readonly olderThanMs?: number; readonly limit?: number; readonly now?: Date },
+  opts: { readonly factsRefresh?: FactsRefreshSteps } = {},
+): Promise<RefundHealReport> {
+  const database = db();
+  const cutoff = new Date((input.now ?? new Date()).getTime() - (input.olderThanMs ?? REFUND_HEAL_AFTER_MS));
+  const limit = Math.max(1, Math.min(input.limit ?? REFUND_HEAL_LIMIT, 100));
+
+  const lost = await database
+    .select({ id: refunds.id, actorUserId: refunds.actorUserId })
+    .from(refunds)
+    .where(
+      and(
+        eq(refunds.orgId, input.orgId),
+        eq(refunds.status, "SUCCEEDED"),
+        sql`${refunds.idempotencyKey} IS NOT NULL`,
+        sql`${refunds.actorUserId} IS NOT NULL`,
+        lt(refunds.finalizedAt, cutoff),
+        sql`NOT EXISTS (SELECT 1 FROM ${orderEvents} e WHERE e.org_id = ${refunds.orgId} AND e.order_id = ${refunds.orderId} AND e.metadata->>'refundId' = ${refunds.id}::text)`,
+      ),
+    )
+    .orderBy(refunds.finalizedAt)
+    .limit(limit);
+
+  let healed = 0;
+  for (const row of lost) {
+    await runFollowUp({ orgId: input.orgId, actorUserId: row.actorUserId!, refundId: row.id }, opts.factsRefresh);
+    const [event] = await database
+      .select({ id: orderEvents.id })
+      .from(orderEvents)
+      .where(and(eq(orderEvents.orgId, input.orgId), sql`${orderEvents.metadata}->>'refundId' = ${row.id}`))
+      .limit(1);
+    if (event) healed += 1;
+  }
+  return { examined: lost.length, healed, stillOpen: lost.length - healed };
 }

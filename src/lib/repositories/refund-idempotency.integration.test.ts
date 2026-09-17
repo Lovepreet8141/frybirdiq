@@ -15,7 +15,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, idempotencyKeys, loyaltyAccounts, loyaltyStampEvents, loyaltyTransactions, orderEvents, orders, payments, refunds } from "@/db/schema";
-import { refundPayment } from "./payments";
+import { healLostRefundFollowUps, refundPayment } from "./payments";
 import { fingerprint } from "./idempotency";
 import { createTestCustomer, createTestOrg, createTestProduct, createTestTaxRate, deleteTestOrg, warmPool, type TestOrg } from "./__test-support__/fixtures";
 import { istInstant, seedSale } from "./__test-support__/iq-fixtures";
@@ -772,6 +772,82 @@ describe("refundPayment — reserve, finalize, converge (ref-b3)", () => {
     expect(row?.status).toBe("RESERVED");
     expect(row?.finalizedAt).toBeNull();
     expect(await db().select().from(auditLogs).where(and(eq(auditLogs.entityId, row!.id), eq(auditLogs.action, "refund_failed")))).toHaveLength(0);
+  });
+
+  /**
+   * A full refund whose follow-up was lost part-way: the order moved and the
+   * stamp was reversed, then the points reversal failed. Finalized
+   * `minutesAgo` minutes ago. Exactly the case a "money event first" order
+   * would hide from the healer.
+   */
+  async function lostFollowUp(minutesAgo: number) {
+    const o = await paidOrder({ points: 15, stamp: true });
+    await arm("reversal", o.orderId);
+    expect((await quietly(() => refund(o.paymentId, o.amount, randomUUID()))).value.ok).toBe(true);
+    await disarm(o.orderId);
+    await db().update(refunds).set({ finalizedAt: new Date(Date.now() - minutesAgo * 60_000) }).where(eq(refunds.paymentId, o.paymentId));
+    return o;
+  }
+
+  it("ref-b7: the healer finishes a lost full-refund follow-up once, and a second run changes nothing", async () => {
+    const recent = await lostFollowUp(1);
+    const o = await lostFollowUp(10);
+    expect(await statusOf("order", o.orderId)).toBe("REFUNDED");
+    expect(await reversals(o.orderId)).toHaveLength(0);
+    expect(await moneyEvents(o.orderId)).toHaveLength(0);
+
+    const first = await healLostRefundFollowUps({ orgId: org.orgId });
+    expect(first).toEqual({ examined: 1, healed: 1, stillOpen: 0 });
+    expect(await statusOf("order", o.orderId)).toBe("REFUNDED");
+    expect(await reversals(o.orderId)).toHaveLength(1);
+    expect(await stampReversed(o.orderId)).toBe(true);
+    expect(await moneyEvents(o.orderId)).toHaveLength(1);
+    // Under five minutes: possibly a live request still finishing, so left alone.
+    expect(await reversals(recent.orderId)).toHaveLength(0);
+
+    expect(await healLostRefundFollowUps({ orgId: org.orgId })).toEqual({ examined: 0, healed: 0, stillOpen: 0 });
+    expect(await reversals(o.orderId)).toHaveLength(1);
+    expect(await moneyEvents(o.orderId)).toHaveLength(1);
+
+    // Tidy for the next test: the recent one, once it is old enough.
+    expect(await healLostRefundFollowUps({ orgId: org.orgId, now: new Date(Date.now() + 10 * 60_000) })).toMatchObject({ healed: 1 });
+  });
+
+  it("ref-b7: the healer honours its limit, stays in its org, and never touches refunds recorded before the reserve flow", async () => {
+    const a = await lostFollowUp(10);
+    const b = await lostFollowUp(9);
+
+    // A refund recorded by the old code: no idempotency key and no money event. History, not a lost follow-up.
+    const legacy = await paidOrder();
+    await db().update(payments).set({ status: "REFUNDED" }).where(eq(payments.id, legacy.paymentId));
+    await db().insert(refunds).values({
+      orgId: org.orgId,
+      paymentId: legacy.paymentId,
+      orderId: legacy.orderId,
+      amount: legacy.amount,
+      reason: "recorded before the refund redesign",
+      actorUserId: randomUUID(),
+      provider: CASH_PROVIDER,
+      status: "SUCCEEDED",
+      finalizedAt: new Date(Date.now() - 60 * 60_000),
+      idempotencyKey: null,
+    });
+
+    const otherOrg = await createTestOrg();
+    try {
+      expect(await healLostRefundFollowUps({ orgId: otherOrg.orgId })).toEqual({ examined: 0, healed: 0, stillOpen: 0 });
+    } finally {
+      await deleteTestOrg(otherOrg.orgId);
+    }
+
+    expect(await healLostRefundFollowUps({ orgId: org.orgId, limit: 1 })).toEqual({ examined: 1, healed: 1, stillOpen: 0 });
+    expect(await reversals(a.orderId)).toHaveLength(1); // oldest first
+    expect(await reversals(b.orderId)).toHaveLength(0);
+    expect(await healLostRefundFollowUps({ orgId: org.orgId, limit: 1 })).toEqual({ examined: 1, healed: 1, stillOpen: 0 });
+    expect(await healLostRefundFollowUps({ orgId: org.orgId })).toEqual({ examined: 0, healed: 0, stillOpen: 0 });
+
+    expect(await statusOf("order", legacy.orderId)).toBe("PAID");
+    expect(await moneyEvents(legacy.orderId)).toHaveLength(0);
   });
 
   it("S4: a stale claim from a caller that died takes over and completes the refund once", async () => {
