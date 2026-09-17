@@ -13,7 +13,7 @@
  * - heavy-job exclusion; org isolation; one heartbeat request end to end.
  */
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
 import { iqInsights, iqJobRuns } from "@/db/schema";
@@ -29,7 +29,7 @@ import { periodKeyAt, shiftPeriod } from "@/lib/jobs/period";
 import { iqDailyFacts, organizations } from "@/db/schema";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 import { seedExpense } from "./__test-support__/iq-fixtures";
-import { readDailyFacts } from "./iq-facts";
+import { factDayLockKey, readDailyFacts } from "./iq-facts";
 import type { JobWriteRepos } from "@/lib/jobs/repos";
 import { createJobRunStore } from "./iq-job-runs";
 import { jobRouteDeps } from "@/app/api/jobs/[job]/deps";
@@ -290,7 +290,7 @@ describe("finish", () => {
     const { row } = await s.claim(request);
     const token = tokenOf(row, request.leaseOwner);
     await s.commit(token, 300, async () => undefined, "after-3");
-    await s.finish(token, { status: "DEADLINE", rowsWritten: 3, summary: { chunks: 3 }, cursor: "after-3", failures: 0 });
+    await s.finish(token, { status: "DEADLINE", errorCode: "DEADLINE", rowsWritten: 3, summary: { chunks: 3 }, cursor: "after-3", failures: 0 });
     const cut = await stored(row.id);
     expect(cut).toMatchObject({ status: "FAILED", errorCode: "DEADLINE", cursor: "after-3", failures: 0, rowsWritten: 3 });
     expect(cut.finishedAt).toBeInstanceOf(Date);
@@ -525,7 +525,7 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
 
     expect(response).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
     expect(seen).toMatchObject({
-      ctxKeys: ["attempt", "commit", "orgId", "period", "periodKey", "repos", "resumeCursor", "runId", "shouldStop", "trigger"],
+      ctxKeys: ["attempt", "commit", "orgId", "period", "periodKey", "remainingMs", "repos", "resumeCursor", "runId", "shouldStop", "trigger"],
       readKeys: ["checkFactsParity", "factsHistoryStart", "getInsight", "listInsights", "listOpenRecommendations", "readFactFigures"],
       writeKeys: ["proposeRecommendation", "recomputeDay", "writeInsight"],
       listedOrgs: [org.orgId],
@@ -644,6 +644,43 @@ describe("IQ-1 facts jobs through the runner (iq1-s8) on the local stack", () =>
     expect(finished).toMatchObject({ status: "SUCCEEDED", attempt: 2, failures: 0, cursor: null });
     expect(finished!.summary).toMatchObject({ days_recomputed: planned.length - done, parity_mismatches: 0, parity_missing_days: 0 });
     expect((await readDailyFacts(c.orgId, planned[0]!, yesterday)).missingDates).toEqual([]);
+  }, 120_000);
+
+  it("a day locked by another recompute stops the run with DAY_LOCK_BUSY inside the budget, no failure counted, and the retry finishes", async () => {
+    const e = await freshOrg();
+    const planned = nightlyDates(yesterday);
+
+    // Another recompute holds the first planned day's lock until released.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const holding = new Promise<void>((resolve) => (locked = resolve));
+    const holder = db().transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${factDayLockKey(e.orgId, planned[0]!)}, 0))`);
+      locked();
+      await released;
+    });
+    await holding;
+
+    // 34 s left of the deadline: the budget is 3 waits of 1.333 s.
+    let calls = 0;
+    const lateClock = () => (calls++ === 0 ? 0 : 206_000);
+    const started = performance.now();
+    try {
+      const busy = await runJob("iq-facts-nightly", [e.orgId], { period: yesterday, clock: lateClock });
+      expect(busy).toMatchObject({ status: 500, body: { counts: { PARTIAL: 1 } } });
+    } finally {
+      release();
+      await holder;
+    }
+    expect(performance.now() - started).toBeLessThan(15_000);
+    const stopped = await runRow("iq-facts-nightly", e.orgId, yesterday);
+    expect(stopped).toMatchObject({ status: "FAILED", errorCode: "DAY_LOCK_BUSY", failures: 0, cursor: null });
+    expect(await factRows(e.orgId)).toBe(0);
+
+    expect(await runJob("iq-facts-nightly", [e.orgId], { period: yesterday })).toMatchObject({ status: 200, body: { counts: { SUCCEEDED: 1 } } });
+    expect(await runRow("iq-facts-nightly", e.orgId, yesterday)).toMatchObject({ status: "SUCCEEDED", attempt: 2, failures: 0 });
+    expect((await readDailyFacts(e.orgId, planned[0]!, yesterday)).missingDates).toEqual([]);
   }, 120_000);
 
   it("backfill recomputes from the org's opened_on day through the period, and intraday recomputes only today", async () => {

@@ -537,3 +537,33 @@ describe("RELIABILITY re-review of d19f296", () => {
     expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "DEADLINE_EXCEEDED", failures: 1 });
   });
 });
+
+describe("DAY_LOCK_BUSY partials (RELIABILITY, iq1-s7b)", () => {
+  it("records DAY_LOCK_BUSY with the committed cursor and counts no failure, even without progress", async () => {
+    const h = harness(
+      job(async () => ({ status: "PARTIAL", reason: "DAY_LOCK_BUSY", rowsWritten: 0, summary: { lock_busy_days: 1 } })),
+    );
+    const response = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(response).toMatchObject({ status: 500, body: { counts: { PARTIAL: 1 } } });
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "DAY_LOCK_BUSY", failures: 0, cursor: null });
+  });
+
+  it("still counts a plain deadline cut without progress as a failure", async () => {
+    const h = harness(job(async () => ({ status: "PARTIAL", reason: "DEADLINE", rowsWritten: 0, summary: {} })));
+    await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ errorCode: "DEADLINE", failures: 1 });
+  });
+
+  it("gives the job the time left before the deadline", async () => {
+    let seen = -1;
+    const h = harness(
+      job(async (ctx) => {
+        h.clock.ms += 100_000;
+        seen = ctx.remainingMs();
+        return complete();
+      }),
+    );
+    await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(seen).toBe(140_000);
+  });
+});

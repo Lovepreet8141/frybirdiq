@@ -183,7 +183,7 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
         break;
       case "DEADLINE":
         row.status = "FAILED";
-        row.errorCode = "DEADLINE";
+        row.errorCode = outcome.errorCode;
         row.errorMessage = null;
         row.cursor = outcome.cursor;
         row.failures = outcome.failures;

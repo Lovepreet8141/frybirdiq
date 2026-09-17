@@ -12,7 +12,7 @@
  *
  * No function here takes an org id: it is closed over. Signatures follow the
  * iq-* repositories they wrap (minus the org, transaction and lease), so the
- * two cannot drift apart. Type-only: nothing here reaches a database.
+ * two cannot drift apart. Nothing here reaches a database.
  */
 import type * as Facts from "@/lib/repositories/iq-facts";
 import type * as Insights from "@/lib/repositories/iq-insights";
@@ -43,9 +43,29 @@ export type JobReadRepos = {
   readonly listOpenRecommendations: WithoutOrg<typeof Recommendations.listOpenRecommendations>;
 };
 
+/** How long a day's recompute may wait for another recompute of the same day (RELIABILITY, iq1-s7b). */
+export type DayLockBudget = {
+  readonly maxLockWaits: number;
+  readonly lockWaitTimeoutMs: number;
+};
+
+/**
+ * The day stayed locked by another recompute past the budget. Nothing was
+ * written. Thrown from inside a chunk so the chunk — and its cursor — rolls
+ * back; the job then stops with PARTIAL and the retry starts at this day.
+ */
+export class DayLockBusy extends Error {
+  readonly code = "DAY_LOCK_BUSY";
+
+  constructor(readonly date: string) {
+    super("day lock busy");
+    this.name = "DayLockBusy";
+  }
+}
+
 export type JobWriteRepos = {
-  /** Rebuilds one IST business day's facts for this org, recorded against this run. Idempotent. */
-  readonly recomputeDay: (date: string) => ReturnType<typeof Facts.recomputeDay>;
+  /** Rebuilds one IST business day's facts for this org, recorded against this run. Idempotent. Throws `DayLockBusy`. */
+  readonly recomputeDay: (date: string, budget: DayLockBudget) => ReturnType<typeof Facts.recomputeDay>;
   readonly writeInsight: WithoutTxAndLease<typeof Insights.writeInsight>;
   readonly proposeRecommendation: WithoutTxAndLease<typeof Recommendations.proposeRecommendation>;
 };

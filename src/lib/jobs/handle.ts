@@ -61,8 +61,9 @@ type Summary = Readonly<Record<string, number>>;
 export type FinishOutcome =
   | { readonly status: "SUCCEEDED"; readonly rowsWritten: number; readonly summary: Summary }
   | {
-      /** Stored as status FAILED, error_code DEADLINE; `cursor` is the one already committed (unchanged). */
+      /** Stored as status FAILED with this error_code; `cursor` is the one already committed (unchanged). */
       readonly status: "DEADLINE";
+      readonly errorCode: "DEADLINE" | "DAY_LOCK_BUSY";
       readonly rowsWritten: number;
       readonly summary: Summary;
       readonly cursor: string | null;
@@ -318,6 +319,7 @@ async function runUnit<W>(
       }
     },
     shouldStop: () => leaseLost || pastDeadline(),
+    remainingMs: () => Math.max(0, deadlineMs - deps.monotonicMs()),
   };
 
   let stopHeartbeat = () => {};
@@ -356,14 +358,17 @@ async function runUnit<W>(
     };
     reported = "FAILED";
   } else if (result.status === "PARTIAL") {
-    // A deadline cut whose committed cursor moved is progress, not a failure (reviews M2, J1).
+    // A deadline cut whose committed cursor moved is progress, not a failure (reviews M2, J1);
+    // a stop on a busy day lock is contention, never a failure (RELIABILITY, iq1-s7b).
     const progressed = committedCursor !== startCursor;
+    const lockBusy = result.reason === "DAY_LOCK_BUSY";
     outcome = {
       status: "DEADLINE",
+      errorCode: lockBusy ? "DAY_LOCK_BUSY" : "DEADLINE",
       rowsWritten: result.rowsWritten,
       summary: result.summary,
       cursor: committedCursor,
-      failures: progressed ? row.failures : row.failures + 1,
+      failures: progressed || lockBusy ? row.failures : row.failures + 1,
     };
     reported = "PARTIAL";
   } else {

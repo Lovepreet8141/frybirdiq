@@ -30,6 +30,8 @@ export type JobContext<W = JobWriteRepos> = {
   commit<T>(write: (repos: W) => Promise<T>, options?: { readonly cursor?: string }): Promise<T>;
   /** True once the deadline has passed or the lease was lost: return PARTIAL now. Commits are refused shortly after. */
   shouldStop(): boolean;
+  /** Milliseconds left before the deadline (0 once passed): size any wait inside a chunk to fit. */
+  remainingMs(): number;
 };
 
 export type JobRunResult =
@@ -44,6 +46,12 @@ export type JobRunResult =
        * the last chunk that committed — never from anything claimed here.
        */
       readonly status: "PARTIAL";
+      /**
+       * Why it stopped. DEADLINE counts as a failure unless a chunk committed;
+       * DAY_LOCK_BUSY never does — another recompute of the same day was
+       * running, which is contention, not a fault.
+       */
+      readonly reason?: "DEADLINE" | "DAY_LOCK_BUSY";
       readonly rowsWritten: number;
       readonly summary: Readonly<Record<string, number>>;
     };

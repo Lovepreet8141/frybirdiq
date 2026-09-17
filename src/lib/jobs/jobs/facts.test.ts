@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { JobContext } from "../context";
-import type { FactsParity, JobReadRepos, JobWriteRepos } from "../repos";
-import { runFactsBackfill, runFactsIntraday, runFactsNightly } from "./facts";
+import { DayLockBusy, type DayLockBudget, type FactsParity, type JobReadRepos, type JobWriteRepos } from "../repos";
+import { dayLockBudget, runFactsBackfill, runFactsIntraday, runFactsNightly } from "./facts";
 
 type Options = {
   periodKey: string;
@@ -10,6 +10,9 @@ type Options = {
   stopAfter?: number;
   historyStart?: string | null;
   parity?: FactsParity;
+  /** A day whose lock stays busy past the budget. */
+  busyOn?: string;
+  remainingMs?: number;
 };
 
 /** A fake context recording which days were recomputed, in order, and the cursor each commit carried. */
@@ -17,9 +20,12 @@ function fakeContext(options: Options) {
   const recomputed: string[] = [];
   const cursors: (string | undefined)[] = [];
   const parityCalls: [string, string][] = [];
+  const budgets: DayLockBudget[] = [];
   let commits = 0;
   const writers: JobWriteRepos = {
-    recomputeDay: async (date) => {
+    recomputeDay: async (date, budget) => {
+      budgets.push(budget);
+      if (date === options.busyOn) throw new DayLockBusy(date);
       recomputed.push(date);
       return { orgId: "org", businessDate: date, definitionVersion: 1, rowsWritten: 20, lockWaits: date.endsWith("-05") ? 1 : 0, attempts: 1 };
     },
@@ -55,12 +61,15 @@ function fakeContext(options: Options) {
     repos: readers,
     commit: async (write, commitOptions) => {
       commits += 1;
+      const value = await write(writers);
+      // Like the real chunk: the cursor is saved only when the write succeeds.
       cursors.push(commitOptions?.cursor);
-      return write(writers);
+      return value;
     },
     shouldStop: () => options.stopAfter !== undefined && commits >= options.stopAfter,
+    remainingMs: () => options.remainingMs ?? 240_000,
   };
-  return { ctx, recomputed, cursors, parityCalls };
+  return { ctx, recomputed, cursors, parityCalls, budgets };
 }
 
 describe("iq-facts-nightly", () => {
@@ -84,6 +93,7 @@ describe("iq-facts-nightly", () => {
         rows_written: 940,
         lock_waits: 2,
         retries: 0,
+        lock_busy_days: 0,
         parity_checks: 2,
         parity_mismatches: 0,
         parity_missing_days: 0,
@@ -137,5 +147,40 @@ describe("iq-facts-backfill", () => {
   it("returns PARTIAL at the deadline", async () => {
     const f = fakeContext({ periodKey: "2026-09-16", historyStart: "2026-01-01", stopAfter: 3 });
     expect(await runFactsBackfill(f.ctx)).toMatchObject({ status: "PARTIAL", summary: { days_recomputed: 3 } });
+  });
+});
+
+describe("day lock budget (RELIABILITY, iq1-s7b)", () => {
+  it("allows 3 waits, each at most 60 s and together inside the deadline less 30 s", () => {
+    expect(dayLockBudget(240_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 60_000 });
+    expect(dayLockBudget(120_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 30_000 });
+    expect(dayLockBudget(34_000)).toEqual({ maxLockWaits: 3, lockWaitTimeoutMs: 1_333 });
+    for (const remaining of [240_000, 120_000, 34_000]) {
+      const budget = dayLockBudget(remaining)!;
+      expect(budget.maxLockWaits * budget.lockWaitTimeoutMs).toBeLessThanOrEqual(remaining - 30_000);
+    }
+    expect(dayLockBudget(32_999)).toBeNull();
+    expect(dayLockBudget(0)).toBeNull();
+  });
+
+  it("passes the budget sized to the time left with each day", async () => {
+    const f = fakeContext({ periodKey: "2026-09-17T10:15", remainingMs: 90_000 });
+    await runFactsIntraday(f.ctx);
+    expect(f.budgets).toEqual([{ maxLockWaits: 3, lockWaitTimeoutMs: 20_000 }]);
+  });
+
+  it("stops with PARTIAL DAY_LOCK_BUSY on a busy day, keeping the days before it and not saving that day as the cursor", async () => {
+    const f = fakeContext({ periodKey: "2026-09-16", resumeCursor: "2026-09-10", busyOn: "2026-09-13" });
+    const result = await runFactsNightly(f.ctx);
+    expect(result).toMatchObject({ status: "PARTIAL", reason: "DAY_LOCK_BUSY", summary: { days_recomputed: 2, lock_busy_days: 1 } });
+    expect(f.recomputed).toEqual(["2026-09-11", "2026-09-12"]);
+    expect(f.cursors).toEqual(["2026-09-11", "2026-09-12"]);
+    expect(f.parityCalls).toEqual([]);
+  });
+
+  it("does not start a day without enough time for its lock budget, stopping with PARTIAL DEADLINE", async () => {
+    const f = fakeContext({ periodKey: "2026-09-17T10:15", remainingMs: 20_000 });
+    expect(await runFactsIntraday(f.ctx)).toMatchObject({ status: "PARTIAL", reason: "DEADLINE", summary: { days_recomputed: 0 } });
+    expect(f.budgets).toEqual([]);
   });
 });

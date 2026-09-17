@@ -39,9 +39,9 @@ import { endOfBusinessDay, startOfBusinessDay } from "@/lib/iq/metrics";
 import { JOB_RUN_STATUSES, type ClaimRead, type ExpectedRow, type JobRunRow, type JobRunStatus, type JobTrigger } from "@/lib/jobs/claim-decision";
 import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
 import type { ClaimRequest, FinishOutcome, JobRunStore } from "@/lib/jobs/handle";
-import type { FactsParity, JobReadRepos, JobWriteRepos } from "@/lib/jobs/repos";
+import { DayLockBusy, type FactsParity, type JobReadRepos, type JobWriteRepos } from "@/lib/jobs/repos";
 import { getProfitAndLoss } from "./expenses";
-import { readDailyFacts, recomputeDay } from "./iq-facts";
+import { DayLockBusyError, readDailyFacts, recomputeDay } from "./iq-facts";
 import { getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
 import { listOpenRecommendations, proposeRecommendation } from "./iq-recommendations";
 
@@ -100,7 +100,14 @@ export function iqWriteRepos(tx: IqTx, lease: LeaseToken & { readonly orgId: str
     // fence has already checked the lease; the chunk (and its cursor) commits
     // after the day does. The recompute is idempotent, so a crash in between
     // only means the day is done again on resume.
-    recomputeDay: (date) => recomputeDay(lease.orgId, date, { jobRunId: lease.runId }),
+    recomputeDay: async (date, budget) => {
+      try {
+        return await recomputeDay(lease.orgId, date, { jobRunId: lease.runId, ...budget });
+      } catch (error) {
+        if (error instanceof DayLockBusyError) throw new DayLockBusy(date);
+        throw error;
+      }
+    },
     writeInsight: (...args) => writeInsight(tx, lease, ...args),
     proposeRecommendation: (...args) => proposeRecommendation(tx, lease, ...args),
   };
@@ -292,7 +299,7 @@ class PostgresJobRunStore implements JobRunStore<JobWriteRepos> {
       outcome.status === "SUCCEEDED"
         ? { ...common, status: "SUCCEEDED", cursor: null, errorCode: null, errorMessage: null }
         : outcome.status === "DEADLINE"
-          ? { ...common, status: "FAILED", errorCode: "DEADLINE", errorMessage: null, cursor: outcome.cursor, failures: outcome.failures }
+          ? { ...common, status: "FAILED", errorCode: outcome.errorCode, errorMessage: null, cursor: outcome.cursor, failures: outcome.failures }
           : { ...common, status: "FAILED", errorCode: outcome.errorCode, errorMessage: outcome.errorMessage, failures: outcome.failures };
 
     const held = await db().update(iqJobRuns).set(set).where(this.fence(token)).returning({ id: iqJobRuns.id });
