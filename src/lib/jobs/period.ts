@@ -6,11 +6,12 @@
  * every key is computed in IST. India has no daylight saving, so a fixed
  * +05:30 offset is exact.
  *
+ * - quarter_hour: "2026-09-17T05:15" (the IST quarter 05:15–05:30)
  * - hour: "2026-09-17T05"  (the IST hour 05:00–06:00)
  * - day:  "2026-09-17"     (the IST business date)
  * - week: "2026-W38"       (ISO week, Monday start, of the IST date)
  */
-export const PERIOD_KINDS = ["hour", "day", "week"] as const;
+export const PERIOD_KINDS = ["quarter_hour", "hour", "day", "week"] as const;
 export type PeriodKind = (typeof PERIOD_KINDS)[number];
 
 /** Which period a run at `now` works on: the one in progress, or the last complete one. */
@@ -20,6 +21,7 @@ export type PeriodTarget = "current" | "previous";
 export const MANUAL_RERUN_MAX_DAYS = 14;
 
 const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+const QUARTER_MS = 15 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
@@ -47,6 +49,8 @@ export function periodKeyAt(kind: PeriodKind, at: Date): string {
   const wall = istWall(at);
   const date = `${wall.getUTCFullYear()}-${pad(wall.getUTCMonth() + 1)}-${pad(wall.getUTCDate())}`;
   switch (kind) {
+    case "quarter_hour":
+      return `${date}T${pad(wall.getUTCHours())}:${pad(Math.floor(wall.getUTCMinutes() / 15) * 15)}`;
     case "hour":
       return `${date}T${pad(wall.getUTCHours())}`;
     case "day":
@@ -59,6 +63,7 @@ export function periodKeyAt(kind: PeriodKind, at: Date): string {
 }
 
 const KEY_PATTERN: { readonly [K in PeriodKind]: RegExp } = {
+  quarter_hour: /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/,
   hour: /^(\d{4})-(\d{2})-(\d{2})T(\d{2})$/,
   day: /^(\d{4})-(\d{2})-(\d{2})$/,
   week: /^(\d{4})-W(\d{2})$/,
@@ -75,6 +80,10 @@ export function periodBounds(kind: PeriodKind, key: string): PeriodBounds | null
   let wallStart: number;
   let lengthMs: number;
   switch (kind) {
+    case "quarter_hour":
+      wallStart = Date.UTC(n[0]!, n[1]! - 1, n[2]!, n[3]!, n[4]!);
+      lengthMs = QUARTER_MS;
+      break;
     case "hour":
       wallStart = Date.UTC(n[0]!, n[1]! - 1, n[2]!, n[3]!);
       lengthMs = HOUR_MS;

@@ -4,7 +4,18 @@
  * DESIGN.md §3 with DESIGN-v2-DELTA.md §3. The route answers 404 for any name
  * not listed here. Each job has its own systemd timer (DEVOPS-RELEASE);
  * `onCalendarUtc` is the timer's OnCalendar value, and a test keeps the two
- * in step once the unit files exist.
+ * in step once the unit files exist; null means the job has no timer and is
+ * only ever started by hand.
+ *
+ * Heavy jobs: `heavyRunLive` is check-then-claim, so two different heavy jobs
+ * starting together could both run. With one heavy job registered that
+ * cannot happen; registering a second needs a lock first (RELIABILITY, s7b),
+ * and a test holds that line. TODO: make iq-facts-backfill heavy once heavy
+ * exclusion takes a lock (RELIABILITY iq1-s8r D).
+ *
+ * Heavy jobs stay off the backup window, 22:00–22:45 UTC (RELIABILITY S10
+ * condition): a test checks that a heavy job's timer start plus every systemd
+ * retry ends before 22:00 UTC.
  *
  * Timing, identical for every job in IQ-0:
  *   lease 300s  — another attempt may take over after this much silence
@@ -14,6 +25,7 @@
  *   maxAttempts 3 — matches systemd Restart=on-failure ×3
  */
 import type { JobContext, JobRunResult } from "./context";
+import { runFactsBackfill, runFactsIntraday, runFactsNightly } from "./jobs/facts";
 import { runHeartbeat } from "./jobs/heartbeat";
 import type { PeriodKind, PeriodTarget } from "./period";
 
@@ -23,8 +35,8 @@ export type JobDefinition = {
   readonly name: string;
   readonly periodKind: PeriodKind;
   readonly target: PeriodTarget;
-  /** systemd OnCalendar, always in UTC; IST = UTC + 05:30. */
-  readonly onCalendarUtc: string;
+  /** systemd OnCalendar, always in UTC (IST = UTC + 05:30); null for a job only started by hand. */
+  readonly onCalendarUtc: string | null;
   readonly leaseSeconds: number;
   readonly heartbeatSeconds: number;
   readonly deadlineSeconds: number;
@@ -53,6 +65,40 @@ export const JOB_REGISTRY = {
     catchUpPeriods: 0,
     concurrency: "light",
     run: runHeartbeat,
+  },
+  /** IQ-1 facts, 02:00 IST (20:30 UTC) for yesterday's period — clear of the 22:00 UTC backup with all retries. */
+  "iq-facts-nightly": {
+    name: "iq-facts-nightly",
+    periodKind: "day",
+    target: "previous",
+    onCalendarUtc: "*-*-* 20:30:00 UTC",
+    ...DEFAULT_TIMING,
+    // Each night already covers the current and previous month.
+    catchUpPeriods: 0,
+    concurrency: "heavy",
+    run: runFactsNightly,
+  },
+  /** IQ-1 facts for today, every 15 minutes (IST quarters line up with UTC quarters). */
+  "iq-facts-intraday": {
+    name: "iq-facts-intraday",
+    periodKind: "quarter_hour",
+    target: "current",
+    onCalendarUtc: "*-*-* *:00/15:00 UTC",
+    ...DEFAULT_TIMING,
+    catchUpPeriods: 0,
+    concurrency: "light",
+    run: runFactsIntraday,
+  },
+  /** IQ-1 facts history, started by hand with a period; resumable. */
+  "iq-facts-backfill": {
+    name: "iq-facts-backfill",
+    periodKind: "day",
+    target: "previous",
+    onCalendarUtc: null,
+    ...DEFAULT_TIMING,
+    catchUpPeriods: 0,
+    concurrency: "light",
+    run: runFactsBackfill,
   },
 } as const satisfies Record<string, JobDefinition>;
 

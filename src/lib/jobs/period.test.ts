@@ -23,6 +23,16 @@ describe("period keys are IST, around midnight", () => {
     expect(periodKeyAt("hour", at)).toBe("2026-09-17T00");
   });
 
+  it("floors to the IST quarter hour, which lines up with UTC quarters (+05:30)", () => {
+    expect(periodKeyAt("quarter_hour", utc("2026-09-16T18:29:59.999Z"))).toBe("2026-09-16T23:45");
+    expect(periodKeyAt("quarter_hour", utc("2026-09-16T18:30:00Z"))).toBe("2026-09-17T00:00");
+    expect(periodKeyAt("quarter_hour", utc("2026-09-17T04:44:59Z"))).toBe("2026-09-17T10:00");
+    expect(periodKeyAt("quarter_hour", utc("2026-09-17T04:45:00Z"))).toBe("2026-09-17T10:15");
+    expect(periodBounds("quarter_hour", "2026-09-17T10:15")).toEqual({ start: utc("2026-09-17T04:45:00Z"), end: utc("2026-09-17T05:00:00Z") });
+    expect(periodBounds("quarter_hour", "2026-09-17T10:10")).toBeNull();
+    expect(shiftPeriod("quarter_hour", "2026-09-17T00:00", -1)).toBe("2026-09-16T23:45");
+  });
+
   it("keeps a UTC-midnight instant on the IST day it already is", () => {
     expect(periodKeyAt("day", utc("2026-09-17T00:00:00Z"))).toBe("2026-09-17");
     expect(periodKeyAt("hour", utc("2026-09-17T00:00:00Z"))).toBe("2026-09-17T05");

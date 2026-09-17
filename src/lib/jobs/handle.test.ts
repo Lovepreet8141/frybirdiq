@@ -76,7 +76,7 @@ const job = (run: (ctx: JobContext<MemoryTx>) => Promise<JobRunResult>, override
     ...DEFAULT_TIMING,
     catchUpPeriods: 0,
     concurrency: "light",
-    run: run as JobDefinition["run"],
+    run: run as unknown as JobDefinition["run"],
     ...overrides,
   } satisfies JobDefinition,
 });
@@ -535,5 +535,77 @@ describe("RELIABILITY re-review of d19f296", () => {
     expect(response).toMatchObject({ status: 500, body: { counts: { FAILED: 1 } } });
     expect(h.store.committed).toEqual(["late-but-in-grace"]);
     expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "DEADLINE_EXCEEDED", failures: 1 });
+  });
+});
+
+describe("DAY_LOCK_BUSY partials (RELIABILITY, iq1-s7b)", () => {
+  it("records DAY_LOCK_BUSY with the committed cursor and counts no failure, even without progress", async () => {
+    const h = harness(
+      job(async () => ({ status: "PARTIAL", reason: "DAY_LOCK_BUSY", rowsWritten: 0, summary: { lock_busy_days: 1 } })),
+    );
+    const response = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(response).toMatchObject({ status: 500, body: { counts: { PARTIAL: 1 } } });
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "DAY_LOCK_BUSY", failures: 0, cursor: null });
+  });
+
+  it("counts a failure on the second DAY_LOCK_BUSY in a row without progress, so a lock that never frees exhausts the run (RELIABILITY F)", async () => {
+    const h = harness(job(async () => ({ status: "PARTIAL", reason: "DAY_LOCK_BUSY", rowsWritten: 0, summary: {} })));
+    const failuresAfter: number[] = [];
+    const outcomes: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const response = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+      outcomes.push(Object.entries(response.body!.counts).find(([, n]) => n > 0)![0]);
+      failuresAfter.push(h.store.run("test_job", "org-a", HOUR)!.failures);
+    }
+    expect(failuresAfter.slice(0, 4)).toEqual([0, 1, 2, 3]);
+    expect(outcomes).toEqual(["PARTIAL", "PARTIAL", "PARTIAL", "PARTIAL", "EXHAUSTED"]);
+  });
+
+  it("does not count a DAY_LOCK_BUSY that follows a plain deadline cut, or one that made progress", async () => {
+    let run = 0;
+    const h = harness(
+      job(async (ctx) => {
+        run += 1;
+        if (run === 1) return { status: "PARTIAL", reason: "DEADLINE", rowsWritten: 0, summary: {} };
+        if (run === 3) await ctx.commit(async () => undefined, { cursor: `c${run}` });
+        return { status: "PARTIAL", reason: "DAY_LOCK_BUSY", rowsWritten: 0, summary: {} };
+      }),
+    );
+    const failures: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+      failures.push(h.store.run("test_job", "org-a", HOUR)!.failures);
+    }
+    // run 1 DEADLINE no progress: 1; run 2 busy after DEADLINE: stays 1; run 3 busy after busy but with progress: stays 1.
+    expect(failures).toEqual([1, 1, 1]);
+  });
+
+  it("records a DAY_TIMEOUT thrown by a job as a counted failure with that error code", async () => {
+    const h = harness(
+      job(async () => {
+        throw Object.assign(new Error("day step timed out"), { code: "DAY_TIMEOUT" });
+      }),
+    );
+    await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "DAY_TIMEOUT", failures: 1 });
+  });
+
+  it("still counts a plain deadline cut without progress as a failure", async () => {
+    const h = harness(job(async () => ({ status: "PARTIAL", reason: "DEADLINE", rowsWritten: 0, summary: {} })));
+    await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ errorCode: "DEADLINE", failures: 1 });
+  });
+
+  it("gives the job the time left before the deadline", async () => {
+    let seen = -1;
+    const h = harness(
+      job(async (ctx) => {
+        h.clock.ms += 100_000;
+        seen = ctx.remainingMs();
+        return complete();
+      }),
+    );
+    await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(seen).toBe(140_000);
   });
 });

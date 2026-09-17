@@ -61,8 +61,8 @@ async function readBody(request: Request): Promise<unknown> {
   }
 }
 
-export async function respondToJobRequest<Tx>(request: Request, jobParam: string, makeDeps: () => HandleDeps<Tx>): Promise<Response> {
-  let deps: HandleDeps<Tx>;
+export async function respondToJobRequest<W>(request: Request, jobParam: string, makeDeps: () => HandleDeps<W>): Promise<Response> {
+  let deps: HandleDeps<W>;
   try {
     // serverEnv() throws on a bad environment; its message must not reach the caller.
     deps = makeDeps();

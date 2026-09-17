@@ -10,20 +10,55 @@ const JOBS_DIR = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = join(JOBS_DIR, "..", "..", "..");
 
 describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
-  it("ships only heartbeat in IQ-0", () => {
-    expect(JOB_NAMES).toEqual(["heartbeat"]);
+  it("ships heartbeat (IQ-0) and the three IQ-1 facts jobs", () => {
+    expect(JOB_NAMES).toEqual(["heartbeat", "iq-facts-nightly", "iq-facts-intraday", "iq-facts-backfill"]);
     expect(isJobName("heartbeat")).toBe(true);
     expect(isJobName("constructor")).toBe(false);
   });
 
-  it("lists heavy jobs from the registry: none today, since heartbeat is light", () => {
-    expect(HEAVY_JOB_NAMES).toEqual([]);
+  it("lists heavy jobs from the registry: only the nightly facts job", () => {
+    expect(HEAVY_JOB_NAMES).toEqual(["iq-facts-nightly"]);
     const fake = (name: string, concurrency: JobDefinition["concurrency"]): JobDefinition => ({
       ...JOB_REGISTRY.heartbeat,
       name,
       concurrency,
     });
     expect(heavyJobNames({ a: fake("a", "heavy"), b: fake("b", "light"), c: fake("c", "heavy") })).toEqual(["a", "c"]);
+  });
+
+  it("keeps every heavy job, with all its systemd retries, clear of the 22:00-22:45 UTC backup window", () => {
+    // deploy (S10): curl -m 290 per attempt, Restart=on-failure, RestartSec=360, 3 restarts.
+    const CURL_MAX_SECONDS = 290;
+    const RESTART_SEC = 360;
+    const RESTARTS = 3;
+    const BACKUP_START_MINUTE = 22 * 60;
+    const BACKUP_END_MINUTE = 22 * 60 + 45;
+    for (const name of HEAVY_JOB_NAMES) {
+      const calendar = JOB_REGISTRY[name as keyof typeof JOB_REGISTRY].onCalendarUtc;
+      const match = /^\*-\*-\* (\d{2}):(\d{2}):00 UTC$/.exec(calendar ?? "");
+      expect(match, `${name} needs a fixed daily UTC start`).not.toBeNull();
+      const startMinute = Number(match![1]) * 60 + Number(match![2]);
+      const worstCaseEndMinute = startMinute + ((RESTARTS + 1) * CURL_MAX_SECONDS + RESTARTS * RESTART_SEC) / 60;
+      const overlaps = startMinute < BACKUP_END_MINUTE && worstCaseEndMinute > BACKUP_START_MINUTE;
+      expect(overlaps, `${name} ${calendar} could run until minute ${worstCaseEndMinute}`).toBe(false);
+    }
+  });
+
+  it("registers at most one heavy job until heavy exclusion takes a lock (RELIABILITY, s7b)", () => {
+    // heavyRunLive is check-then-claim: two different heavy jobs starting together could both run.
+    expect(HEAVY_JOB_NAMES.length).toBeLessThanOrEqual(1);
+  });
+
+  it("schedules the facts jobs as designed: nightly 03:00 IST for yesterday, intraday every IST quarter for today, backfill by hand", () => {
+    expect(JOB_REGISTRY["iq-facts-nightly"]).toMatchObject({ periodKind: "day", target: "previous", onCalendarUtc: "*-*-* 20:30:00 UTC", catchUpPeriods: 0 });
+    expect(JOB_REGISTRY["iq-facts-intraday"]).toMatchObject({
+      periodKind: "quarter_hour",
+      target: "current",
+      onCalendarUtc: "*-*-* *:00/15:00 UTC",
+      catchUpPeriods: 0,
+      concurrency: "light",
+    });
+    expect(JOB_REGISTRY["iq-facts-backfill"]).toMatchObject({ periodKind: "day", onCalendarUtc: null, catchUpPeriods: 0 });
   });
 
   it("uses lease 300s, heartbeat 60s, deadline 240s, 3 attempts", () => {
@@ -33,7 +68,8 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
   it.each(JOB_NAMES)("%s: timing is internally safe", (name) => {
     const def = JOB_REGISTRY[name];
     expect(def.name).toBe(name);
-    expect(name).toMatch(/^[a-z][a-z0-9_]*$/);
+    // A URL segment and a systemd instance name: lower-case letters, digits, - and _.
+    expect(name).toMatch(/^[a-z][a-z0-9_-]*$/);
     // Several heartbeats fit in one lease, so one slow heartbeat does not lose it.
     expect(def.heartbeatSeconds * 2).toBeLessThan(def.leaseSeconds);
     // The job stops before its lease could lapse and before curl -m 290 and Node's 300s requestTimeout.
@@ -41,7 +77,7 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
     expect(def.deadlineSeconds).toBeLessThan(290);
     expect(def.maxAttempts).toBeGreaterThanOrEqual(1);
     expect(def.catchUpPeriods).toBeGreaterThanOrEqual(0);
-    expect(def.onCalendarUtc).toMatch(/ UTC$/);
+    if (def.onCalendarUtc !== null) expect(def.onCalendarUtc).toMatch(/ UTC$/);
   });
 
   it("keeps each installed timer in step with the registry", () => {
@@ -56,36 +92,60 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
   });
 });
 
-describe("what job code may import (DESIGN §3, review T5)", () => {
-  const FORBIDDEN = [
+describe("what job code may import (DESIGN §3, review T5; mirrors QA's eslint rules)", () => {
+  const ROUTE_DIR = join(REPO_ROOT, "src", "app", "api", "jobs");
+
+  /** Every job file and the route that wires it. */
+  const EVERYWHERE = [
     /["']@\/db(\/|["'])/,
     /["']drizzle-orm/,
     /["']postgres["']/,
+    /["']pg["']/,
+    /["']@supabase\//,
     /["']@\/lib\/supabase/,
     /["']@\/lib\/payments/,
-    /["']@\/lib\/repositories\/(orders|payments|refunds|invoices|expenses|finance|cash)/,
     /["']@\/lib\/finance/,
-    /["']next\//,
+    // A repository, but only an iq-* one (wiring and type-only contracts).
+    /["']@\/lib\/repositories\/(?!iq-)/,
     /["']react["']/,
   ];
+  /** src/lib/jobs: no framework and no secrets — both arrive through the route. */
+  const LIBRARY = [/["']next\//, /["']@\/lib\/env/];
+  /** src/lib/jobs/jobs: an individual job reaches the database only through ctx (SECURITY condition). */
+  const JOB = [/["']@\/lib\/repositories/, /["'](\.\.\/)+.*repositories/, /["']@\/db/];
 
-  const files: string[] = [];
-  const walk = (dir: string) => {
+  const walk = (dir: string, out: string[] = []) => {
+    if (!existsSync(dir)) return out;
     for (const name of readdirSync(dir)) {
       const path = join(dir, name);
-      if (statSync(path).isDirectory()) walk(path);
-      else if (/\.tsx?$/.test(name) && !name.endsWith(".test.ts")) files.push(path);
+      if (statSync(path).isDirectory()) walk(path, out);
+      else if (/\.tsx?$/.test(name) && !name.endsWith(".test.ts")) out.push(path);
     }
+    return out;
   };
-  walk(JOBS_DIR);
+  const files = [...walk(JOBS_DIR), ...walk(ROUTE_DIR)];
+  const rel = (path: string) => path.slice(REPO_ROOT.length + 1);
 
-  it("scans the job sources", () => {
+  it("scans the job sources and the route", () => {
     expect(files.some((f) => f.endsWith("heartbeat.ts"))).toBe(true);
+    expect(files.some((f) => f.endsWith(join("[job]", "route.ts")))).toBe(true);
   });
 
-  it.each(files.map((f) => [f.slice(JOBS_DIR.length)]))("%s imports no database, money writer or framework", (rel) => {
-    const source = readFileSync(join(JOBS_DIR, rel), "utf8");
+  it.each(files.map((f) => [rel(f), f]))("%s imports only what its layer allows", (_rel, path) => {
+    const source = readFileSync(path, "utf8");
     const imports = source.split("\n").filter((line) => /\bfrom\s+["']|^\s*import\s+["']|\bimport\(/.test(line));
-    for (const pattern of FORBIDDEN) expect(imports.filter((line) => pattern.test(line))).toEqual([]);
+    const rules = [
+      ...EVERYWHERE,
+      ...(path.startsWith(JOBS_DIR) ? LIBRARY : []),
+      ...(path.startsWith(join(JOBS_DIR, "jobs")) ? JOB : []),
+    ];
+    for (const pattern of rules) expect(imports.filter((line) => pattern.test(line)), String(pattern)).toEqual([]);
+  });
+
+  it("would catch a job that imports a repository or the database directly", () => {
+    const probe = ['import { writeInsight } from "@/lib/repositories/iq-insights";', 'import { db } from "@/db";'];
+    for (const line of probe) expect(JOB.some((pattern) => pattern.test(line))).toBe(true);
+    expect(EVERYWHERE.some((pattern) => pattern.test('import { placeOrder } from "@/lib/repositories/orders";'))).toBe(true);
+    expect(EVERYWHERE.some((pattern) => pattern.test('import type { JobTx } from "@/lib/repositories/iq-job-runs";'))).toBe(false);
   });
 });
