@@ -34,17 +34,30 @@ const optionalSecret = z.preprocess(
 );
 
 /**
- * An optional secret with a minimum length when set.
+ * Printable ASCII, no whitespace: `!` (0x21) through `~` (0x7e).
  *
- * Unset (or "") means the feature it gates is dormant — same rule as
- * `optionalSecret`. A value that is present but too short is a config
- * mistake, not a dormant feature, and fails validation instead of silently
- * accepting a weak secret.
+ * `src/lib/jobs/auth.ts` compares the bearer token to this secret as raw
+ * bytes. Whitespace or a non-ASCII character makes the secret impossible to
+ * ever present correctly in an `Authorization: Bearer <token>` header (a
+ * space ends the token; non-ASCII round-trips differently depending on how
+ * it was typed and saved) — the runner would fail closed forever, silently,
+ * with every request 404ing and no signal pointing at the env file. Reject
+ * it here instead, at startup, where the message names the variable.
  */
-const optionalSecretMinLength = (minLength: number) =>
+const SECRET_CHARSET = /^[\x21-\x7e]+$/;
+
+/**
+ * An optional bearer secret: minimum length, and printable-ASCII-only once
+ * set. Used for `JOB_SECRET` / `JOB_SECRET_PREVIOUS` — see `SECRET_CHARSET`.
+ */
+const optionalBearerSecret = (minLength: number) =>
   z.preprocess(
     (value) => (value === "" ? undefined : value),
-    z.string().min(minLength).optional(),
+    z
+      .string()
+      .min(minLength)
+      .regex(SECRET_CHARSET, "must not contain whitespace or non-ASCII characters")
+      .optional(),
   );
 
 const serverSchema = z.object({
@@ -69,8 +82,22 @@ const serverSchema = z.object({
    * deploy can roll the systemd credential without a window where in-flight
    * timers fail.
    */
-  JOB_SECRET: optionalSecretMinLength(32),
-  JOB_SECRET_PREVIOUS: optionalSecretMinLength(32),
+  JOB_SECRET: optionalBearerSecret(32),
+  JOB_SECRET_PREVIOUS: optionalBearerSecret(32),
+  /**
+   * The deployed commit, written into `iq_job_runs.code_version` and every
+   * insight's `producedBy.codeVersion` (`src/app/api/jobs/[job]/deps.ts`).
+   * Unset until DEVOPS-RELEASE's `deploy.sh` writes it — every run records
+   * `"unversioned"` until then. §51-adjacent: once a run is recorded against
+   * a commit, that record must not silently drift to mean a different one.
+   */
+  DEPLOY_COMMIT: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z
+      .string()
+      .regex(/^[0-9a-f]{40}$/, "must be a 40-character lowercase git commit SHA")
+      .optional(),
+  ),
 });
 
 export type ClientEnv = z.infer<typeof clientSchema>;
