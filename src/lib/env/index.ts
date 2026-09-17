@@ -33,6 +33,20 @@ const optionalSecret = z.preprocess(
   z.string().min(1).optional(),
 );
 
+/**
+ * An optional secret with a minimum length when set.
+ *
+ * Unset (or "") means the feature it gates is dormant — same rule as
+ * `optionalSecret`. A value that is present but too short is a config
+ * mistake, not a dormant feature, and fails validation instead of silently
+ * accepting a weak secret.
+ */
+const optionalSecretMinLength = (minLength: number) =>
+  z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(minLength).optional(),
+  );
+
 const serverSchema = z.object({
   DATABASE_URL: z.string().min(1),
   /**
@@ -48,6 +62,15 @@ const serverSchema = z.object({
   RAZORPAY_KEY_ID: optionalSecret,
   RAZORPAY_KEY_SECRET: optionalSecret,
   RAZORPAY_WEBHOOK_SECRET: optionalSecret,
+  /**
+   * Bearer secret for `/api/jobs/[job]`. Unset means the job runner is
+   * dormant — every job route 404s rather than running unauthenticated.
+   * `JOB_SECRET_PREVIOUS` accepts the outgoing secret during rotation so a
+   * deploy can roll the systemd credential without a window where in-flight
+   * timers fail.
+   */
+  JOB_SECRET: optionalSecretMinLength(32),
+  JOB_SECRET_PREVIOUS: optionalSecretMinLength(32),
 });
 
 export type ClientEnv = z.infer<typeof clientSchema>;
