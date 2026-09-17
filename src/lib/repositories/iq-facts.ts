@@ -336,10 +336,24 @@ export interface DayLockOptions {
   readonly maxLockWaits?: number;
   /** How long one wait may block before giving up with `DayLockBusyError`. Default 60 s. */
   readonly lockWaitTimeoutMs?: number;
+  /** statement_timeout inside the locked transaction; a slower statement fails with `DayTimeoutError`. Default 30 s. */
+  readonly statementTimeoutMs?: number;
+  /** idle_in_transaction_session_timeout inside the locked transaction: a holder gone quiet is cut off. Default 30 s. */
+  readonly idleInTransactionTimeoutMs?: number;
 }
 
 const DEFAULT_MAX_LOCK_WAITS = 20;
 const DEFAULT_LOCK_WAIT_TIMEOUT_MS = 60_000;
+const DEFAULT_STATEMENT_TIMEOUT_MS = 30_000;
+const DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS = 30_000;
+
+/** A positive whole number of milliseconds, safe to put in a SET statement. */
+const millis = (value: number) => Math.max(1, Math.floor(value));
+
+function pgCode(error: unknown): string | undefined {
+  const e = error as { code?: string; cause?: { code?: string } } | null;
+  return e?.cause?.code ?? e?.code;
+}
 
 /**
  * The day's lock stayed busy past the caller's budget: too many waits, or one
@@ -362,6 +376,29 @@ export class DayLockBusyError extends Error {
   }
 }
 
+/**
+ * The locked transaction was cut off by its own timeout: one statement ran past
+ * `statementTimeoutMs` (57014), or the transaction sat idle past
+ * `idleInTransactionTimeoutMs` (25P03, the session is terminated). It rolled
+ * back, so the day lock is released and nothing was written. Not retriable as
+ * is: the same day would likely time out again, so a job should count a
+ * failure rather than reschedule silently.
+ */
+export class DayTimeoutError extends Error {
+  /** Stable code for the job runner's errorCodeOf (src/lib/jobs/handle.ts). */
+  readonly code = "DAY_TIMEOUT";
+  readonly retriable = false;
+  constructor(
+    readonly key: string,
+    readonly reason: "statement" | "idle_in_transaction",
+    readonly timeoutMs: number,
+    options?: { cause?: unknown },
+  ) {
+    super(`day ${key} ${reason === "statement" ? "statement" : "idle transaction"} exceeded ${timeoutMs} ms`, options);
+    this.name = "DayTimeoutError";
+  }
+}
+
 type DayTransaction = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
 
 /**
@@ -377,6 +414,11 @@ type DayTransaction = Parameters<Parameters<ReturnType<typeof db>["transaction"]
  * remaining collision is a holder committing in the instant between snapshot
  * and try; that rolls back on a unique key (23505) or as 40001 and retries,
  * logged, up to MAX_ATTEMPTS. Shared by the facts and trust writers.
+ *
+ * Timeouts (design P2): the transaction sets statement_timeout and
+ * idle_in_transaction_session_timeout (SET LOCAL takes no snapshot), so a
+ * hung holder cannot keep the day locked; hitting either raises
+ * `DayTimeoutError`, never `DayLockBusyError`.
  */
 export async function runLockedDayTransaction<T>(
   key: string,
@@ -385,12 +427,18 @@ export async function runLockedDayTransaction<T>(
   options: DayLockOptions = {},
 ): Promise<{ readonly value: T; readonly lockWaits: number; readonly attempts: number }> {
   const maxLockWaits = options.maxLockWaits ?? DEFAULT_MAX_LOCK_WAITS;
-  const timeoutMs = Math.max(1, Math.floor(options.lockWaitTimeoutMs ?? DEFAULT_LOCK_WAIT_TIMEOUT_MS));
+  const timeoutMs = millis(options.lockWaitTimeoutMs ?? DEFAULT_LOCK_WAIT_TIMEOUT_MS);
+  const statementTimeoutMs = millis(options.statementTimeoutMs ?? DEFAULT_STATEMENT_TIMEOUT_MS);
+  const idleTimeoutMs = millis(options.idleInTransactionTimeoutMs ?? DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS);
   let lockWaits = 0;
   for (let attempt = 1; ; ) {
+    const started = Date.now();
     try {
       const value = await db().transaction(
         async (tx) => {
+          // Utility statements: they set no REPEATABLE READ snapshot, so the try-lock below still comes first.
+          await tx.execute(sql.raw(`SET LOCAL statement_timeout = '${statementTimeoutMs}ms'`));
+          await tx.execute(sql.raw(`SET LOCAL idle_in_transaction_session_timeout = '${idleTimeoutMs}ms'`));
           const [lock] = await tx.execute<{ locked: boolean }>(sql`SELECT pg_try_advisory_xact_lock(hashtextextended(${key}, 0)) AS locked`);
           if (!lock?.locked) throw new LockBusy();
           return work(tx);
@@ -410,12 +458,18 @@ export async function runLockedDayTransaction<T>(
             await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
           });
         } catch (waitError) {
-          const e = waitError as { code?: string; cause?: { code?: string } };
           // 55P03 lock_not_available: lock_timeout expired.
-          if ((e.cause?.code ?? e.code) === "55P03") throw new DayLockBusyError(key, lockWaits, "timeout");
+          if (pgCode(waitError) === "55P03") throw new DayLockBusyError(key, lockWaits, "timeout");
           throw waitError;
         }
         continue;
+      }
+      if (pgCode(error) === "57014") throw new DayTimeoutError(key, "statement", statementTimeoutMs, { cause: error });
+      // The server ends an idle-in-transaction session (FATAL 25P03); the driver
+      // usually reports only CONNECTION_CLOSED. Read that as the idle timeout
+      // when the transaction had been open at least that long; otherwise rethrow.
+      if (pgCode(error) === "25P03" || (pgCode(error) === "CONNECTION_CLOSED" && Date.now() - started >= idleTimeoutMs)) {
+        throw new DayTimeoutError(key, "idle_in_transaction", idleTimeoutMs, { cause: error });
       }
       if (!isRetryable(error) || attempt >= MAX_ATTEMPTS) throw error;
       console.warn(`${label} collided with a concurrent run; retrying (attempt ${attempt + 1} of ${MAX_ATTEMPTS})`);
