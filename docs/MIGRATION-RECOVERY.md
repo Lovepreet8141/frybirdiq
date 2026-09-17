@@ -354,6 +354,26 @@ decision `dec-2`; production backfill of facts is a separate approved step.
   DISTINCT), as for 0034.
 - **Journal (FACT):** `when` set by hand to 1790000000000, above 0035.
 
+### `iq_intraday_facts` retention: 35 → 63 days (IQ-2 S8, R2.8, RELIABILITY C7)
+- **FACT:** no schema change. Retention is not in the database: the job deletes
+  rows. IQ-1 B7 specified 35 days; `9e05721` (iq2-s8, ANALYTICS-DATA) adds the
+  writer and the purge at 63 days: `purgeIntradayFacts` deletes
+  `business_date < today − 62` (IST) per org, every definition version
+  (`src/lib/repositories/iq-facts.ts:737-741`,
+  `src/lib/iq/metrics/intraday.ts:34`). The 8-week backfill rebuilds D−56 … D−1
+  from the same IST date, so the purge never removes a day the backfill has just
+  written.
+- **Recovery:** intraday rows are derived from `orders` (sale set by
+  `created_at`, tickets by `ready_at`). Rows lost to a purge or a drop are
+  rebuilt by the backfill for the last 56 days; older buckets are not rebuilt
+  and are not needed by any reader. Reverting the job to 35 days deletes days
+  36–63 on its next run; no down SQL is involved.
+- **Unit note (FACT):** `ticket_ready_seconds_total` is stored with unit
+  `count` (a count of seconds). 0036's unit CHECK allows only `paise` and
+  `count`; a dedicated `seconds` unit would need a migration widening
+  `iq_intraday_facts_unit_check` and `iq_daily_facts_unit_check`.
+
+
 ## 4d. 0038 `iq_insights_copy_trust` (not deployed; `agent/database-iq2-s1`, card iq2-s1)
 
 Added 2026-09-17. Requires 0034. IQ-2 slice S1 (hive `reviews/iq-2/DESIGN.md`
@@ -415,19 +435,9 @@ entry for 0038 has `idx` 37: the next `drizzle-kit generate` will name its file
   `status_reason`. Insights are derived today; once IQ-2 writes production
   insights that recommendations cite, fix forward.
 
-### Intraday facts retention: 35 → 63 days (IQ-2 R2.8, REL C7)
-- **FACT:** 0036 gives `iq_intraday_facts` no database retention. IQ-1 B7
-  specified a 35-day purge by the job runner; at `48c428a` no code writes or
-  purges intraday rows (`runFactsIntraday` recomputes today's daily facts).
-  IQ-2 slice S8 adds the writer and sets the purge to 63 days so an 8-week
-  baseline has history; the 63-day purge merges before or with the 8-week
-  backfill, with the cutoff taken from the same IST business date.
-- **No schema change** is needed for it; this migration does not touch
-  `iq_intraday_facts`.
-- **Recovery impact:** rows older than 35 days that exist only because of the
-  63-day window are derived from `orders` and can be rebuilt by the backfill. A
-  rollback of the S8 job change to 35 days deletes them on the next purge; no
-  down SQL is involved.
+### Intraday facts retention
+Recorded with the table it applies to, in §4c (35 → 63 days, iq2-s8). 0038
+does not touch `iq_intraday_facts`.
 
 ---
 
