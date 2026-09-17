@@ -513,6 +513,26 @@ describe("0034 — CHECK backstops and cascade", () => {
     }
   });
 
+  it("job runs count failures from 0 and never below (0035)", async () => {
+    const run = (failures?: number) =>
+      db()
+        .insert(iqJobRuns)
+        .values({
+          orgId: org.orgId,
+          job: "heartbeat",
+          periodKey: `2026-09-17T${randomUUID().slice(0, 8)}`,
+          trigger: "TIMER",
+          leaseOwner: randomUUID(),
+          leaseExpiresAt: new Date(Date.now() + 300_000),
+          deadlineAt: new Date(Date.now() + 240_000),
+          codeVersion: "abc1234",
+          ...(failures === undefined ? {} : { failures }),
+        })
+        .returning({ failures: iqJobRuns.failures });
+    expect((await run())[0]!.failures).toBe(0);
+    expect(await sqlState(run(-1))).toBe("23514");
+  });
+
   it("forecast intervals are ordered and non-negative", async () => {
     const forecast = (p10: bigint, p50: bigint, p90: bigint) =>
       db().insert(iqForecasts).values({

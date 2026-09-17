@@ -146,6 +146,12 @@ export const iqJobRuns = pgTable(
     status: text("status").notNull().default("RUNNING"),
     trigger: text("trigger").notNull(),
     attempt: integer("attempt").notNull().default(1),
+    /**
+     * Failed attempts, counted apart from `attempt` (the fencing generation):
+     * a deadline cut that made progress costs nothing, an expired zombie lease
+     * counts one. Migration 0035; RELIABILITY J3.
+     */
+    failures: integer("failures").notNull().default(0),
     /** Minted by the claimant; every output write checks it (fencing). */
     leaseOwner: uuid("lease_owner").notNull(),
     leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }).notNull(),
@@ -174,6 +180,7 @@ export const iqJobRuns = pgTable(
     check("iq_job_runs_status_check", sql`${table.status} IN (${list(IQ_JOB_RUN_STATUSES)})`),
     check("iq_job_runs_trigger_check", sql`${table.trigger} IN (${list(IQ_JOB_TRIGGERS)})`),
     check("iq_job_runs_attempt_check", sql`${table.attempt} >= 1`),
+    check("iq_job_runs_failures_check", sql`${table.failures} >= 0`),
     check("iq_job_runs_counts_check", sql`${table.rowsWritten} >= 0 AND (${table.durationMs} IS NULL OR ${table.durationMs} >= 0)`),
     check("iq_job_runs_summary_check", sql`jsonb_typeof(${table.summary}) = 'object'`),
     check("iq_job_runs_error_message_check", sql`char_length(${table.errorMessage}) <= 500`),
