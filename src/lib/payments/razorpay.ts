@@ -145,8 +145,18 @@ export interface RazorpayRefund {
   readonly notes?: Record<string, unknown> | unknown[] | null;
 }
 
-/** Every Razorpay call gives up after this long; a refund that times out is ambiguous, never assumed. */
-export const RAZORPAY_TIMEOUT_MS = 10_000;
+/**
+ * Every Razorpay call gives up after this long; a refund that times out is
+ * ambiguous, never assumed.
+ *
+ * Kept below `withIdempotency`'s 10 s in-flight wait (RELIABILITY C3), so a
+ * caller that takes over a silent claim normally finds the first POST
+ * already finished. Correctness does not rest on the timing: a takeover
+ * resumes the same RESERVED row and sends the same X-Refund-Idempotency (the
+ * row id), and Razorpay answers a concurrent same-key request with 409,
+ * which is ambiguous — never a second refund. Keep that invariant.
+ */
+export const RAZORPAY_TIMEOUT_MS = 8_000;
 
 type CallResult<T> = { ok: true; data: T; status: number } | { ok: false; error: string; status: number | null };
 

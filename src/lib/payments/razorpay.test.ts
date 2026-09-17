@@ -208,7 +208,7 @@ describe("razorpay refunds", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ amount: 29900, notes: { reason: "Wrong order", [REFUND_ROW_NOTE]: REFUND_ROW } });
     expect(fetchSpy.mock.calls[1]![1]?.body).toBe(init?.body);
     expect(init?.signal).toBeInstanceOf(AbortSignal);
-    expect(RAZORPAY_TIMEOUT_MS).toBe(10_000);
+    expect(RAZORPAY_TIMEOUT_MS).toBeLessThan(10_000); // below withIdempotency's in-flight wait (RELIABILITY C3)
   });
 
   it("keeps a pending refund pending (it must stay RESERVED), and refuses a failed one", () => {
