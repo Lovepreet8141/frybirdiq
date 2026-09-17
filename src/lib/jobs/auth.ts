@@ -1,0 +1,98 @@
+/**
+ * Who may start a job — a systemd timer on the same machine, and no one else.
+ *
+ * DESIGN-v2-DELTA.md §3. The checks run in this order and every failure is
+ * the same empty 404 to the caller; the reason exists only for tests.
+ *
+ *   1. JOB_SECRET unset (or too short) → the runner is dormant.
+ *   2. `x-real-ip` present → the request came through nginx.
+ *   3. `x-forwarded-for` must be present, and every entry loopback. Next
+ *      fills it from the socket when absent (base-server.js:611), so a local
+ *      curl arrives with "127.0.0.1"; anything public means a proxy hop.
+ *   4. `Host` is exactly 127.0.0.1:3000.
+ *   5. The bearer token matches JOB_SECRET or JOB_SECRET_PREVIOUS. Both are
+ *      always compared, as sha256 digests with timingSafeEqual, so neither the
+ *      token's length nor which secret matched shows in the timing.
+ *   6. The job name is in the registry — checked only after the secret, so an
+ *      outsider cannot probe job names.
+ *
+ * Never log a header value from here.
+ */
+import { createHash, timingSafeEqual } from "node:crypto";
+
+/** Matches the JOB_SECRET minimum in the environment schema. */
+export const JOB_SECRET_MIN_LENGTH = 32;
+
+export const JOB_HOST = "127.0.0.1:3000";
+
+const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+export type HeaderReader = { get(name: string): string | null };
+
+export type JobSecrets = {
+  readonly current: string | undefined;
+  readonly previous: string | undefined;
+};
+
+export type AuthRefusal =
+  | "DORMANT"
+  | "REAL_IP_PRESENT"
+  | "FORWARDED_FOR_MISSING"
+  | "FORWARDED_FOR_NOT_LOOPBACK"
+  | "HOST_MISMATCH"
+  | "BAD_SECRET"
+  | "UNKNOWN_JOB";
+
+export type AuthResult<J extends string> = { readonly ok: true; readonly job: J } | { readonly ok: false; readonly reason: AuthRefusal };
+
+const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest();
+
+/** Compared in place of an absent secret so timing stays the same; the usable flags stop it ever matching. */
+const UNUSABLE = sha256("frybird:job-secret:unusable");
+
+function usable(secret: string | undefined): secret is string {
+  return typeof secret === "string" && secret.length >= JOB_SECRET_MIN_LENGTH;
+}
+
+function bearerToken(header: string | null): string {
+  if (header === null) return "";
+  const match = /^Bearer (\S+)$/.exec(header);
+  return match?.[1] ?? "";
+}
+
+/** Constant-time buffer comparison; a parameter only so tests can count the calls. */
+export type DigestCompare = (a: Buffer, b: Buffer) => boolean;
+
+function secretMatches(presented: string, secrets: JobSecrets, compare: DigestCompare): boolean {
+  const digest = sha256(presented);
+  const hasCurrent = usable(secrets.current);
+  const hasPrevious = usable(secrets.previous);
+  const matchesCurrent = compare(digest, hasCurrent ? sha256(secrets.current!) : UNUSABLE) && hasCurrent;
+  const matchesPrevious = compare(digest, hasPrevious ? sha256(secrets.previous!) : UNUSABLE) && hasPrevious;
+  // Both comparisons always run; a missing secret can never match, whatever is presented.
+  return presented.length > 0 && (Number(matchesCurrent) | Number(matchesPrevious)) === 1;
+}
+
+export function authorizeJobRequest<J extends string>(
+  headers: HeaderReader,
+  jobParam: string,
+  secrets: JobSecrets,
+  isJob: (name: string) => name is J,
+  compare: DigestCompare = timingSafeEqual,
+): AuthResult<J> {
+  if (!usable(secrets.current)) return { ok: false, reason: "DORMANT" };
+
+  if (headers.get("x-real-ip") !== null) return { ok: false, reason: "REAL_IP_PRESENT" };
+
+  const forwarded = headers.get("x-forwarded-for");
+  if (forwarded === null || forwarded.trim() === "") return { ok: false, reason: "FORWARDED_FOR_MISSING" };
+  const hops = forwarded.split(",").map((hop) => hop.trim());
+  if (!hops.every((hop) => LOOPBACK.has(hop))) return { ok: false, reason: "FORWARDED_FOR_NOT_LOOPBACK" };
+
+  if (headers.get("host") !== JOB_HOST) return { ok: false, reason: "HOST_MISMATCH" };
+
+  if (!secretMatches(bearerToken(headers.get("authorization")), secrets, compare)) return { ok: false, reason: "BAD_SECRET" };
+
+  if (!isJob(jobParam)) return { ok: false, reason: "UNKNOWN_JOB" };
+  return { ok: true, job: jobParam };
+}
