@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ORDER_CHANNEL_LABELS, type OrderChannel } from "@/domain/order-channel";
+import type { OrderPaymentState } from "@/domain/order-payment-state";
 import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
 import { formatINR, type Paise } from "@/lib/money";
 
@@ -22,6 +23,7 @@ export interface OrderHistoryEntry {
   readonly customerName: string | null;
   readonly grandTotal: Paise;
   readonly isPaid: boolean;
+  readonly paymentState: OrderPaymentState;
   readonly placedAt: string | null;
   readonly closedAt: string;
   readonly cancellationReason: string | null;
@@ -47,6 +49,13 @@ const FULFILMENT: Record<FulfilmentType, string> = { DINE_IN: "Dine-in", TAKEAWA
 
 function formatWhen(iso: string): string {
   return new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+}
+
+/** A paid order can still owe money back — REFUNDED and PARTIALLY_REFUNDED take priority over the plain paid/not-paid read. */
+export function paymentLabel(order: Pick<OrderHistoryEntry, "isPaid" | "paymentState">): string {
+  if (order.paymentState === "REFUNDED") return "Refunded";
+  if (order.paymentState === "PARTIALLY_REFUNDED") return "Partly refunded";
+  return order.isPaid ? "Paid" : "Not paid";
 }
 
 const column = dataColumns<OrderHistoryEntry>();
@@ -130,7 +139,7 @@ export function OrderHistoryTable({ orders, periodLabel }: { orders: readonly Or
           cell: ({ row }) => (
             <div className="flex flex-col items-end gap-0.5">
               <span className="tabular font-semibold">{formatINR(row.original.grandTotal)}</span>
-              <span className="text-xs text-muted-foreground">{row.original.isPaid ? "Paid" : "Not paid"}</span>
+              <span className="text-xs text-muted-foreground">{paymentLabel(row.original)}</span>
             </div>
           ),
         }),
@@ -241,7 +250,7 @@ export function OrderHistoryTable({ orders, periodLabel }: { orders: readonly Or
                 {order.items.length === 0 && <li className="px-3 py-2 text-muted-foreground">No lines were stored for this order.</li>}
               </ul>
               <div className="flex items-center justify-between gap-4 border-t border-border px-3 py-2 font-semibold">
-                <span>Total {order.isPaid ? "· paid" : "· not paid"}</span>
+                <span>Total · {paymentLabel(order).toLowerCase()}</span>
                 <span className="tabular">{formatINR(order.grandTotal)}</span>
               </div>
             </div>
