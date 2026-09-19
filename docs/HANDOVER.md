@@ -460,3 +460,10 @@ State now: Release 5 live (`eddba18`, migration 0040, Tuesday marked). Working t
 - **Known limits, stated on the screen or here:** (1) `countStock` writes nothing when a count matches the balance, so the stock score is a floor (card `stock-count-trace`, low: write an audit row for a zero-difference count, then score from that); (2) the cash score cannot see a completed order that has no payment row at all (card `cash-no-payment-row`, low: needs a definition of "cash order" that does not depend on the payment row); (3) Revenue / Paid orders / Average order KPIs are not badged even though they too rest on closed and paid orders; (4) recipe trend is rebuilt from recipe creation dates; (5) the brief page shows the line AND the panel (repeat, harmless).
 - **Card 1b still to do:** IQ-2 integration itself (daily brief job, reconciliation, detectors; nine unmerged branches, one blocking finding `iq2-s5c`). Needs server job changes, so it is a go/no-go.
 
+## 19. Update, 2026-09-20 (Release 6: IQ readiness panel live)
+
+- **Release 6 is live:** `e4d791b`, BUILD_ID `05c95a9e11be8ef4`, RELEASES row 10, no migration (head 0040). Rollback: code-only, redeploy `eddba18` (`f094f7a2953c1cc7`).
+- **First readings in production (facts):** closed the same day 22 of 67 (33%); cash recorded 64 of 64 (100%); 20 best sellers with a recipe 1 (5%); stock counts 0 of 6 ingredients, never counted; orders with a customer 9 of 64 (14%). Overall about 30%. The 33% is mostly the old counter orders left in ACCEPTED (order #1226 parked; the 26 counter orders are the ops-2 card).
+- **Low cards:** `readiness-safe-1` (the Overview page has no fallback if a readiness query ever throws: wrap in a safe read and hide the panel); `stock-count-trace`, `cash-no-payment-row` (see section 18); `iq-flaky-1`.
+- **Order now:** card 1b (IQ-2 integration: gated), then card 2 (pay-ready, gated), then the rest of section 17.
+
