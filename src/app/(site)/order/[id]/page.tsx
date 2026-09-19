@@ -5,6 +5,9 @@ import { Check, Circle, Clock, FileText, Flame, Gift } from "lucide-react";
 import { formatINR } from "@/lib/money";
 import { type Paise, paise } from "@/lib/money";
 import { getOrder } from "@/lib/repositories/orders";
+import { getStoreContact } from "@/lib/repositories/org";
+import { shopPhone } from "@/lib/contact/phone";
+import { CallShop } from "@/components/site/call-shop";
 import { getRating } from "@/lib/ratings";
 import { getCustomer } from "@/lib/customer";
 import { readRememberedContact } from "@/lib/cart/remembered-contact";
@@ -68,6 +71,9 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   const [{ id }, { pay }] = await Promise.all([params, searchParams]);
   const [order, customer, remembered] = await Promise.all([getOrder(id), getCustomer(), readRememberedContact()]);
   if (!order) notFound();
+  // The number comes from the outlet row; null when unset or unusable, and then
+  // no copy below tells the customer to call.
+  const phone = shopPhone((await getStoreContact())?.phone);
   const isOwner = viewerOwnsOrder(order, customer, remembered);
   const greetedName = greetingName(order.customerName, isOwner);
 
@@ -138,7 +144,12 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
       )}
       {awaitingOnline && (!razorpay || !online?.providerOrderId) && (
         <p role="alert" className="mt-6 rounded-lg border border-border bg-surface px-4 py-3 text-sm">
-          Online payment isn&rsquo;t available right now. Call the shop and we&rsquo;ll take payment on collection.
+          Online payment isn&rsquo;t available right now. You can pay when you collect.
+          {phone && (
+            <span className="mt-1 block">
+              <CallShop phone={phone} lead="Questions? Call" />
+            </span>
+          )}
         </p>
       )}
 
@@ -165,7 +176,11 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
       {cancelled ? (
         <div role="alert" className="mt-8 rounded-lg border border-border bg-surface p-5">
           <p className="font-heading text-lg font-semibold">This order was {status.toLowerCase()}.</p>
-          <p className="mt-1 text-sm text-muted-foreground">Call the shop if that wasn&rsquo;t expected.</p>
+          {phone && (
+            <p className="mt-1 text-sm text-muted-foreground">
+              <CallShop phone={phone} lead="If that wasn't expected, call" />
+            </p>
+          )}
         </div>
       ) : (
         <ol className="mt-8 flex flex-col gap-0 rounded-lg border border-border bg-surface p-5">
