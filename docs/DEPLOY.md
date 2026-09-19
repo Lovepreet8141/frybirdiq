@@ -383,8 +383,7 @@ Supabase project yet, so the first production run must be checked (below).
 ### 8.1 Offsite copy, encrypted (owner steps; nothing here is done yet)
 
 **Recommended storage: Backblaze B2, through `rclone`.** Cheap (the dumps are
-under a megabyte), a bucket-restricted key is easy, and B2 can be set so the key
-on the VPS can add files but not delete or read them.
+under a megabyte) and the key on the VPS can be limited to one bucket.
 
 Everything is **encrypted on the VPS before upload** with an `age` public key. The
 VPS and the storage hold only ciphertext; the private key is the owner's alone.
@@ -392,33 +391,57 @@ If the VPS or the B2 account is broken into, the backups cannot be read.
 If the private key is lost, the offsite copies cannot be opened, so store it in
 a password manager, not only on one laptop.
 
+**What the VPS key can and cannot do.** It can *add* files and *hide* them (hiding
+needs only the write capability). It cannot read, and cannot delete. But a hidden
+file is removed by the bucket's lifecycle rule, so on its own the key could still
+be used to make history disappear. **Object Lock closes that**: a locked version
+cannot be removed by anyone before its retention ends, however it is hidden.
+
 *What the owner creates (none of it is ever pasted in chat):*
 
-1. **A Backblaze B2 account and one private bucket** (e.g. `frybird-backups`).
-   In the bucket's settings set *Lifecycle* to keep only the last 30 days.
+1. **A Backblaze B2 account and one private bucket (e.g. `frybird-backups`) with
+   Object Lock turned ON when the bucket is created** (it cannot be added later).
+   Default retention: *Governance* mode, **30 days**. Lifecycle: keep 30 days, to
+   match (retention must be at least as long as the lifecycle window).
 2. **An application key limited to that bucket**, with only *listFiles* and
-   *writeFiles* (no read, no delete). Copy the key ID and key once; they are
-   entered only into the prompt in step 4.
+   *writeFiles*, and no *readFiles*, *deleteFiles* or *bypassGovernance*. Copy the
+   key ID and key once; they are entered only at the `rclone config` prompts in the
+   owner-only step below.
 3. **An `age` key pair on the owner's own machine:**
    `brew install age && age-keygen -o frybird-backup.key`. Store
    `frybird-backup.key` in a password manager. The line printed as `Public key:
    age1…` is **not secret** and is the only thing that goes on the server.
 
-*What god/DevOps runs on the VPS after the owner has done 1–3 (root):*
+**OWNER-ONLY step — no agent, no chat, no pasted block.** The owner opens their
+own SSH session to the VPS and types this at the prompts themselves. The key ID
+and key are typed into that terminal only, so no secret passes through an agent
+or any log:
 
 ```bash
 apt install -y age rclone
-rclone config          # owner types the B2 key ID/key at the prompts: new remote "b2frybird", type b2
-                       # (stored in /root/.config/rclone/rclone.conf, root-only)
+rclone config     # new remote named  b2frybird , type  b2 ; enter the key ID and key when asked
+```
+
+*Then god/DevOps runs (no secret involved; it prints names and file names only):*
+
+```bash
+rclone listremotes                                   # expect b2frybird:
 install -m 600 -o root -g root /dev/null /etc/frybird/backup.env
 cat > /etc/frybird/backup.env <<'EOT'
 BACKUP_RCLONE_REMOTE=b2frybird:frybird-backups
 BACKUP_AGE_RECIPIENT=age1PASTE_THE_PUBLIC_KEY_HERE
 EOT
 cp deploy/backup.sh /usr/local/bin/frybird-backup
+# ONE-TIME CHECK: uploads must work under Object Lock. This leaves one tiny locked
+# object that cannot be deleted for 30 days; that is expected.
+echo "lock-check $(date -u +%FT%TZ)" | rclone rcat b2frybird:frybird-backups/lock-check.txt && rclone lsf b2frybird:frybird-backups
 systemctl start frybird-backup && journalctl -u frybird-backup -n 30
 rclone lsf b2frybird:frybird-backups          # expect frybird-STAMP.dump.age, .auth.dump.age, .counts
 ```
+
+If the one-time check fails, stop and report the error text; do **not** switch
+Object Lock off to make it pass. (This has not been run against a real B2
+bucket, so how rclone behaves under Object Lock is unconfirmed until this step.)
 
 If the remote is set but `age` or the public key is missing, the script
 **refuses to upload** and fails loudly. Plaintext never leaves the box.

@@ -49,19 +49,38 @@ src_users=$(psql -U postgres -d srcdb -At -c "select count(*) from auth.users")
 echo "fixture: orders=$src_orders auth_users=$src_users"
 
 age-keygen -o /root/owner.key 2>/root/pub.txt; pub=$(awk "/Public key/{print \$3}" /root/pub.txt)
-export DATABASE_URL="postgres://postgres@127.0.0.1/srcdb"
-: > /root/env
+# The database now demands a password over TCP (the URL below carries a marker password
+# with an encoded @), so a run proves the password really reaches the server, and
+# the argv probe below has something to look for.
+psql -U postgres -q -c "alter role postgres password 'S3cretMARKER@x'" >/dev/null
+sed -i "s/^host all all all .*/host all all all scram-sha-256/;s/^host all all 127.0.0.1\/32 .*/host all all 127.0.0.1\/32 scram-sha-256/" "$(psql -U postgres -At -c 'show hba_file')"
+psql -U postgres -q -c "select pg_reload_conf()" >/dev/null
+printf "%s\n" "SUPABASE_SERVICE_ROLE_KEY=svc-must-not-leak" "DATABASE_URL=\"postgres://postgres:S3cretMARKER%40x@127.0.0.1/srcdb\"" > /root/env
+# Slow the DB tools by 2s so the argv probe has a wide window to look in.
+for t in pg_dump psql; do real=$(command -v $t); printf "#!/bin/sh\nsleep 2\nexec %s \"\$@\"\n" "$real" > /usr/local/bin/$t; chmod 755 /usr/local/bin/$t; done
 run_backup() { # <backup.env content> ; returns backup.sh exit code
-  rm -rf /bk /off; mkdir -p /off
+  rm -rf /bk /off /root/argv.hits /root/env.hits; mkdir -p /off
   printf "%b" "$1" > /root/backup.env
-  ENV_FILE=/root/env BACKUP_ENV=/root/backup.env BACKUP_DIR=/bk DATABASE_URL="$DATABASE_URL" bash /repo/backup.sh > /root/backup.out 2>&1
+  # Probe: every 50ms, look at the command line of EVERY process for the password (encoded or not).
+  ( exec 2>/dev/null; while [ ! -f /root/probe.stop ]; do
+      for f in /proc/[0-9]*/cmdline; do tr "\0" " " < "$f" 2>/dev/null; echo; done | grep -E "S3cretMARK[E]R" >> /root/argv.hits
+      for f in /proc/[0-9]*/environ; do tr "\0" "\n" < "$f" 2>/dev/null; done | grep -q "svc-must-not-lea[k]" && echo hit >> /root/env.hits
+      sleep 0.05; done ) &
+  probe=$!; rm -f /root/probe.stop
+  ENV_FILE=/root/env BACKUP_ENV=/root/backup.env BACKUP_DIR=/bk bash /repo/backup.sh > /root/backup.out 2>&1
+  rcode=$?
+  touch /root/probe.stop; wait $probe 2>/dev/null; rm -f /root/probe.stop
+  return $rcode
 }
 rc() { PG_AS="gosu postgres" RESULT_DIR=/res BACKUP_DIR=/bk bash /repo/restore-check.sh "$@" > /root/rc.out 2>&1; }
 chmod 755 /root; chmod 644 /root/env
 
 echo "== 1. happy path"
 run_backup "BACKUP_RCLONE_REMOTE=/off\nBACKUP_AGE_RECIPIENT=$pub\n"; r=$?
-check "backup.sh exits 0" "[ $r -eq 0 ]"
+check "backup.sh exits 0 (password reached the server through PGPASSWORD, @ decoded)" "[ $r -eq 0 ]"
+check "database password never appears in ANY process argv during the run" "[ ! -s /root/argv.hits ] || { head -3 /root/argv.hits | cut -c1-200; false; }"
+check "the backup directory is mode 700" "[ \$(stat -c %a /bk) = 700 ]"
+check "other secrets in the env file (service-role key) never reach any child process environment" "[ ! -s /root/env.hits ]"
 check "public + auth dumps and counts exist" "ls /bk/frybird-*[0-9].dump /bk/frybird-*.auth.dump /bk/frybird-*.counts >/dev/null 2>&1"
 check "offsite holds only encrypted dumps (.age) plus counts" "[ \$(ls /off | grep -c '\.dump\.age\$') -eq 2 ] && ! ls /off | grep -q '\.dump\$'"
 check "no plaintext dump content offsite (no PGDMP magic)" "! grep -rl PGDMP /off"
@@ -75,6 +94,12 @@ mkdir -p /res; chown postgres /res 2>/dev/null; chmod 777 /res
 rc; r=$?; cat /root/rc.out | sed "s/^/    | /"
 check "restore-check PASS" "[ $r -eq 0 ] && grep -q 'RESULT: PASS' /root/rc.out"
 check "result file recorded with orders and auth_users counts" "grep -q \"restored orders=$src_orders\" /res/restore-check-*.txt && grep -q \"restored auth_users=$src_users\" /res/restore-check-*.txt"
+
+echo "== 6. restore-check with leftover scratch databases present"
+createdb -U postgres frybird_restore_public; createdb -U postgres frybird_restore_auth
+psql -U postgres -d frybird_restore_public -q -c "create table stale(x int)"
+rc; r=$?
+check "still PASSes, and the stale table is gone" "[ $r -eq 0 ] && ! psql -U postgres -d frybird_restore_public -At -c 'select 1 from stale' >/dev/null 2>&1"
 
 echo "== 3. tampered counts (a restore with fewer rows than were counted must FAIL)"
 sed -i "s/^before_orders=.*/before_orders=$((src_orders+50))/;s/^after_orders=.*/after_orders=$((src_orders+60))/" /bk/frybird-*.counts

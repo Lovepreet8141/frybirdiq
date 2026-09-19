@@ -36,12 +36,36 @@ BACKUP_ENV="${BACKUP_ENV:-/etc/frybird/backup.env}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/frybird}"
 KEEP_DAYS="${KEEP_DAYS:-14}"
 
-# shellcheck disable=SC1090
-set -a; . "$ENV_FILE"; [ -f "$BACKUP_ENV" ] && . "$BACKUP_ENV"; set +a
+# Only DATABASE_URL is taken from the app's env file (not the whole file: the
+# service-role key and JOB_SECRET have no business in this process's
+# environment). The file is systemd EnvironmentFile format, so a value may be quoted.
+DATABASE_URL="$(grep -m1 '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)"
+DATABASE_URL="${DATABASE_URL%\"}"; DATABASE_URL="${DATABASE_URL#\"}"
+DATABASE_URL="${DATABASE_URL%\'}"; DATABASE_URL="${DATABASE_URL#\'}"
 : "${DATABASE_URL:?DATABASE_URL is not set in $ENV_FILE}"
+# shellcheck disable=SC1090
+[ -f "$BACKUP_ENV" ] && { set -a; . "$BACKUP_ENV"; set +a; }
+
+# Keep the database password OFF every command line: /proc/<pid>/cmdline is
+# world-readable on Ubuntu, and pg_dump/psql run for as long as the dump does.
+# The password moves to PGPASSWORD (environment: /proc/<pid>/environ is owner-only)
+# and the URL handed to the tools has the password removed.
+db_url="$DATABASE_URL"
+scheme="${db_url%%://*}://"
+rest="${db_url#*://}"
+userinfo="${rest%@*}"
+if [ "$userinfo" != "$rest" ] && [ "${userinfo#*:}" != "$userinfo" ]; then
+  raw_pw="${userinfo#*:}"
+  # printf %b with \x turns %40-style escapes back into characters.
+  PGPASSWORD="$(printf '%b' "${raw_pw//%/\\x}")"
+  export PGPASSWORD
+  db_url="${scheme}${userinfo%%:*}@${rest#"$userinfo"@}"
+fi
+unset DATABASE_URL raw_pw userinfo rest
 
 umask 077
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 stamp="$(date -u +%Y%m%d-%H%M)"
 base="$BACKUP_DIR/frybird-$stamp"
 failed=0
@@ -55,13 +79,13 @@ COUNT_SQL="select 'orders='||count(*) from public.orders
  union all select 'customers='||count(*) from public.customers
  union all select 'products='||count(*) from public.products
  union all select 'auth_users='||count(*) from auth.users;"
-counts() { psql "$DATABASE_URL" -At -v ON_ERROR_STOP=1 -c "$COUNT_SQL"; }
+counts() { psql "$db_url" -At -v ON_ERROR_STOP=1 -c "$COUNT_SQL"; }
 
 before="$(counts)" || { fail "could not count rows before the dump"; before=""; }
 
 echo "==> pg_dump public → $base.dump"
 # --no-owner/--no-privileges: the restore target is never the same role set.
-if pg_dump "$DATABASE_URL" --format=custom --compress=6 --schema=public \
+if pg_dump "$db_url" --format=custom --compress=6 --schema=public \
      --no-owner --no-privileges --file="$base.dump.partial"; then
   mv "$base.dump.partial" "$base.dump"
 else
@@ -71,7 +95,7 @@ fi
 echo "==> pg_dump auth → $base.auth.dump"
 # Staff logins live in Supabase's auth schema, not public. Schema + data, so the
 # archive is self-contained and restore-check can prove it in a scratch database.
-if pg_dump "$DATABASE_URL" --format=custom --compress=6 --schema=auth \
+if pg_dump "$db_url" --format=custom --compress=6 --schema=auth \
      --no-owner --no-privileges --file="$base.auth.dump.partial"; then
   mv "$base.auth.dump.partial" "$base.auth.dump"
 else

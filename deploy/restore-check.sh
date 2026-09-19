@@ -45,6 +45,7 @@ bad() { say "FAIL: $*"; verdict=FAIL; }
 
 cleanup() { for d in "$SCRATCH_PUBLIC" "$SCRATCH_AUTH"; do $PG_AS dropdb --if-exists "$d" >/dev/null 2>&1; done; }
 trap cleanup EXIT
+cleanup   # leftover scratch databases from a run that was killed
 
 say "restore-check of $(basename "$dump") started $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log="$(mktemp)"
