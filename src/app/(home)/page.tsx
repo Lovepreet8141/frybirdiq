@@ -10,6 +10,9 @@ import { Location } from "@/components/home/location";
 import { FranchiseForm } from "@/components/home/franchise-form";
 import { HomeFooter } from "@/components/home/footer";
 import { HomeOrderBar } from "@/components/home/order-bar";
+import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
+import { shopPhone } from "@/lib/contact/phone";
+import { shopHoursState } from "@/lib/cart/shop-hours";
 import { HomeMotion } from "@/components/home/motion";
 import { getAllProducts } from "@/lib/repositories/menu";
 import { getDeliverySettings } from "@/lib/repositories/delivery";
@@ -82,9 +85,9 @@ export default async function HomePage() {
   const maxDeliveryKm = delivery?.enabled && delivery.rates.bands.length > 0 ? delivery.rates.bands[delivery.rates.bands.length - 1]!.upToMetres / 1000 : null;
   const deliveryChip = maxDeliveryKm ? `${Number.isInteger(maxDeliveryKm) ? maxDeliveryKm : maxDeliveryKm.toFixed(1)} km delivery` : "Pick-up or delivery";
 
-  const phoneDigits = contact?.phone?.replace(/[^\d]/g, "") ?? null;
-  const phoneDisplay = phoneDigits && contact?.phone ? contact.phone : null;
-  const phoneHref = phoneDigits ? `tel:+91${phoneDigits.length === 10 ? phoneDigits : phoneDigits.slice(-10)}` : null;
+  const phone = shopPhone(contact?.phone);
+  const phoneDisplay = phone?.display ?? null;
+  const phoneHref = phone?.href ?? null;
 
   return (
     <>
@@ -95,6 +98,15 @@ export default async function HomePage() {
       <div className="fb">
         <HomeNav signedIn={signedIn} />
         <main>
+          {org && !shopHoursState(new Date(), opens, closes).open && (
+            <div style={{ background: "var(--fb-ink-deep)", padding: "calc(var(--nav-h) + 0.75rem) var(--fb-gutter) 0.75rem" }}>
+              <ShopClosedNotice
+                openingTime={opens}
+                closingTime={closes}
+                className="border-[var(--fb-on-ink-30)] bg-transparent text-[var(--fb-on-ink)]"
+              />
+            </div>
+          )}
           <Hero
             city={CITY}
             stats={[

@@ -8,6 +8,9 @@ import { DeliveryFields, type SavedAddressOption } from "@/components/delivery/d
 import type { Point } from "@/components/delivery/map";
 import type { CheckoutMethod } from "@/lib/payments";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { refusedClosedText } from "@/lib/cart/closed-copy";
+import { CallShop } from "@/components/site/call-shop";
+import type { ShopPhone } from "@/lib/contact/phone";
 import { cn } from "@/lib/utils";
 
 export interface ScheduleSlotOption {
@@ -63,6 +66,8 @@ export function CheckoutForm({
   extras,
   methods,
   scheduleOptions,
+  asapAvailable = true,
+  shopPhone = null,
 }: {
   idempotencyKey: string;
   /** Where the outlet is. Null when it has not been placed on the map. */
@@ -86,12 +91,20 @@ export function CheckoutForm({
    * same window itself at submit time regardless of what this list said.
    */
   scheduleOptions: readonly ScheduleDayOption[];
+  /**
+   * False while the shop is closed (`shopHoursState`). "As soon as possible"
+   * is then disabled and "Choose a time" is preselected, so the customer is
+   * never handed a default the server would refuse.
+   */
+  asapAvailable?: boolean;
+  /** From the outlet record; null when unset, and then no call line shows. */
+  shopPhone?: ShopPhone | null;
 }) {
   const [payment, setPayment] = useState<"COD" | "ONLINE">(methods[0]?.choice ?? "COD");
   const [fulfilment, setFulfilment] = useState<"TAKEAWAY" | "DELIVERY">("TAKEAWAY");
 
   // ASAP (unchanged default) or a chosen time.
-  const [when, setWhen] = useState<"ASAP" | "SCHEDULED">("ASAP");
+  const [whenChoice, setWhen] = useState<"ASAP" | "SCHEDULED">(asapAvailable ? "ASAP" : "SCHEDULED");
   // Defaults to the first day that actually has a slot left — "today" can be
   // empty this close to closing, and defaulting to an empty day would make
   // "Choose a time" look broken the moment it opens.
@@ -109,6 +122,13 @@ export function CheckoutForm({
    */
   const [editingContact, setEditingContact] = useState(contact === null);
   const [state, action] = useActionState<CheckoutState, FormData>(submitCheckout, { status: "idle" });
+  // The server refused ASAP because the shop is shut (it may have closed while
+  // this page sat open). Its answer overrides the page's render-time one, and
+  // the customer is moved onto "Choose a time" rather than left on a choice
+  // that will be refused again. No browser clock is consulted.
+  const closed = state.status === "error" ? state.closed : undefined;
+  const asapOk = asapAvailable && !closed;
+  const when = asapOk ? whenChoice : "SCHEDULED";
   const fieldErrors = state.status === "error" ? (state.fieldErrors ?? {}) : {};
 
   return (
@@ -170,7 +190,7 @@ export function CheckoutForm({
         <div className="grid gap-2 sm:grid-cols-2">
           {(
             [
-              { value: "ASAP" as const, icon: Clock, label: "As soon as possible", detail: "The usual" },
+              { value: "ASAP" as const, icon: Clock, label: "As soon as possible", detail: asapOk ? "The usual" : "Not while we are closed" },
               { value: "SCHEDULED" as const, icon: Clock, label: "Choose a time", detail: "Pick today or tomorrow" },
             ] satisfies { value: "ASAP" | "SCHEDULED"; icon: typeof Clock; label: string; detail: string }[]
           ).map((option) => (
@@ -179,6 +199,7 @@ export function CheckoutForm({
               className={cn(
                 "flex min-h-[56px] cursor-pointer items-center gap-3 rounded-md border px-4 py-3 transition-colors duration-[var(--duration-micro)]",
                 when === option.value ? "border-primary bg-primary/10" : "border-border bg-surface hover:border-border-strong",
+                option.value === "ASAP" && !asapOk && "cursor-not-allowed",
               )}
             >
               <input
@@ -186,12 +207,14 @@ export function CheckoutForm({
                 name="whenChoice"
                 value={option.value}
                 checked={when === option.value}
+                disabled={option.value === "ASAP" && !asapOk}
                 onChange={() => setWhen(option.value)}
                 className="size-4 accent-[var(--primary)]"
               />
-              <option.icon className="size-4 shrink-0 text-primary" aria-hidden="true" />
+              <option.icon className={cn("size-4 shrink-0 text-primary", option.value === "ASAP" && !asapOk && "opacity-50")} aria-hidden="true" />
               <span className="flex flex-col">
-                <span className="font-semibold">{option.label}</span>
+                {/* Only the icon and title dim; the reason line stays at full contrast. */}
+                <span className={cn("font-semibold", option.value === "ASAP" && !asapOk && "opacity-50")}>{option.label}</span>
                 <span className="text-sm text-muted-foreground">{option.detail}</span>
               </span>
             </label>
@@ -268,7 +291,12 @@ export function CheckoutForm({
       {fulfilment === "DELIVERY" && shop && <DeliveryFields shop={shop} saved={savedAddresses} />}
       {state.status === "error" && !state.fieldErrors && (
         <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm leading-relaxed">
-          {state.message}
+          {closed ? refusedClosedText(closed) : state.message}
+          {shopPhone && (
+            <span className="mt-1 block">
+              <CallShop phone={shopPhone} lead="Still stuck? Call" />
+            </span>
+          )}
         </p>
       )}
 
