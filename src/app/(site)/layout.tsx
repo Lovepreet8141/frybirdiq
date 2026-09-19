@@ -1,6 +1,7 @@
 import "../(home)/frybird-home.css";
 import { HomeNav } from "@/components/home/nav";
 import { Footer } from "@/components/site/footer";
+import { OrderingBanner } from "@/components/site/ordering-banner";
 import { PreviewNotice } from "@/components/site/preview-notice";
 import { ToastProvider } from "@/components/ui/toast";
 import { getCustomer } from "@/lib/customer";
@@ -22,7 +23,13 @@ export default async function SiteLayout({ children }: { children: React.ReactNo
       <HomeNav signedIn={signedIn} />
       <div className="flex min-h-full flex-col pt-[var(--nav-h)]">
         <PreviewNotice />
-        <main className="flex-1">{children}</main>
+        <main className="flex-1">
+          {/* Closed by hours or paused: on every customer page, in the content, never against the top bar. */}
+          <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] pt-4 empty:hidden">
+            <OrderingBanner />
+          </div>
+          {children}
+        </main>
         <Footer />
       </div>
     </ToastProvider>

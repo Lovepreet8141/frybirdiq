@@ -6,9 +6,7 @@ import { ProductCard } from "@/components/menu/product-card";
 import { Stagger, StaggerItem } from "@/components/motion/reveal";
 import { EmptyState } from "@/components/states";
 import { LoyaltyStrip } from "@/components/loyalty/loyalty-strip";
-import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
 import { getMenuCached } from "@/lib/repositories/menu-cache";
-import { getOrg } from "@/lib/repositories/org";
 
 export const metadata: Metadata = {
   title: "Menu",
@@ -32,7 +30,7 @@ interface SearchParams {
 
 export default async function MenuPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const { q = "", diet = "" } = await searchParams;
-  const [menu, org] = await Promise.all([getMenuCached("ONLINE"), getOrg()]);
+  const menu = await getMenuCached("ONLINE");
 
   const query = q.trim().toLowerCase();
   const vegOnly = diet === "veg";
@@ -57,7 +55,6 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
   return (
     <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-10 sm:py-14">
       <h1 className="font-heading text-4xl font-bold tracking-tight sm:text-5xl">Menu</h1>
-      {org && <ShopClosedNotice openingTime={org.openingTime} closingTime={org.closingTime} className="mt-4" />}
       <LoyaltyStrip className="mt-4" />
 
       {/*

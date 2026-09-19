@@ -10,9 +10,8 @@ import { Location } from "@/components/home/location";
 import { FranchiseForm } from "@/components/home/franchise-form";
 import { HomeFooter } from "@/components/home/footer";
 import { HomeOrderBar } from "@/components/home/order-bar";
-import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
+import { OrderingBanner } from "@/components/site/ordering-banner";
 import { shopPhone } from "@/lib/contact/phone";
-import { shopHoursState } from "@/lib/cart/shop-hours";
 import { LoyaltySection } from "@/components/loyalty/loyalty-section";
 import { HomeMotion } from "@/components/home/motion";
 import { getAllProductsCached } from "@/lib/repositories/menu-cache";
@@ -109,15 +108,12 @@ export default async function HomePage() {
       <div className="fb">
         <HomeNav signedIn={signedIn} />
         <main>
-          {org && !shopHoursState(new Date(), opens, closes).open && (
-            <div style={{ background: "var(--fb-ink-deep)", padding: "calc(var(--nav-h) + 0.75rem) var(--fb-gutter) 0.75rem" }}>
-              <ShopClosedNotice
-                openingTime={opens}
-                closingTime={closes}
-                className="border-[var(--fb-on-ink-30)] bg-transparent text-[var(--fb-on-ink)]"
-              />
-            </div>
-          )}
+          {/* Closed by hours or paused. Its own cream band under the fixed top bar, with a bordered
+              card inside, so it reads as a notice about the shop and not as part of the bar. Empty (and
+              collapsed) while open. */}
+          <div className="fb-notice-band empty:hidden" style={{ background: "var(--fb-cream)", padding: "calc(var(--nav-h) + 0.75rem) var(--fb-gutter) 0.75rem" }}>
+            <OrderingBanner />
+          </div>
           <Hero
             city={CITY}
             stats={[

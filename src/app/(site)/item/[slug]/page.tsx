@@ -6,11 +6,11 @@ import { ArrowLeft } from "lucide-react";
 import { Customizer } from "@/components/menu/customizer";
 import { SpiceMark, VegMark } from "@/components/menu/marks";
 import { Price } from "@/components/menu/price";
-import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
 import { getProductCached } from "@/lib/repositories/menu-cache";
 import { itemShareImage } from "@/lib/seo/item-share";
 import { absoluteUrl } from "@/lib/seo/site";
-import { getOrg } from "@/lib/repositories/org";
+import { getCustomerOrderingStatus } from "@/lib/cart/ordering-status";
+import { orderingControls } from "@/lib/cart/ordering-banner";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -44,7 +44,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
  */
 export default async function ProductPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const [product, org] = await Promise.all([getProductCached(slug, "ONLINE"), getOrg()]);
+  const [product, status] = await Promise.all([getProductCached(slug, "ONLINE"), getCustomerOrderingStatus()]);
   if (!product) notFound();
 
   return (
@@ -88,8 +88,6 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
 
         <h1 className="font-heading text-3xl font-black tracking-tight sm:text-5xl">{product.name}</h1>
 
-        {org && <ShopClosedNotice openingTime={org.openingTime} closingTime={org.closingTime} />}
-
         {product.description && (
           <p className="max-w-prose text-lg leading-relaxed text-muted-foreground">{product.description}</p>
         )}
@@ -98,7 +96,7 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
       </div>
 
       <div className="mt-10 border-t border-border pt-10">
-        <Customizer product={product} />
+        <Customizer product={product} orderingPausedReason={orderingControls(status).disabledReason} />
       </div>
 
       <p className="mt-6 text-xs text-muted-foreground">

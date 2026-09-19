@@ -13,13 +13,15 @@ import { getCustomer } from "@/lib/customer";
 import { getStampConfig } from "@/lib/loyalty/config";
 import { isRewardEligibleItem, isStampProgramEnabled } from "@/lib/loyalty/stamps";
 import { getAvailableStampReward } from "@/lib/repositories/loyalty";
-import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
+import { getCustomerOrderingStatus } from "@/lib/cart/ordering-status";
+import { orderingControls } from "@/lib/cart/ordering-banner";
 import { getOrg } from "@/lib/repositories/org";
 
 export const metadata: Metadata = { title: "Your order", robots: { index: false } };
 
 export default async function CartPage() {
-  const [cart, customer, stampConfig] = await Promise.all([getPricedCart(), getCustomer(), getStampConfig()]);
+  const [cart, customer, stampConfig, orderingStatus] = await Promise.all([getPricedCart(), getCustomer(), getStampConfig(), getCustomerOrderingStatus()]);
+  const pausedReason = orderingControls(orderingStatus).disabledReason;
 
   const org = await getOrg();
   // Withheld until the email is confirmed — same reasoning as everywhere else
@@ -32,7 +34,6 @@ export default async function CartPage() {
   return (
     <div className="mx-auto w-full max-w-4xl px-[var(--gutter)] py-10 sm:py-14">
       <h1 className="font-heading text-4xl font-bold tracking-tight sm:text-5xl">Your order</h1>
-      {org && <ShopClosedNotice openingTime={org.openingTime} closingTime={org.closingTime} className="mt-4" />}
 
       {/*
         Lines that could not be honoured are shown, not silently dropped. A cart
@@ -126,13 +127,30 @@ export default async function CartPage() {
             <OrderSummary cart={cart} />
             <EarnPreview spend={cart.payable} />
 
-            <Link
-              href="/checkout"
-              className="flex min-h-[56px] items-center justify-center gap-2 rounded-md bg-primary px-6 font-semibold text-primary-foreground transition-opacity duration-[var(--duration-micro)] hover:opacity-90"
-            >
-              Checkout
-              <ArrowRight className="size-4" aria-hidden="true" />
-            </Link>
+            {pausedReason ? (
+              <>
+                <button
+                  type="button"
+                  disabled
+                  aria-describedby="checkout-paused"
+                  className="flex min-h-[56px] cursor-not-allowed items-center justify-center gap-2 rounded-md bg-primary px-6 font-semibold text-primary-foreground opacity-50"
+                >
+                  Checkout
+                  <ArrowRight className="size-4" aria-hidden="true" />
+                </button>
+                <p id="checkout-paused" className="text-center text-sm text-muted-foreground">
+                  {pausedReason}
+                </p>
+              </>
+            ) : (
+              <Link
+                href="/checkout"
+                className="flex min-h-[56px] items-center justify-center gap-2 rounded-md bg-primary px-6 font-semibold text-primary-foreground transition-opacity duration-[var(--duration-micro)] hover:opacity-90"
+              >
+                Checkout
+                <ArrowRight className="size-4" aria-hidden="true" />
+              </Link>
+            )}
 
             <Link
               href="/menu"
