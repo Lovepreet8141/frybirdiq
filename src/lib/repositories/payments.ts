@@ -118,6 +118,23 @@ export async function createPendingPayment(input: {
   return { id: row?.id ?? null, providerOrderId };
 }
 
+/**
+ * Whether an order is still waiting on an online payment the customer chose:
+ * a Razorpay payment is open for it and no money has been applied to it
+ * (pay-ready Q3). Such an order must not reach the kitchen — nobody has paid
+ * and nobody chose to pay at the counter. Cash on collection and cash on
+ * delivery are not this: cooking those unpaid is the design (order-status.ts).
+ * Read with the caller's transaction, under its order-row lock.
+ */
+export async function awaitsOnlinePayment(tx: Tx, input: { orderId: string; orgId: string }): Promise<boolean> {
+  const rows = await tx
+    .select({ provider: payments.provider, status: payments.status, unapplied: UNAPPLIED })
+    .from(payments)
+    .where(and(eq(payments.orderId, input.orderId), eq(payments.orgId, input.orgId)));
+  const moneyApplied = rows.some((row) => (MONEY_TAKEN_STATUSES as readonly string[]).includes(row.status) && !row.unapplied);
+  return !moneyApplied && rows.some((row) => row.provider === RAZORPAY_PROVIDER && row.status === "PENDING");
+}
+
 /** Whether money has actually been captured against an order — answered by the payments table, never by the status. */
 export async function isOrderPaid(orderId: string): Promise<boolean> {
   const [captured] = await db()

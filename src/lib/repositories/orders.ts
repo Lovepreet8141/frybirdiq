@@ -37,7 +37,7 @@ import { ensureCustomerByPhone } from "./customers";
 import { COUNTER_PLACED_STATUS } from "@/lib/pos/counter-placement";
 import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
-import { createPendingPayment, recordCashPayment } from "./payments";
+import { awaitsOnlinePayment, createPendingPayment, recordCashPayment } from "./payments";
 import { CASH_PROVIDER, RAZORPAY_PROVIDER, availableMethods, codAllowed, getProvider, type PaymentMethod } from "@/lib/payments";
 import { reversePointsForOrder, reverseStampForOrder, spendPointsForOrder } from "./loyalty";
 import { recordConsumption, reverseConsumption } from "./stock";
@@ -1277,6 +1277,18 @@ export async function advanceOrder(input: {
               : "Take payment before handing this over.",
         };
       }
+    }
+
+    /*
+     * An order waiting on its online payment does not reach the kitchen
+     * (pay-ready Q3, FINANCE-LEDGER). The customer chose to pay online and
+     * has not: accepting it would cook for someone who never paid and never
+     * chose to pay at the counter. Once the money is recorded — online, or
+     * cash taken at the counter instead — it can be accepted. Cash orders are
+     * untouched. Read under the lock, so a payment landing meanwhile is seen.
+     */
+    if (input.to === "ACCEPTED" && order.status === "PENDING_PAYMENT" && (await awaitsOnlinePayment(tx, { orderId: order.id, orgId: input.orgId }))) {
+      return { ok: false, error: "This order is waiting for its online payment. Accept it once it's paid, or take payment at the counter first." };
     }
 
     /*
