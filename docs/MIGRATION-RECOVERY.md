@@ -536,18 +536,31 @@ payment.
 > **Roll back only while no shop is paused.** The code before 0039 has no idea
 > a pause exists. Dropping the columns while a shop is paused **silently
 > REOPENS it**: customers can order again, and nothing tells anyone. Resume
-> ordering first. The down file enforces this and refuses otherwise.
+> ordering first. The down file enforces this and refuses otherwise. A pause
+> whose `ordering_paused_until` has already passed counts as open and does not
+> block.
 
 ### Classification — **Reversible while not paused**
 - **What it does (FACT):** on `organizations` adds `ordering_paused_at
   timestamptz`, `ordering_paused_by uuid` (loose, not a foreign key: the auth
-  user id, as in `inventory.ts` and `menu.ts`) and `ordering_paused_reason
-  text`, all nullable, no default, no backfill. One CHECK,
-  `organizations_ordering_pause_check`: `paused_at` and `paused_by` are set
-  together; the reason is null whenever not paused (a resume clears it); a
-  reason is 1–200 characters. The staff form is stricter (3–200, required); the
-  DB leaves room for a future automatic pause. `SET LOCAL lock_timeout = '5s'`
-  first: `organizations` is read on every request.
+  user id, as in `inventory.ts` and `menu.ts`), `ordering_paused_reason text`
+  and `ordering_paused_until timestamptz`, all nullable, no default, no
+  backfill. `_until` is the owner's "how long" (god, ops-1 amendment): "until
+  we next open" (default) sets it, "until I switch it back on" leaves it null.
+  Nothing writes at that instant: a pause past its `_until` simply no longer
+  counts. One CHECK, `organizations_ordering_pause_check`:
+  - `paused_at` and `paused_by` are set together. Every pause has a person
+    behind it; an automatic pause with no human actor would need this CHECK
+    changed first, deliberately (none exists or is planned).
+  - The reason and `_until` are null whenever not paused (a resume clears
+    them).
+  - A reason is 1–200 characters. The staff form is stricter (3–200, required).
+  - `_until` is after `paused_at`. It is written as `_until IS NULL OR
+    (paused_at IS NOT NULL AND _until > paused_at)`: the plain comparison
+    alone is NULL when `paused_at` is null, and a NULL CHECK passes.
+
+  `SET LOCAL lock_timeout = '5s'` first: `organizations` is read on every
+  request.
 - **Expand-only (FACT):** safe to run before the deploy. Every existing org
   reads as taking orders, and the code already live never names these columns.
   It reads `organizations` only through Drizzle's explicit column lists; there
@@ -558,21 +571,29 @@ payment.
   customer or an anonymous caller.
 - **Down file (FACT):** `supabase/rollback/0039_ordering_pause.down.sql`, one
   transaction: `SET LOCAL lock_timeout = '5s'` → `LOCK TABLE organizations IN
-  ACCESS EXCLUSIVE MODE` → guard that **refuses** (55000, naming each paused
-  org's slug and pause time) while any org is paused → drop the CHECK → drop
-  the three columns. Journal-row delete is a manual step outside the
+  ACCESS EXCLUSIVE MODE` → guard that **refuses** (55000, naming each org's
+  slug, pause time and end time or "until switched back on") while any pause
+  is in force, meaning `paused_at` is set and `_until` is null or still ahead →
+  drop the CHECK → drop the four columns. Journal-row delete is a manual step outside the
   transaction (production: `created_at = 1790400000000`).
 - **Tested locally (FACT, 2026-09-20, local Postgres 17.6, per-worktree
   database):** `ordering-pause-0039.integration.test.ts` failed before 0039
-  was applied and passes 10/10 after it. It covers the defaults, pause and
-  resume, a pause without a reason, 200 characters accepted and 201 refused,
-  four CHECK refusals, and the down file inside a rolled-back transaction:
-  it refuses while paused and names the org, and otherwise sets a 5 s timeout
-  and removes exactly 0039's columns and CHECK. Also drilled for real with psql:
-  a paused org made the down refuse with 3 columns intact; after the resume it
-  ran, 0 columns were left and the org was kept; then `test-db.sh migrate`
+  was applied and passes 16/16 after the `_until` amendment. It covers the
+  defaults, pause until next opening and resume, a manual-only pause, a pause
+  without a reason, 200 characters accepted and 201 refused, seven CHECK
+  refusals (including `_until` while not paused, equal to and before
+  `paused_at`), and the down file inside a rolled-back transaction:
+  - it refuses a pause ending later and a manual-only pause, naming the org;
+  - it lets an already-ended pause through (fail-first: with the old
+    "any `paused_at`" guard that test fails);
+  - otherwise it sets a 5 s timeout and removes exactly 0039's columns and
+    CHECK.
+
+  The first three-column version was also drilled for real with psql: a paused
+  org made the down refuse with its columns intact; after the resume it ran,
+  0 columns were left and the org was kept; then `test-db.sh migrate`
   re-applied it. Drizzle migrator path not tested (CLI-managed local stack).
-- **Data at risk:** only the current pause state (when, who, why). Each pause
+- **Data at risk:** only the current pause state (when, who, why, until). Each pause
   and resume keeps its `audit_logs` row.
 - **Journal (FACT):** `when` set by hand to 1790400000000, above 0038.
 

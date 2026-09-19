@@ -128,19 +128,30 @@ export const organizations = pgTable("organizations", {
   orderingPausedBy: uuid("ordering_paused_by"),
   /** Why, for staff only; never shown to a customer. Null when not paused. */
   orderingPausedReason: text("ordering_paused_reason"),
+  /**
+   * When the pause lifts by itself. The staff member chooses when pausing:
+   * "until we next open" (the default) sets it, "until I switch it back on"
+   * leaves it null. Nothing writes at that instant: a pause whose `until` has
+   * passed simply no longer counts, so the row can still carry `paused_at`
+   * after the shop has reopened. Null when not paused.
+   */
+  orderingPausedUntil: timestamp("ordering_paused_until", { withTimezone: true }),
   ...timestamps,
 }, (table) => [
   /*
-   * A pause is all-or-nothing: when and who are set together, and resuming
-   * clears the reason with them, so a stale reason never outlives its pause.
-   * The reason itself is optional here — the staff form requires one; a
-   * future automatic pause might not have one.
+   * A pause is all-or-nothing. When and who are set together: every pause has
+   * a person behind it, and a pause with no human actor (an automatic one)
+   * would need this CHECK changed first — deliberately, since none exists.
+   * Resuming clears the reason and the end time with them, so neither
+   * outlives its pause, and a pause cannot end before it began. The reason
+   * is optional here; the staff form requires one (3–200 characters).
    */
   check(
     "organizations_ordering_pause_check",
     sql`(${table.orderingPausedAt} IS NULL) = (${table.orderingPausedBy} IS NULL)
       AND (${table.orderingPausedAt} IS NOT NULL OR ${table.orderingPausedReason} IS NULL)
-      AND (${table.orderingPausedReason} IS NULL OR char_length(${table.orderingPausedReason}) BETWEEN 1 AND 200)`,
+      AND (${table.orderingPausedReason} IS NULL OR char_length(${table.orderingPausedReason}) BETWEEN 1 AND 200)
+      AND (${table.orderingPausedUntil} IS NULL OR (${table.orderingPausedAt} IS NOT NULL AND ${table.orderingPausedUntil} > ${table.orderingPausedAt}))`,
   ),
 ]);
 

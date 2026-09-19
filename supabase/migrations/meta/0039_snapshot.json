@@ -1,5 +1,5 @@
 {
-  "id": "03525e1e-43f9-4b7b-b337-b988474b5eee",
+  "id": "6d61754a-4fec-4557-8812-19eea3d225f8",
   "prevId": "7093623a-0a49-4bad-890d-2ea1d981f4ef",
   "version": "7",
   "dialect": "postgresql",
@@ -707,6 +707,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "ordering_paused_until": {
+          "name": "ordering_paused_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -738,7 +744,7 @@
       "checkConstraints": {
         "organizations_ordering_pause_check": {
           "name": "organizations_ordering_pause_check",
-          "value": "(\"organizations\".\"ordering_paused_at\" IS NULL) = (\"organizations\".\"ordering_paused_by\" IS NULL)\n      AND (\"organizations\".\"ordering_paused_at\" IS NOT NULL OR \"organizations\".\"ordering_paused_reason\" IS NULL)\n      AND (\"organizations\".\"ordering_paused_reason\" IS NULL OR char_length(\"organizations\".\"ordering_paused_reason\") BETWEEN 1 AND 200)"
+          "value": "(\"organizations\".\"ordering_paused_at\" IS NULL) = (\"organizations\".\"ordering_paused_by\" IS NULL)\n      AND (\"organizations\".\"ordering_paused_at\" IS NOT NULL OR \"organizations\".\"ordering_paused_reason\" IS NULL)\n      AND (\"organizations\".\"ordering_paused_reason\" IS NULL OR char_length(\"organizations\".\"ordering_paused_reason\") BETWEEN 1 AND 200)\n      AND (\"organizations\".\"ordering_paused_until\" IS NULL OR (\"organizations\".\"ordering_paused_at\" IS NOT NULL AND \"organizations\".\"ordering_paused_until\" > \"organizations\".\"ordering_paused_at\"))"
         }
       },
       "isRLSEnabled": false
