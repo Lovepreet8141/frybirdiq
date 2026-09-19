@@ -57,7 +57,7 @@ describe("confirmOnlinePaymentAction", () => {
 
   it("passes the server's refusal through — including money recorded for a refund", async () => {
     recordOnlinePayment.mockResolvedValue({ ok: false, code: "RECORDED_FOR_REFUND", error: "This order had already been paid or closed, so this payment has been recorded to be refunded.", paymentId: "p-2" });
-    expect(await confirmOnlinePaymentAction(VALID)).toEqual({ ok: false, error: "This order had already been paid or closed, so this payment has been recorded to be refunded." });
+    expect(await confirmOnlinePaymentAction(VALID)).toEqual({ ok: false, code: "RECORDED_FOR_REFUND", error: "This order had already been paid or closed, so this payment has been recorded to be refunded." });
   });
 });
 

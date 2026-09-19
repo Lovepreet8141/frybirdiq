@@ -13,9 +13,16 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { readRememberedContact } from "@/lib/cart/remembered-contact";
 import { getCustomer } from "@/lib/customer";
-import { markOnlinePaymentFailed, recordOnlinePayment } from "@/lib/repositories/payments";
+import { type RecordPaymentCode, markOnlinePaymentFailed, recordOnlinePayment } from "@/lib/repositories/payments";
 
-export type OnlinePaymentResult = { ok: true; replayed: boolean } | { ok: false; error: string };
+/**
+ * `code` lets the order page choose what to say without reading `error`
+ * (pay-ready): GATEWAY_DECLINED — offer "Try again"; GATEWAY_UNAVAILABLE — "we
+ * are checking with the bank, do not pay again"; RECORDED_FOR_REFUND — "this
+ * order was already paid, your money will be refunded". Absent when the input
+ * itself was malformed.
+ */
+export type OnlinePaymentResult = { ok: true; replayed: boolean } | { ok: false; error: string; code?: RecordPaymentCode };
 
 const confirmSchema = z.object({
   orderId: z.uuid(),
@@ -37,7 +44,7 @@ export async function confirmOnlinePaymentAction(input: unknown): Promise<Online
 
   revalidatePath(`/order/${parsed.data.orderId}`);
   revalidatePath("/app/orders");
-  return result.ok ? { ok: true, replayed: result.replayed } : { ok: false, error: result.error };
+  return result.ok ? { ok: true, replayed: result.replayed } : { ok: false, error: result.error, code: result.code };
 }
 
 const failureSchema = z.object({
