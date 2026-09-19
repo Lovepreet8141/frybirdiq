@@ -249,7 +249,7 @@ Legend: "Reviewed" = what the office recorded. "Open findings" = refusals or non
 
 - **Refund release / P0 branches** are all inside `49f858a` (live). The `agent/*-p0-*`, `agent/*-ref-*`, `release/rc-*` branches are history now.
 - **`agent/backend--mu4xnzut` `49cb953`:** "Never let a malformed `DEPLOY_COMMIT` take `serverEnv()` down" (be-1 follow-up). Not confirmed as live.
-- **Other unmerged agent branches:** `agent/database-dat-2` (integration suites per-worktree), `agent/reliability-mu4xrig7` (`0066e44` idem-1: withIdempotency scoped by org — **a money-path change, check whether it's in production before assuming**), `agent/gst-tax-mu4xpetj` (`eba2b9a` fin-1 org scoping), `agent/dwight-mu4xqbfl-loy2` (`97e3a92` org-scope `getStampAccountState`), `agent/pos-orders-mu4xqexi-kubf1` / `-ord8`, `agent/qa-mu4xr4hv` (`4be99a7`), `agent/finance-ledger-mu4xp10r`, `agent/michael-mu4lr1ro`, `fix/sign-out-and-email-verification`. **Their status was not recorded in this handover.** Use `git log kit-radix-nova..<branch>` and `git branch -r --contains` to check whether each is already in `49f858a`.
+- **Other unmerged agent branches:** `agent/database-dat-2` (integration suites per-worktree), `agent/reliability-mu4xrig7` (`0066e44` idem-1, withIdempotency scoped by org; **checked 2026-09-19: an ancestor of `kit-radix-nova` and of `49f858a`, so it is live**), `agent/gst-tax-mu4xpetj` (`eba2b9a` fin-1 org scoping), `agent/dwight-mu4xqbfl-loy2` (`97e3a92` org-scope `getStampAccountState`), `agent/pos-orders-mu4xqexi-kubf1` / `-ord8`, `agent/qa-mu4xr4hv` (`4be99a7`), `agent/finance-ledger-mu4xp10r`, `agent/michael-mu4lr1ro`, `fix/sign-out-and-email-verification`. **Their status was not recorded in this handover.** Use `git log kit-radix-nova..<branch>` and `git branch -r --contains` to check whether each is already in `49f858a`.
 - **`iq-dashboard`** is a pre-existing branch that was 6 commits ahead of its upstream; now pushed too.
 
 ---
@@ -326,3 +326,12 @@ Legend: "Reviewed" = what the office recorded. "Open findings" = refusals or non
 - The hive is at `~/FRYBIRD-IQ/hive/` (`board.md`, `tasks.json`, `reviews/`, `research/launch-audit/`). It is a record, not something to keep running.
 - Production deploy details: `docs/DEPLOY.md` §10 (steps), §11.2 (alerting), `deploy/backup.sh`. The release record is `docs/RELEASES.md`.
 - Integration tests need the local Supabase stack (`supabase start`, `.env.test.local`); see CLAUDE.md.
+
+---
+
+## 8. Update, 2026-09-19 (session after the handover)
+
+- **Release 1 is live:** `383e693` (seo-1 + loy-web), BUILD_ID `QfcS3cFFTWYktErhEU-8Q`, RELEASES row 4; nginx `robots.txt` Sitemap line applied, row 5. Production migration head is still 0038. `kit-radix-nova` is fast-forwarded to each released commit (owner: keep doing this after every release).
+- **Parked, not started:** the 15 item descriptions. Owner will supply the real menu facts another day; nothing is written to the live menu. The drafts in `~/FRYBIRD-IQ/hive/research/seo-1-descriptions.md` are not to be rewritten yet.
+- **Queued right after Release 2 (owner card): stale staff screens.** After a deploy, POS, KDS, the orders board and Admin keep running the old client until someone reloads them (seen live after row 4: a pre-deploy tab logged `Failed to find Server Action` about every 30 s). Add a version check on those screens; when the BUILD_ID changes show "New version — tap to reload"; reload automatically when the screen is idle with no order in progress.
+- **Order now:** Release 2 (ops-1 Close Shop) -> stale-screen version check -> day-off card (ops-3) -> the rest of the §2 queue.
