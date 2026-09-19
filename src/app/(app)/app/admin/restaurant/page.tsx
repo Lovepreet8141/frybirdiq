@@ -18,7 +18,7 @@ import { adminNavAccess } from "@/lib/auth/admin-access";
 import { formatBps, formatINR } from "@/lib/money";
 import { getRestaurantSettings } from "@/lib/repositories/settings";
 import { getOrderingStatusForStaff } from "@/lib/repositories/shop-status";
-import { restartLine, sinceLabel } from "@/lib/settings/close-shop-copy";
+import { sinceLabel } from "@/lib/settings/close-shop-copy";
 import { CloseShopPanel } from "./close-shop-panel";
 
 export const metadata: Metadata = { title: "Restaurant", robots: { index: false, follow: false } };
@@ -59,10 +59,6 @@ export default async function RestaurantSettingsPage() {
       {ordering && (
         <CloseShopPanel
           status={ordering}
-          restartLines={{
-            UNTIL_NEXT_OPENING: restartLine("UNTIL_NEXT_OPENING", now, organization.openingTime, organization.closingTime),
-            UNTIL_RESUMED: restartLine("UNTIL_RESUMED", now, organization.openingTime, organization.closingTime),
-          }}
           pausedSince={ordering.state === "paused" ? sinceLabel(ordering.pausedAt, now) : null}
         />
       )}

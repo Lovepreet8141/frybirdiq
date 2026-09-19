@@ -1,10 +1,10 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { pauseOrderingAction, resumeOrderingAction } from "@/lib/orders/shop-status-actions";
+import { pauseOrderingAction, previewPauseAction, resumeOrderingAction } from "@/lib/orders/shop-status-actions";
 import type { PauseMode } from "@/lib/orders/opening-hours";
 import type { StaffOrderingStatus } from "@/lib/repositories/shop-status";
-import { PAUSE_MODE_LABELS, SHOP_CLOSED_HEADLINE, SHOP_OPEN_HEADLINE } from "@/lib/settings/close-shop-copy";
+import { PAUSE_MODE_LABELS, SHOP_CLOSED_HEADLINE, SHOP_OPEN_HEADLINE, pauseOutcome, restartLine, stillDueLine } from "@/lib/settings/close-shop-copy";
 
 /**
  * The Close Shop switch on Admin → Restaurant (ops-1 S4b) — the same switch as
@@ -25,23 +25,23 @@ const secondary = `${control} border border-border bg-panel hover:bg-surface`;
 
 export interface CloseShopPanelProps {
   readonly status: StaffOrderingStatus;
-  /** "Orders restart today at 11:30 AM." — computed on the server, per mode, for the confirm. */
-  readonly restartLines: Readonly<Record<PauseMode, string>>;
   /** "today at 7:42 PM" — when the current pause began; null when not paused. */
   readonly pausedSince: string | null;
 }
 
-export function CloseShopPanel({ status, restartLines, pausedSince }: CloseShopPanelProps) {
+export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
   const [choosing, setChoosing] = useState(false);
   const [mode, setMode] = useState<PauseMode>("UNTIL_NEXT_OPENING");
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState<{ tone: "error" | "note"; text: string } | null>(null);
+  // Read from the server when the chooser opens, not at page render (a phone left open across opening time).
+  const [preview, setPreview] = useState<{ nextOpeningLabel: string; ordersStillDue: number } | null>(null);
   const [pending, startTransition] = useTransition();
 
   const paused = status.state === "paused";
   const open = status.state === "open";
 
-  function run(work: () => Promise<{ ok: boolean; error?: string; changed?: boolean }>, done: () => void) {
+  function run<R extends { ok: boolean; error?: string }>(work: () => Promise<R>, done: (result: R) => void) {
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       setMessage({ tone: "error", text: "You're offline. Nothing was changed — check your connection and try again." });
       return;
@@ -51,24 +51,39 @@ export function CloseShopPanel({ status, restartLines, pausedSince }: CloseShopP
       try {
         const result = await work();
         if (!result.ok) setMessage({ tone: "error", text: result.error ?? "That didn't save. Try again." });
-        else done();
+        else done(result);
       } catch {
         setMessage({ tone: "error", text: "Couldn't reach the server. Nothing was changed — try again." });
       }
     });
   }
 
-  function confirmPause() {
+  function openChooser() {
+    setMessage(null);
+    setMode("UNTIL_NEXT_OPENING");
+    setReason("");
+    setPreview(null);
+    setChoosing(true);
     run(
-      async () => {
-        const result = await pauseOrderingAction({ reason, mode });
-        // Already paused elsewhere: the page now shows the pause in force, not this choice.
-        if (result.ok && !result.changed) setMessage({ tone: "note", text: "Orders were already switched off — the pause in force is shown above." });
-        return result;
+      () => previewPauseAction(),
+      (result) => {
+        if ("preview" in result) setPreview({ nextOpeningLabel: result.preview.nextOpeningLabel, ordersStillDue: result.preview.ordersStillDue });
       },
-      () => {
-        setChoosing(false);
-        setReason("");
+    );
+  }
+
+  function confirmPause() {
+    const chosen = { mode, reason };
+    run(
+      () => pauseOrderingAction(chosen),
+      (result) => {
+        if (!("status" in result)) return;
+        const outcome = pauseOutcome(result, chosen);
+        setMessage(outcome.message);
+        if (outcome.close) {
+          setChoosing(false);
+          setReason("");
+        }
       },
     );
   }
@@ -78,13 +93,14 @@ export function CloseShopPanel({ status, restartLines, pausedSince }: CloseShopP
     const shownPausedAt = status.pausedAt.toISOString();
     run(async () => {
       const result = await resumeOrderingAction({ shownPausedAt });
-      if (!result.ok && result.code === "PAUSE_CHANGED") setMessage({ tone: "error", text: `${result.error} The pause now in force is shown above.` });
+      if (!result.ok && result.code === "PAUSE_CHANGED") return { ...result, error: `${result.error} The pause now in force is shown above.` };
       return result;
     }, () => undefined);
   }
 
   const reasonOk = reason.trim().length >= 3;
-  const stillDue = status.ordersStillDue;
+  const stillDue = preview?.ordersStillDue ?? status.ordersStillDue;
+  const restart = restartLine(mode, preview?.nextOpeningLabel ?? null);
 
   return (
     <section aria-labelledby="close-shop-heading" className={`rounded-lg border-l-4 p-4 sm:p-5 ${open ? "border-gain bg-gain-soft/60" : "border-loss bg-loss-soft/60"}`}>
@@ -138,7 +154,7 @@ export function CloseShopPanel({ status, restartLines, pausedSince }: CloseShopP
         </div>
       ) : !choosing ? (
         <div className="mt-4">
-          <button type="button" onClick={() => { setMessage(null); setChoosing(true); }} className={secondary}>
+          <button type="button" onClick={openChooser} className={secondary}>
             Switch online orders off…
           </button>
         </div>
@@ -179,19 +195,15 @@ export function CloseShopPanel({ status, restartLines, pausedSince }: CloseShopP
           </div>
 
           <div className="grid gap-1 text-sm" role="note">
-            <p className="font-semibold">{restartLines[mode]}</p>
-            {stillDue > 0 && (
-              <p className="text-muted-foreground">
-                {stillDue} {stillDue === 1 ? "order is" : "orders are"} already placed and still to be made. Switching off does not cancel {stillDue === 1 ? "it" : "them"}.
-              </p>
-            )}
+            <p className="font-semibold">{restart ?? (pending ? "Checking opening hours…" : "Couldn't check the opening hours — choose \"until I switch it back on\" or close this and try again.")}</p>
+            {stillDueLine(stillDue) && <p className="text-muted-foreground">{stillDueLine(stillDue)}</p>}
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
             <button type="button" onClick={() => { setChoosing(false); setMessage(null); }} disabled={pending} className={secondary}>
               Keep taking orders
             </button>
-            <button type="submit" disabled={pending || !reasonOk} className={primary}>
+            <button type="submit" disabled={pending || !reasonOk || restart === null} className={primary}>
               {pending ? "Switching off…" : "Switch orders off"}
             </button>
           </div>
