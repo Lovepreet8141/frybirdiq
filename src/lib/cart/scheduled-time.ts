@@ -11,7 +11,7 @@
  */
 
 import { addDays, businessDate } from "@/lib/dates";
-import { businessHoursWindow, formatBusinessClock, isOpenAt } from "@/lib/orders/opening-hours";
+import { businessHoursWindow, formatBusinessClock, sessionStartDate } from "@/lib/orders/opening-hours";
 
 /** Shortest notice a scheduled order gets, same idea as a kitchen needing warning before an ASAP ticket lands. */
 export const MIN_LEAD_MINUTES = 20;
@@ -98,16 +98,25 @@ export function isValidScheduledTime(candidate: Date, now: Date, openingTime: st
   if (Number.isNaN(candidate.getTime())) return false;
   if (candidate.getTime() < now.getTime() + MIN_LEAD_MINUTES * 60_000) return false;
 
-  const today = businessDate(now);
-  const horizon = addDays(today, SCHEDULE_DAYS_AHEAD);
-  const candidateDate = businessDate(candidate);
-  if (candidateDate < today || candidateDate > horizon) return false;
+  // Which trading session the requested time falls in — null when the shop is
+  // shut then, which refuses it. One question instead of two, and the same
+  // answer `scheduleDays` keys its days by, so the picker and this check cannot
+  // offer and refuse the same slot.
+  const session = sessionStartDate(candidate, openingTime, closingTime);
+  if (session === null) return false;
 
-  // The same predicate the ASAP gate uses, asked about a future instant rather
-  // than about now. Not `businessHoursWindow(candidateDate)` alone: under
-  // overnight hours a 1am slot belongs to the session that opened the previous
-  // evening, and `slotsForDay` below will happily offer it — a validator that
-  // only looked at its own date's session would refuse a time the picker had
-  // just shown.
-  return isOpenAt(candidate, openingTime, closingTime);
+  /*
+   * Bounded by the session's own date, not the candidate's calendar date.
+   * Those differ only when a session runs past midnight, and that difference
+   * was the whole bug: under 18:00-02:00 hours the last day the picker offers
+   * closes at 02:00 the following morning, so its post-midnight slots read as
+   * one day past the horizon and were refused after being offered.
+   *
+   * Only an upper bound. "Not in the past" is already settled by the lead-time
+   * check above, and a lower bound on the session date would refuse a real
+   * one: at 00:00 under those hours the shop is open on the session that began
+   * the previous evening, so a time half an hour away belongs to a session
+   * whose date is yesterday's and is perfectly orderable.
+   */
+  return session <= addDays(businessDate(now), SCHEDULE_DAYS_AHEAD);
 }

@@ -10,9 +10,9 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { openHoursSpan } from "@/lib/dates";
+import { businessDate, openHoursSpan } from "@/lib/dates";
 import { isValidScheduledTime, scheduleDays } from "@/lib/cart/scheduled-time";
-import { asapRefusal, businessHoursWindow, formatBusinessClock, isOpenAt, nextOpening } from "./opening-hours";
+import { asapRefusal, businessHoursWindow, formatBusinessClock, isOpenAt, nextOpening, sessionStartDate } from "./opening-hours";
 
 /** FRYBIRD's real configured hours (organizations.opening_time / closing_time defaults). */
 const OPEN = "11:30";
@@ -260,5 +260,79 @@ describe("formatBusinessClock", () => {
     const [today] = scheduleDays(new Date("2026-09-19T04:00:00.000Z"), OPEN, CLOSE); // 09:30 IST
     expect(today?.slots[0]?.label).toBe(formatBusinessClock(today!.slots[0]!.at));
     expect(today?.slots[0]?.label).toBe("11:30 AM");
+  });
+});
+
+/**
+ * The horizon, bounded by the session a time belongs to rather than the
+ * calendar date it reads (p0-3d). RELIABILITY measured the defect: with
+ * 18:00–02:00 hours the picker's last day offered 32 slots and the validator
+ * refused 8 of them, the shop being open at every one.
+ */
+describe("the scheduling horizon under hours that cross midnight", () => {
+  const NOW = new Date("2026-09-19T06:30:00.000Z"); // 2026-09-19 12:00 IST
+
+  it("names the session a time belongs to, which is not always its own date", () => {
+    // 2026-09-19 19:00 IST — inside the session that opened that evening.
+    expect(sessionStartDate(new Date("2026-09-19T13:30:00.000Z"), LATE_OPEN, LATE_CLOSE)).toBe("2026-09-19");
+    // 2026-09-20 00:30 IST — the calendar has turned, the session has not.
+    expect(sessionStartDate(new Date("2026-09-19T19:00:00.000Z"), LATE_OPEN, LATE_CLOSE)).toBe("2026-09-19");
+    // 2026-09-20 10:00 IST — shut, so no session.
+    expect(sessionStartDate(new Date("2026-09-20T04:30:00.000Z"), LATE_OPEN, LATE_CLOSE)).toBeNull();
+    // Hours that do not cross midnight: the session date IS the candidate's date.
+    expect(sessionStartDate(new Date("2026-09-19T12:30:00.000Z"), OPEN, CLOSE)).toBe("2026-09-19");
+  });
+
+  it("accepts every slot the picker offers, which it did not before", () => {
+    const days = scheduleDays(NOW, LATE_OPEN, LATE_CLOSE);
+    const offered = days.flatMap((day) => day.slots);
+    expect(offered.length).toBe(64); // 32 on each of the two days
+    expect(offered.filter((slot) => !isValidScheduledTime(slot.at, NOW, LATE_OPEN, LATE_CLOSE))).toEqual([]);
+  });
+
+  it("accepted the exact instant RELIABILITY measured as refused", () => {
+    // 2026-09-21 00:00 IST, labelled "12:00 AM" by the picker — the first of
+    // the eight. It belongs to the session that opened on the 20th, which is
+    // the horizon itself.
+    const firstRefused = new Date("2026-09-20T18:30:00.000Z");
+    expect(sessionStartDate(firstRefused, LATE_OPEN, LATE_CLOSE)).toBe("2026-09-20");
+    expect(isOpenAt(firstRefused, LATE_OPEN, LATE_CLOSE)).toBe(true);
+    expect(isValidScheduledTime(firstRefused, NOW, LATE_OPEN, LATE_CLOSE)).toBe(true);
+  });
+
+  it("still refuses the session after the horizon", () => {
+    // 2026-09-21 19:00 IST — the session starting on the 21st, one day beyond
+    // a horizon of today + 1. Open, but further ahead than scheduling goes.
+    const beyond = new Date("2026-09-21T13:30:00.000Z");
+    expect(isOpenAt(beyond, LATE_OPEN, LATE_CLOSE)).toBe(true);
+    expect(isValidScheduledTime(beyond, NOW, LATE_OPEN, LATE_CLOSE)).toBe(false);
+  });
+
+  it("accepts a time tonight whose session began yesterday", () => {
+    // This is why the bound is upper-only. Now is 2026-09-20 00:00 IST, the
+    // shop open on the session that started on the 19th; a time 30 minutes
+    // away belongs to that session, whose date is *before* today's. A lower
+    // bound on the session date would refuse a perfectly orderable time.
+    const justAfterMidnight = new Date("2026-09-19T18:30:00.000Z"); // 2026-09-20 00:00 IST
+    const halfAnHourLater = new Date("2026-09-19T19:00:00.000Z"); // 2026-09-20 00:30 IST
+    expect(sessionStartDate(halfAnHourLater, LATE_OPEN, LATE_CLOSE)).toBe("2026-09-19");
+    expect(businessDate(justAfterMidnight)).toBe("2026-09-20");
+    expect(isValidScheduledTime(halfAnHourLater, justAfterMidnight, LATE_OPEN, LATE_CLOSE)).toBe(true);
+  });
+
+  it("leaves 11:30-23:00 exactly as it was", () => {
+    // Every slot offered is accepted, and the day after the horizon is not.
+    const offered = scheduleDays(NOW, OPEN, CLOSE).flatMap((day) => day.slots);
+    expect(offered.length).toBeGreaterThan(0);
+    expect(offered.filter((slot) => !isValidScheduledTime(slot.at, NOW, OPEN, CLOSE))).toEqual([]);
+    // 2026-09-21 12:00 IST — open, beyond the horizon, refused as before.
+    expect(isValidScheduledTime(new Date("2026-09-21T06:30:00.000Z"), NOW, OPEN, CLOSE)).toBe(false);
+  });
+
+  it("still refuses a time inside the lead window, and an invalid date", () => {
+    // 2026-09-19 19:10 IST against a now of 19:00 — open, but ten minutes off.
+    const now = new Date("2026-09-19T13:30:00.000Z");
+    expect(isValidScheduledTime(new Date("2026-09-19T13:40:00.000Z"), now, LATE_OPEN, LATE_CLOSE)).toBe(false);
+    expect(isValidScheduledTime(new Date("not a date"), now, LATE_OPEN, LATE_CLOSE)).toBe(false);
   });
 });
