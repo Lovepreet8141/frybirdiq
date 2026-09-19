@@ -629,6 +629,12 @@ integration suite, 45 files / 437 tests, run against a database that has 0039, p
 5. Do NOT roll back the database first. New code without the columns is a
    site-wide outage (every organizations read names them).
 
+## 4g. 0040 `day_off` (ops-3, `release/rc-18-day-off`)
+
+- **What:** `organizations.weekly_closed_days smallint[] NOT NULL DEFAULT '{}'` (CHECK: values 0-6, at most six) and table `closed_dates` (org_id FK cascade, start/end date, public_note 1-120 chars, CHECK end >= start, RLS enabled and forced, no client DML). Expand-only: a constant-default column (catalogue only) and an empty table. Journal `when` 1790500000000.
+- **Classification: reversible while nothing is in force.** `supabase/rollback/0040_day_off.down.sql` runs in one transaction and REFUSES while any weekly closed day is set or a closed date has not yet ended (otherwise the shop silently opens on those days). Drilled on a throwaway database 2026-09-20: apply, refuse with Tuesday set, refuse with an upcoming date, undo when clear (a finished closure does not block), re-apply. Then delete the 0040 row from `drizzle.__drizzle_migrations` (created_at 1790500000000).
+- **Code-only rollback (to the previous build) is safe for the database:** the previous build passes its full integration suite (492) with 0040 present. It does not know about closures, so on and before a closed day it would TAKE ORDERS. Order of steps: (1) switch orders off from the POS or Admin, "until I switch it back on"; (2) redeploy the previous commit code-only; (3) leave 0040 in place; (4) resume ordering only after the day passes or after clearing the weekly day and closed dates deliberately. Run the down script only after (2) and after clearing the closures.
+
 ## 5. Rollback files 0022–0026: the known-safe procedure
 
 ### What the files are (FACT)

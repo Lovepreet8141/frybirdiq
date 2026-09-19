@@ -24,3 +24,12 @@ describe("refusedClosedText on a whole closed day", () => {
     expect(refusedClosedText({ opensAtLabel: "tomorrow at 11:30 AM", dayOff: null })).toContain("Choose a time to order ahead.");
   });
 });
+
+describe("refusedClosedText: 'Choose a time' only when there is a day to choose", () => {
+  it("offered when we open today or tomorrow, withheld when the next opening is further out", () => {
+    expect(refusedClosedText({ opensAtLabel: "tomorrow at 11:30 AM", dayOff: null, opensDay: "TOMORROW" })).toContain("Choose a time to order ahead.");
+    expect(refusedClosedText({ opensAtLabel: "Wednesday at 11:30 AM", dayOff: null, opensDay: "LATER" })).toBe(
+      "We're closed, so this order wasn't placed and nothing was charged. We open Wednesday at 11:30 AM.",
+    );
+  });
+});

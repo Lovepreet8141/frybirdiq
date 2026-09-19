@@ -21,6 +21,7 @@ import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransit
 import type { Role } from "@/domain/permissions";
 import { REJECTION_LABELS, type RejectionReason } from "@/domain/rejection";
 import { businessDate } from "@/lib/dates";
+import { closedDay } from "@/lib/orders/closures";
 import { isValidScheduledTime } from "@/lib/cart/scheduled-time";
 import { isSupabaseConfigured } from "@/lib/env";
 import { type Paise, ZERO, formatINR, paise, subtract } from "@/lib/money";
@@ -208,8 +209,16 @@ function closedResult(closed: ShopClosedRefusal): PlaceOrderResult {
   // A whole closed day says so; "choose a time" is only offered when a later slot could exist (the picker never lists a closed day).
   const error = closed.dayOff
     ? `We're closed today. We open again ${closed.opensAtLabel} — nothing has been ordered or charged.${closed.dayOff.note ? ` ${closed.dayOff.note}` : ""}`
-    : `The kitchen is closed right now. We open ${closed.opensAtLabel} — nothing has been ordered or charged. You can still choose a time instead.`;
+    : `The kitchen is closed right now. We open ${closed.opensAtLabel} — nothing has been ordered or charged.${closed.opensDay === "LATER" ? "" : " You can still choose a time instead."}`;
   return { ok: false, error, closed };
+}
+
+/** A pre-order for a closed day says so; any other slipped slot keeps the generic words. */
+function scheduleRefusalResult(candidate: Date | null, shop: ShopStatus): PlaceOrderResult {
+  if (candidate && !Number.isNaN(candidate.getTime()) && closedDay(businessDate(candidate), shop.closures)) {
+    return { ok: false, error: "We're closed on that day. Pick another day.", fieldErrors: { scheduledFor: "We're closed on that day. Pick another day." } };
+  }
+  return SCHEDULE_SLIPPED_RESULT;
 }
 
 const SCHEDULE_SLIPPED_RESULT: PlaceOrderResult = {
@@ -235,10 +244,10 @@ async function readShopStatus(orgId: string): Promise<ShopStatus> {
   return shopStatusFromOrg(row, await readClosedDates(orgId, new Date()));
 }
 
-function writeRefusalResult(refusal: WriteRefusal, now: Date, shop: ShopStatus): PlaceOrderResult {
+function writeRefusalResult(refusal: WriteRefusal, now: Date, shop: ShopStatus, scheduledFor: Date | null): PlaceOrderResult {
   if (refusal.kind === "PAUSED") return pausedResult(now, shop, refusal.paused);
   if (refusal.kind === "CLOSED") return closedResult(refusal.closed);
-  return SCHEDULE_SLIPPED_RESULT;
+  return scheduleRefusalResult(scheduledFor, shop);
 }
 
 /**
@@ -374,6 +383,8 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   if (details.when === "SCHEDULED") {
     const candidate = details.scheduledFor ? new Date(details.scheduledFor) : null;
     if (!candidate || !isValidScheduledTime(candidate, now, shop.openingTime, shop.closingTime, shop.closures)) {
+      const closedThatDay = scheduleRefusalResult(candidate, shop);
+      if (closedThatDay !== SCHEDULE_SLIPPED_RESULT) return closedThatDay;
       return {
         ok: false,
         error: "That time isn't available anymore. Pick another.",
@@ -502,7 +513,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       const fresh = await readShopStatus(org.id);
       const at = new Date();
       const refused = writeGate({ now: at, shop: fresh, when: details.when, scheduledFor });
-      if (refused) return writeRefusalResult(refused, at, fresh);
+      if (refused) return writeRefusalResult(refused, at, fresh, scheduledFor);
     }
 
     try {
@@ -543,7 +554,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     }
     // Refused at the moment of writing (paused, closed, or the slot slipped): nothing was ordered or charged,
     // and the idempotency claim was released, so a retry after the shop reopens is a fresh attempt.
-    if (error instanceof OrderingRefusedAtWrite) return writeRefusalResult(error.refusal, error.at, error.shop);
+    if (error instanceof OrderingRefusedAtWrite) return writeRefusalResult(error.refusal, error.at, error.shop, scheduledFor);
     if (error instanceof PromoLimitReached) return { ok: false, error: "That offer just reached its usage limit. Remove the code and try again." };
     throw error;
   }

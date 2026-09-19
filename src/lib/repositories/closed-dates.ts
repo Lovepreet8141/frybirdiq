@@ -18,7 +18,7 @@ import "server-only";
  * Every change is one audit row, in the transaction.
  */
 
-import { and, asc, eq, gte, isNotNull, notInArray } from "drizzle-orm";
+import { and, asc, eq, gte, isNotNull, lte, notInArray } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, closedDates, orders, organizations } from "@/db/schema";
 import { TERMINAL_STATUSES } from "@/domain/order-status";
@@ -50,6 +50,9 @@ export async function readClosedDates(orgId: string, now: Date, executor: Execut
 
 /** Statuses that mean the order is still going to be made: not finished, not a draft. PENDING_PAYMENT counts (the customer is waiting). */
 const OPEN_STATUSES_EXCLUDED = [...TERMINAL_STATUSES, "DRAFT"] as const;
+
+/** Pre-orders are only offered a day or two ahead; a month is far more than enough and keeps the query bounded. */
+const PRE_ORDER_LOOKAHEAD_DAYS = 45;
 
 export interface AffectedPreOrder {
   readonly orderId: string;
@@ -85,11 +88,12 @@ export async function findPreOrdersOnClosedDays(orgId: string, closures: Closure
         eq(orders.orgId, orgId),
         isNotNull(orders.scheduledFor),
         gte(orders.scheduledFor, now),
+        lte(orders.scheduledFor, new Date(now.getTime() + PRE_ORDER_LOOKAHEAD_DAYS * 86_400_000)),
         notInArray(orders.status, [...OPEN_STATUSES_EXCLUDED]),
       ),
     )
     .orderBy(asc(orders.scheduledFor))
-    .limit(500);
+    .limit(2000);
   const affected: AffectedPreOrder[] = [];
   for (const row of rows) {
     if (!row.scheduledFor) continue;
@@ -148,7 +152,16 @@ export async function addClosedDate(input: AddClosedDateInput): Promise<ClosureW
     const [org] = await tx.select({ weekly: organizations.weeklyClosedDays }).from(organizations).where(eq(organizations.id, input.orgId)).for("update").limit(1);
     if (!org) return { ok: false, code: "NOT_FOUND", error: "That shop could not be found." } as const;
 
-    const existing = await tx.select({ id: closedDates.id }).from(closedDates).where(and(eq(closedDates.orgId, input.orgId), gte(closedDates.endDate, businessDate(now))));
+    const existing = await tx
+      .select({ id: closedDates.id, startDate: closedDates.startDate, endDate: closedDates.endDate, note: closedDates.publicNote })
+      .from(closedDates)
+      .where(and(eq(closedDates.orgId, input.orgId), gte(closedDates.endDate, businessDate(now))));
+    // A double-submit or a second tab: the same closure again changes nothing (no duplicate row, no second audit row).
+    if (existing.some((row) => row.startDate === input.startDate && row.endDate === input.endDate && row.note === input.note)) {
+      const dates = await readClosedDates(input.orgId, now, tx);
+      const preOrders = await findPreOrdersOnClosedDays(input.orgId, { weeklyClosedDays: normaliseWeekdays(org.weekly), closedDates: dates }, now, tx);
+      return { ok: true, preOrders: preOrders.filter((order) => order.date >= input.startDate && order.date <= input.endDate) } as const;
+    }
     if (existing.length >= CLOSED_DATE_MAX_ROWS) return { ok: false, code: "INVALID", error: `There are already ${CLOSED_DATE_MAX_ROWS} planned closures. Remove some that have finished.` } as const;
 
     const [row] = await tx

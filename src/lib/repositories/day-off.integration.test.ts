@@ -73,6 +73,15 @@ describe("closed dates", () => {
     expect(audit).toMatchObject({ actorUserId: actor, after: { startDate: "2026-10-20", endDate: "2026-10-22", note: "Closed for Diwali" } });
   });
 
+  it("adding the same closure twice (a double-submit, a second tab) writes one row and one audit row", async () => {
+    await reset();
+    const input = { orgId: org.orgId, actorUserId: actor, startDate: "2026-10-20", endDate: "2026-10-20", note: "Closed for Diwali", now: MONDAY_NOON };
+    expect((await addClosedDate(input)).ok).toBe(true);
+    expect((await addClosedDate(input)).ok).toBe(true);
+    expect(await readClosedDates(org.orgId, MONDAY_NOON)).toHaveLength(1);
+    expect(await auditActions("closed_date_added")).toBe(1);
+  });
+
   it("history does not weigh on the gate: a range that ended long ago is not read", async () => {
     await reset();
     await db().insert(closedDates).values({ orgId: org.orgId, startDate: "2026-01-01", endDate: "2026-01-03", publicNote: null });

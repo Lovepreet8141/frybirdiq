@@ -63,3 +63,10 @@ export function closedDay(date: string, closures: Closures | undefined): ClosedD
 export function isClosedDay(date: string, closures: Closures | undefined): boolean {
   return closedDay(date, closures) !== null;
 }
+
+/** "Open daily", or "Open daily except Tuesday" / "except Tuesday and Wednesday": what the public site says about the week. */
+export function openDaysLabel(closedWeekdays: readonly number[] | undefined): string {
+  const days = normaliseWeekdays(closedWeekdays).map((day) => WEEKDAY_NAMES[day]);
+  if (days.length === 0) return "Open daily";
+  return `Open daily except ${days.length === 1 ? days[0] : `${days.slice(0, -1).join(", ")} and ${days[days.length - 1]}`}`;
+}

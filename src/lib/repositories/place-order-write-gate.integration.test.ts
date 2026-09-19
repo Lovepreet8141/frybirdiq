@@ -459,7 +459,7 @@ describe("a closed day (ops-3): the server refuses whatever the page showed", ()
     const result = await placeOrder({ ...base, phone: "9000000012", when: "SCHEDULED", scheduledFor: WEDNESDAY_SLOT.toISOString(), idempotencyKey: randomUUID() });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
-    expect(result.error).toBe("That time isn't available anymore. Pick another.");
+    expect(result.error).toBe("We're closed on that day. Pick another day."); // says WHY, not the generic slot message
     expect(await orderCount()).toBe(before);
   });
 

@@ -10,7 +10,7 @@ import { orderingBanner, orderingControls } from "@/lib/cart/ordering-banner";
 import { isValidScheduledTime, scheduleDays } from "@/lib/cart/scheduled-time";
 import { shopOrderingState } from "@/lib/cart/shop-hours";
 import type { StaffOrderingStatus } from "@/lib/repositories/shop-status";
-import { type Closures, NO_CLOSURES, closedDay, isClosedDay, normaliseWeekdays, weekdayOf } from "./closures";
+import { type Closures, NO_CLOSURES, openDaysLabel, closedDay, isClosedDay, normaliseWeekdays, weekdayOf } from "./closures";
 import { asapRefusal, dayPhrase, isOpenAt, nextOpening, openingOnOrAfter, opensAtPhrase, orderingRefusal, pausedUntilFor, sessionStartDate, type ShopStatus } from "./opening-hours";
 import { clockOrTomorrow, pillDetail, pillView, statusSignature } from "./shop-pill";
 import { writeGate } from "./write-gate";
@@ -312,5 +312,15 @@ describe("the staff pill on a day off", () => {
     const a = staff(shopOrderingState(TUESDAY, shop(TUESDAYS)));
     expect(statusSignature(a)).not.toBe(statusSignature(staff(shopOrderingState(TUESDAY, shop(TUESDAYS)), { preOrdersOnClosedDays: 1 })));
     expect(statusSignature(a)).not.toBe(statusSignature(staff(shopOrderingState(ist("2026-09-21", "23:30"), shop(TUESDAYS)))));
+  });
+});
+
+describe("what the public site says about the week", () => {
+  it("open daily, or which day is the exception", () => {
+    expect(openDaysLabel(undefined)).toBe("Open daily");
+    expect(openDaysLabel([])).toBe("Open daily");
+    expect(openDaysLabel([2])).toBe("Open daily except Tuesday");
+    expect(openDaysLabel([3, 2])).toBe("Open daily except Tuesday and Wednesday");
+    expect(openDaysLabel([0, 2, 3])).toBe("Open daily except Sunday, Tuesday and Wednesday");
   });
 });

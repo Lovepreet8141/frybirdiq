@@ -10,6 +10,7 @@ import { Location } from "@/components/home/location";
 import { FranchiseForm } from "@/components/home/franchise-form";
 import { HomeFooter } from "@/components/home/footer";
 import { HomeOrderBar } from "@/components/home/order-bar";
+import { openDaysLabel } from "@/lib/orders/closures";
 import { OrderingBanner } from "@/components/site/ordering-banner";
 import { shopPhone } from "@/lib/contact/phone";
 import { LoyaltySection } from "@/components/loyalty/loyalty-section";
@@ -65,6 +66,7 @@ export default async function HomePage() {
   const opens = org?.openingTime ?? "11:30";
   const closes = org?.closingTime ?? "23:00";
   const hoursValue = formatHoursRange(opens, closes);
+  const openDays = openDaysLabel(org?.weeklyClosedDays);
 
   const byslug = new Map(products.map((p) => [p.slug, p] as const));
   const bestsellers: HomeBestseller[] = BESTSELLER_SLUGS.map((entry): HomeBestseller | null => {
@@ -132,7 +134,7 @@ export default async function HomePage() {
             addressOneLine={contact ? addressLines.join(", ") : ADDRESS_ONE_LINE}
             deliveryChip={deliveryChip}
             deliveryText={deliveryText}
-            hoursLabel="Open daily"
+            hoursLabel={openDays}
             hoursValue={hoursValue}
             mapsDirectionsUrl={directionsUrl(pin)}
             mapsPlaceUrl={MAPS_PLACE_URL}
@@ -142,7 +144,7 @@ export default async function HomePage() {
           />
           <FranchiseForm />
         </main>
-        <HomeFooter addressLines={addressLines} city={CITY} hoursLabel="Open daily" hoursValue={hoursValue} />
+        <HomeFooter addressLines={addressLines} city={CITY} hoursLabel={openDays} hoursValue={hoursValue} />
         <HomeOrderBar />
         <HomeMotion />
       </div>
