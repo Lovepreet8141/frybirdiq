@@ -146,6 +146,11 @@ export async function updateOperationsSettings(
  * reason CLAUDE.md is explicit about — price basis above all, where
  * changing it retroactively misstates every past margin. This function only
  * ever touches `name`, `opening_time` and `closing_time`.
+ *
+ * Does NOT check that closing is after opening: that rule (no overnight
+ * hours, card td-1) lives in `src/lib/settings/hours.ts` and is enforced by
+ * the caller, not here — a new caller must apply it too, or one night's
+ * takings splits across two business dates.
  */
 export async function updateBusinessProfile(
   orgId: string,
