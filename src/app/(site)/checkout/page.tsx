@@ -11,12 +11,12 @@ import { CallShop } from "@/components/site/call-shop";
 import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
 import { getPricedCart } from "@/lib/cart";
 import { shopPhone } from "@/lib/contact/phone";
-import { shopHoursState } from "@/lib/cart/shop-hours";
 import { readRememberedAddress } from "@/lib/cart/remembered-address";
 import { readRememberedContact } from "@/lib/cart/remembered-contact";
 import { scheduleDays } from "@/lib/cart/scheduled-time";
 import { getCustomer } from "@/lib/customer";
 import { toLatLng } from "@/lib/delivery";
+import { isOpenAt } from "@/lib/orders/opening-hours";
 import { isLoyaltyEnabled, maxRedeemable } from "@/lib/loyalty";
 import { getLoyaltyConfig } from "@/lib/loyalty/config";
 import { formatINR } from "@/lib/money";
@@ -58,7 +58,7 @@ export default async function CheckoutPage() {
     label: day.label,
     slots: day.slots.map((slot) => ({ iso: slot.at.toISOString(), label: slot.label })),
   }));
-  const asapAvailable = shopHoursState(now, org.openingTime, org.closingTime).open;
+  const asapAvailable = isOpenAt(now, org.openingTime, org.closingTime);
   const methods = availableMethods({ cash: org.cashEnabled, online: org.onlineEnabled });
   const delivery = await getDeliverySettings();
   const phone = shopPhone((await getStoreContact())?.phone);

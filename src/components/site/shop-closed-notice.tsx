@@ -1,5 +1,6 @@
 import { Clock } from "lucide-react";
-import { closedMessage, shopHoursState } from "@/lib/cart/shop-hours";
+import { closedNoticeText } from "@/lib/cart/closed-copy";
+import { isOpenAt, nextOpening } from "@/lib/orders/opening-hours";
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,12 +21,12 @@ export function ShopClosedNotice({
   now?: Date;
   className?: string;
 }) {
-  const state = shopHoursState(now, openingTime, closingTime);
-  if (state.open) return null;
+  if (isOpenAt(now, openingTime, closingTime)) return null;
+  const { day } = nextOpening(now, openingTime, closingTime);
   return (
     <p role="status" className={cn("flex items-start gap-3 rounded-md border border-border bg-surface px-4 py-3 text-sm leading-relaxed", className)}>
       <Clock className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
-      <span>{closedMessage(state)}</span>
+      <span>{closedNoticeText(day, openingTime)}</span>
     </p>
   );
 }

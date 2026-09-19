@@ -8,6 +8,7 @@ import { DeliveryFields, type SavedAddressOption } from "@/components/delivery/d
 import type { Point } from "@/components/delivery/map";
 import type { CheckoutMethod } from "@/lib/payments";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { refusedClosedText } from "@/lib/cart/closed-copy";
 import { CallShop } from "@/components/site/call-shop";
 import type { ShopPhone } from "@/lib/contact/phone";
 import { cn } from "@/lib/utils";
@@ -103,7 +104,7 @@ export function CheckoutForm({
   const [fulfilment, setFulfilment] = useState<"TAKEAWAY" | "DELIVERY">("TAKEAWAY");
 
   // ASAP (unchanged default) or a chosen time.
-  const [when, setWhen] = useState<"ASAP" | "SCHEDULED">(asapAvailable ? "ASAP" : "SCHEDULED");
+  const [whenChoice, setWhen] = useState<"ASAP" | "SCHEDULED">(asapAvailable ? "ASAP" : "SCHEDULED");
   // Defaults to the first day that actually has a slot left — "today" can be
   // empty this close to closing, and defaulting to an empty day would make
   // "Choose a time" look broken the moment it opens.
@@ -121,6 +122,13 @@ export function CheckoutForm({
    */
   const [editingContact, setEditingContact] = useState(contact === null);
   const [state, action] = useActionState<CheckoutState, FormData>(submitCheckout, { status: "idle" });
+  // The server refused ASAP because the shop is shut (it may have closed while
+  // this page sat open). Its answer overrides the page's render-time one, and
+  // the customer is moved onto "Choose a time" rather than left on a choice
+  // that will be refused again. No browser clock is consulted.
+  const closed = state.status === "error" ? state.closed : undefined;
+  const asapOk = asapAvailable && !closed;
+  const when = asapOk ? whenChoice : "SCHEDULED";
   const fieldErrors = state.status === "error" ? (state.fieldErrors ?? {}) : {};
 
   return (
@@ -182,7 +190,7 @@ export function CheckoutForm({
         <div className="grid gap-2 sm:grid-cols-2">
           {(
             [
-              { value: "ASAP" as const, icon: Clock, label: "As soon as possible", detail: asapAvailable ? "The usual" : "Not while we are closed" },
+              { value: "ASAP" as const, icon: Clock, label: "As soon as possible", detail: asapOk ? "The usual" : "Not while we are closed" },
               { value: "SCHEDULED" as const, icon: Clock, label: "Choose a time", detail: "Pick today or tomorrow" },
             ] satisfies { value: "ASAP" | "SCHEDULED"; icon: typeof Clock; label: string; detail: string }[]
           ).map((option) => (
@@ -191,7 +199,7 @@ export function CheckoutForm({
               className={cn(
                 "flex min-h-[56px] cursor-pointer items-center gap-3 rounded-md border px-4 py-3 transition-colors duration-[var(--duration-micro)]",
                 when === option.value ? "border-primary bg-primary/10" : "border-border bg-surface hover:border-border-strong",
-                option.value === "ASAP" && !asapAvailable && "cursor-not-allowed opacity-50",
+                option.value === "ASAP" && !asapOk && "cursor-not-allowed opacity-50",
               )}
             >
               <input
@@ -199,7 +207,7 @@ export function CheckoutForm({
                 name="whenChoice"
                 value={option.value}
                 checked={when === option.value}
-                disabled={option.value === "ASAP" && !asapAvailable}
+                disabled={option.value === "ASAP" && !asapOk}
                 onChange={() => setWhen(option.value)}
                 className="size-4 accent-[var(--primary)]"
               />
@@ -282,7 +290,7 @@ export function CheckoutForm({
       {fulfilment === "DELIVERY" && shop && <DeliveryFields shop={shop} saved={savedAddresses} />}
       {state.status === "error" && !state.fieldErrors && (
         <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm leading-relaxed">
-          {state.message}
+          {closed ? refusedClosedText(closed) : state.message}
           {shopPhone && (
             <span className="mt-1 block">
               <CallShop phone={shopPhone} lead="Still stuck? Call" />
