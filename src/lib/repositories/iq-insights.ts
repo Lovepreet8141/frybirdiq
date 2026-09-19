@@ -40,9 +40,10 @@ import "server-only";
  * which bypasses row-level security.
  */
 
-import { and, desc, eq, inArray, notLike, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, like, lt, notLike, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { iqInsights, iqJobRuns } from "@/db/schema";
+import { endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
 import {
   InsightSchema,
   IstDateTimeSchema,
@@ -480,7 +481,14 @@ type Statuses = readonly ("ACTIVE" | "SUPERSEDED" | "EXPIRED" | "RETRACTED")[];
 
 async function readRows(
   orgId: string,
-  options: { readonly claimTypes?: readonly ClaimType[]; readonly statuses?: Statuses; readonly limit?: number; readonly includeLedger: boolean },
+  options: {
+    readonly claimTypes?: readonly ClaimType[];
+    readonly statuses?: Statuses;
+    readonly limit?: number;
+    readonly includeLedger: boolean;
+    /** An extra org-scoped condition (the brief's day window); ANDed with the rest. */
+    readonly where?: SQL;
+  },
 ): Promise<StoredInsightsRead> {
   const statuses = options.statuses ?? ["ACTIVE"];
   const limit = Math.min(Math.max(options.limit ?? 100, 1), 500);
@@ -493,6 +501,7 @@ async function readRows(
         eq(iqInsights.orgId, orgId),
         inArray(iqInsights.status, [...statuses]),
         options.claimTypes ? inArray(iqInsights.claimType, [...options.claimTypes]) : undefined,
+        options.where,
         ...(options.includeLedger ? [] : LEDGER_PRODUCER_PREFIXES.map((prefix) => notLike(iqInsights.producer, `${prefix}%`))),
       ),
     )
@@ -568,6 +577,53 @@ export async function loadInsightsFor(
     restricted: presented.restricted,
     dropped: read.dropped,
   };
+}
+
+/**
+ * Every insight the daily brief for one IST business day may need, as stored
+ * rows — not presentations (IQ-2 R2.10, BUSINESS-INTELLIGENCE's S10 request).
+ *
+ * `composeBrief` needs `period`, `producer`, `dedupeKey`, `createdAt`,
+ * `statusReason` and `supersededBy` to pick the day's set, so it takes
+ * `StoredInsight`, not `Presentation`. The gate is the same as
+ * `loadInsightsFor`: without finance.view the `recon.*` and `sig.*` producers
+ * never leave the query, and `composeBrief` runs `presentFor` over the result
+ * again, so a viewer cannot reach a payment-ledger finding either way.
+ *
+ * The window is a **superset** of what `composeBrief.isForDay` keeps — the
+ * selection rule is the brief's, not the repository's:
+ *  - rows whose period starts inside the day (the detections and the day's facts);
+ *  - payment-ledger rows overlapping the day, or still ACTIVE and opened before
+ *    its end (`sig.*` keeps one key per rule and looks back 48 h);
+ *  - rows whose dedupe key ends `:<date>` — the brief's own FACTs for the day,
+ *    including the two month-to-date windows, whose periods are not the day.
+ *
+ * FACT and DETECTION only, RETRACTED never: the brief ignores everything else.
+ */
+export async function loadBriefInsightsFor(
+  orgId: string,
+  viewer: InsightViewer,
+  date: string,
+  options: { readonly limit?: number } = {},
+): Promise<StoredInsightsRead> {
+  const dayStart = startOfBusinessDay(date);
+  const dayEnd = endOfBusinessDay(date);
+  const ledgerOverlap = LEDGER_PRODUCER_PREFIXES.map((prefix) => like(iqInsights.producer, `${prefix}%`));
+  return readRows(orgId, {
+    claimTypes: ["FACT", "DETECTION"],
+    statuses: ["ACTIVE", "SUPERSEDED", "EXPIRED"],
+    limit: options.limit ?? 500,
+    includeLedger: viewer.financeView,
+    where: or(
+      and(gte(iqInsights.periodStart, dayStart), lt(iqInsights.periodStart, dayEnd)),
+      and(
+        or(...ledgerOverlap),
+        lt(iqInsights.periodStart, dayEnd),
+        or(eq(iqInsights.status, "ACTIVE"), gt(iqInsights.periodEnd, dayStart)),
+      ),
+      like(iqInsights.dedupeKey, `%:${date}`),
+    ),
+  });
 }
 
 export type FactFigureRow = {
