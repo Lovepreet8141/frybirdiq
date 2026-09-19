@@ -84,6 +84,8 @@ function expectPausedRefusal(result: Awaited<ReturnType<typeof placeOrder>>) {
   expect("closed" in result && result.closed !== undefined).toBe(false);
   expect(result.error).not.toMatch(/choose a time/i);
   expect(result.error).not.toContain("fryer down"); // staff's reason never reaches a customer
+  // The whole result, not just the sentence: toMatchObject above allows extra keys (SECURITY-TENANCY).
+  expect(JSON.stringify(result)).not.toContain("fryer down");
 }
 
 describe("placeOrder with the switch OFF (owner req 3: refused regardless of a stale page)", () => {
