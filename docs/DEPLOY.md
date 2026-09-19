@@ -346,10 +346,20 @@ create one.
 ## 8. Backups (roadmap 0.7)
 
 Supabase backs the database up on its own schedule; this is FRYBIRD's own
-nightly copy on the VPS, verified and pruned, with an optional offsite copy.
+nightly copy on the VPS, verified and pruned, with an **encrypted offsite copy**
+and a restore check that records what it proved.
+
+Each night `frybird-backup` writes three files to `/var/backups/frybird/`
+(root-only, kept 14 days):
+
+| File | Holds |
+|---|---|
+| `frybird-STAMP.dump` | the `public` schema: orders, menu, customers, payments |
+| `frybird-STAMP.auth.dump` | the `auth` schema: **staff logins** (emails, password hashes) |
+| `frybird-STAMP.counts` | row counts taken just before and just after the dumps |
 
 ```bash
-apt install -y postgresql-client            # pg_dump / pg_restore
+apt install -y postgresql-client            # pg_dump / pg_restore / psql
 cp deploy/backup.sh /usr/local/bin/frybird-backup && chmod 750 /usr/local/bin/frybird-backup
 cp deploy/frybird-backup.service deploy/frybird-backup.timer /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now frybird-backup.timer
@@ -357,18 +367,92 @@ systemctl start frybird-backup && journalctl -u frybird-backup -n 20   # run one
 ls -la /var/backups/frybird/
 ```
 
-Dumps are custom-format, `public` schema only, kept 14 days, root-only
-(they hold every customer's phone number). For an offsite copy, configure an
-rclone remote (Backblaze B2, Google Drive, any S3) and put
-`BACKUP_RCLONE_REMOTE=remote:frybird-backups` in `/etc/frybird/backup.env`.
+A failed step (either dump, the counts, the offsite copy) makes the run exit
+non-zero, which fires the `OnFailure=` alert (§11). Each step is independent: a
+failed auth dump never stops the public dump, and a failed offsite copy never
+touches the local dumps.
 
-Prove a restore once — and again after any schema change you would not want
-to discover cannot be restored:
+**Staff logins.** They live in Supabase Auth, not in `public`, so the `public`
+dump alone would lose every staff account. The `auth` schema is dumped through the
+same `DATABASE_URL`, so **no paid Supabase plan is needed**. (Supabase's own
+daily backups and point-in-time recovery are a separate, paid feature; this does
+not depend on them.) It has been proven against a copy of the local Supabase
+schema (`deploy/test/backup-test.sh`); it has **not** been run against the real
+Supabase project yet, so the first production run must be checked (below).
+
+### 8.1 Offsite copy, encrypted (owner steps; nothing here is done yet)
+
+**Recommended storage: Backblaze B2, through `rclone`.** Cheap (the dumps are
+under a megabyte), a bucket-restricted key is easy, and B2 can be set so the key
+on the VPS can add files but not delete or read them.
+
+Everything is **encrypted on the VPS before upload** with an `age` public key. The
+VPS and the storage hold only ciphertext; the private key is the owner's alone.
+If the VPS or the B2 account is broken into, the backups cannot be read.
+If the private key is lost, the offsite copies cannot be opened, so store it in
+a password manager, not only on one laptop.
+
+*What the owner creates (none of it is ever pasted in chat):*
+
+1. **A Backblaze B2 account and one private bucket** (e.g. `frybird-backups`).
+   In the bucket's settings set *Lifecycle* to keep only the last 30 days.
+2. **An application key limited to that bucket**, with only *listFiles* and
+   *writeFiles* (no read, no delete). Copy the key ID and key once; they are
+   entered only into the prompt in step 4.
+3. **An `age` key pair on the owner's own machine:**
+   `brew install age && age-keygen -o frybird-backup.key`. Store
+   `frybird-backup.key` in a password manager. The line printed as `Public key:
+   age1…` is **not secret** and is the only thing that goes on the server.
+
+*What god/DevOps runs on the VPS after the owner has done 1–3 (root):*
+
+```bash
+apt install -y age rclone
+rclone config          # owner types the B2 key ID/key at the prompts: new remote "b2frybird", type b2
+                       # (stored in /root/.config/rclone/rclone.conf, root-only)
+install -m 600 -o root -g root /dev/null /etc/frybird/backup.env
+cat > /etc/frybird/backup.env <<'EOT'
+BACKUP_RCLONE_REMOTE=b2frybird:frybird-backups
+BACKUP_AGE_RECIPIENT=age1PASTE_THE_PUBLIC_KEY_HERE
+EOT
+cp deploy/backup.sh /usr/local/bin/frybird-backup
+systemctl start frybird-backup && journalctl -u frybird-backup -n 30
+rclone lsf b2frybird:frybird-backups          # expect frybird-STAMP.dump.age, .auth.dump.age, .counts
+```
+
+If the remote is set but `age` or the public key is missing, the script
+**refuses to upload** and fails loudly. Plaintext never leaves the box.
+Prove the offsite copy is openable **on the owner's machine**, where the private key is:
+
+```bash
+rclone copy b2frybird:frybird-backups/frybird-STAMP.dump.age .   # or download from the B2 web page
+age -d -i frybird-backup.key frybird-STAMP.dump.age > x.dump && pg_restore --list x.dump | head
+```
+
+### 8.2 Prove a restore (records what it proved)
 
 ```bash
 apt install -y postgresql                  # a scratch server the app never touches
-bash deploy/restore-check.sh               # restores the newest dump, counts rows, drops the scratch db
+bash deploy/restore-check.sh               # newest dump set on the box
+cat /var/log/frybird/restore-check-*.txt   # counts and PASS/FAIL, no personal data
 ```
+
+It restores the `public` and `auth` dumps into two scratch databases, counts
+rows, and requires each count to lie between the "before" and "after" counts the
+backup recorded (so a restore that is readable but short **fails**). The result is
+written to `/var/log/frybird/` and the journal (`frybird-restore-check`).
+Run it once after the first production backup that has the auth dump, and again
+after any schema-changing deploy. Run it as the first check the morning after
+install, not months later.
+
+*Rebuilding after a lost Supabase project (procedure; the load into a new
+Supabase project is not yet rehearsed):* create the new project, apply the
+migrations, `pg_restore --data-only` the `public` dump into it, then load the
+users and identities from the restored auth scratch database (`pg_dump
+--data-only -t auth.users -t auth.identities` from it into the new project's
+`auth`). Repoint `DATABASE_URL` and the Supabase keys in `/etc/frybird/env` and
+restart `frybird`. Rehearse this once against a scratch Supabase project before
+relying on it.
 
 ## 9. Scheduled jobs (IQ-0, S10)
 
