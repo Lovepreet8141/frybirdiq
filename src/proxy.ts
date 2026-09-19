@@ -62,13 +62,19 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Everything except static assets, images and the scheduled-job routes.
+    // Everything except static assets, images, the scheduled-job routes and
+    // the health check.
+    //
+    // /api/health is polled by an uptime monitor and reachable by anyone: it
+    // carries no session, so it must not pay for a Supabase auth call, and
+    // its answer must not depend on Supabase being up (it checks the
+    // database itself). `api/health(?:/|$)` stops at the segment.
     //
     // /api/jobs/* is called by a systemd timer on the box itself, never by a
     // browser: it carries no session to refresh and must not pay for a
     // Supabase round trip or have cookies written onto its response. The
     // route authenticates itself (src/app/api/jobs). `api/jobs(?:/|$)` stops
     // at the segment, so /api/jobsx still goes through the proxy.
-    "/((?!_next/static|_next/image|favicon.ico|api/jobs(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/jobs(?:/|$)|api/health(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif)$).*)",
   ],
 };
