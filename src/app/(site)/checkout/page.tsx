@@ -6,6 +6,7 @@ import { ArrowLeft, Wallet } from "lucide-react";
 import { CheckoutForm } from "@/components/cart/checkout-form";
 import { CheckoutExtras } from "@/components/cart/extras";
 import { OrderSummary } from "@/components/cart/summary";
+import { EarnPreview } from "@/components/loyalty/earn-preview";
 import type { SavedAddressOption } from "@/components/delivery/delivery-fields";
 import { CallShop } from "@/components/site/call-shop";
 import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
@@ -140,6 +141,7 @@ export default async function CheckoutPage() {
 
         <div className="flex flex-col gap-3 lg:sticky lg:top-24">
           <OrderSummary cart={cart} />
+          <EarnPreview spend={cart.payable} />
 
           {/* Payment, as a line rather than a section. With one option a
               heading and a card made it look like a choice; with two the form

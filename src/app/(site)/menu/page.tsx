@@ -5,6 +5,7 @@ import { MenuControls } from "@/components/menu/menu-controls";
 import { ProductCard } from "@/components/menu/product-card";
 import { Stagger, StaggerItem } from "@/components/motion/reveal";
 import { EmptyState } from "@/components/states";
+import { LoyaltyStrip } from "@/components/loyalty/loyalty-strip";
 import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
 import { getMenu } from "@/lib/repositories/menu";
 import { getOrg } from "@/lib/repositories/org";
@@ -56,6 +57,7 @@ export default async function MenuPage({ searchParams }: { searchParams: Promise
     <div className="mx-auto w-full max-w-6xl px-[var(--gutter)] py-10 sm:py-14">
       <h1 className="font-heading text-4xl font-bold tracking-tight sm:text-5xl">Menu</h1>
       {org && <ShopClosedNotice openingTime={org.openingTime} closingTime={org.closingTime} className="mt-4" />}
+      <LoyaltyStrip className="mt-4" />
 
       {/*
         A GET form still wraps the controls, so pressing Enter without
