@@ -1,0 +1,24 @@
+# Starts frybird-job@refund-followup-heal.service every 15 minutes, at :07,
+# :22, :37 and :52 (ref-b7). OnCalendar must stay byte-for-byte the
+# JOB_REGISTRY["refund-followup-heal"].onCalendarUtc string in
+# src/lib/jobs/registry.ts — src/lib/jobs/registry.test.ts reads this file
+# and fails the build the moment the two drift.
+#
+# Ships in the same release as the refund code it heals (POS-ORDERS).
+#
+#   cp deploy/frybird-job-refund-followup-heal.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now frybird-job-refund-followup-heal.timer
+#   systemctl list-timers frybird-job-refund-followup-heal.timer
+
+[Unit]
+Description=Finish lost FRYBIRD refund follow-ups every 15 minutes
+
+[Timer]
+# The target is the templated instance, not this timer's own base name.
+Unit=frybird-job@refund-followup-heal.service
+OnCalendar=*-*-* *:07/15:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

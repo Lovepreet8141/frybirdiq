@@ -1140,6 +1140,13 @@ type AdvanceTxOutcome = { ok: true; orderId: string; orderNumber: string; status
  * button happened to send — a stale screen must not be able to push an order
  * backwards. The actor is recorded on the event.
  *
+ * `actorUserId` is null when the system moves the order with no staff member
+ * behind it (a refund follow-up finished by the healer, ord-10). Every write
+ * that carries the actor takes null as "System": the order_events row, and
+ * the SALE/RETURN/WASTE movements and audit rows that `recordConsumption`
+ * (ACCEPTED) and `reverseConsumption` (CANCELLED) write. The permission check
+ * belongs to the caller; this function never authorizes anyone.
+ *
  * The read, the transition check and the write are locked together with
  * `SELECT ... FOR UPDATE` on the order row: without it, two concurrent
  * transitions on the same order (a kitchen tablet marking READY at the same
@@ -1157,7 +1164,8 @@ type AdvanceTxOutcome = { ok: true; orderId: string; orderNumber: string; status
 export async function advanceOrder(input: {
   orderId: string;
   to: OrderStatus;
-  actorUserId: string;
+  /** The staff member moving the order, or null for the system. */
+  actorUserId: string | null;
   orgId: string;
   /** The order_events row's own reason, when the caller has one (a rejection's reason, a refund's note). */
   reason?: string;
@@ -1298,7 +1306,7 @@ export async function advanceOrder(input: {
       const lines = await database
         .select({ orderItemId: orderItems.id, productId: orderItems.productId, quantity: orderItems.quantity })
         .from(orderItems)
-        .where(eq(orderItems.orderId, outcome.orderId));
+        .where(and(eq(orderItems.orderId, outcome.orderId), eq(orderItems.orgId, input.orgId)));
       const consumed = await recordConsumption(input.orgId, input.actorUserId, { orderId: outcome.orderId, lines });
       if (!consumed.ok) {
         console.error(`orders: stock consumption failed for order ${outcome.orderId}: ${consumed.error}`);

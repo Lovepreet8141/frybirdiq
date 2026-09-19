@@ -46,6 +46,7 @@ import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
 import type { ClaimRequest, FinishOutcome, JobRunStore } from "@/lib/jobs/handle";
 import { DayLockBusy, DayTimeout, type FactsParity, type JobReadRepos, type JobWriteRepos } from "@/lib/jobs/repos";
 import { getProfitAndLoss } from "./expenses";
+import { countStuckRefundFollowUps, healLostRefundFollowUps } from "./payments";
 import { DayLockBusyError, DayTimeoutError, purgeIntradayFacts, readDailyFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
 import { expireInsights, getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
 import { TRUST_DEFINITION_VERSION, computeTrustDay } from "./iq-trust";
@@ -183,6 +184,9 @@ async function readDetectDays(orgId: string, dates: readonly string[]): Promise<
 /** The iq-* reads a job may make, with `orgId` closed over. */
 export function iqRepos(orgId: string): JobReadRepos {
   return {
+    // PAYMENT-SAFETY's healer (ref-b7): its own idempotent transaction per refund, outside any chunk.
+    healLostRefundFollowUps: (options) => healLostRefundFollowUps({ orgId }, { shouldStop: options.shouldStop }),
+    countStuckRefundFollowUps: () => countStuckRefundFollowUps({ orgId }),
     factsHistoryStart: () => factsHistoryStart(orgId),
     checkFactsParity: (from, to) => checkFactsParity(orgId, from, to),
     factsReadyFor: (date) => factsReadyFor(orgId, date),

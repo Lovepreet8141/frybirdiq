@@ -7,6 +7,9 @@ import { ReceiptPrintButton } from "@/components/receipt/receipt-print-button";
 import { ReceiptShare } from "@/components/receipt/receipt-share";
 import { getCustomerReceipt } from "@/lib/receipt/customer-view";
 import { channelThankYouMessage } from "@/lib/receipt/share-message";
+import { getCustomer } from "@/lib/customer";
+import { readRememberedContact } from "@/lib/cart/remembered-contact";
+import { redactReceiptCustomerForViewer, viewerOwnsOrder } from "@/components/order/viewer-owns-order";
 
 export const metadata: Metadata = { title: "Receipt", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -24,8 +27,14 @@ export const dynamic = "force-dynamic";
  */
 export default async function InvoicePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const receipt = await getCustomerReceipt(id);
+  const [receipt, customer, remembered] = await Promise.all([getCustomerReceipt(id), getCustomer(), readRememberedContact()]);
   if (!receipt) notFound();
+
+  // Same rule as /order/[id]: the link alone does not prove the viewer is the
+  // customer, so their name and phone are withheld from anyone else. The
+  // invoice never carries an email, so only phone decides this here.
+  const isOwner = viewerOwnsOrder({ customerPhone: receipt.customer.phone, customerEmail: null }, customer, remembered);
+  const receiptData = { ...receipt, customer: redactReceiptCustomerForViewer(receipt.customer, isOwner) };
 
   return (
     <div className="mx-auto w-full max-w-2xl px-[var(--gutter)] py-10 print:max-w-none print:px-0 print:py-0">
@@ -47,10 +56,10 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
         filename={`FRYBIRD-Order-${receipt.orderNumber}-Invoice.jpg`}
         message={channelThankYouMessage(receipt.fulfilment)}
         orderId={receipt.orderId}
-        phone={receipt.customer.phone}
+        phone={isOwner ? receipt.customer.phone : null}
       >
         <div className="mt-6 print:mt-0">
-          <FrybirdReceipt data={receipt} />
+          <FrybirdReceipt data={receiptData} />
         </div>
       </ReceiptShare>
 

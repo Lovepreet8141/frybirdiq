@@ -120,12 +120,14 @@ describe("stored metric registry", () => {
     expect(getMetric("discount_total").basis).toBe("listed");
   });
 
-  it("states the v1 day anchor of refund counts and amounts", () => {
+  it("states the day anchor of refund counts and amounts", () => {
     expect(getMetric("orders_refunded").description).toContain("order's created_at IST day");
     expect(getMetric("orders_part_refunded").description).toContain("order's created_at IST day");
+    // Refund release (0038): SUCCEEDED rows on the finalized day; never the reserved day.
     const refunds = getMetric("refunds_amount").description;
-    expect(refunds).toContain("refunds.created_at");
+    expect(refunds).toContain("status = SUCCEEDED");
     expect(refunds).toContain("finalized_at");
+    expect(refunds).not.toContain("created_at");
   });
 
   it("marks points_tender not yet available and keeps it out of v1 computation", () => {

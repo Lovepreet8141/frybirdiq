@@ -4,7 +4,7 @@ import { ArrowUpRight } from "lucide-react";
 import { CapturedChart } from "@/components/finance/captured-chart";
 import { PaymentsTable } from "@/components/finance/payments-table";
 import { PeriodSwitch } from "@/components/iq/period-switch";
-import { BarList, DataTrust, KpiTile, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
+import { BarList, DataTrust, KpiTile, Panel, PanelBody, PanelHeader, StatusWord } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
 import { PermissionDenied } from "@/components/states";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,17 @@ import { requireStaff, staffCan } from "@/lib/auth";
 import { type RangeKey, daysInRange, resolveRange } from "@/lib/dates";
 import { capturedByDay, methodShares, tillSplit } from "@/lib/finance/ledger-view";
 import { formatBps, formatINR } from "@/lib/money";
-import { getPaymentsLedger } from "@/lib/repositories/finance";
+import { type RefundRow, getPaymentsLedger } from "@/lib/repositories/finance";
+import { cn } from "@/lib/utils";
+
+/** Only SUCCEEDED money went back; the other two are shown so nobody reads them as refunded. */
+const REFUND_TONE: Record<RefundRow["status"], "gain" | "flag" | "loss"> = { SUCCEEDED: "gain", RESERVED: "flag", FAILED: "loss" };
+
+function refundStatusText(row: RefundRow): string {
+  if (row.status === "SUCCEEDED") return "Refunded";
+  if (row.status === "FAILED") return "Failed — no money moved";
+  return row.stale ? "Stuck in progress — check it" : "In progress — held, not refunded yet";
+}
 
 export const metadata: Metadata = { title: "Finance", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -97,7 +107,17 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         <KpiTile label="Captured" value={formatINR(ledger.capturedTotal, "whole")} note={ledger.capturedCount === 0 ? `No captured payments ${range.label.toLowerCase()}` : `${ledger.capturedCount} ${ledger.capturedCount === 1 ? "payment" : "payments"} · ${range.label}`} emphasis={ledger.capturedCount > 0} />
         <KpiTile label="Cash payments" value={split.cashBps === null ? "—" : formatBps(split.cashBps, 0)} missing={split.cashBps === null} note={split.cashBps === null ? "Nothing captured yet, so no split to show" : `${formatINR(split.cash, "whole")} cash · ${formatINR(split.online, "whole")} through a provider`} />
         <KpiTile label="Provider fees" value={ledger.feeTotal === 0n ? "—" : formatINR(ledger.feeTotal)} note={ledger.feeTotal === 0n ? "No provider fees recorded; cash carries none" : "Kept separate so a payout reconciles"} />
-        <KpiTile label="Refunded" value={ledger.refunds.length === 0 ? "—" : formatINR(ledger.refundedTotal, "whole")} note={ledger.refunds.length === 0 ? `No refunds ${range.label.toLowerCase()}` : `${ledger.refunds.length} ${ledger.refunds.length === 1 ? "refund" : "refunds"}`} />
+        <KpiTile
+          label="Refunded"
+          value={ledger.refundedCount === 0 ? "—" : formatINR(ledger.refundedTotal, "whole")}
+          note={[
+            ledger.refundedCount === 0 ? `No refunds ${range.label.toLowerCase()}` : `${ledger.refundedCount} ${ledger.refundedCount === 1 ? "refund" : "refunds"}`,
+            ledger.reservedRefundCount > 0 ? `${formatINR(ledger.reservedRefundTotal)} in progress, not counted` : null,
+            ledger.staleReservedRefundCount > 0 ? `${ledger.staleReservedRefundCount} stuck` : null,
+          ]
+            .filter((part) => part !== null)
+            .join(" · ")}
+        />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -160,6 +180,9 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
               capturedBy: row.capturedBy,
               at: row.at.toISOString(),
               refunded: row.refunded,
+              refundReserved: row.refundReserved,
+              refundStuck: row.refundStuck,
+              refundFailedCount: row.refundFailedCount,
             }))}
             periodLabel={range.label}
             canRefund={canRefund}
@@ -177,6 +200,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
                   <TableRow>
                     <TableHead>Order</TableHead>
                     <TableHead>Reason</TableHead>
+                    <TableHead>Status</TableHead>
                     <TableHead className="hidden md:table-cell">By</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
                     <TableHead className="hidden text-right sm:table-cell">When</TableHead>
@@ -187,8 +211,11 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
                     <TableRow key={row.id}>
                       <TableCell className="tabular font-semibold">#{row.orderNumber}</TableCell>
                       <TableCell className="whitespace-normal">{row.reason}</TableCell>
+                      <TableCell className="whitespace-normal">
+                        <StatusWord tone={REFUND_TONE[row.status]}>{refundStatusText(row)}</StatusWord>
+                      </TableCell>
                       <TableCell className="hidden text-muted-foreground md:table-cell">{row.by ?? "System"}</TableCell>
-                      <TableCell className="tabular text-right font-semibold">{formatINR(row.amount)}</TableCell>
+                      <TableCell className={cn("tabular text-right font-semibold", row.status !== "SUCCEEDED" && "text-muted-foreground")}>{formatINR(row.amount)}</TableCell>
                       <TableCell className="tabular hidden text-right text-muted-foreground sm:table-cell">{row.at.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })}</TableCell>
                     </TableRow>
                   ))}

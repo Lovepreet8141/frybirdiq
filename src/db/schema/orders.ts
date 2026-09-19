@@ -348,6 +348,8 @@ export const payments = pgTable(
   ],
 );
 
+export const REFUND_STATUSES = ["RESERVED", "SUCCEEDED", "FAILED"] as const;
+
 export const refunds = pgTable(
   "refunds",
   {
@@ -368,9 +370,39 @@ export const refunds = pgTable(
     provider: text("provider").notNull(),
     providerRefundId: text("provider_refund_id"),
     providerPayload: jsonb("provider_payload").$type<Record<string, unknown>>(),
+    /**
+     * RESERVED → SUCCEEDED | FAILED (refund design Revision 2; migration 0038).
+     * RESERVED and SUCCEEDED count against the payment's refundable balance;
+     * FAILED does not. The default is expand-phase only (RELIABILITY): code
+     * deployed before the refund redesign inserts without a status. A later
+     * contract migration drops it once the redesign is live.
+     */
+    status: text("status").$type<(typeof REFUND_STATUSES)[number]>().notNull().default("SUCCEEDED"),
+    /** The caller's key for this refund; a retry finds the row by (org_id, key). Old rows are null. */
+    idempotencyKey: text("idempotency_key"),
+    /**
+     * Database time the refund became SUCCEEDED; set exactly then (finance
+     * dates refunds by it). Expand-phase DEFAULT now() pairs with the status
+     * default so old-code inserts satisfy refunds_finalized_check. A RESERVED
+     * or FAILED insert must therefore pass `finalizedAt: null` explicitly.
+     */
+    finalizedAt: timestamp("finalized_at", { withTimezone: true }).defaultNow(),
     ...timestamps,
   },
-  (table) => [index("refunds_order_idx").on(table.orderId)],
+  (table) => [
+    index("refunds_order_idx").on(table.orderId),
+    index("refunds_payment_idx").on(table.paymentId),
+    // NULLs distinct: rows written before 0038 carry no key.
+    unique("refunds_org_idempotency_unique").on(table.orgId, table.idempotencyKey),
+    // Stuck reservations are what a reconciliation sweep looks for.
+    index("refunds_reserved_idx").on(table.orgId, table.createdAt).where(sql`${table.status} = 'RESERVED'`),
+    check("refunds_status_check", sql`${table.status} IN ('RESERVED', 'SUCCEEDED', 'FAILED')`),
+    check("refunds_finalized_check", sql`(${table.status} = 'SUCCEEDED') = (${table.finalizedAt} IS NOT NULL)`),
+    check(
+      "refunds_idempotency_key_check",
+      sql`${table.idempotencyKey} IS NULL OR char_length(${table.idempotencyKey}) BETWEEN 1 AND 200`,
+    ),
+  ],
 );
 
 /**

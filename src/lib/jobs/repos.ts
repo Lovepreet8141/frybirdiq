@@ -35,7 +35,33 @@ export type FactsParity = {
   readonly missingDays: number;
 };
 
+/** What one refund healer run did (PAYMENT-SAFETY's RefundHealReport; ids only, nothing else about a refund). */
+export type RefundHealReport = {
+  readonly examined: number;
+  readonly healed: number;
+  readonly stillOpen: number;
+  readonly stillOpenRefundIds: readonly string[];
+  readonly notReached: number;
+};
+
+/**
+ * `ctx.repos`: bound to the run's org, used outside any chunk — reads, and the
+ * few operations that manage their own short, idempotent transactions.
+ */
 export type JobReadRepos = {
+  /**
+   * Finishes this org's lost refund follow-ups (ref-b7, PAYMENT-SAFETY's
+   * healLostRefundFollowUps). Called OUTSIDE any chunk (RELIABILITY ref-b7j):
+   * it runs its own idempotent transaction per refund, never calls a payment
+   * provider, and ends between refunds once `shouldStop` returns true.
+   */
+  readonly healLostRefundFollowUps: (options: { readonly shouldStop: () => boolean }) => Promise<RefundHealReport>;
+  /**
+   * How many of this org's refund follow-ups are stuck: unfinished and failed
+   * on at least two heals (PAYMENT-SAFETY's countStuckRefundFollowUps, read
+   * only). State, not a per-run delta, so it survives the healer's back-off.
+   */
+  readonly countStuckRefundFollowUps: () => Promise<number>;
   /** The first IST business day this org has history for (opened_on, else its first order), or null. */
   readonly factsHistoryStart: () => Promise<string | null>;
   /** Compares Σ daily facts with getProfitAndLoss for [from, to] (IST dates, inclusive). */

@@ -102,9 +102,13 @@ describe("cash refund", () => {
       providerPaymentId: null,
       amount: fromRupees("299"),
       reason: "Wrong order",
+      refundId: "4f1c2a3b-0000-4000-8000-000000000001",
     });
-    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
     expect(result.refundedAmount).toBe(fromRupees("299"));
+    expect(result.httpStatus).toBeNull();
+    // Nothing external to look up: a resumed cash refund goes straight back to the till.
+    expect(cashProvider.findRefund).toBeUndefined();
   });
 });
 

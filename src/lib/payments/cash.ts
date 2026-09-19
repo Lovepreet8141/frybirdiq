@@ -91,8 +91,9 @@ export const cashProvider: PaymentProvider = {
   },
 
   async refund({ amount }): Promise<RefundResult> {
-    // Cash out of the till, recorded the same way it went in.
-    return { ok: true, providerRefundId: null, refundedAmount: amount as Paise };
+    // Cash out of the till, recorded the same way it went in. Nothing
+    // external can fail or be unsure, so a cash refund always succeeds.
+    return { outcome: "succeeded", providerRefundId: null, refundedAmount: amount as Paise, httpStatus: null };
   },
 
   async verifyWebhook(): Promise<WebhookVerification> {

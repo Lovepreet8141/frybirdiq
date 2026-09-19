@@ -333,7 +333,7 @@ export const METRIC_CATALOG: { readonly [K in MetricId]: StoredMetricDefinition 
     basis: "gross",
     allowedDimensions: [],
     sources: ["refunds", "payments"],
-    description: "Σ refunds.amount on the refund's own IST day (F1), anchored on refunds.created_at in v1 until ref-1 adds finalized_at (B6). refunds has no status column yet; a row is written only after the provider confirms (payments.ts), so every row is a succeeded refund. Once status exists, SUCCEEDED only. Switches to SUCCEEDED + finalized_at in the refund (ref-1) release.",
+    description: "Σ refunds.amount WHERE status = SUCCEEDED, on the IST day of finalized_at (F1). RESERVED and FAILED never counted.",
     trustSignals: SALES_TRUST,
   }),
   captured_amount: stored({
@@ -519,7 +519,7 @@ export const DERIVED_METRIC_CATALOG: { readonly [K in DerivedMetricId]: DerivedM
     basis: "gross",
     allowedDimensions: [],
     inputs: ["captured_amount", "refunds_amount"],
-    description: "Σ captured_amount − Σ refunds_amount (F8): cash kept after refunds, GST included. Each input keeps its own day anchor (captured_at, refund day), so a day can be negative; never clamped.",
+    description: "Σ captured_amount − Σ refunds_amount (SUCCEEDED, finalized_at day) (F8): cash kept after refunds, GST included. Each input keeps its own day anchor (captured_at, refund day), so a day can be negative; never clamped.",
   }),
 };
 

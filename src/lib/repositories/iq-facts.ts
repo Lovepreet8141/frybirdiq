@@ -12,8 +12,9 @@ import "server-only";
  *
  * Sales read the same sale set as the P&L (`saleSetWhere` in ./analytics),
  * so Σ facts over a range equals `getProfitAndLoss` for that range. Refunds
- * stay on today's definition (refunds.created_at, every row) until the refund
- * release adds a status and finalized_at.
+ * count only SUCCEEDED rows, on the IST day of finalized_at (migration 0038);
+ * facts stored before that release used created_at, so recompute the days
+ * still shown after deploying it (the nightly run covers at least 35).
  *
  * Location: sales, movements and waste carry their row's location; expenses
  * are org-level (location null). Readers sum across locations.
@@ -190,7 +191,16 @@ export async function computeDayFacts(orgId: string, date: string, tx: Pick<Retu
       .select({ locationId: orders.locationId, count: sql<number>`count(*)::int`, amount: sql<string>`coalesce(sum(${refunds.amount}), 0)::text` })
       .from(refunds)
       .innerJoin(orders, eq(orders.id, refunds.orderId))
-      .where(and(eq(refunds.orgId, orgId), eq(orders.orgId, orgId), gte(refunds.createdAt, day.from), lt(refunds.createdAt, day.to)))
+      // Refund release (0038): SUCCEEDED only, on the IST day it was finalized. RESERVED and FAILED never count.
+      .where(
+        and(
+          eq(refunds.orgId, orgId),
+          eq(orders.orgId, orgId),
+          eq(refunds.status, "SUCCEEDED"),
+          gte(refunds.finalizedAt, day.from),
+          lt(refunds.finalizedAt, day.to),
+        ),
+      )
       .groupBy(orders.locationId),
 
     tx
