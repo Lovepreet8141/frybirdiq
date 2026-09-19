@@ -219,6 +219,8 @@ Legend: "Reviewed" = what the office recorded. "Open findings" = refusals or non
 
 ### 3.8 p3-order-copy / pay-ready — Razorpay readiness (queue 6)
 
+> **QUESTION TO SETTLE BEFORE ANY RAZORPAY KEY GOES IN (owner, 2026-09-20):** should the Razorpay intent be created AFTER the order row instead of before it? Today `placeOrder` creates the intent first (the payment row needs its `providerOrderId`), so a pause landing in the ~1 s gateway round trip leaves one unpaid, unholdable intent with no order (accepted as a known limit while Razorpay is off in production; it cannot occur today). Creating it after the row would close that, but changes the payment flow (an order row would exist briefly without an intent, and the intent call could then fail after the row exists), so it is a money change: payments review + owner go/no-go. Decide before keys go in.
+
 - **p3-order-copy.** Status `todo`, deps rc-13 (now live). Two defects, neither reachable in production while Razorpay is off:
   (a) the pending-payment copy "The shop can take payment when you collect/deliver" ignores `org.cashEnabled` and doesn't tell the customer to wait for confirmation;
   (b) a FAILED Razorpay payment is not `awaitingOnline`, so the retry path never shows.
@@ -408,4 +410,11 @@ Order now: version-check card -> **status pill** -> write-time re-check + status
 - **Proofs (fail-first):** old claim placement fails 3; no pre-intent check fails 1; no claim fails 2; plus the earlier five. Tests assert a refused order leaves no order row, promo use, payment row, points, stamps or stock rows, and that after reopening the same key and code consume exactly one slot.
 - **Reviews on `207aacd`:** payments no veto (AGREE); reliability AGREE (nothing above low); QA 7/7 (unit 2368, integration 492, new file 14/14 stable x3). Security reviewed `c502556` (AGREE); the delta adds no auth, scoping or message change.
 - **Still true (cannot be closed without provider cancellation or restructuring online payment):** a pause landing in the roughly one-second gateway round trip after a Razorpay intent is created leaves one unpaid intent with no order (cannot be charged; asserted in a test named KNOWN RESIDUE); a guest customer row can remain from a refused attempt in the millisecond window. Neither holds money.
+
+## 14. Update, 2026-09-20 (Release 4: card 3 live)
+
+- **Release 4 is live:** `207aacd`, BUILD_ID `efd32b5a1f11057e`, RELEASES row 8, no migration (head 0039). Rollback: code-only, redeploy `4e6c6fe` (BUILD_ID `6b9c1b3950382ca5`).
+- **Owner decisions:** (1) the unpaid Razorpay intent in the ~1 s window after an intent is created: accepted for now; added to the pay-ready card (3.8) as a question to settle BEFORE Razorpay keys go in (Razorpay is off in production, so it cannot occur today). (2) The guest customer record left by a refused attempt: **accepted**. It holds no money, and the customer gave those details in order to place an order. (3) Optional hardening (b) (keep the scheduled-slot lead test on the first clock) left as is.
+- **Live observation still owed:** nobody has watched a real pause on the live site (banner or write-time refusal). The first real pause is the observation.
+- **Order now:** day-off card (ops-3; gated: migration) -> the rest of section 2. The owner runs `/compact` before it starts.
 
