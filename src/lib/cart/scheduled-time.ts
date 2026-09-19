@@ -10,7 +10,8 @@
  * client for money or authorization" applies just as much to a time).
  */
 
-import { addDays, businessDate, timeOnBusinessDate } from "@/lib/dates";
+import { addDays, businessDate } from "@/lib/dates";
+import { businessHoursWindow, formatBusinessClock, sessionStartDate } from "@/lib/orders/opening-hours";
 
 /** Shortest notice a scheduled order gets, same idea as a kitchen needing warning before an ASAP ticket lands. */
 export const MIN_LEAD_MINUTES = 20;
@@ -33,26 +34,10 @@ export interface ScheduleDay {
   readonly slots: readonly TimeSlot[];
 }
 
-/** Same shape as `orders-board.tsx`'s `formatClock` — one convention for a wall-clock time across staff and customer surfaces. */
-function formatSlotLabel(at: Date): string {
-  return at.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" });
-}
-
 function dayLabel(date: string, today: string, tomorrow: string): string {
   if (date === today) return "Today";
   if (date === tomorrow) return "Tomorrow";
   return date;
-}
-
-/**
- * Same closing-instant computation `getSmart86Projections`/`inventoryAvailability`
- * already use — `timeOnBusinessDate` alone, no overnight-wrap adjustment.
- * FRYBIRD's real hours (11:30–23:00) never cross midnight, so this matches
- * the rest of the codebase rather than introducing a stricter rule nothing
- * else follows.
- */
-function closingInstant(date: string, closingTime: string): Date {
-  return timeOnBusinessDate(date, closingTime);
 }
 
 /** Rounds an instant forward to the next slot boundary. */
@@ -69,14 +54,13 @@ function roundUpToSlot(at: Date): Date {
  * rollover to tomorrow the roadmap asks for is just this array being empty.
  */
 function slotsForDay(date: string, now: Date, openingTime: string, closingTime: string): readonly TimeSlot[] {
-  const opening = timeOnBusinessDate(date, openingTime);
-  const closing = closingInstant(date, closingTime);
+  const { opening, closing } = businessHoursWindow(date, openingTime, closingTime);
   const earliest = new Date(Math.max(opening.getTime(), now.getTime() + MIN_LEAD_MINUTES * 60_000));
   const first = roundUpToSlot(earliest);
 
   const slots: TimeSlot[] = [];
   for (let at = first; at.getTime() < closing.getTime(); at = new Date(at.getTime() + SLOT_INTERVAL_MINUTES * 60_000)) {
-    slots.push({ at, label: formatSlotLabel(at) });
+    slots.push({ at, label: formatBusinessClock(at) });
   }
   return slots;
 }
@@ -114,12 +98,25 @@ export function isValidScheduledTime(candidate: Date, now: Date, openingTime: st
   if (Number.isNaN(candidate.getTime())) return false;
   if (candidate.getTime() < now.getTime() + MIN_LEAD_MINUTES * 60_000) return false;
 
-  const today = businessDate(now);
-  const horizon = addDays(today, SCHEDULE_DAYS_AHEAD);
-  const candidateDate = businessDate(candidate);
-  if (candidateDate < today || candidateDate > horizon) return false;
+  // Which trading session the requested time falls in — null when the shop is
+  // shut then, which refuses it. One question instead of two, and the same
+  // answer `scheduleDays` keys its days by, so the picker and this check cannot
+  // offer and refuse the same slot.
+  const session = sessionStartDate(candidate, openingTime, closingTime);
+  if (session === null) return false;
 
-  const opening = timeOnBusinessDate(candidateDate, openingTime);
-  const closing = closingInstant(candidateDate, closingTime);
-  return candidate.getTime() >= opening.getTime() && candidate.getTime() < closing.getTime();
+  /*
+   * Bounded by the session's own date, not the candidate's calendar date.
+   * Those differ only when a session runs past midnight, and that difference
+   * was the whole bug: under 18:00-02:00 hours the last day the picker offers
+   * closes at 02:00 the following morning, so its post-midnight slots read as
+   * one day past the horizon and were refused after being offered.
+   *
+   * Only an upper bound. "Not in the past" is already settled by the lead-time
+   * check above, and a lower bound on the session date would refuse a real
+   * one: at 00:00 under those hours the shop is open on the session that began
+   * the previous evening, so a time half an hour away belongs to a session
+   * whose date is yesterday's and is perfectly orderable.
+   */
+  return session <= addDays(businessDate(now), SCHEDULE_DAYS_AHEAD);
 }

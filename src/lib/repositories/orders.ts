@@ -26,6 +26,7 @@ import { isSupabaseConfigured } from "@/lib/env";
 import { type Paise, ZERO, formatINR, paise, subtract } from "@/lib/money";
 import { type PricedOrder, priceOrder } from "@/lib/pricing";
 import { fromMicro, toPoint } from "@/lib/delivery";
+import { type ShopClosedRefusal, asapRefusal } from "@/lib/orders/opening-hours";
 import { type SnapshotLineInput, snapshotLines } from "@/lib/orders/snapshot";
 import type { CartLine } from "@/lib/cart/schema";
 import { priceDraft } from "@/lib/pos/pricing";
@@ -101,9 +102,18 @@ export const checkoutSchema = z.object({
 
 export type CheckoutInput = z.infer<typeof checkoutSchema>;
 
+/**
+ * The refusal shape, defined beside the predicate that produces it
+ * (`@/lib/orders/opening-hours`) and re-exported here because this is the path
+ * callers already import it from — `checkout-action.ts` among them. A bare
+ * `export type { ... } from` would re-export it without binding the name
+ * locally, and `PlaceOrderResult` below needs both.
+ */
+export type { ShopClosedRefusal };
+
 export type PlaceOrderResult =
   | { ok: true; orderId: string; orderNumber: string; payment: "COD" | "ONLINE" }
-  | { ok: false; error: string; fieldErrors?: Record<string, string>; resumeOrderId?: string };
+  | { ok: false; error: string; fieldErrors?: Record<string, string>; resumeOrderId?: string; closed?: ShopClosedRefusal };
 
 /**
  * The next order number, as the counter would call it out.
@@ -182,7 +192,13 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     return {
       ok: false,
       error:
-        "Ordering isn't connected yet, so this order has not been placed. Nothing has been charged. Please call the shop to order.",
+        // No "call the shop to order": no number is published anywhere on the
+        // site (launch audit), and this branch returns before the org row is
+        // read, so there is nothing here to name even if one were. Saying what
+        // happened and that nothing was charged is the whole honest answer —
+        // "try again shortly" would be a guess, since an unconfigured
+        // Supabase is a deployment fault and not a passing one.
+        "Ordering isn't connected yet, so this order has not been placed. Nothing has been charged.",
     };
   }
 
@@ -243,9 +259,10 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
    * exactly the existing behaviour, unchanged.
    */
   let scheduledFor: Date | null = null;
+  const now = new Date();
   if (details.when === "SCHEDULED") {
     const candidate = details.scheduledFor ? new Date(details.scheduledFor) : null;
-    if (!candidate || !isValidScheduledTime(candidate, new Date(), org.openingTime, org.closingTime)) {
+    if (!candidate || !isValidScheduledTime(candidate, now, org.openingTime, org.closingTime)) {
       return {
         ok: false,
         error: "That time isn't available anymore. Pick another.",
@@ -253,6 +270,30 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       };
     }
     scheduledFor = candidate;
+  } else {
+    /*
+     * ASAP means "start cooking it now", so it needs someone in the kitchen.
+     * Until this check existed, only the SCHEDULED branch above consulted the
+     * hours at all: a 2am ASAP order was accepted, and paid for, with nobody
+     * to see it until morning (launch audit C1 / P0-3a). Same hours, same
+     * window, same server clock as the branch above — refused before the
+     * Razorpay Order is minted and before anything is written, so nothing is
+     * charged and there is nothing to clean up.
+     *
+     * Scheduling is still open while the shop is shut, which is the point:
+     * "we're closed, order for 11:30" is the answer, not a dead end.
+     *
+     * The decision itself is `asapRefusal`, pure and unit-tested including the
+     * wall-clock label. What is left here is the call and the sentence.
+     */
+    const closed = asapRefusal(now, org);
+    if (closed) {
+      return {
+        ok: false,
+        error: `The kitchen is closed right now. We open ${closed.opensAtLabel} — nothing has been ordered or charged. You can still choose a time instead.`,
+        closed,
+      };
+    }
   }
 
   /*
