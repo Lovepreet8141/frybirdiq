@@ -436,3 +436,20 @@ Order now: version-check card -> **status pill** -> write-time re-check + status
 - **Low card `iq-flaky-1`:** `iq-insights-recommendations.integration.test.ts` "M1(b): a proposal racing the supersede of its evidence is refused instead of resting on a SUPERSEDED insight" failed once in three full-suite QA runs (2026-09-20, `6ca6095`, run under load) and passed 6/6 in isolation on the live commit and 3/3 full-suite runs on `eddba18`. Load-sensitive race test; not caused by ops-3. Investigate when the IQ-2 work is next touched.
 - **Order now:** the autonomous queue the owner pastes next, then the rest of section 2.
 
+## 17. AUTONOMOUS QUEUE (owner, 2026-09-20, after Release 5) — the working order until it is done
+
+Rules for this queue (owner's words, condensed): one card at a time, in order. Before each card write state here. Before showing the owner anything run the owner-guide subagent; reviewer subagents for money, order placement, auth, permissions, migrations; QA-release on everything; every fix proven fail-first. UI-only, no migration: standing approval (confirm shop closed: open 11:30-23:00 IST, closed all day Tuesday; fresh dump; fail-fast scripts; smoke, zero journal errors, RELEASES row, push, fast-forward; then tell the owner the phone screens). Migration, production data write, or any change to money/orders/auth/permissions: ONE go/no-go, then WAIT for the yes. A card blocked on the owner: do all preparation, park it under "waiting on owner", move on. Never: test orders/payments/refunds in production; print secrets; copy customer data off the server; force-push/reset/rebase; pause/resume the live shop. Reporting: one message at every go/no-go and after every release; once a day one summary of at most 12 lines (live / shipped / in progress / waiting on owner).
+
+Cards, in order:
+1. **IQ-2** (daily brief, reconciliation, detectors) + **IQ READINESS panel** (read-only owner-dashboard screen from `iq_daily_trust` and live tables: five scores as percent with trend — orders closed the same day; cash payments recorded for completed cash orders; top-20 items with a recipe; days since last stock count (red over 7); orders with a customer attached — plus one overall "IQ readiness" percent and the single most useful action for today; every insight card gets a "limited" badge when a score it depends on is under 80%; every number a labelled fact from stored data, no forecasts, changes nothing; the daily brief includes the readiness percent and the one action). Gated if it needs a migration or server job changes; otherwise ship as UI.
+2. **Razorpay readiness (pay-ready)**, gated, no keys (the owner's step): p3-order-copy incl. whether an unpaid online order reaches the kitchen; pay-7; the intent-after-order-row question; tests for submitCheckout, confirmOnlinePaymentAction and the webhook route; one test that fails if any permission gate is removed.
+3. **Cash sessions 5.1, rider cash handover 5.2, reconciliation view 5.3**, gated.
+4. **p0-7** (ADMIN can create an OWNER; role-blind reads), gated. Must be live before card 5.
+5. **Rider assignment 6.3**, gated.
+6. **Prep targets 4.1, then kitchen stations 4.2**, gated. Stations FRY, ASSEMBLY, DRINKS, PACK, plus an EXPO view.
+7. **WhatsApp order updates 7.2** behind a provider mock. No provider account, no messages sent.
+Small cards to slot between: `iq-flaky-1`; the first Tuesday check on 2026-09-22 (read-only).
+PARKED, do not start: item descriptions, order #1226, offsite backups (until the owner creates the storage account).
+
+State now: Release 5 live (`eddba18`, migration 0040, Tuesday marked). Working tree on `kit-radix-nova` @ `04975ad`. Starting card 1.
+
