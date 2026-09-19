@@ -18,6 +18,29 @@
  *
  * Remove `eq(categories.isActive, true)` from `readFromDatabase` and every
  * "after archiving" expectation below fails.
+ *
+ * ## The fix closes more than the three surfaces asserted here
+ *
+ * Do not "add the missing surfaces" later — there are none, and doing it by
+ * filtering per surface would recreate exactly the split this condition
+ * removes. Everything downstream of `getMenu` inherits it: `/item/[slug]`
+ * (`getProduct` → `getMenu`), the homepage (`getAllProducts`), and the
+ * customer cart (`priceCart`, `src/lib/cart/index.ts:154`). A grep for
+ * category reads outside `menu-admin` returns only the seed, so no ordering
+ * surface reads categories a second way.
+ *
+ * The cart is the one behavioural consequence, and it is the money question
+ * this fix raised: a line whose category is archived *mid-session* falls out
+ * of `priceCart`'s slug map and is **rejected** with "No longer on the menu"
+ * (`cart/index.ts:169-172`), not silently dropped. So archiving a category
+ * cannot undercharge an in-flight cart.
+ *
+ * ## The transcription fallback is deliberately untouched
+ *
+ * `buildFromTranscription()` has no `isActive` concept, so an archived
+ * category would still appear there. That is vacuous rather than a hole:
+ * the branch runs only when Supabase is unconfigured, and with no database
+ * there is nothing to have archived. Not a missing case — do not file it.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -68,9 +91,18 @@ async function seedCategory(org: TestOrg, taxRateId: string, name: string): Prom
   return { id: category.id, slug: categorySlug, productSlugs };
 }
 
-/** Exactly what `setCategoryActive` writes when the owner archives a category. */
+/**
+ * Exactly what `setCategoryActive` writes when the owner archives a category
+ * (`src/lib/repositories/menu-admin.ts:319`) — including `updatedAt`, which
+ * nothing asserted here reads.
+ *
+ * It is mirrored anyway so this helper cannot quietly stop modelling the real
+ * write: if a category read ever starts resolving by `updatedAt` the way
+ * product availability does, a helper that set only `isActive` would keep
+ * passing while the thing it stands in for had moved.
+ */
 async function archive(categoryId: string): Promise<void> {
-  await db().update(categories).set({ isActive: false }).where(eq(categories.id, categoryId));
+  await db().update(categories).set({ isActive: false, updatedAt: new Date() }).where(eq(categories.id, categoryId));
 }
 
 describe("getMenu — an archived category is off sale on every surface (P0-5)", () => {
