@@ -11,7 +11,7 @@
  */
 
 import { addDays, businessDate } from "@/lib/dates";
-import { businessHoursWindow, isOpenAt } from "@/lib/orders/opening-hours";
+import { businessHoursWindow, formatBusinessClock, isOpenAt } from "@/lib/orders/opening-hours";
 
 /** Shortest notice a scheduled order gets, same idea as a kitchen needing warning before an ASAP ticket lands. */
 export const MIN_LEAD_MINUTES = 20;
@@ -32,11 +32,6 @@ export interface ScheduleDay {
   readonly date: string;
   readonly label: string;
   readonly slots: readonly TimeSlot[];
-}
-
-/** Same shape as `orders-board.tsx`'s `formatClock` — one convention for a wall-clock time across staff and customer surfaces. */
-function formatSlotLabel(at: Date): string {
-  return at.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" });
 }
 
 function dayLabel(date: string, today: string, tomorrow: string): string {
@@ -65,7 +60,7 @@ function slotsForDay(date: string, now: Date, openingTime: string, closingTime: 
 
   const slots: TimeSlot[] = [];
   for (let at = first; at.getTime() < closing.getTime(); at = new Date(at.getTime() + SLOT_INTERVAL_MINUTES * 60_000)) {
-    slots.push({ at, label: formatSlotLabel(at) });
+    slots.push({ at, label: formatBusinessClock(at) });
   }
   return slots;
 }

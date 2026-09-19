@@ -27,7 +27,7 @@ describe("scheduleDays", () => {
     const now = new Date("2026-09-15T04:00:00Z"); // 09:30 IST — before 11:30 opening
     const [today] = scheduleDays(now, OPENING, CLOSING);
     const first = today!.slots[0]!;
-    expect(first.label).toBe("11:30 am");
+    expect(first.label).toBe("11:30 AM");
   });
 
   it("date rollover: right at closing, today has no slots left and tomorrow does", () => {
@@ -35,7 +35,7 @@ describe("scheduleDays", () => {
     const [today, tomorrow] = scheduleDays(now, OPENING, CLOSING);
     expect(today!.slots).toHaveLength(0);
     expect(tomorrow!.slots.length).toBeGreaterThan(0);
-    expect(tomorrow!.slots[0]!.label).toBe("11:30 am");
+    expect(tomorrow!.slots[0]!.label).toBe("11:30 AM");
   });
 
   it("date rollover: after closing, today has no slots left", () => {

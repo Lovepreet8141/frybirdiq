@@ -11,8 +11,8 @@
 
 import { describe, expect, it } from "vitest";
 import { openHoursSpan } from "@/lib/dates";
-import { isValidScheduledTime } from "@/lib/cart/scheduled-time";
-import { asapRefusal, businessHoursWindow, isOpenAt, nextOpening } from "./opening-hours";
+import { isValidScheduledTime, scheduleDays } from "@/lib/cart/scheduled-time";
+import { asapRefusal, businessHoursWindow, formatBusinessClock, isOpenAt, nextOpening } from "./opening-hours";
 
 /** FRYBIRD's real configured hours (organizations.opening_time / closing_time defaults). */
 const OPEN = "11:30";
@@ -232,5 +232,33 @@ describe("asapRefusal", () => {
     const at = new Date("2026-09-19T03:30:00.000Z");
     expect(asapRefusal(at, { openingTime: "08:00", closingTime: CLOSE })).toBeNull();
     expect(asapRefusal(at, HOURS)).toMatchObject({ openingTime: "11:30" });
+  });
+});
+
+describe("formatBusinessClock", () => {
+  it("renders a 12-hour wall-clock time with an upper-case meridiem", () => {
+    expect(formatBusinessClock(new Date("2026-09-19T06:00:00.000Z"))).toBe("11:30 AM"); // 11:30 IST
+    expect(formatBusinessClock(new Date("2026-09-19T12:30:00.000Z"))).toBe("6:00 PM"); // 18:00 IST
+    expect(formatBusinessClock(new Date("2026-09-19T17:30:00.000Z"))).toBe("11:00 PM"); // 23:00 IST
+  });
+
+  it("does not leave the 12-or-24-hour choice to the ICU build", () => {
+    // A build resolving en-IN to h23 would render "18:00" here, with no
+    // meridiem to normalise — so this assertion is what notices if `hour12`
+    // ever stops being passed explicitly.
+    expect(formatBusinessClock(new Date("2026-09-19T12:30:00.000Z"))).toMatch(/^\d{1,2}:\d{2} (AM|PM)$/u);
+  });
+
+  it("uses a plain space, whatever separator the build emits", () => {
+    // This build puts U+202F before the meridiem; the label must not carry it.
+    expect(formatBusinessClock(new Date("2026-09-19T06:00:00.000Z"))).not.toMatch(/[  ]/u);
+  });
+
+  it("is the same formatter the schedule picker labels slots with", () => {
+    // One wall-clock convention across the customer surfaces: the picker's
+    // first slot and the refusal's label cannot disagree about "11:30 AM".
+    const [today] = scheduleDays(new Date("2026-09-19T04:00:00.000Z"), OPEN, CLOSE); // 09:30 IST
+    expect(today?.slots[0]?.label).toBe(formatBusinessClock(today!.slots[0]!.at));
+    expect(today?.slots[0]?.label).toBe("11:30 AM");
   });
 });

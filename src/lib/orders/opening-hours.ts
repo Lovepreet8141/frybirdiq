@@ -156,7 +156,7 @@ export function asapRefusal(now: Date, { openingTime, closingTime }: OpeningHour
   if (isOpenAt(now, openingTime, closingTime)) return null;
 
   const opens = nextOpening(now, openingTime, closingTime);
-  const label = `${opens.day === "TODAY" ? "today" : "tomorrow"} at ${formatOpeningLabel(opens.at)}`;
+  const label = `${opens.day === "TODAY" ? "today" : "tomorrow"} at ${formatBusinessClock(opens.at)}`;
   return {
     code: "CLOSED",
     openingTime,
@@ -168,21 +168,31 @@ export function asapRefusal(now: Date, { openingTime, closingTime }: OpeningHour
 }
 
 /**
- * A wall-clock time in the business's timezone, as "11:30 AM".
+ * A wall-clock time in the business's timezone, as "11:30 AM". The one
+ * formatter for a customer-facing clock time — the schedule picker's slot
+ * labels come through here too.
  *
- * The timezone comes from ICU; the CASING does not. `en-IN` on this Node build
- * renders "11:30 am" lowercase and emits a narrow no-break space (U+202F)
- * before it, and neither is stable across ICU versions — so a label built
- * straight from `toLocaleTimeString` can differ between a laptop, CI and the
- * deployed server, and the test that pinned it would be pinning the machine.
- * Normalising both means the customer sees the same string everywhere, and the
- * same string `clockLabel` already renders on the website's open/closed line —
- * one wall-clock convention across the customer surfaces instead of the three
- * that were drifting apart.
+ * Only the timezone and the digits come from ICU. Everything a build could
+ * decide differently is pinned:
+ *
+ * - `hour12: true`, because `hour: "numeric"` alone leaves the 12-or-24-hour
+ *   choice to locale resolution. An ICU build that resolved `en-IN` to h23
+ *   would render "18:00", with no meridiem to normalise, and a test asserting
+ *   "6:00 PM" would pass on one machine and fail on another.
+ * - the meridiem case, because this build renders "am" lowercase.
+ * - the whitespace, because this build emits a narrow no-break space (U+202F)
+ *   before the meridiem, which `\s` does match under the `u` flag.
+ *
+ * With all three fixed the string cannot vary between a laptop, CI and the
+ * deployed server — which is the only reason it is safe to assert in a test at
+ * all. Before this there were three formatters drifting apart: this one, the
+ * picker's, and the website's own `clockLabel`. The first two are now the same
+ * function; `clockLabel` lives on the customer site's branch and renders
+ * "11:30 AM" by hand, so the two should be reconciled at that merge.
  */
-function formatOpeningLabel(at: Date): string {
+export function formatBusinessClock(at: Date): string {
   return at
-    .toLocaleTimeString("en-IN", { timeZone: BUSINESS_TIMEZONE, hour: "numeric", minute: "2-digit" })
+    .toLocaleTimeString("en-IN", { timeZone: BUSINESS_TIMEZONE, hour: "numeric", minute: "2-digit", hour12: true })
     .replace(/\s+/gu, " ")
     .replace(/\b(am|pm)\b/iu, (meridiem) => meridiem.toUpperCase());
 }
