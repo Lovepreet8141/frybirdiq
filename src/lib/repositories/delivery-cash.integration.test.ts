@@ -173,7 +173,7 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
   it("RIDER taking payment without the delivery flag (the markPaid-style path) is still refused", async () => {
     const orderId = await createOrder(orgA, DELIVERY, "OUT_FOR_DELIVERY");
     const result = await recordCashPayment({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgA.orgId });
-    expect(result).toEqual({ ok: false, error: "You don't have permission to take payment." });
+    expect(result).toEqual({ ok: false, code: "NOT_PERMITTED", error: "You don't have permission to take payment." });
     expect(await paymentsFor(orderId)).toHaveLength(0);
     expect(await statusOf(orderId)).toBe("OUT_FOR_DELIVERY");
   });
@@ -213,7 +213,7 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
       const orderId = await createOrder(orgA, DELIVERY, "OUT_FOR_DELIVERY");
       const rider = randomUUID();
       const take = () => recordCashPayment({ orderId, actorUserId: rider, actorRoles: ["RIDER"], orgId: orgA.orgId, via: "delivery" });
-      const refusal = { ok: false, error: "Only a delivery that is out for delivery can take cash at the door." };
+      const refusal = { ok: false, code: "GUARD_REFUSED", error: "Only a delivery that is out for delivery can take cash at the door." };
 
       const raced = await withOrderRowHeld(orderId, take, async (tx) => {
         await tx.update(orders).set({ status: movedTo }).where(eq(orders.id, orderId));
@@ -266,7 +266,7 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
   it("KITCHEN with the delivery flag is refused: the flag needs delivery.complete", async () => {
     const orderId = await createOrder(orgA, DELIVERY, "OUT_FOR_DELIVERY");
     const result = await recordCashPayment({ orderId, actorUserId: randomUUID(), actorRoles: ["KITCHEN"], orgId: orgA.orgId, via: "delivery" });
-    expect(result).toEqual({ ok: false, error: "You don't have permission to take payment." });
+    expect(result).toEqual({ ok: false, code: "NOT_PERMITTED", error: "You don't have permission to take payment." });
     expect(await paymentsFor(orderId)).toHaveLength(0);
     expect(await idempotencyRowsFor(orderId)).toHaveLength(0);
     expect(await statusOf(orderId)).toBe("OUT_FOR_DELIVERY");
@@ -314,7 +314,7 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
     const orderId = await createOrder(orgA, DELIVERY, "OUT_FOR_DELIVERY");
 
     const direct = await recordCashPayment({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgB.orgId, via: "delivery" });
-    expect(direct).toEqual({ ok: false, error: "That order does not exist." });
+    expect(direct).toEqual({ ok: false, code: "ORDER_NOT_FOUND", error: "That order does not exist." });
 
     const closed = await completeDelivery({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgB.orgId, cashCollected: true });
     expect(closed.ok).toBe(false);
