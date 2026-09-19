@@ -640,12 +640,25 @@ install -m 750 deploy/notify.sh /usr/local/bin/frybird-notify
 install -m 600 -o root -g root /dev/null /etc/frybird/alert.env
 # history-safe: read -s does not echo or record the value; printf is a builtin, so it is not in ps
 read -rsp 'ALERT_URL: ' u && printf 'ALERT_URL=%s\n' "$u" > /etc/frybird/alert.env; unset u; echo
-cp deploy/frybird-alert@.service deploy/frybird-backup.service deploy/frybird-job-failed@.service /etc/systemd/system/
+cp deploy/frybird-alert@.service deploy/frybird-backup.service deploy/frybird-job@.service deploy/frybird-job-failed@.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl start frybird-alert@test.service     # one test alert; owner confirms it arrived
 systemctl start frybird-job@nosuchjob          # MUST also produce an alert (proves the OnFailure chain fires;
                                                # a clean systemd-analyze verify does not). Then: systemctl reset-failed 'frybird-job@*'
 ```
+
+`frybird-job@.service` is in that `cp` on purpose and is the one that matters:
+it carries the `OnFailure=` list and is already live from section 9 with the old
+single entry, so skipping it leaves job alerts silent. The four units plus
+`notify.sh` are every deploy/ file this card changed. The `nosuchjob` start runs
+after the `cp` and `daemon-reload`, so it exercises the installed unit, not the
+old one (replacing a template unit does not disturb running instances).
+
+**What each check proves.** The container test on real systemd 255 (files copied
+in directly) proves the *unit contents* fire the chain. It does not prove this
+*install step* puts those contents on the VPS. Only the `nosuchjob` start,
+run on the VPS after this `cp`, proves that, and only a real alert arriving
+proves the channel. Neither substitutes for the other.
 
 Without `alert.env` the units still log and `frybird-notify` exits non-zero,
 so the unconfigured state shows in `systemctl --failed` instead of passing
