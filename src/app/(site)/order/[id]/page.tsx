@@ -93,6 +93,8 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
 
   const status = order.status as OrderStatus;
   const isDelivery = order.fulfilment === "DELIVERY";
+  // Same condition gates the pay widget, the "pay below" line and the fallback.
+  const canPayOnline = awaitingOnline && online !== null && razorpay !== null && Boolean(online.providerOrderId);
   const STEPS = stepsFor(order.fulfilment);
 
   // The repository already decided whether the promised time has passed; this
@@ -123,7 +125,9 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
       <p className="mt-3 text-lg leading-relaxed text-muted-foreground">
         Thanks{greetedName ? `, ${greetedName}` : ""}.{" "}
         {awaitingOnline
-          ? "Pay below and the kitchen gets your order straight away."
+          ? canPayOnline
+            ? "Pay below and the kitchen gets your order straight away."
+            : "Your order is saved, but it hasn't been paid for yet."
           : isDelivery
             ? "We'll call when it's on its way."
             : "We'll call when it's ready to collect."}
@@ -142,9 +146,12 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           failureReason={online.failureReason}
         />
       )}
-      {awaitingOnline && (!razorpay || !online?.providerOrderId) && (
+      {awaitingOnline && !canPayOnline && (
         <p role="alert" className="mt-6 rounded-lg border border-border bg-surface px-4 py-3 text-sm">
-          Online payment isn&rsquo;t available right now. You can pay when you collect.
+          Online payment isn&rsquo;t available right now.{" "}
+          {isDelivery
+            ? "The shop can take payment when your order is delivered."
+            : "The shop can take payment when you collect your order."}
           {phone && (
             <span className="mt-1 block">
               <CallShop phone={phone} lead="Questions? Call" />
