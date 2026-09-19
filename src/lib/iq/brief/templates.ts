@@ -103,7 +103,72 @@ export const DETECTION_TEMPLATES: Readonly<Record<string, string>> = {
   "detect.channel_mix.shift": "Online orders were {observed} of net sales, {direction} a usual {baseline}.",
   // IQ-2 S9 (IQ-ENGINE) writes pulse.no_orders with this templateId; the times come from the insight's period.
   "pulse.no_orders": "No orders came in between {start} and {end}.",
+
+  /*
+   * Reconciliation (FINANCE-LEDGER a4a0774, R2.6). `templateId` is the rule
+   * id, so one entry per rule in RECON_RULE_IDS; `{observed}` is the count of
+   * unexplained breaks that rule found on the day. Every one of these is
+   * finance.view only — `presentFor` drops them for anyone else before the
+   * brief sees them, so nothing here needs to hedge.
+   *
+   * Counted things are phrased as a noun then the count, never "{observed}
+   * orders", so the sentence reads correctly when the count is one.
+   */
+  "recon.facts_parity": "The day's stored figures did not match a recount from the ledger. Figures that disagree: {observed}.",
+  "recon.order_totals": "Orders whose totals do not add up to their own lines: {observed}.",
+  "recon.capture_vs_total": "Orders paid more than once, or paid an amount different from the bill: {observed}.",
+  "recon.status_vs_payment": "Orders that closed with no payment recorded against them: {observed}.",
+  "recon.refund_vs_payment": "Refunds that do not match the payment they came from: {observed}.",
+  "recon.invoice": "Invoice numbers missing, malformed, duplicated or out of sequence: {observed}.",
+  "recon.gst_lines": "Bills whose GST lines do not add up: {observed}.",
+  "recon.loyalty_refund": "Refunded orders still holding loyalty points or a stamp: {observed}.",
+
+  /*
+   * The two rules that also carry money (`withAmount` in rules.ts). The job
+   * writes the amount as its own insight, so it is its own line: a count with
+   * no amount hides how much is at stake, and a group sentence would drop one
+   * figure or the other.
+   */
+  "recon.capture_vs_total.paise": "Money involved in those payment mismatches: {observed}.",
+  "recon.refund_vs_payment.paise": "Money involved in those refund mismatches: {observed}.",
+
+  /*
+   * An explained finding, keyed by the card that explains it
+   * (`recon.explained.<card>`; EXPLAINING_CARDS in reconcile/explanations.ts
+   * has only pay-4 today). It is still shown, with its count: a customer paid
+   * twice whatever the cause. `explainingCardOf` adds the "known issue" suffix.
+   */
+  "recon.explained.pay-4": "Orders paid more than once before the guard against a second charge went live: {observed}.",
+
+  /*
+   * Money crash signatures (PAYMENT-SAFETY 1f2afc0, R2.7). `templateId` is the
+   * rule id; `{observed}` is the row count, and the insight carries no order
+   * id, amount or claim key by design. A signature is a standing condition
+   * rather than a thing that happened on the day, so none of these name a date.
+   */
+  "sig.double_capture": "Orders charged twice: {observed}.",
+  "sig.refund_unrecorded": "Payments marked refunded with no matching refund recorded: {observed}.",
+  "sig.refund_followup_lost": "Refunded orders whose follow-up never finished, so the order and its loyalty points are still as they were: {observed}.",
+  "sig.half_order": "Unpaid orders left half written, with no items or no payment: {observed}.",
+  "sig.capture_on_terminal": "Orders that took money after they were cancelled, failed or refunded: {observed}.",
+  "sig.claim_stuck": "Orders or payments that started and never finished: {observed}.",
+  "sig.webhook_failed": "Payment updates from the gateway that never processed: {observed}.",
 };
+
+/** Prefix of an explained reconciliation finding's templateId; what follows is the card id. */
+export const EXPLAINED_TEMPLATE_PREFIX = "recon.explained.";
+
+/**
+ * The fix card an insight names itself, or null. The reconcile job puts the
+ * card in the templateId of its `.explained` insight rather than in a column,
+ * so the brief reads it from there and needs no port of its own; `BriefInput`
+ * may still pass `explainedBy` to explain a finding this does not cover.
+ */
+export function explainingCardOf(templateId: string): string | null {
+  if (!templateId.startsWith(EXPLAINED_TEMPLATE_PREFIX)) return null;
+  const card = templateId.slice(EXPLAINED_TEMPLATE_PREFIX.length);
+  return card.length > 0 ? card : null;
+}
 
 /** Several rules that describe one problem become one line (R2.10 "one line per problem"). */
 export const RULE_GROUPS: Readonly<Record<string, string>> = {

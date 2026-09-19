@@ -9,7 +9,8 @@
  *   cites, and that insight is in the brief's pinned set;
  * - every date part re-derives from the brief's date, the read time or the
  *   cited insight's period;
- * - every count part counts what it says, and every ref is the explained-by card;
+ * - every count part counts what it says, and every ref is a card the cited
+ *   finding names, through explainedBy or its own templateId;
  * - every number in the rendered text is accounted for by those parts;
  * - only FACT and DETECTION insights are cited, even when others are present.
  */
@@ -20,6 +21,7 @@ import { estimated, present, type Insight } from "@/lib/iq/engine";
 
 import { DATE, briefFacts, detection, detections, input, nextId, stored, trust } from "./__test-support__/brief";
 import { composeBrief, formatDate, instantFor, renderBriefText, unsignedText, type Brief, type BriefInput, type BriefLine, type BriefPart } from "./compose";
+import { explainingCardOf } from "./templates";
 
 const NUMBER = /\d+(?:[.,:]\d+)*/g;
 
@@ -95,7 +97,13 @@ function expectGrounded(brief: Brief, briefInput: BriefInput): void {
           expect(part.value).toBeGreaterThan(0);
           break;
         case "ref":
-          expect(line.insightIds.some((id) => briefInput.explainedBy?.(byId.get(id)!) === part.text)).toBe(true);
+          // A card comes either from the explainedBy port or from the finding's own templateId; never from nowhere.
+          expect(
+            line.insightIds.some((id) => {
+              const insight = byId.get(id)!;
+              return briefInput.explainedBy?.(insight) === part.text || explainingCardOf(insight.copy.templateId) === part.text;
+            }),
+          ).toBe(true);
           break;
       }
       if (part.kind !== "text" && part.kind !== "word") for (const n of part.text.match(NUMBER) ?? []) allowedNumbers.add(n);
@@ -154,7 +162,27 @@ async function seededDay(offset: number): Promise<BriefInput> {
     },
   } as Insight);
 
-  const ledger = offset % 2 === 0 ? [recon, sig] : [recon];
+  // The money a capture mismatch involves, as reconcile-job.ts writes it: its
+  // own insight, in paise, beside the count.
+  const reconAmount = detection({
+    producer: "recon.orders",
+    ruleId: "recon.capture_vs_total.paise",
+    severity: 2,
+    date,
+    unit: "paise",
+    observed: 124050n + BigInt(offset) * 1000n,
+  });
+  // An explained double capture names its own card in the templateId; no port fills it in.
+  const reconExplained = detection({
+    producer: "recon.orders",
+    ruleId: "recon.capture_vs_total.explained",
+    templateId: "recon.explained.pay-4",
+    severity: 2,
+    date,
+    observed: 2n,
+  });
+
+  const ledger = offset % 2 === 0 ? [recon, sig, reconAmount] : [recon, reconExplained];
   return input(date, [...facts, ...found.insights, ...ledger, pulse, forecast], {
     detectSummary: found.summary,
     parity: offset === 4 ? { state: "NOT_CHECKED" } : { state: "CHECKED", matched: true },

@@ -62,7 +62,12 @@ export type BriefInput = {
   readonly parity: ParityCheck;
   /** The detect run's summary for `date` (its `not_evaluated:<ruleId>:<reason>` counts), or null. */
   readonly detectSummary: Readonly<Record<string, number>> | null;
-  /** The fix card that explains a finding (FINANCE-LEDGER's explanations table), or null. */
+  /**
+   * A fix card that explains a finding, for findings that do not say so
+   * themselves. Optional: a reconciliation finding already names its card in
+   * `copy.templateId` (`recon.explained.<card>`) and `explainingCardOf` reads
+   * it, so nothing has to pass this to get pay-4 on a double capture.
+   */
   readonly explainedBy?: (insight: BriefInsight) => string | null;
 };
 
@@ -376,7 +381,7 @@ export function composeBrief(input: BriefInput): Brief {
     }
     const sentence = detectionSentence(insight, presentation);
     if (!sentence.templated) count("lines_generic");
-    const card = input.explainedBy?.(insight) ?? null;
+    const card = input.explainedBy?.(insight) ?? T.explainingCardOf(insight.copy.templateId);
     const member: Member = { insight, sentence: sentence.parts, card, lifecycle };
 
     if (lifecycle !== "ACTIVE") {

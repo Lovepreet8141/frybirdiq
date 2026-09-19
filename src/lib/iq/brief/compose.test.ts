@@ -130,8 +130,52 @@ describe("composeBrief: Risks (B3, C1)", () => {
     const recon = detection({ producer: "recon.orders", ruleId: "recon.capture_vs_total", severity: 2 });
     const brief = composeBrief(input(DATE, [...facts, recon], { explainedBy: (i) => (i.id === recon.id ? "pay-4" : null) }));
     expect(brief.risks.lines).toEqual([]);
-    expect(texts(brief.risks.known)).toEqual(["A payment records check found a problem that needs a look. Known issue, fix in pay-4."]);
+    expect(texts(brief.risks.known)).toEqual(["Orders paid more than once, or paid an amount different from the bill: 3. Known issue, fix in pay-4."]);
     expect(brief.risks.empty).toBeNull();
+  });
+
+  it("reads the explaining card off the finding itself, with no explainedBy port", async () => {
+    // What reconcile-job.ts writes for an explained double capture: ruleId
+    // <rule>.explained, templateId recon.explained.<card> (FINANCE-LEDGER a4a0774).
+    const facts = await briefFacts(DATE);
+    const explained = detection({
+      producer: "recon.orders",
+      ruleId: "recon.capture_vs_total.explained",
+      templateId: "recon.explained.pay-4",
+      severity: 2,
+    });
+    const brief = composeBrief(input(DATE, [...facts, explained]));
+    expect(brief.risks.lines).toEqual([]);
+    expect(texts(brief.risks.known)).toEqual([
+      "Orders paid more than once before the guard against a second charge went live: 3. Known issue, fix in pay-4.",
+    ]);
+    // The card is a ref part, so the grounding check does not read pay-4 as a figure.
+    expect(brief.risks.known[0]?.parts.some((p) => p.kind === "ref" && p.text === "pay-4")).toBe(true);
+  });
+
+  it("gives reconciliation and signature findings their own sentences, not the generic line", async () => {
+    const facts = await briefFacts(DATE);
+    const parity = detection({ producer: "recon.orders", ruleId: "recon.facts_parity", severity: 3, observed: 2n });
+    const stuck = detection({ producer: "sig.money", ruleId: "sig.claim_stuck", severity: 2, observed: 1n });
+    const brief = composeBrief(input(DATE, [...facts, parity, stuck]));
+    expect(texts(brief.risks.lines)).toEqual([
+      "The day's stored figures did not match a recount from the ledger. Figures that disagree: 2.",
+      "Orders or payments that started and never finished: 1.",
+    ]);
+    expect(brief.counts.lines_generic).toBeUndefined();
+  });
+
+  it("keeps the money beside the count when a reconciliation rule carries an amount", async () => {
+    const facts = await briefFacts(DATE);
+    const count = detection({ producer: "recon.orders", ruleId: "recon.capture_vs_total", severity: 2, dedupeKey: `recon:capture_vs_total:${DATE}` });
+    const amount = detection({ producer: "recon.orders", ruleId: "recon.capture_vs_total.paise", severity: 2, dedupeKey: `recon:capture_vs_total:paise:${DATE}` });
+    const brief = composeBrief(input(DATE, [...facts, count, amount]));
+    // Two lines: a group sentence carries no figure, and dropping either one
+    // hides how many orders or how much money.
+    expect(texts(brief.risks.lines)).toEqual([
+      "Orders paid more than once, or paid an amount different from the bill: 3.",
+      "Money involved in those payment mismatches: 3.",
+    ]);
   });
 
   it("says 'No risks found' only when every check ran", async () => {

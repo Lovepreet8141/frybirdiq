@@ -148,7 +148,12 @@ export type RawDetection = {
   readonly observed?: bigint;
   readonly baseline?: bigint;
   readonly dedupeKey?: string;
+  /** Counts unless said otherwise; the `.paise` reconciliation insights carry money. */
+  readonly unit?: "count" | "paise";
 };
+
+const figure = (unit: RawDetection["unit"], value: bigint) =>
+  unit === "paise" ? observed({ unit: "paise", value: value.toString() }) : observed({ unit: "count", value: Number(value) });
 
 /** A hand-built DETECTION for producers without a job body in this branch. */
 export function detection(raw: RawDetection, extra: Parameters<typeof stored>[1] = {}): BriefInsight {
@@ -177,8 +182,8 @@ export function detection(raw: RawDetection, extra: Parameters<typeof stored>[1]
       claimType: "DETECTION",
       payload: {
         ruleId: raw.ruleId,
-        observed: observed({ unit: "count", value: Number(raw.observed ?? 3n) }),
-        baseline: { method: "threshold", value: observed({ unit: "count", value: Number(raw.baseline ?? 0n) }), windowWeeks: 0 },
+        observed: figure(raw.unit, raw.observed ?? 3n),
+        baseline: { method: "threshold", value: figure(raw.unit, raw.baseline ?? 0n), windowWeeks: 0 },
         deviationBps: raw.deviationBps ?? 10000,
         severity: raw.severity ?? 3,
       },
