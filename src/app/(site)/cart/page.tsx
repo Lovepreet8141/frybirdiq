@@ -4,6 +4,7 @@ import { ArrowRight, Gift } from "lucide-react";
 import { LineControls } from "@/components/cart/line-controls";
 import { RedeemToggle } from "@/components/cart/redeem-toggle";
 import { OrderSummary } from "@/components/cart/summary";
+import { EarnPreview } from "@/components/loyalty/earn-preview";
 import { VegMark } from "@/components/menu/marks";
 import { EmptyState, ErrorState } from "@/components/states";
 import { formatINR } from "@/lib/money";
@@ -123,6 +124,7 @@ export default async function CartPage() {
 
           <div className="flex flex-col gap-4 lg:sticky lg:top-24">
             <OrderSummary cart={cart} />
+            <EarnPreview spend={cart.payable} />
 
             <Link
               href="/checkout"

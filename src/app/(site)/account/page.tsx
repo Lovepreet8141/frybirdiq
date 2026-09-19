@@ -10,6 +10,7 @@ import { resolveHome } from "@/lib/auth/route-home";
 import { isLoyaltyEnabled, pointsValue } from "@/lib/loyalty";
 import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
 import { isStampProgramEnabled } from "@/lib/loyalty/stamps";
+import { stampProgress } from "@/lib/loyalty/copy";
 import { StampCard } from "@/components/loyalty/stamp-card";
 import { formatBps, formatINR } from "@/lib/money";
 import { listCustomerOrders } from "@/lib/repositories/orders";
@@ -98,7 +99,7 @@ export default async function AccountPage() {
           <p className="mt-1 text-sm text-muted-foreground">
             {availableRewards > 0
               ? "Pick your free item from the menu — it's added at no charge when you check out."
-              : `${stampCount} of ${stampConfig.stampsRequired} — spend over ${formatINR(stampConfig.minOrderValue)} on ${stampConfig.stampsRequired - stampCount} more order${stampConfig.stampsRequired - stampCount === 1 ? "" : "s"} and your next item up to ${formatINR(stampConfig.maxRewardValue)} is free.`}
+              : stampProgress(stampCount, availableRewards, stampConfig)?.text}
           </p>
           <StampCard
             stampsRequired={stampConfig.stampsRequired}

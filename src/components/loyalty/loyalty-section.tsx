@@ -9,6 +9,7 @@ import { getOrg } from "@/lib/repositories/org";
 import { formatBps, formatINR, fromRupees } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { StampCard } from "./stamp-card";
+import { stampProgress, stampRule } from "@/lib/loyalty/copy";
 
 /**
  * Two loyalty programs, told straight, with real numbers.
@@ -110,8 +111,7 @@ export async function LoyaltySection() {
                 </span>
                 <h3 className="mt-4 font-heading text-xl font-extrabold">FRYBIRD REWARDS</h3>
                 <p className="mt-1.5 text-sm text-muted-foreground">
-                  Spend over {formatINR(stampConfig.minOrderValue)}, get a stamp. Collect {stampConfig.stampsRequired}, and one item up to{" "}
-                  {formatINR(stampConfig.maxRewardValue)} is free — you pick which one.
+                  {stampRule(stampConfig)}
                 </p>
 
                 <StampCard
@@ -124,8 +124,7 @@ export async function LoyaltySection() {
 
                 {customer?.emailVerified && availableRewards === 0 && (
                   <p className="tabular mt-4 text-sm text-muted-foreground">
-                    {stampConfig.stampsRequired - stampCount} more order{stampConfig.stampsRequired - stampCount === 1 ? "" : "s"} over{" "}
-                    {formatINR(stampConfig.minOrderValue)} to go.
+                    {stampProgress(stampCount, availableRewards, stampConfig)?.text}
                   </p>
                 )}
               </div>

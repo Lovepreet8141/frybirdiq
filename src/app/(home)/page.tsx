@@ -13,6 +13,7 @@ import { HomeOrderBar } from "@/components/home/order-bar";
 import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
 import { shopPhone } from "@/lib/contact/phone";
 import { shopHoursState } from "@/lib/cart/shop-hours";
+import { LoyaltySection } from "@/components/loyalty/loyalty-section";
 import { HomeMotion } from "@/components/home/motion";
 import { getAllProductsCached } from "@/lib/repositories/menu-cache";
 import { toLatLng } from "@/lib/delivery";
@@ -129,6 +130,7 @@ export default async function HomePage() {
           <Bestsellers items={bestsellers} />
           <Range />
           <Story />
+          <LoyaltySection />
           <Location
             addressLines={addressLines}
             addressOneLine={contact ? addressLines.join(", ") : ADDRESS_ONE_LINE}

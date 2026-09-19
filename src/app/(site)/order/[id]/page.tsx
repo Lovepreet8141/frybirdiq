@@ -14,6 +14,7 @@ import { getCustomer } from "@/lib/customer";
 import { readRememberedContact } from "@/lib/cart/remembered-contact";
 import { OrderRating } from "@/components/order/rating";
 import { PayOnline } from "@/components/order/pay-online";
+import { ProgressNote } from "@/components/loyalty/progress-note";
 import { OrderLive } from "@/components/order/order-live";
 import { greetingName, viewerOwnsOrder } from "@/components/order/viewer-owns-order";
 import { RAZORPAY_PROVIDER, razorpayConfig } from "@/lib/payments";
@@ -275,6 +276,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           <p className="mt-6 text-sm text-muted-foreground">This order earns a FRYBIRD REWARDS stamp once it&rsquo;s paid, if it qualifies.</p>
         )
       )}
+      <ProgressNote show={isOwner} orderCarriesReward={order.stampRewardDiscount > 0n} />
 
       {/* Only once the order is finished. Asking someone to score food that has
           not arrived turns a bad minute during the wait into a permanent one
