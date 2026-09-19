@@ -84,6 +84,8 @@ function expectPausedRefusal(result: Awaited<ReturnType<typeof placeOrder>>) {
   expect("closed" in result && result.closed !== undefined).toBe(false);
   expect(result.error).not.toMatch(/choose a time/i);
   expect(result.error).not.toContain("fryer down"); // staff's reason never reaches a customer
+  // The whole result, not just the sentence: toMatchObject above allows extra keys (SECURITY-TENANCY).
+  expect(JSON.stringify(result)).not.toContain("fryer down");
 }
 
 describe("placeOrder with the switch OFF (owner req 3: refused regardless of a stale page)", () => {
@@ -244,6 +246,55 @@ describe("pauseOrdering / resumeOrdering", () => {
     await pauseOrdering({ orgId: org.orgId, actorUserId: cashier, reason: "first", mode: "UNTIL_RESUMED", now: PAUSED_AT });
     const again = await pauseOrdering({ orgId: org.orgId, actorUserId: randomUUID(), reason: "second", mode: "UNTIL_NEXT_OPENING", now: EVENING_AFTER_PAUSE });
     expect(again).toMatchObject({ ok: true, changed: false, status: { state: "paused", reason: "first", mode: "UNTIL_RESUMED" } });
+    expect(await pauseAudit(org.orgId)).toHaveLength(1);
+  });
+
+  it("a stricter pause replaces a weaker one: a fire after 'out of chicken' stays closed past the next opening (RELIABILITY, blocking)", async () => {
+    // Till A: out of chicken, until we next open (the action's default).
+    await pauseOrdering({ orgId: org.orgId, actorUserId: cashier, reason: "out of chicken", mode: "UNTIL_NEXT_OPENING", now: PAUSED_AT });
+    // Till B, half an hour later: kitchen fire, until someone switches it back on.
+    const fire = await pauseOrdering({ orgId: org.orgId, actorUserId: cashier, reason: "kitchen fire", mode: "UNTIL_RESUMED", now: EVENING_AFTER_PAUSE });
+
+    expect(fire).toMatchObject({ ok: true, changed: true, status: { state: "paused", mode: "UNTIL_RESUMED", reason: "kitchen fire" } });
+    expect(await pauseRow(org.orgId)).toMatchObject({ at: EVENING_AFTER_PAUSE, reason: "kitchen fire", until: null });
+
+    // Both pauses are on record, and the second says what it replaced.
+    const audit = (await pauseAudit(org.orgId)).filter((row) => row.action === "ordering_paused");
+    expect(audit).toHaveLength(2);
+    expect(audit.find((row) => (row.after as { reason?: string }).reason === "kitchen fire")).toMatchObject({
+      before: { mode: "UNTIL_NEXT_OPENING", reason: "out of chicken", pausedAt: PAUSED_AT.toISOString(), reopensAt: NEXT_OPENING.toISOString() },
+      after: { mode: "UNTIL_RESUMED", reason: "kitchen fire" },
+    });
+
+    // The whole point: it does NOT reopen by itself at 11:30.
+    expect(await getOrderingStatus(org.orgId, NEXT_OPENING)).toMatchObject({ state: "paused", mode: "UNTIL_RESUMED" });
+  });
+
+  it("Resume pressed on the 'out of chicken' screen cannot lift the fire pause that replaced it", async () => {
+    await pauseOrdering({ orgId: org.orgId, actorUserId: cashier, reason: "out of chicken", mode: "UNTIL_NEXT_OPENING", now: PAUSED_AT });
+    await pauseOrdering({ orgId: org.orgId, actorUserId: cashier, reason: "kitchen fire", mode: "UNTIL_RESUMED", now: EVENING_AFTER_PAUSE });
+
+    const stale = await resumeOrdering({ orgId: org.orgId, actorUserId: cashier, shownPausedAt: PAUSED_AT, now: new Date(EVENING_AFTER_PAUSE.getTime() + 60_000) });
+    expect(stale).toMatchObject({ ok: false, code: "PAUSE_CHANGED", status: { state: "paused", reason: "kitchen fire" } });
+    expect((await pauseRow(org.orgId))?.reason).toBe("kitchen fire");
+  });
+
+  it("a weaker or equal pause never replaces the one in force", async () => {
+    // Indefinite first, then timed: still indefinite.
+    await pauseOrdering({ orgId: org.orgId, actorUserId: cashier, reason: "fire", mode: "UNTIL_RESUMED", now: PAUSED_AT });
+    expect(await pauseOrdering({ orgId: org.orgId, actorUserId: cashier, reason: "later", mode: "UNTIL_NEXT_OPENING", now: EVENING_AFTER_PAUSE })).toMatchObject({
+      changed: false,
+      status: { mode: "UNTIL_RESUMED", reason: "fire" },
+    });
+    await setPause(null, null);
+    await db().delete(auditLogs).where(and(eq(auditLogs.orgId, org.orgId), inArray(auditLogs.action, ["ordering_paused", "ordering_resumed"])));
+
+    // Timed then timed, same next opening: the first stands.
+    await pauseOrdering({ orgId: org.orgId, actorUserId: cashier, reason: "first", mode: "UNTIL_NEXT_OPENING", now: PAUSED_AT });
+    expect(await pauseOrdering({ orgId: org.orgId, actorUserId: cashier, reason: "second", mode: "UNTIL_NEXT_OPENING", now: EVENING_AFTER_PAUSE })).toMatchObject({
+      changed: false,
+      status: { reason: "first" },
+    });
     expect(await pauseAudit(org.orgId)).toHaveLength(1);
   });
 
