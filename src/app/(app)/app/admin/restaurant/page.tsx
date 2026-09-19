@@ -17,6 +17,9 @@ import { requireStaff, staffCan } from "@/lib/auth";
 import { adminNavAccess } from "@/lib/auth/admin-access";
 import { formatBps, formatINR } from "@/lib/money";
 import { getRestaurantSettings } from "@/lib/repositories/settings";
+import { getOrderingStatusForStaff } from "@/lib/repositories/shop-status";
+import { sinceLabel } from "@/lib/settings/close-shop-copy";
+import { CloseShopPanel } from "./close-shop-panel";
 
 export const metadata: Metadata = { title: "Restaurant", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -37,7 +40,7 @@ export default async function RestaurantSettingsPage() {
     );
   }
 
-  const [settings, access] = await Promise.all([getRestaurantSettings(staff.orgId), adminNavAccess()]);
+  const [settings, access, ordering] = await Promise.all([getRestaurantSettings(staff.orgId), adminNavAccess(), getOrderingStatusForStaff(staff.orgId)]);
   if (!settings) {
     return (
       <div className="mx-auto w-full max-w-lg px-[var(--gutter)] py-16">
@@ -46,12 +49,19 @@ export default async function RestaurantSettingsPage() {
     );
   }
 
+  const now = new Date();
   const { organization, loyalty, location, delivery, taxRates } = settings;
   const inclusive = organization.priceBasis === "inclusive";
   const gaps = [!organization.gstin && "GSTIN", !organization.legalName && "legal name", !location && "outlet", location && !delivery?.shop && "map pin", location && !location.state && "GST state", taxRates.length === 0 && "GST rates"].filter((gap): gap is string => typeof gap === "string");
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
+      {ordering && (
+        <CloseShopPanel
+          status={ordering}
+          pausedSince={ordering.state === "paused" ? sinceLabel(ordering.pausedAt, now) : null}
+        />
+      )}
       <PageHeader title="Restaurant" description="What FRYBIRD is configured as. These values already drive every invoice, price, reward and delivery quote; changing one is a business decision, so this page shows them and edits only the operations settings the Overview reads." />
       <AdminSectionNav current="restaurant" access={access} />
 
