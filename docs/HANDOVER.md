@@ -1,0 +1,328 @@
+# HANDOVER — agent office closed, single builder from here
+
+Written 2026-09-19 (session `frybirdiq-3c`, on `kit-radix-nova`). Sources: `git` state at the time of writing,
+`~/FRYBIRD-IQ/hive/{board.md,tasks.json}` (the office's own record), `docs/RELEASES.md`.
+
+**How to read the test numbers.** Every number below is what the office recorded on the card. I did **not** re-run the
+suites for this handover, with one exception: the uncommitted S4a change (see ops-1), where I ran its test file and `tsc`.
+Nothing here has been re-verified in a browser. Nobody on the office floor had a browser.
+
+**Nothing has been deployed, merged into `kit-radix-nova`, or deleted by this handover.** All 108 local branches are on
+GitHub (`origin`), each at the same commit as local (checked with `git rev-parse` per branch after the push). Worktrees,
+branches and hive files are untouched.
+
+---
+
+## 1. What is live in production
+
+| | |
+|---|---|
+| Commit | `49f858a5fe79b3b391aa85633ada1485a0b2203a` (`release/rc-13-native-retry`, fast-forwarded into `kit-radix-nova`) |
+| BUILD_ID | `x5cu1EHxOpfe8vYlRFl8C` |
+| Migration head | `0038_refunds_status_idempotency` (39 of 39 applied) |
+| Deployed | 2026-09-19 18:12:50 UTC (23:41 IST, shop closed) |
+| Smoke / journal | Smoke pass, 0 journal errors, 0 restarts (per board) |
+| Pre-migration dump | `/var/backups/frybird/frybird-20260919-1811.dump` on the VPS (440,664 B, listed clean) |
+| Record | `docs/RELEASES.md` rows 2 and 3 |
+
+`kit-radix-nova` = `origin/kit-radix-nova` = `1fe080b` = production's code plus the RELEASES rows. There is no branch
+ahead of production on `kit-radix-nova`: every card below lives on its own branch.
+
+**Rollback of 49f858a is code AND database together and needs the owner's yes.** Old code breaks on 0037's
+`NOT NULL as_of`. The deploy worktree `~/FRYBIRD-IQ/worktrees/deploy-49f858a` is kept for this.
+
+**Open after that deploy:** the owner has not yet entered the shop phone (Admin → Restaurant); alerting install
+(DEPLOY.md §11.2) not run; no uptime monitor; `p0-3e` (a human looking at the closed-shop strip on the live site during
+closed hours) not done.
+
+Only the heartbeat job is scheduled in production. Facts, detect, reconcile, signatures and the refund healer are built
+but not scheduled/deployed (this is the IQ-2 / refund-healer backlog).
+
+---
+
+## 2. Queue order (`tasks.json` `queueRank`)
+
+1. **p0-3e** closed-shop check with the owner — blocked by ops-1 (no safe way to see the closed state without editing live hours)
+2. **p1-backup** offsite backups + proven restore incl. staff logins — waiting on owner
+3. **ops-1** Close Shop switch — built, reviews open
+   - 3.1 **ops-3** day off + planned closures (after ops-1, own migration)
+   - 3.5 **ops-2** close paid counter orders + alert on old ACCEPTED (after ops-1; the 27 ACCEPTED orders)
+4. **seo-1** get-found pack — finished, waiting for a release
+5. **loy-web** loyalty visible on the site — finished, merge after seo-1
+6. **pay-ready** Razorpay readiness (includes p3-order-copy, pay-7) — built, unreviewed, money
+7. **iq2-ship** finish and deploy IQ-2
+8. **rm-5.1 → rm-5.2 → rm-5.3** cash sessions, rider cash handover, reconciliation view
+9. **p0-7** ADMIN can mint OWNER / role-blind reads — **must be fixed before any non-OWNER login exists**
+10. **rm-6.3** rider assignment
+11. **rm-4.1 → rm-4.2** prep targets, kitchen stations
+12. **rm-7.2** WhatsApp order-status notifications (mock until the owner picks a provider)
+
+Side card `a3-accepted` is done (see §4).
+
+---
+
+## 3. Cards
+
+Legend: "Reviewed" = what the office recorded. "Open findings" = refusals or non-blocking notes not yet closed.
+
+### 3.1 ops-1 — Close Shop switch (queue 3)
+
+- **Branches / heads.** ops-1 is **five branches that have never been integrated**; there is no single ops-1 branch.
+  All are based on `1fe080b`.
+
+  | Slice | Branch | Head |
+  |---|---|---|
+  | S2 migration 0039 | `agent/database-ops-1-s2` | `9928f23` |
+  | S3 gate + repo, S4a POS switch (+ S3 fixes) | `agent/pos-orders-ops-1-s4a` | `939c41d` |
+  | S3 fixes only (guard) | `agent/pos-orders-ops-1` | `785b9ab` |
+  | S4b Admin → Restaurant panel | `agent/backend-ops-1-s4b` | `7a17af4` |
+  | S5 site banner | `agent/customer-web-ops-1-s5` | `a1eb45e` |
+
+  Integration trap: `backend-ops-1-s4b` (11 commits over kit) contains S3 at `4656277` and S4a at `2c8ed18` but **not**
+  the S3 fix `dd73819` / guard `785b9ab` and not `939c41d`. `pos-orders-ops-1-s4a` has those. `customer-web-ops-1-s5`
+  (9 over kit) is a separate line. Merge order must carry S2 → S3 (with `dd73819`, `785b9ab`) → S4a (`939c41d`) → S4b → S5.
+  Expect small conflicts.
+- **Done.**
+  - S1 pure gate (`c185d01`, `87210c7`).
+  - S2 migration 0039 (`paused_at/by/reason/until`, CHECK constraint, down refuses only while a pause is in force).
+  - S3 `placeOrder` refuses while paused; pause/resume with audit row.
+  - S4a POS header switch.
+  - S4b Admin panel.
+  - S5 banner on every customer page.
+- **Left.**
+  1. Integrate the five branches into one (see trap above) and re-run everything.
+  2. RELIABILITY re-check of S3 option-(a) + S4a notice + S4b polish + S5 fix, sent as one batch.
+  3. The server-side payment hold (refuse a NEW Razorpay intent while paused) lives in `pay-ready`, not here.
+  4. Browser check at 375 px and 1280 px, both themes (nobody has seen the banner or POS/Admin panels rendered; contrast unmeasured).
+  5. Owner go/no-go (order placement + migration).
+- **Review status and open findings.**
+  - SECURITY-TENANCY: AGREE on S4a / S4b / S5.
+  - RELIABILITY: AGREE on the design (+6 requirements; 3 built at `87210c7`). Then:
+    - **S3 REFUSED (open until re-checked).** "A stricter pause replaces a weaker one." Fix is `dd73819`, guard `785b9ab`. No re-check recorded.
+    - **S4a REFUSED (open until re-checked).** Needs a visible "choice not applied" message. Fix is `939c41d`, committed by me during this handover, **unreviewed**; I ran `shop-switch-view.test.ts` (21 pass) and `tsc --noEmit` (clean), but did not prove fail-first.
+    - **S4b AGREE** plus 3 polish items, done in `7a17af4`.
+    - **S5 REFUSED (open until re-checked).** An uncaught status read broke every page. Fix `a1eb45e` (read caught → null, logs name+message only, 5 tests). No re-check recorded.
+  - Known: an unreadable status **fails open on the page** (the server still refuses).
+- **Tests (as recorded).**
+  - S3: 2203 unit / 450 integration at `4656277`.
+  - S2: 16/16 integration for 0039.
+  - S4b: 2213 → 2240 unit.
+  - S4a: 2225 unit / 454 integration at `2c8ed18`.
+  - S5: 2205 → 2210 unit; build compiles.
+  - Fail-first was recorded for S1 (5 of 8 fail without the fix).
+  - No integrated run exists.
+- **Migration.** Yes: `0039` (in `9928f23`). Down script exists, refuses while a pause is in force, and was integration-tested (16/16).
+  Production is at 0038, so 0039 needs the owner's go/no-go.
+- **Rollback.** **Resume ordering (switch on) before ANY rollback**: old code has no pause check and would stay
+  paused-invisible. Then code rollback to `49f858a`. The 0039 down script refuses while paused.
+  Code-only rollback after 0039 is applied is safe only because the columns are additive and the old code ignores them,
+  and only once ordering is resumed. **Not verified.**
+- **Required deploy step (owner rule 2).** After deploy: pause → the site shows paused and refuses → resume → the site takes orders. **No order placed.**
+- **Owner rulings (reversible).** Pause control on the POS header; pause/resume needs `orders.update` (OWNER/ADMIN/MANAGER/CASHIER, not KITCHEN);
+  paused refuses ASAP and scheduled; no auto-cancel of placed orders (confirm shows "N orders still due");
+  a pause that ends later or never replaces one that ends earlier.
+  Owner requirements (override "no auto-reopen"): see §5.
+
+### 3.2 p1-backup — offsite backups + restore proof (queue 2)
+
+- **Branch / head.** `agent/devops-release-backup` @ `5353b2a` (3 commits over `1fe080b`; built `0549ede` → `c70d114` → `5353b2a`).
+- **Done.** Encrypted (age) dumps of the public and auth schemas, rclone to Backblaze B2 with Object Lock, owner-only rclone config, DB password off argv, restore-check with row counts. Staff logins (Supabase auth) are included; they are **not** in today's nightly dump.
+- **Left.** Blocked on the owner:
+  1. B2 bucket + write-only key typed into rclone **on the VPS** by the owner, plus an age key pair (public key line only).
+  2. A yes to install the script on the VPS. The new script fixes a live finding: the current `backup.sh` line 39 puts the DB password on the command line, readable via `/proc/cmdline`.
+  3. A yes to a restore of CURRENT data into a **scratch** database (never production).
+- **Review.** SECURITY-TENANCY REFUSED the first build (Object Lock, config permissions, password on argv); AGREED `c70d114` (own argv probe: 0 hits across 4 password shapes). The three follow-ups after that are in `5353b2a`. Not recorded as re-reviewed. **Open finding: none recorded.**
+- **Tests.** 34 checks, fail-first 6 → 0, including auth enforced, a wrong-password case, and a `%XX`-only decoder. **Untested:** the auth dump as the production pooler role, real B2, and a restore on the VPS. The first real run must be watched.
+- **Migration.** None. Touches `deploy/` and the VPS only.
+- **Rollback.** Restore the previous `backup.sh` from git; nothing in the database changes. Offsite upload stays off until B2 is configured.
+
+### 3.3 loy-web — loyalty visible on the customer site (queue 5)
+
+- **Branch / head.** `agent/customer-web-loy-web` @ `b407ebb` (2 over `1fe080b`; built `5fe3318`).
+- **Done.** Loyalty shown on home, menu, account, order, cart, checkout, from config via `lib/loyalty/copy.ts`.
+  Preview uses the ledger's own functions; the owner's wording is "You'll earn 1 stamp when this order is completed." (same for points); nothing is shown at 0.
+- **Left.** Merge **after seo-1** (small conflicts expected). Owner visual check at 375 px / 1280 px. Then release.
+- **Review.** Dwight (loyalty): first REFUSE (copy), then **AGREE on `b407ebb`**. Diff `1fe080b..b407ebb` touches only site pages, `components/loyalty`, `lib/loyalty/copy(.test).ts` — display only.
+  Non-blocking: `stampRewardDiscount` proxy misses a zero-priced reward (cosmetic); a proper fix needs `stampRewardId` on `OrderView`, which is order code and out of this slice.
+- **Tests.** 20 new, 2170 unit, build compiles. No integration run recorded.
+- **Migration.** None.
+- **Release class.** Standing approval **only while the diff stays display-only**. Any change to checkout action, order placement, loyalty calculation or payments needs the owner's go/no-go.
+- **Rollback.** Code-only, redeploy previous BUILD_ID. Safe (no schema change).
+
+### 3.4 seo-1 — get-found pack (queue 4)
+
+- **Branch / head.** `agent/customer-web-seo-1` @ `1e0e817` (5 over `1fe080b`; built `21ad271`).
+- **Done.** `/order/<bad id>` → 404 (fail-first), sitemap/robots/canonical/OG/Twitter/share image, JSON-LD location from the stored map pin, 45 s public menu cache, image sizes + media cache, branded 404. P3 fixes (photo-less item og:image fallback, ignore 172.16/12 and link-local `SITE_URL` hosts) done.
+- **Left.**
+  1. Owner approves the 15 item descriptions (draft: `~/FRYBIRD-IQ/hive/research/seo-1-descriptions.md`). **Writing them into production menu data is a production data write → owner gate.**
+  2. nginx `robots.txt` Sitemap line is a VPS conf change, separate from the code deploy.
+  3. Owner look at rendered pages.
+- **Review.** PERFORMANCE: AGREE (verified on a real DB + prod build). Two P3s raised and fixed in `1e0e817`. **Open findings: none recorded.**
+- **Tests.** 2174 unit, build OK.
+- **Migration.** None.
+- **Release class.** Standing approval (UI only, no migration, no money/orders/auth), shop closed, fresh dump first.
+- **Rollback.** Code-only, redeploy previous BUILD_ID. Safe.
+
+### 3.5 ops-3 — day off + planned closures (queue 3.1)
+
+- **Branch / head.** **None. Not started.** Spec is in §5 below.
+- **Depends on ops-1 being released.** Not part of the ops-1 release.
+- **Done / left.** Nothing built. Planned order: schema (per-day hours, closed dates with public note) → gate / next-opening / picker / pre-order impact query → Admin hours + closed-dates UI → extra switch durations on POS + Admin → banner.
+- **Review / tests / rollback.** None yet.
+- **Migration.** Expected yes (hours are one opening/closing pair today) → owner go/no-go.
+- **Waiting on owner.** Which weekday is the weekly off (or "none"). Not needed to build it.
+
+### 3.6 iq2-ship — IQ-2 (daily brief, reconciliation, detectors) (queue 7)
+
+- **State.** Built in pieces across many branches, **none integrated or deployed**. Production has no IQ-2 job scheduled.
+  Base `release/rc-12` @ `6ad2606` (0037 + 0038) is already inside `49f858a`, so 0037/0038 are live.
+- **Branches / heads** (none pushed before today; all now on GitHub):
+
+  | Slice | Branch | Head | Note |
+  |---|---|---|---|
+  | S4 recon (FIN) | `agent/finance-ledger-mu4xp10r-iq2-s4` | `47eeed9` | closed both refusals; recon reviews out to PAY / GST / REL |
+  | S5 signatures | `agent/michael-mu4lr1ro-iq2-s5` | `1f2afc0` | FIN REFUSED `91ae343`: `double_capture` never clears once the duplicate is refunded |
+  | S9 pulse | `agent/iq-engine-iq2-s9` | `af3162d` | |
+  | S10 brief | `agent/business-intelligence-iq2-s10` | `61cc1e3` | compose/templates/brief-job, grounding test (42 tests) |
+  | S10a loader | `agent/iq-engine-iq2-s10a` | `5ed149d` | |
+  | S11 UI | `agent/frontend-mu4xp5yj` | `1a6a7da` | BI refused `6308030`, fixed in the S11c commits |
+  | S11b alerts page | `agent/iq-engine-iq2-s11b` | `e2e74c8` | |
+  | adapter (jobs) | `agent/automation-architect-iq2-adapt` | `8dec6e2` | on `6ad2606`, 11 commits |
+  | reference (rc-12 jobs) | `agent/automation-architect-ref-b7` | `4546dba` | |
+
+  S5, S10, S11 branch from `93fd9c5` (84 commits behind `kit-radix-nova`); S10a and iq2-adapt from `6ad2606` (43 behind). Rebasing is forbidden — merge.
+- **Left.** Open cards: `iq2-s5c` (`double_capture` fix, on top of `1f2afc0`), `iq2-s6` (post-refund signatures; must ship with 0038's `status='SUCCEEDED'` fix), `iq2-s10b` (brief page — held until s11c + s10a), `iq2-s10c` (per-rule sentences), `iq2-s10d/e/f`, `iq2-s4c–f`, `iq2-s7d`, `iq2-s9b`, `iq2-s11d/e`, then QA and DEVOPS scheduling/rollback.
+- **Open review findings (non-blocking unless noted).**
+  - S5: `double_capture` never clears (**blocking**, fix card `iq2-s5c`).
+  - `iq2-s10d`: an hourly job with partial coverage folds to SUCCEEDED, so the brief can all-clear on partial data. Decide **before** any signatures job is registered.
+  - `iq2-s10e`: brief loader truncates silently at 500 rows.
+  - `iq2-s10f`: parity is month-scoped but reads as per-day.
+  - `iq2-s4c`: reconcile note 5 — a day touched within 5 minutes of every run is unchecked forever and its parity key never expires.
+  - `iq2-s4d`: parity fixture covers 4 of 8 metrics (a divergence in the expense branch would fire a false severity-3 every day).
+  - `iq2-s4e`: `detect/day.ts:222` still hardcodes `parityFlagged=false`; a timeout and an unchecked run both read "not flagged" — decide it deliberately.
+  - `iq2-s4f`: reconcile deadline 180 s vs parity ~50 s, re-check against the 21:32 systemd retry window.
+  - `iq2-s7d`, `iq2-s9b`, `iq2-s11d`, `iq2-s11e`: small.
+- **Tests.** rc-12 (`6ad2606`): unit 2002, integration 398/398, build green, journal 0000–0038 contiguous (recorded by QA). Slice-level counts are on each card; there is no integrated IQ-2 run. The one recorded build failure (S10) was Google Fonts being unreachable, not code.
+- **Migration.** 0037/0038 already live. Further IQ-2 slices may add none; confirm when integrating. `iq_insights` is at 0037.
+- **Rollback.** Not written for IQ-2. New jobs are additive and unscheduled until DEVOPS wires timers; removing the timer stops them. **Unverified.**
+- **Owner decisions blocking parts:** `dec-3` (PII-free history export), `dec-7` (food-cost target), `dec-9/11` (GST on refunds), `dec-13` (may ANALYST/ADMIN see money totals on IQ pages).
+
+### 3.7 a3-accepted — the 27 orders stuck in ACCEPTED (done, read-only)
+
+- **Result (DATABASE, read-only, aggregated).** Staff not closing orders; **not a bug**. Kitchen steps stopped after 2026-09-16 20:36 IST. 26 POS counter takeaway orders (cash captured, ₹8,652) plus 1 website delivery order (cash pending, ₹517). Same event path as completed orders; the stall predates and spans four builds; 0 app errors.
+- **Effect.** These orders are missing from history and from COMPLETED totals.
+- **Caveat.** A browser-side KDS button failure leaves no trace. The owner can settle by pressing Preparing on one old order at `/app/kds`.
+- **Follow-up.** `ops-2` (queue 3.5): "handed over" on the POS for paid takeaway, and an alert for orders ACCEPTED for more than one business day. It changes the order status flow → owner yes to deploy. Cleanup of the 27 existing orders is the owner's call via normal buttons; I have not touched them.
+- **Branch.** None. Not started. **Migration:** unknown until designed.
+
+### 3.8 p3-order-copy / pay-ready — Razorpay readiness (queue 6)
+
+- **p3-order-copy.** Status `todo`, deps rc-13 (now live). Two defects, neither reachable in production while Razorpay is off:
+  (a) the pending-payment copy "The shop can take payment when you collect/deliver" ignores `org.cashEnabled` and doesn't tell the customer to wait for confirmation;
+  (b) a FAILED Razorpay payment is not `awaitingOnline`, so the retry path never shows.
+  The `c209ce3` copy fix is in production; this is the remainder. The `pay-ready` commit `db5e520` ("Customer's confirm result carries the settlement code") was made to support it. **No branch of its own.**
+- **pay-ready branch / head.** `agent/finance-ledger-pay-ready` @ `db5e520` (4 over `1fe080b`):
+  - `79b7e60` pay-7: record online money the order cannot take; never store a failed capture; webhook retries on error codes.
+  - `9af12f9` an order waiting on its online payment does not reach the kitchen.
+  - `64aa967` tests for checkout and online-payment actions plus a permission-gate test for every server action.
+  - `db5e520` confirm result carries the settlement code.
+- **Left.** Refuse a NEW Razorpay intent for a pending online order while the shop is paused (ops-1 D4a; **never** refuse recording an already-captured payment). That needs ops-1 integrated first. Then the pending-payment copy (a) and failed-payment retry (b). Anything touching the Razorpay webhook: treat "does not exist" for another org as final, not a 500 (from red-team note `040a43`).
+- **Review.** Reviewer RELIABILITY assigned; **no verdict recorded**. Treat as unreviewed. It is money and order placement: PAYMENT/RELIABILITY-style review is mandatory.
+- **Tests.** Not recorded at the card level.
+- **Migration.** None recorded.
+- **Not live.** Razorpay is not configured in production (no keys, no Razorpay payments — read-only check). `pay-7` must ship **before** Razorpay keys are added. Owner go/no-go (money).
+- **Rollback.** Code-only; the provider is off, so no money moves. **Unverified.**
+
+### 3.9 p0-7 — internal authorization (queue 9, LATENT)
+
+- **Branch / head.** None. Not started (`status: todo`).
+- **Defects.**
+  - (1) `inviteStaff` doesn't take actor roles and never applies the role ceiling that `deactivateStaff` and `changeStaffRole` apply. The only limit is which options the dropdown renders, so an ADMIN can mint an OWNER.
+  - (2) Migration 0001 grants read across 35 tables to any org member regardless of role, and 0033 revoked writes only. Any staff login can read customers, payments, refunds and audit logs through PostgREST.
+- **Owner answer (2026-09-19):** only OWNER accounts exist today. Both are LATENT (downgraded P1 → P2, not closed). **The trigger is the first ADMIN, ANALYST or CASHIER account. Fix before the first non-OWNER login is created.**
+- **Left.** Everything. Auth/permissions and probably a migration (RLS read policies) → SECURITY subagent review, owner go/no-go.
+- **Tests / review / rollback.** None yet.
+
+---
+
+## 4. Other work parked on branches (not on your list, but on GitHub)
+
+- **Refund release / P0 branches** are all inside `49f858a` (live). The `agent/*-p0-*`, `agent/*-ref-*`, `release/rc-*` branches are history now.
+- **`agent/backend--mu4xnzut` `49cb953`:** "Never let a malformed `DEPLOY_COMMIT` take `serverEnv()` down" (be-1 follow-up). Not confirmed as live.
+- **Other unmerged agent branches:** `agent/database-dat-2` (integration suites per-worktree), `agent/reliability-mu4xrig7` (`0066e44` idem-1: withIdempotency scoped by org — **a money-path change, check whether it's in production before assuming**), `agent/gst-tax-mu4xpetj` (`eba2b9a` fin-1 org scoping), `agent/dwight-mu4xqbfl-loy2` (`97e3a92` org-scope `getStampAccountState`), `agent/pos-orders-mu4xqexi-kubf1` / `-ord8`, `agent/qa-mu4xr4hv` (`4be99a7`), `agent/finance-ledger-mu4xp10r`, `agent/michael-mu4lr1ro`, `fix/sign-out-and-email-verification`. **Their status was not recorded in this handover.** Use `git log kit-radix-nova..<branch>` and `git branch -r --contains` to check whether each is already in `49f858a`.
+- **`iq-dashboard`** is a pre-existing branch that was 6 commits ahead of its upstream; now pushed too.
+
+---
+
+## 5. Owner decisions and rules (do not re-litigate)
+
+### Standing rules and gates
+- **Never** place, pay, cancel, refund or sign up a test order/payment/cash record in production. No asking for one. Prove things with the local stack, mocks, fixtures, or read-only checks.
+- **Gates (ask first):** deploy with a migration or with changes to money, orders, auth or permissions; any production data write; anything needing a secret, a new account or spending; deleting anything; changing these rules.
+- **Standing approval:** UI-only, no migration, no money/orders/auth/permissions change → may deploy while the shop is closed after all tests green + a fresh DB dump; then smoke, zero journal errors, RELEASES row, push, report. A failed smoke on such a deploy: code-only rollback to the last good RELEASES build is pre-approved. **Never roll back the database without the owner's yes.**
+- **"Before you start" rule:** if the owner attaches a "before you start" condition to a yes, stop and wait for the answer before doing anything (this was broken once, on the 49f858a deploy).
+- **Never:** copy customer data off the server; print/log a secret or ask for one in chat; force-push/reset/rebase shared branches; create a second Supabase project; put demo data in production; show a forecast as fact; compute authoritative totals in the UI (money is integer paise, server-side).
+- **Release cadence (office rule, now yours to apply sensibly):** one card at a time; one builder + one reviewer, a second reviewer only for money, order placement, auth, permissions or migrations. Don't start something new while a finished slice has sat undeployed more than 48 h. Every bug fix proves its test fails without the fix. Each customer-facing release ends with the exact phone screens the owner should look at.
+- **Go/no-go format:** changes for customers and staff; test numbers; reviews; migrations with undo scripts tested; whether a code-only rollback is safe; the rollback step; risks; what you need from the owner.
+- **Verification is on frybirdiq.tech, not localhost** (CLAUDE.md). Nobody has a browser on the office side, so the owner does visual checks.
+- **Commit trailers:** the office used `Agent: <ROLE>`; this session's trailer is `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`.
+
+### Product / business
+- Direct orders only (dine-in, takeaway, own website). No aggregators. Prices are GST-inclusive. INR only.
+- Mission order: safe to launch > easy to pay > easy to find > customers return > runs the shop better.
+- No production test orders (absolute; only the owner can change it, in an explicit message).
+- Production has no Razorpay keys. `pay-7` must ship before keys are added.
+- Migrations 0037 and 0038 (refund release) are live, in `49f858a`.
+- The P0 launch-blocker branches are in `49f858a` (phone-leak fix, hours gate, overnight-hours guard, open/closed UI + phone display, phone settings path, category archiving, alerting code). Alerting is built but **not installed**, see §6.
+
+### ops-1 owner requirements (2026-09-19; these override the office's earlier "no auto-reopen")
+1. One switch, "Shop is OPEN for orders" / "Shop is CLOSED for orders", the same setting in TWO places: the POS screen and Admin → Restaurant (phone-usable). Switching OFF asks "until we next open" (**default**, reopens automatically) or "until I switch it back on". Both places always show state: who, when, and when it reopens. Every switch writes an audit row.
+2. A website banner at the top of EVERY customer page (home, menu, item, cart, checkout, order tracking).
+   - Hours-closed: "We're closed right now. We open [day] at [time]."
+   - Switch-closed: "We're not taking orders right now." plus "We open again [day] at [time]" or "Please check back soon" for manual-only.
+   - Tappable call link if a shop phone is set.
+   - While switch-closed: order buttons and checkout disabled with a short reason; no ASAP, no pre-orders; tracking of existing orders works normally.
+   - Readable at 375 px, both themes, must not look like part of the top bar.
+3. The server refuses regardless of a stale page or bypass. Tests: off → refused; on → accepted; auto-reopen at next opening; manual-only stays closed; banner text per state.
+4. Release needs the owner's yes. Afterwards, give the owner the exact phone screens to check.
+
+### ops-3 owner requirements (day off + planned closures; after ops-1, not in it)
+1. Weekly off: any weekday can be "Closed all day" in Admin → Restaurant → hours. Owner's day: **TBD**.
+2. A closed-dates list (date or range + optional public note, e.g. "Closed for Diwali"); add weeks ahead; remove.
+3. The switch (POS + Admin) gains "Closed for the rest of today" and "Closed until a date I pick"; all except manual-only reopen automatically at the opening time of the chosen day.
+4. Banner on a day off: "We're closed today. We open again [day] at [time]." plus the public note. Next opening skips off days and closed dates.
+5. Server refuses ASAP on a closed day and pre-orders for any closed day/date; the time picker never offers a closed day; adding a closed date that has pre-orders shows how many and which, and **never auto-cancels**.
+6. Migration expected → go/no-go.
+
+### Other owner answers on record
+- Only OWNER accounts exist today (answer to p0-7; 2026-09-19).
+- The integration branch is `kit-radix-nova`; `origin/claude/v2-evolution` is out of scope.
+- The release record is `docs/RELEASES.md` (no DB table). No down SQL for deployed migrations 0027–0032.
+- Offsite backup: Backblaze B2 within the free 10 GB, no paid Supabase plan; the owner does the B2 setup himself from the numbered list; a restore of current data goes to a scratch DB only, and needs his yes.
+- Models: routine UI work is fine on the cheaper model; money, orders, auth and migrations get the stronger model plus a reviewer.
+- Owner approved the engine migrations 0034–0036 and job runner (dec-1/dec-2) — already live in `6ec290c`.
+
+---
+
+## 6. Waiting on the owner
+
+1. **Shop phone number** — enter in Admin → Restaurant (the site still has no phone).
+2. **Alerting install** — DEPLOY.md §11.2 (VPS change) plus a monitoring account and its long random topic URL. Alerting is **two sibling branches**, `agent/backend-p0-1-health` `af6b114` and `agent/devops-release-p0-1` `49bfef2`; taking only one silences job alerting. Both are already inside `49f858a`; the install is not done. Also an uptime monitor.
+3. **p1-backup** (`blk-4`, `blk-5`, `dec-8`): B2 bucket + key on the VPS, age public key, yes to install the script, yes to a scratch-database restore.
+4. **Weekly off day** for ops-3.
+5. **seo-1 descriptions** — approve the 15 item descriptions and allow the production menu-data write; nginx `robots.txt` Sitemap line.
+6. **Browser looks** (nobody else can): the closed-shop strip on the live site (`p0-3e`), plus seo-1, loy-web and ops-1 banner/POS/Admin at 375 px and 1280 px.
+7. **Go/no-go decisions** when ready: ops-1 (migration 0039), pay-ready (money), p0-7 fix (auth), ops-2 (order status flow), IQ-2 rollout.
+8. **The 27 ACCEPTED orders** — settle or leave them; they distort history and COMPLETED totals.
+9. **Decision queue:** `dec-3` history export for backtests; `dec-4` which A1 automatic actions; `dec-5` consent wording and win-back messaging; `dec-6` Anthropic key and monthly cap for Ask FRYBIRD; `dec-7` food-cost target; `dec-9` GST on refunds (credit note vs keep tax as charged); `dec-11` CA questions (ITC, points vs taxable value, tax point, delivery-fee SAC/rate); `dec-12` who approves A2 actions and the `iq_*` retention policy; `dec-13` whether ANALYST/ADMIN see money on IQ pages. GST registration status was a conditional launch blocker in the audit.
+10. **`blk-3`** the temps switch (moot now the office is closed).
+
+---
+
+## 7. Practical notes for the next session
+
+- Root is `~/Downloads/Frybirdiq`, branch `kit-radix-nova` @ `1fe080b`, clean. The worktrees live under `~/FRYBIRD-IQ/worktrees/`; several branches are checked out there, and git refuses to check out the same branch twice. Work in a worktree or use `git worktree list` first.
+- Untracked junk in some worktrees (`.pnpm-store/`, `.worktree-setup-build.log`) was deliberately **not** committed.
+- The hive is at `~/FRYBIRD-IQ/hive/` (`board.md`, `tasks.json`, `reviews/`, `research/launch-audit/`). It is a record, not something to keep running.
+- Production deploy details: `docs/DEPLOY.md` §10 (steps), §11.2 (alerting), `deploy/backup.sh`. The release record is `docs/RELEASES.md`.
+- Integration tests need the local Supabase stack (`supabase start`, `.env.test.local`); see CLAUDE.md.
