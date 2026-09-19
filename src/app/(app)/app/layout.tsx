@@ -1,7 +1,9 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getStaff, staffCan } from "@/lib/auth";
-import { getStoreHeadline } from "@/lib/repositories/org";
+import { getOrg, getStoreHeadline } from "@/lib/repositories/org";
+import { getOrderingStatusForStaff } from "@/lib/repositories/shop-status";
+import type { ShopStatusPillProps } from "@/components/staff/shop-status-pill";
 import { AppChrome } from "@/components/staff/app-chrome";
 import { resolveHome } from "@/lib/auth/route-home";
 
@@ -34,6 +36,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     canReject,
     canSeeHardware,
     canSeeExports,
+    canSwitchShop,
   ] = await Promise.all([
     getStaff(),
     staffCan("orders.view"),
@@ -53,6 +56,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // Printers: the owner configures, the device at the till tests — either may see the page.
     Promise.all([staffCan("integrations.manage"), staffCan("orders.create")]).then((flags) => flags.some(Boolean)),
     staffCan("reports.export"),
+    staffCan("orders.update"),
   ]);
 
   if (!staff) {
@@ -69,6 +73,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const sidebarDefaultOpen = sidebarState === undefined || sidebarState === "true";
 
   const store = await getStoreHeadline(staff.orgId);
+  const shopPill = canSeeOrders ? await shopPillProps(staff.orgId, canSwitchShop, canSeeSettings) : null;
 
   return (
     /* The whole staff area is the IQ surface: light, where the customer
@@ -78,6 +83,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         staff={{ displayName: staff.displayName, roles: staff.roles, orgId: staff.orgId }}
         store={store}
         sidebarDefaultOpen={sidebarDefaultOpen}
+        shopPill={shopPill}
         permissions={{
           canSeeOrders,
           canSeePos,
@@ -101,4 +107,21 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       </AppChrome>
     </div>
   );
+}
+
+/**
+ * The status pill's data: the same staff read the POS and Admin use, plus the
+ * hours. A failed read hides the pill rather than taking every staff screen
+ * down; the controls that matter (POS switch, Admin panel) are unaffected.
+ */
+async function shopPillProps(orgId: string, canSwitch: boolean, canEditHours: boolean): Promise<ShopStatusPillProps | null> {
+  try {
+    const now = new Date();
+    const [status, org] = await Promise.all([getOrderingStatusForStaff(orgId, now), getOrg()]);
+    if (!status || !org || org.id !== orgId) return null;
+    return { initialStatus: status, renderedAt: now.toISOString(), canSwitch, canEditHours, hours: { opens: org.openingTime, closes: org.closingTime } };
+  } catch (error) {
+    console.error("staff layout: shop status pill read failed", error instanceof Error ? error.name : "unknown");
+    return null;
+  }
 }

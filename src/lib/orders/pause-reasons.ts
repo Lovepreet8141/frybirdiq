@@ -23,3 +23,12 @@ export function composePauseReason(preset: PauseReasonPreset, note: string | und
 export function noteProblem(note: string): string | null {
   return note.trim().length > PAUSE_NOTE_MAX ? `Keep the note under ${PAUSE_NOTE_MAX} characters.` : null;
 }
+
+/**
+ * The one shape every Close Shop control sends to `pauseOrderingAction`: the POS
+ * switch, the top-bar pill (same dialog) and Admin → Restaurant. One builder, so
+ * a switch from any of them writes the same audit record.
+ */
+export function pauseRequest(preset: PauseReasonPreset, note: string, mode: "UNTIL_NEXT_OPENING" | "UNTIL_RESUMED") {
+  return { preset, note, mode } as const;
+}

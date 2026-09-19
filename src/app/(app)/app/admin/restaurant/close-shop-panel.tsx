@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { pauseOrderingAction, previewPauseAction, resumeOrderingAction } from "@/lib/orders/shop-status-actions";
 import type { PauseMode } from "@/lib/orders/opening-hours";
-import { PAUSE_NOTE_MAX, PAUSE_REASON_PRESETS, type PauseReasonPreset, composePauseReason, noteProblem } from "@/lib/orders/pause-reasons";
+import { CONFIRM_ARM_MS, confirmArmed } from "@/lib/orders/shop-pill";
+import { PAUSE_NOTE_MAX, PAUSE_REASON_PRESETS, type PauseReasonPreset, composePauseReason, noteProblem, pauseRequest } from "@/lib/orders/pause-reasons";
 import type { StaffOrderingStatus } from "@/lib/repositories/shop-status";
 import { PAUSE_MODE_LABELS, SHOP_CLOSED_HEADLINE, SHOP_OPEN_HEADLINE, pauseOutcome, restartLine, stillDueLine } from "@/lib/settings/close-shop-copy";
 
@@ -32,6 +33,10 @@ export interface CloseShopPanelProps {
 
 export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
   const [choosing, setChoosing] = useState(false);
+  // Switching back on is two deliberate steps, like the POS: a double-tap must never lift a pause.
+  const [confirmingResume, setConfirmingResume] = useState(false);
+  const [resumeArmed, setResumeArmed] = useState(false);
+  const resumeShownAt = useRef<number | null>(null);
   const [mode, setMode] = useState<PauseMode>("UNTIL_NEXT_OPENING");
   const [note, setNote] = useState("");
   const [message, setMessage] = useState<{ tone: "error" | "note"; text: string } | null>(null);
@@ -82,7 +87,7 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
     }
     const chosen = { mode, reason: composePauseReason(preset, note) };
     run(
-      () => pauseOrderingAction({ preset, note, mode }),
+      () => pauseOrderingAction(pauseRequest(preset, note, mode)),
       (result) => {
         if (!("status" in result)) return;
         const outcome = pauseOutcome(result, chosen);
@@ -95,14 +100,28 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
     );
   }
 
+  function askToResume() {
+    setMessage(null);
+    resumeShownAt.current = Date.now();
+    setResumeArmed(false);
+    setConfirmingResume(true);
+  }
+
+  useEffect(() => {
+    if (!confirmingResume) return;
+    const timer = setTimeout(() => setResumeArmed(true), CONFIRM_ARM_MS);
+    return () => clearTimeout(timer);
+  }, [confirmingResume]);
+
   function resume() {
     if (!(status.state === "paused")) return;
+    if (!confirmArmed(resumeShownAt.current, Date.now())) return;
     const shownPausedAt = status.pausedAt.toISOString();
     run(async () => {
       const result = await resumeOrderingAction({ shownPausedAt });
       if (!result.ok && result.code === "PAUSE_CHANGED") return { ...result, error: `${result.error} The pause now in force is shown above.` };
       return result;
-    }, () => undefined);
+    }, () => setConfirmingResume(false));
   }
 
   const stillDue = preview?.ordersStillDue ?? status.ordersStillDue;
@@ -142,7 +161,7 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
             <dd className="break-words">{status.reason ?? "—"}</dd>
           </>
         )}
-        <dt className="text-muted-foreground">Orders still to make</dt>
+        <dt className="text-muted-foreground">Orders not finished</dt>
         <dd>{stillDue}</dd>
       </dl>
 
@@ -153,11 +172,25 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
       )}
 
       {paused ? (
-        <div className="mt-4">
-          <button type="button" onClick={resume} disabled={pending} className={primary}>
-            {pending ? "Switching on…" : "Switch orders back on"}
-          </button>
-        </div>
+        confirmingResume ? (
+          <div className="mt-4 grid gap-3 rounded-lg border border-border bg-panel p-4" role="group" aria-label="Confirm switching orders back on">
+            <p className="text-sm font-semibold">Open the shop for online orders?</p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setConfirmingResume(false)} disabled={pending} className={secondary}>
+                Cancel
+              </button>
+              <button type="button" onClick={resume} disabled={pending || !resumeArmed} className={primary}>
+                {pending ? "Switching on…" : "Open for orders"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4">
+            <button type="button" onClick={askToResume} disabled={pending} className={primary}>
+              Switch orders back on…
+            </button>
+          </div>
+        )
       ) : !choosing ? (
         <div className="mt-4">
           <button type="button" onClick={openChooser} className={secondary}>
@@ -216,7 +249,7 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
 
           <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
             <button type="button" onClick={() => { setChoosing(false); setMessage(null); }} disabled={pending} className={secondary}>
-              Keep taking orders
+              Cancel
             </button>
           </div>
         </div>

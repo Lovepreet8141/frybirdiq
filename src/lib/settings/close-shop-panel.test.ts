@@ -47,4 +47,15 @@ describe("CloseShopPanel", () => {
     expect(html).toContain("Shop is CLOSED for orders");
     expect(html).toContain("today at 11:30 AM");
   });
+
+  it("paused: switching back on is a first step, not the action itself (no confirm shown, nothing is sent by the first tap)", () => {
+    const html = render({
+      status: { state: "paused", mode: "UNTIL_RESUMED", pausedAt: new Date("2026-09-19T14:12:00Z"), reopensAt: null, reopensAtLabel: null, withinHours: true, pausedBy: { userId: "u", name: "Aman" }, reason: "Too busy", ordersStillDue: 0, carriedOver: false },
+      pausedSince: "today at 7:42 PM",
+    });
+    expect(html).toContain("Switch orders back on…");
+    expect(html).not.toContain("Open for orders");
+    expect(html).toContain("Orders not finished");
+    expect(html).not.toContain("still to make");
+  });
 });

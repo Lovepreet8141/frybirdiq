@@ -4,6 +4,7 @@ import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { CommandPalette } from "@/components/staff/command-palette";
 import type { NavGroup } from "@/components/staff/nav-items";
 import { SectionBreadcrumb } from "@/components/staff/section-breadcrumb";
+import { ShopStatusPill, type ShopStatusPillProps } from "@/components/staff/shop-status-pill";
 import { SoundCheck } from "@/components/staff/sound-check";
 import { UserMenu } from "@/components/staff/user-menu";
 import { Button } from "@/components/ui/button";
@@ -20,10 +21,12 @@ export function SiteHeader({
   groups,
   canSeeOrders,
   staff,
+  shopPill,
 }: {
   groups: readonly NavGroup[];
   canSeeOrders: boolean;
   staff: { displayName: string | null; roles: readonly Role[] };
+  shopPill: ShopStatusPillProps | null;
 }) {
   const { toggleSidebar, open, openMobile, isMobile } = useSidebar();
   const expanded = isMobile ? openMobile : open;
@@ -39,6 +42,7 @@ export function SiteHeader({
 
         <div className="ml-auto flex items-center gap-2">
           <CommandPalette groups={groups} />
+          {shopPill && <ShopStatusPill {...shopPill} />}
           {canSeeOrders && <SoundCheck />}
           <span className="mx-0.5 hidden h-4 w-px bg-border sm:block" aria-hidden="true" />
           <UserMenu displayName={staff.displayName} roles={staff.roles} />

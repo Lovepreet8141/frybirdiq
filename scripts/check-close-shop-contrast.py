@@ -119,4 +119,22 @@ for name, layers in (("Staff surface (POS strip, reason buttons, Admin panel)", 
     check("Admin edge: loss on background", loss, bgc, 3)
     check("Admin edge: gain on background", gain, bgc, 3)
 
+
+print("Status pill and its panel (staff surface)")
+t = theme(ROOT, DARK, IQ)
+panel = rgb(t("panel"))
+fg = rgb(t("foreground"))
+muted = rgb(t("muted-foreground"))
+popover = rgb(t("popover")) if "popover" in {**ROOT, **DARK, **IQ} else panel
+check("pill text: foreground on panel", fg, panel, 4.5)
+check("pill panel body: foreground on popover", rgb(t("popover-foreground")) if "popover-foreground" in {**ROOT, **DARK, **IQ} else fg, popover, 4.5)
+check("pill panel secondary lines: muted on popover", muted, popover, 4.5)
+off_bg = over(rgb(t("destructive")), 0.10, panel)
+check("Orders OFF pill: foreground on destructive/10", fg, off_bg, 4.5)
+check("green dot: success on panel (graphic)", rgb(t("success")), panel, 3)
+check("red dot: destructive on panel (graphic)", rgb(t("destructive")), panel, 3)
+check("grey dot: muted-foreground on panel (graphic)", muted, panel, 3)
+check("resume button: inverse-foreground on inverse", rgb(t("inverse-foreground")), rgb(t("inverse")), 4.5)
+check("switch-off button: foreground on destructive/10 over popover", fg, over(rgb(t("destructive")), 0.10, popover), 4.5)
+
 sys.exit(1 if failed else 0)

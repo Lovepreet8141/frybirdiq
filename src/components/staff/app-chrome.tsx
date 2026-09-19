@@ -10,6 +10,7 @@ import { PageTransition } from "@/components/staff/page-transition";
 import { NewOrderAlert } from "@/components/staff/new-order-alert";
 import { buildNavGroups } from "@/components/staff/nav-items";
 import { SiteHeader } from "@/components/staff/site-header";
+import { ShopStatusPill, type ShopStatusPillProps } from "@/components/staff/shop-status-pill";
 import { SoundCheck } from "@/components/staff/sound-check";
 import { VersionCheck } from "@/components/staff/version-check";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -54,6 +55,7 @@ export function AppChrome({
   store,
   permissions,
   sidebarDefaultOpen,
+  shopPill,
   children,
 }: {
   staff: StaffSummary;
@@ -62,6 +64,8 @@ export function AppChrome({
   permissions: Permissions;
   /** Read from the `sidebar_state` cookie by the layout, so a collapsed sidebar stays collapsed across loads without a flash. */
   sidebarDefaultOpen: boolean;
+  /** The shop status pill's data, or null when this person cannot see orders (or the read failed). */
+  shopPill: ShopStatusPillProps | null;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -125,6 +129,7 @@ export function AppChrome({
                 {staff.displayName}
                 <span className="ml-2 text-xs uppercase tracking-[0.08em]">{staff.roles.join(" · ")}</span>
               </span>
+              {shopPill && <ShopStatusPill {...shopPill} />}
               {canSeeOrders && <SoundCheck />}
               <form action="/api/auth/sign-out" method="POST">
                 <button
@@ -203,7 +208,7 @@ export function AppChrome({
         canSeeExports={canSeeExports}
       />
       <SidebarInset>
-        <SiteHeader groups={navGroups} canSeeOrders={canSeeOrders} staff={staff} />
+        <SiteHeader groups={navGroups} canSeeOrders={canSeeOrders} staff={staff} shopPill={shopPill} />
 
         {canSeeOrders && (
           <div className="print:hidden">

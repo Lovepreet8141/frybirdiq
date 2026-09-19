@@ -69,8 +69,9 @@ export function VersionCheck() {
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("online", check);
     const timer = setInterval(() => void check(), VERSION_POLL_MS);
-    void check();
+    const first = setTimeout(() => void check(), 0);
     return () => {
+      clearTimeout(first);
       for (const name of events) window.removeEventListener(name, touch);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", check);

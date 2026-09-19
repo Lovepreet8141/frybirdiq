@@ -80,7 +80,7 @@ describe("sinceLabel", () => {
 describe("stillDueLine", () => {
   it("is null for none, singular for one, plural otherwise", () => {
     expect(stillDueLine(0)).toBeNull();
-    expect(stillDueLine(1)).toMatch(/^1 order is already placed/);
-    expect(stillDueLine(3)).toMatch(/^3 orders are already placed/);
+    expect(stillDueLine(1)).toMatch(/^1 order is not finished yet/);
+    expect(stillDueLine(3)).toMatch(/^3 orders are not finished yet/);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PAUSE_NOTE_MAX, PAUSE_REASON_PRESETS, composePauseReason, noteProblem } from "./pause-reasons";
+import { PAUSE_NOTE_MAX, PAUSE_REASON_PRESETS, composePauseReason, noteProblem, pauseRequest } from "./pause-reasons";
 
 describe("pause reasons", () => {
   it("offers exactly the owner's five, in the owner's words and order", () => {
@@ -24,5 +24,11 @@ describe("pause reasons", () => {
     expect(noteProblem("x".repeat(PAUSE_NOTE_MAX))).toBeNull();
     expect(noteProblem("x".repeat(PAUSE_NOTE_MAX + 1))).not.toBeNull();
     expect(noteProblem("")).toBeNull();
+  });
+});
+
+describe("pauseRequest — one shape from every control", () => {
+  it("is exactly what the action's schema takes", () => {
+    expect(pauseRequest("Too busy", "two off", "UNTIL_RESUMED")).toEqual({ preset: "Too busy", note: "two off", mode: "UNTIL_RESUMED" });
   });
 });

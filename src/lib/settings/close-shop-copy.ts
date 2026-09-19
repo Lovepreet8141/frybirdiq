@@ -83,5 +83,5 @@ export function pauseOutcome(result: { readonly changed: boolean; readonly statu
 /** The count line in the confirm; null when there is nothing to remind anyone of. */
 export function stillDueLine(count: number): string | null {
   if (count <= 0) return null;
-  return `${count} ${count === 1 ? "order is" : "orders are"} already placed and still to be made. Closing does not cancel ${count === 1 ? "it" : "them"}.`;
+  return `${count} ${count === 1 ? "order is" : "orders are"} not finished yet. Closing does not cancel ${count === 1 ? "it" : "them"}.`;
 }
