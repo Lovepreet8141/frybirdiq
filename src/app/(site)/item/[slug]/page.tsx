@@ -8,6 +8,7 @@ import { SpiceMark, VegMark } from "@/components/menu/marks";
 import { Price } from "@/components/menu/price";
 import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
 import { getProductCached } from "@/lib/repositories/menu-cache";
+import { itemShareImage } from "@/lib/seo/item-share";
 import { absoluteUrl } from "@/lib/seo/site";
 import { getOrg } from "@/lib/repositories/org";
 
@@ -17,15 +18,15 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   if (!product) return { title: "Not found", robots: { index: false } };
 
   const description = product.description ?? `${product.name} at FRYBIRD, Sector 9, Ambala City.`;
-  // The item's own photo when it has one; otherwise the site-wide share image
-  // (app/opengraph-image) is inherited.
-  const images = product.image ? [{ url: product.image.url.startsWith("http") ? product.image.url : absoluteUrl(product.image.url), alt: product.image.alt }] : undefined;
+  // This page's openGraph/twitter objects replace the root layout's, so they
+  // must carry an image themselves: the item's photo, else the site share image.
+  const image = itemShareImage(product.image, product.name);
   return {
     title: product.name,
     description,
     alternates: { canonical: `/item/${product.slug}` },
-    openGraph: { type: "website", siteName: "FRYBIRD", locale: "en_IN", title: `${product.name} · FRYBIRD`, description, url: absoluteUrl(`/item/${product.slug}`), ...(images ? { images } : {}) },
-    twitter: { card: images ? "summary_large_image" : "summary", title: `${product.name} · FRYBIRD`, description, ...(images ? { images: images.map((image) => image.url) } : {}) },
+    openGraph: { type: "website", siteName: "FRYBIRD", locale: "en_IN", title: `${product.name} · FRYBIRD`, description, url: absoluteUrl(`/item/${product.slug}`), images: [image] },
+    twitter: { card: "summary_large_image", title: `${product.name} · FRYBIRD`, description, images: [image.url] },
   };
 }
 
