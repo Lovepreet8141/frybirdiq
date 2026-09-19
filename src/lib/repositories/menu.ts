@@ -341,6 +341,11 @@ async function readFromDatabase(channel: string | null): Promise<MenuCategory[]>
         eq(products.orgId, org.id),
         eq(products.isActive, true),
         eq(products.status, "PUBLISHED"),
+        // Archiving a category takes it and everything in it off sale, the
+        // same way archiving a product does. Without this the owner's
+        // "Archive category" control writes `is_active = false`, renders
+        // "Off" in the Control Center, and changes nothing a customer sees.
+        eq(categories.isActive, true),
         eq(categories.status, "PUBLISHED"),
       ),
     )
