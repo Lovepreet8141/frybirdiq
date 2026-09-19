@@ -12,7 +12,7 @@ import { HomeFooter } from "@/components/home/footer";
 import { HomeOrderBar } from "@/components/home/order-bar";
 import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
 import { shopPhone } from "@/lib/contact/phone";
-import { isOpenAt } from "@/lib/orders/opening-hours";
+import { shopHoursState } from "@/lib/cart/shop-hours";
 import { HomeMotion } from "@/components/home/motion";
 import { getAllProducts } from "@/lib/repositories/menu";
 import { getDeliverySettings } from "@/lib/repositories/delivery";
@@ -98,7 +98,7 @@ export default async function HomePage() {
       <div className="fb">
         <HomeNav signedIn={signedIn} />
         <main>
-          {org && !isOpenAt(new Date(), opens, closes) && (
+          {org && !shopHoursState(new Date(), opens, closes).open && (
             <div style={{ background: "var(--fb-ink-deep)", padding: "calc(var(--nav-h) + 0.75rem) var(--fb-gutter) 0.75rem" }}>
               <ShopClosedNotice
                 openingTime={opens}
