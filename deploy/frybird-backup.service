@@ -9,6 +9,8 @@
 Description=FRYBIRD database backup
 After=network-online.target
 Wants=network-online.target
+# A failed backup must reach a person, not just the journal (p0-1).
+OnFailure=frybird-alert@%n.service
 
 [Service]
 Type=oneshot
