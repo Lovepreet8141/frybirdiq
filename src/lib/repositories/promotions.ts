@@ -263,8 +263,9 @@ export async function deletePromotion(orgId: string, actorUserId: string, id: st
  * committed order with a promo the shop never actually intended to grant
  * twice is not something a later count-only write can undo.
  */
-export async function claimPromotionUse(orgId: string, code: string): Promise<boolean> {
-  const [row] = await db()
+export async function claimPromotionUse(orgId: string, code: string, executor: Pick<ReturnType<typeof db>, "update"> = db()): Promise<boolean> {
+  // `executor` is the order's own transaction when the claim must commit or roll back WITH the order (persistOrder's gate).
+  const [row] = await executor
     .update(promotions)
     .set({ usageCount: sql`${promotions.usageCount} + 1`, updatedAt: new Date() })
     .where(

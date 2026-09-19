@@ -27,7 +27,7 @@ import { type Paise, ZERO, formatINR, paise, subtract } from "@/lib/money";
 import { type PricedOrder, priceOrder } from "@/lib/pricing";
 import { fromMicro, toPoint } from "@/lib/delivery";
 import { type ShopClosedRefusal, type ShopPausedRefusal, type ShopStatus, orderingRefusal } from "@/lib/orders/opening-hours";
-import { OrderingRefusedAtWrite, type WriteRefusal, writeGate } from "@/lib/orders/write-gate";
+import { OrderingRefusedAtWrite, PromoLimitReached, type WriteRefusal, writeGate } from "@/lib/orders/write-gate";
 import { shopOrderingState } from "@/lib/cart/shop-hours";
 import { shopStatusFromOrg } from "./shop-status";
 import { type SnapshotLineInput, snapshotLines } from "@/lib/orders/snapshot";
@@ -494,6 +494,15 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       };
     }
 
+    // Just before a payment intent exists: an intent cannot be un-made, so ask the gate on a fresh read first. A refusal
+    // here creates nothing at all. (The re-checks inside the write remain for what lands after this point.)
+    {
+      const fresh = await readShopStatus(org.id);
+      const at = new Date();
+      const refused = writeGate({ now: at, shop: fresh, when: details.when, scheduledFor });
+      if (refused) return writeRefusalResult(refused, at, fresh);
+    }
+
     try {
       const intent = await getProvider(RAZORPAY_PROVIDER).createIntent({ orderId: details.idempotencyKey, amount: payable, method: "UPI" });
       payment = { provider: RAZORPAY_PROVIDER, method: "UPI", providerOrderId: intent.providerOrderId };
@@ -533,6 +542,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     // Refused at the moment of writing (paused, closed, or the slot slipped): nothing was ordered or charged,
     // and the idempotency claim was released, so a retry after the shop reopens is a fresh attempt.
     if (error instanceof OrderingRefusedAtWrite) return writeRefusalResult(error.refusal, error.at, error.shop);
+    if (error instanceof PromoLimitReached) return { ok: false, error: "That offer just reached its usage limit. Remove the code and try again." };
     throw error;
   }
 
@@ -605,37 +615,17 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     .returning();
 
   /*
-   * Claim the promotion's usage slot before the order that spends it is
-   * written — not after, the way this used to work. `cart.promotion` was
-   * resolved against a snapshot read minutes (or milliseconds) ago; another
-   * order on the same near-exhausted code may have claimed the last slot in
-   * between. Claiming here, right before persisting, and refusing to
-   * persist at all when the claim fails, means an order can never exist
-   * with a discount the code's own limit did not actually have room for —
-   * unlike a customer's spent points (spendPointsForOrder below), a promo
-   * slot can be checked *before* the order becomes real, rather than only
-   * after.
-   *
-   * Not fully airtight: this claim and `persistOrder` below are separate
-   * statements, not one transaction, so a claim that succeeds and is then
-   * followed by a `persistOrder` failure (an order-number collision that
-   * outlasts its own retries, say) burns a real slot with no order to show
-   * for it. Accepted for the same reason the customer/address writes just
-   * above already accept the same shape of risk — narrower here only
-   * because a usage slot, unlike an idempotent upsert, cannot be "written
-   * again harmlessly" if this ever needs tightening.
+   * The promotion's usage slot is claimed INSIDE the transaction that inserts the
+   * order row (persistOrder's gate, below), after the ordering gate has passed on
+   * the locked read. Before, it was claimed here as a separate statement, so an
+   * order refused at the last moment (a pause landing between this point and the
+   * insert) had already consumed a slot. Now a refusal, a lost race for the last
+   * slot, or a failed insert rolls the claim back with it: a refused order leaves
+   * no promo use behind. The claim is still made BEFORE the order can exist, so an
+   * order never exists with a discount the code's limit did not have room for.
+   * `cart.promotion` was resolved against a snapshot read earlier; the claim is
+   * what checks the real count, at that instant.
    */
-  if (cart.promotion) {
-    const claimed = await claimPromotionUse(orgId, cart.promotion.code);
-    // No `fieldErrors` here on purpose — checkout-form.tsx only shows the
-    // generic error banner (`state.message`) when `fieldErrors` is absent,
-    // and "promoCode" isn't one of the named fields it renders a
-    // field-level message for. Setting one would silently swallow this
-    // message instead of surfacing it.
-    if (!claimed) {
-      return { ok: false, error: "That offer just reached its usage limit. Remove the code and try again." };
-    }
-  }
 
   // The row, the §51 snapshots, the placement event and the pending payment —
   // through the same core the counter uses, so a website order and a till
@@ -660,7 +650,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     actorUserId: null,
     eventReason: `Placed on the website for ${fulfilment === "DELIVERY" ? "delivery" : "collection"}`,
     // Website orders only: re-checked under a lock in the transaction that inserts the row. The counter passes none (it stays ungated).
-    gate: { when: details.when, scheduledFor },
+    gate: { when: details.when, scheduledFor, promoCode: cart.promotion?.code ?? null },
     extra: {
       scheduledFor,
       deliveryAddress:
@@ -778,7 +768,7 @@ export interface PersistOrderInput {
    * refuses, or this commits first and the pause waits. The counter passes
    * nothing here and stays ungated (owner ruling: the till keeps working).
    */
-  readonly gate?: { readonly when: "ASAP" | "SCHEDULED"; readonly scheduledFor: Date | null };
+  readonly gate?: { readonly when: "ASAP" | "SCHEDULED"; readonly scheduledFor: Date | null; readonly promoCode?: string | null };
 }
 
 export type PersistOrderResult = { ok: true; order: typeof orders.$inferSelect } | { ok: false; error: string };
@@ -850,6 +840,9 @@ export async function persistOrder(input: PersistOrderInput): Promise<PersistOrd
       const at = new Date();
       const refused = writeGate({ now: at, shop, when: gate.when, scheduledFor: gate.scheduledFor });
       if (refused) throw new OrderingRefusedAtWrite(refused, at, shop);
+      // Claimed in THIS transaction, after the gate passed: a refusal above never consumes a slot, and if the insert
+      // below fails the claim rolls back with it.
+      if (gate.promoCode && !(await claimPromotionUse(input.orgId, gate.promoCode, tx))) throw new PromoLimitReached();
       return tx.insert(orders).values(values).returning();
     });
   };

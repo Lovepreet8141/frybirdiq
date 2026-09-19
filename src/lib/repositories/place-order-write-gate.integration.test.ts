@@ -17,11 +17,13 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { customers, idempotencyKeys, orders, organizations } from "@/db/schema";
+import { customers, idempotencyKeys, inventoryMovements, loyaltyStampEvents, loyaltyTransactions, orders, organizations, payments, promotions } from "@/db/schema";
 import { createTestOrg, createTestProduct, createTestTaxRate, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 import { ORG_SLUG } from "./org";
 
 let productSlug = "";
+let promoCode: string | null = null;
+const intents = { count: 0 };
 const hooks: { beforePricing: (() => Promise<void>) | null; afterEarlyCheck: (() => Promise<void>) | null; calls: number; customerCalls: number } = {
   beforePricing: null,
   afterEarlyCheck: null,
@@ -41,7 +43,25 @@ vi.mock("@/lib/customer", () => ({
 }));
 vi.mock("@/lib/cart", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/cart")>();
-  return { ...actual, getPricedCart: () => actual.priceCart({ lines: [{ slug: productSlug, quantity: 1, modifiers: [], redeemStamp: false }] } as never) };
+  return {
+    ...actual,
+    getPricedCart: () => actual.priceCart({ lines: [{ slug: productSlug, quantity: 1, modifiers: [], redeemStamp: false }], ...(promoCode ? { promoCode } : {}) } as never),
+  };
+});
+// Online payment with a counting fake provider: an intent is something a refusal must not leave behind.
+vi.mock("@/lib/payments", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/payments")>();
+  return {
+    ...actual,
+    availableMethods: (toggles?: { cash?: boolean; online?: boolean }) => [
+      ...actual.availableMethods(toggles).filter((method) => method.choice !== "ONLINE"),
+      { method: "UPI", provider: actual.RAZORPAY_PROVIDER, choice: "ONLINE", label: "Pay online", detail: "" },
+    ],
+    getProvider: (name: string) =>
+      name === actual.RAZORPAY_PROVIDER
+        ? { createIntent: async () => ({ providerOrderId: `order_test_${(intents.count += 1)}` }) }
+        : actual.getProvider(name),
+  };
 });
 // Runs after the top-of-request gate and before any write: the gap the re-check exists for.
 // `priceCart` (the cart pricing that runs FIRST, before the gate) calls it too, so the hook fires on the second call:
@@ -84,6 +104,8 @@ afterAll(async () => {
 beforeEach(async () => {
   hooks.calls = 0;
   hooks.customerCalls = 0;
+  intents.count = 0;
+  promoCode = null;
   await clearPause();
 });
 afterEach(() => {
@@ -168,6 +190,99 @@ describe("a pause that lands after the early re-check, just before the order row
     if (result.ok) throw new Error("unreachable");
     expect("paused" in result && result.paused).toEqual({ code: "PAUSED" });
     expect(await orderCount()).toBe(before);
+  });
+});
+
+async function createPromo(code: string, usageLimit: number, usageCount = 0): Promise<void> {
+  await db().insert(promotions).values({ orgId: org.orgId, code, name: `Test ${code}`, discountBps: 1000, usageLimit, usageCount, isActive: true });
+}
+async function sideEffectRows(): Promise<{ payments: number; points: number; stamps: number; stock: number }> {
+  const count = async (rows: Promise<unknown[]>) => (await rows).length;
+  return {
+    payments: await count(db().select({ id: payments.id }).from(payments).where(eq(payments.orgId, org.orgId))),
+    points: await count(db().select({ id: loyaltyTransactions.id }).from(loyaltyTransactions).where(eq(loyaltyTransactions.orgId, org.orgId))),
+    stamps: await count(db().select({ id: loyaltyStampEvents.id }).from(loyaltyStampEvents).where(eq(loyaltyStampEvents.orgId, org.orgId))),
+    stock: await count(db().select({ id: inventoryMovements.id }).from(inventoryMovements).where(eq(inventoryMovements.orgId, org.orgId))),
+  };
+}
+const promoUses = async (code: string) => (await db().select({ n: promotions.usageCount }).from(promotions).where(eq(promotions.code, code)))[0]?.n ?? -1;
+
+describe("a refused order leaves nothing behind", () => {
+  it("no promo slot is consumed when a pause lands just before the order row (the millisecond window)", async () => {
+    at(NOON);
+    const code = `KEEP-${randomUUID().slice(0, 6).toUpperCase()}`;
+    await createPromo(code, 5);
+    promoCode = code;
+    const before = await orderCount();
+    const sideBefore = await sideEffectRows();
+    hooks.afterEarlyCheck = pauseNow; // after the early check, before persistOrder: only the locked check can refuse
+
+    const result = await placeOrder({ ...base, phone: "9000000002", idempotencyKey: randomUUID() });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect("paused" in result && result.paused).toEqual({ code: "PAUSED" });
+    expect(await promoUses(code)).toBe(0); // the claim rolled back with the refusal
+    expect(await orderCount()).toBe(before);
+    // no payment row, no points, no stamps, no stock movement either
+    expect(await sideEffectRows()).toEqual(sideBefore);
+  });
+
+  it("after the shop reopens, the same code is still claimable and the order is placed with exactly one use", async () => {
+    at(NOON);
+    const code = `AGAIN-${randomUUID().slice(0, 6).toUpperCase()}`;
+    await createPromo(code, 5);
+    promoCode = code;
+    const key = randomUUID();
+    hooks.afterEarlyCheck = pauseNow;
+    expect((await placeOrder({ ...base, phone: "9000000003", idempotencyKey: key })).ok).toBe(false);
+
+    hooks.afterEarlyCheck = null;
+    await clearPause();
+    const retry = await placeOrder({ ...base, phone: "9000000003", idempotencyKey: key });
+    expect(retry.ok).toBe(true);
+    expect(await promoUses(code)).toBe(1);
+  });
+
+  it("the last slot taken by someone else at the last moment: refused with the offer message, no order, claim released", async () => {
+    at(NOON);
+    const code = `LAST-${randomUUID().slice(0, 6).toUpperCase()}`;
+    await createPromo(code, 1);
+    promoCode = code;
+    const key = randomUUID();
+    const before = await orderCount();
+    hooks.afterEarlyCheck = async () => {
+      await db().update(promotions).set({ usageCount: 1 }).where(eq(promotions.code, code)); // another order took it
+    };
+    const result = await placeOrder({ ...base, phone: "9000000004", idempotencyKey: key });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.error).toBe("That offer just reached its usage limit. Remove the code and try again.");
+    expect(await promoUses(code)).toBe(1); // not double-counted
+    expect(await orderCount()).toBe(before);
+    expect(await keyRows(key)).toBe(0);
+  });
+
+  it("no payment intent is created when the pause lands before the intent (online payment)", async () => {
+    at(NOON);
+    const before = await orderCount();
+    hooks.beforePricing = pauseNow; // after the top gate, before the intent is created
+    const result = await placeOrder({ ...base, payment: "ONLINE" as never, phone: "9000000005", idempotencyKey: randomUUID() });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect("paused" in result && result.paused).toEqual({ code: "PAUSED" });
+    expect(intents.count).toBe(0);
+    expect(await orderCount()).toBe(before);
+  });
+
+  it("KNOWN RESIDUE: a pause landing after the intent was created still refuses the order (no order row) but leaves that one unpaid intent", async () => {
+    at(NOON);
+    const before = await orderCount();
+    hooks.afterEarlyCheck = pauseNow; // after the intent, after the early check: cannot be un-made
+    const result = await placeOrder({ ...base, payment: "ONLINE" as never, phone: "9000000006", idempotencyKey: randomUUID() });
+    expect(result.ok).toBe(false);
+    expect(await orderCount()).toBe(before);
+    expect(intents.count).toBe(1); // an unpaid Razorpay order nobody holds: cannot be charged; documented, accepted
   });
 });
 

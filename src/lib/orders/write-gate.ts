@@ -34,6 +34,17 @@ export function writeGate(input: {
   return null;
 }
 
+/**
+ * Thrown from inside the order's own transaction when the promo code's last slot went to someone else between
+ * pricing and the write. Thrown (not returned) so the transaction rolls back and the idempotency claim is released.
+ */
+export class PromoLimitReached extends Error {
+  constructor() {
+    super("promo usage limit reached at write");
+    this.name = "PromoLimitReached";
+  }
+}
+
 /** Thrown from inside the write so `withIdempotency` releases its claim (a refusal must never be stored as the key's result). */
 export class OrderingRefusedAtWrite extends Error {
   /** `at` and `shop` are the clock and the fresh read the decision was made on, so the customer's message is worded from the same facts. */
