@@ -29,6 +29,7 @@ import { FACTS_NIGHTLY_JOB } from "./facts-plan";
 import { runDetect } from "./jobs/detect";
 import { runFactsBackfill, runFactsIntraday, runFactsNightly } from "./jobs/facts";
 import { runIntradayBackfillJob } from "./jobs/intraday";
+import { RECONCILE_JOB_NAME, runReconcile } from "./jobs/reconcile";
 import { runHeartbeat } from "./jobs/heartbeat";
 import { REFUND_HEAL_JOB, runRefundFollowUpHeal } from "./jobs/refund-heal";
 import type { PeriodKind, PeriodTarget } from "./period";
@@ -132,9 +133,29 @@ export const JOB_REGISTRY = {
     concurrency: "light",
     run: runIntradayBackfillJob,
   },
+  /**
+   * IQ-2 reconciliation for yesterday, 21:00 UTC (02:30 IST), after nightly
+   * facts and before the detectors. Like detect it fails closed with
+   * UPSTREAM_NOT_READY until the facts for the day are final, and catch-up 1
+   * re-evaluates a night missed that way (R2.8).
+   *
+   * Deadline 180 s: each of the 8 rules reads in its own snapshot with a 10 s
+   * statement timeout (RECON_STATEMENT_TIMEOUT_MS), so a run where every rule
+   * times out still has room to write; start plus all systemd retries ends at
+   * 21:32 UTC, clear of the 21:45 backup window.
+   */
+  [RECONCILE_JOB_NAME]: {
+    name: RECONCILE_JOB_NAME,
+    periodKind: "day",
+    target: "previous",
+    onCalendarUtc: "*-*-* 21:00:00 UTC",
+    ...DEFAULT_TIMING,
+    deadlineSeconds: 180,
+    catchUpPeriods: 1,
+    concurrency: "light",
+    run: runReconcile,
+  },
   // TODO(IQ-2 S7, AUTOMATION-ARCHITECT): register these when their bodies land (R2.1, R2.8):
-  // - iq-reconcile-nightly  (FINANCE-LEDGER src/lib/iq/reconcile/reconcile-job.ts): day/previous, 21:00 UTC,
-  //   light, catch-up 1, facts-ready gate -> UPSTREAM_NOT_READY, statement 10 s per rule.
   // - iq-money-signatures   (PAYMENT-SAFETY src/lib/iq/signatures/signatures-job.ts): hour/current, :10 hourly,
   //   light, catch-up 0, <= 15 s per org.
   // - iq-service-pulse      (IQ-ENGINE src/lib/iq/detect/pulse-job.ts, S9): quarter_hour, :05/:20/:35/:50,

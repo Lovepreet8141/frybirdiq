@@ -17,6 +17,7 @@
 import type { DetectDay } from "@/lib/iq/detect/rules";
 import type { Observed } from "@/lib/iq/engine";
 import type * as Facts from "@/lib/repositories/iq-facts";
+import type * as Recon from "@/lib/repositories/iq-recon";
 import type * as Insights from "@/lib/repositories/iq-insights";
 import type * as Trust from "@/lib/repositories/iq-trust";
 import type * as Recommendations from "@/lib/repositories/iq-recommendations";
@@ -76,6 +77,13 @@ export type JobReadRepos = {
   readonly readDetectDays: (dates: readonly string[]) => Promise<readonly DetectDay[]>;
   /** The owner's food-cost target for the date's month; null until owner decision dec-7. */
   readonly readFoodCostTarget: (date: string) => Promise<Observed | null>;
+  /**
+   * Every reconciliation rule over `date` and the days before it, each rule in
+   * its own read-only snapshot with its own statement timeout (IQ-2 S4
+   * `readRecon`). A rule that times out comes back NOT_EVALUATED, never as a
+   * clear, so the job never expires a finding it failed to look at.
+   */
+  readonly readRecon: WithoutOrg<typeof Recon.readRecon>;
   readonly listInsights: WithoutOrg<typeof Insights.listInsights>;
   readonly getInsight: WithoutOrg<typeof Insights.getInsight>;
   readonly readFactFigures: WithoutOrg<typeof Insights.readFactFigures>;

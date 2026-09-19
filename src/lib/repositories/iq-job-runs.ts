@@ -49,6 +49,7 @@ import { getProfitAndLoss } from "./expenses";
 import { countStuckRefundFollowUps, healLostRefundFollowUps } from "./payments";
 import { DayLockBusyError, DayTimeoutError, purgeIntradayFacts, readDailyFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
 import { expireInsights, getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
+import { readRecon } from "./iq-recon";
 import { TRUST_DEFINITION_VERSION, computeTrustDay } from "./iq-trust";
 import { listOpenRecommendations, proposeRecommendation } from "./iq-recommendations";
 
@@ -193,6 +194,7 @@ export function iqRepos(orgId: string): JobReadRepos {
     readDetectDays: (dates) => readDetectDays(orgId, dates),
     // Blocked by owner decision dec-7 (food-cost target): the rule stays unevaluated until then.
     readFoodCostTarget: async () => null,
+    readRecon: (...args) => readRecon(orgId, ...args),
     listInsights: (...args) => listInsights(orgId, ...args),
     getInsight: (...args) => getInsight(orgId, ...args),
     readFactFigures: (...args) => readFactFigures(orgId, ...args),

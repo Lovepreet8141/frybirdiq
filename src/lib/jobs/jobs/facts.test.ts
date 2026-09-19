@@ -73,6 +73,7 @@ function fakeContext(options: Options) {
     countStuckRefundFollowUps: unused,
     factsReadyFor: unused,
     readDetectDays: unused,
+    readRecon: unused,
     readFoodCostTarget: unused,
     checkFactsParity: async (from, to) => {
       parityCalls.push([from, to]);

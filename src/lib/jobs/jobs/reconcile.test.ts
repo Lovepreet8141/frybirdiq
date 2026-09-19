@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { history } from "@/lib/iq/detect/__test-support__/days";
+import type { ReconRunRead } from "@/lib/iq/reconcile/reconcile-job";
 
 import type { JobContext } from "../context";
 import type { JobReadRepos, JobWriteRepos } from "../repos";
-import { runDetect } from "./detect";
+import { runReconcile } from "./reconcile";
 
 const unused = async (): Promise<never> => {
   throw new Error("not used");
 };
+
+/** Nothing fired, so no Observed figure is read: the rules' own tests cover the body. */
+const emptyRead = { from: "2026-08-07", to: "2026-09-11", outcomes: [] } as unknown as ReconRunRead;
 
 function fakeContext(options: { factsReady: boolean }) {
   const calls: string[] = [];
@@ -21,15 +24,12 @@ function fakeContext(options: { factsReady: boolean }) {
       calls.push(`factsReady ${date}`);
       return options.factsReady;
     },
-    readDetectDays: async (dates) => {
-      calls.push(`readDays ${dates.length} from ${dates[0]}`);
-      return history();
+    readDetectDays: unused,
+    readFoodCostTarget: unused,
+    readRecon: async (date, now) => {
+      calls.push(`readRecon ${date} at ${now.toISOString()}`);
+      return emptyRead;
     },
-    readFoodCostTarget: async (date) => {
-      calls.push(`target ${date}`);
-      return null;
-    },
-    readRecon: unused,
     listInsights: unused,
     getInsight: unused,
     readFactFigures: unused,
@@ -37,10 +37,7 @@ function fakeContext(options: { factsReady: boolean }) {
   };
   const writers = {
     writeInsight: async () => ({ outcome: "INSERTED" }),
-    expireInsights: async (requests: readonly unknown[]) => {
-      calls.push(`expire ${requests.length}`);
-      return { expired: 0, expiredIds: [], staleWrites: 0, absent: requests.length, supersededRecommendationIds: [] };
-    },
+    expireInsights: async (requests: readonly unknown[]) => ({ expired: 0, expiredIds: [], staleWrites: 0, absent: requests.length, supersededRecommendationIds: [] }),
   } as unknown as JobWriteRepos;
   let commits = 0;
   const ctx: JobContext = {
@@ -58,31 +55,30 @@ function fakeContext(options: { factsReady: boolean }) {
       return write(writers);
     },
     shouldStop: () => false,
-    remainingMs: () => 60_000,
+    remainingMs: () => 180_000,
   };
   return { ctx, calls, commits: () => commits };
 }
 
-describe("iq-detect-daily adapter (IQ-2 R2.1, R2.8)", () => {
-  it("evaluates the period's day through ctx.repos and writes in one fenced chunk", async () => {
+describe("iq-reconcile-nightly adapter (IQ-2 R2.1, R2.8)", () => {
+  it("reconciles the period's day through ctx.repos and writes in one fenced chunk", async () => {
     const f = fakeContext({ factsReady: true });
-    const result = await runDetect(f.ctx);
+    const result = await runReconcile(f.ctx);
     expect(result.status).toBe("COMPLETE");
     expect(f.calls[0]).toBe("factsReady 2026-09-11");
-    expect(f.calls[1]).toBe("readDays 10 from 2026-09-11");
-    expect(f.calls[2]).toBe("target 2026-09-11");
+    expect(f.calls[1]).toMatch(/^readRecon 2026-09-11 at /);
     expect(f.commits()).toBe(1);
   });
 
   it("fails with CODE_VERSION_UNKNOWN before reading anything when the deployed commit is unknown", async () => {
     const f = fakeContext({ factsReady: true });
-    await expect(runDetect({ ...f.ctx, codeVersion: "unversioned" })).rejects.toMatchObject({ code: "CODE_VERSION_UNKNOWN" });
+    await expect(runReconcile({ ...f.ctx, codeVersion: "unversioned" })).rejects.toMatchObject({ code: "CODE_VERSION_UNKNOWN" });
     expect(f.calls).toEqual([]);
   });
 
   it("stops PARTIAL UPSTREAM_NOT_READY before reading or writing anything when facts are not final (C4, iq2-s7 blocker)", async () => {
     const f = fakeContext({ factsReady: false });
-    expect(await runDetect(f.ctx)).toEqual({ status: "PARTIAL", reason: "UPSTREAM_NOT_READY", rowsWritten: 0, summary: { upstream_not_ready: 1 } });
+    expect(await runReconcile(f.ctx)).toEqual({ status: "PARTIAL", reason: "UPSTREAM_NOT_READY", rowsWritten: 0, summary: { upstream_not_ready: 1 } });
     expect(f.calls).toEqual(["factsReady 2026-09-11"]);
     expect(f.commits()).toBe(0);
   });
