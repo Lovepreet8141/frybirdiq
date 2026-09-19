@@ -14,7 +14,8 @@ import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
 import { shopPhone } from "@/lib/contact/phone";
 import { shopHoursState } from "@/lib/cart/shop-hours";
 import { HomeMotion } from "@/components/home/motion";
-import { getAllProducts } from "@/lib/repositories/menu";
+import { getAllProductsCached } from "@/lib/repositories/menu-cache";
+import { toLatLng } from "@/lib/delivery";
 import { getDeliverySettings } from "@/lib/repositories/delivery";
 import { getOrg, getStoreContact } from "@/lib/repositories/org";
 import { getCustomer } from "@/lib/customer";
@@ -22,7 +23,9 @@ import { formatHoursRange, restaurantSchema } from "@/lib/seo/restaurant";
 import { summarizeDeliveryBands, summarizeFreeDelivery } from "@/lib/delivery/summary";
 
 export const metadata: Metadata = {
-  title: "FRYBIRD, Ambala City. Born crispy. Built bold.",
+  // Absolute: the layout template would append "· FRYBIRD" to a title that already opens with it.
+  title: { absolute: "FRYBIRD, Ambala City. Born crispy. Built bold." },
+  alternates: { canonical: "/" },
   description:
     "Hand-breaded fried chicken in Sector 9, Ambala City. Burgers, wraps, wings, loaded fries and party boxes, fried after you order. Pick-up or delivery.",
 };
@@ -40,14 +43,19 @@ const BESTSELLER_SLUGS = [
 const CITY = "Ambala City";
 const ADDRESS_ONE_LINE = "Shop 31-B, Shopping Complex, Sector 9, Ambala City, Haryana 134003";
 const MAPS_PLACE_URL = "https://maps.google.com/?cid=16250293097084103835";
-const MAPS_DIRECTIONS_URL = "https://www.google.com/maps/dir/?api=1&destination=30.3618007%2C76.7808927";
+/** Used only while the outlet has no stored pin; with one, directions and the structured data both read it. */
+const FALLBACK_MAPS_DIRECTIONS_URL = "https://www.google.com/maps/dir/?api=1&destination=30.3618007%2C76.7808927";
+
+function directionsUrl(pin: { lat: number; lng: number } | null): string {
+  return pin ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${pin.lat},${pin.lng}`)}` : FALLBACK_MAPS_DIRECTIONS_URL;
+}
 
 export default async function HomePage() {
   const [org, contact, delivery, products, customer] = await Promise.all([
     getOrg(),
     getStoreContact(),
     getDeliverySettings(),
-    getAllProducts("ONLINE"),
+    getAllProductsCached("ONLINE"),
     getCustomer(),
   ]);
   // Only whether someone is signed in crosses into the client nav — never the
@@ -85,6 +93,8 @@ export default async function HomePage() {
   const maxDeliveryKm = delivery?.enabled && delivery.rates.bands.length > 0 ? delivery.rates.bands[delivery.rates.bands.length - 1]!.upToMetres / 1000 : null;
   const deliveryChip = maxDeliveryKm ? `${Number.isInteger(maxDeliveryKm) ? maxDeliveryKm : maxDeliveryKm.toFixed(1)} km delivery` : "Pick-up or delivery";
 
+  // One stored pin for the map link and the structured data, so they cannot disagree.
+  const pin = delivery?.shop ? toLatLng(delivery.shop) : null;
   const phone = shopPhone(contact?.phone);
   const phoneDisplay = phone?.display ?? null;
   const phoneHref = phone?.href ?? null;
@@ -93,7 +103,7 @@ export default async function HomePage() {
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema({ opens, closes })) }}
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema({ opens, closes }, { pin, telephone: phone?.display ?? null })) }}
       />
       <div className="fb">
         <HomeNav signedIn={signedIn} />
@@ -126,7 +136,7 @@ export default async function HomePage() {
             deliveryText={deliveryText}
             hoursLabel="Open daily"
             hoursValue={hoursValue}
-            mapsDirectionsUrl={MAPS_DIRECTIONS_URL}
+            mapsDirectionsUrl={directionsUrl(pin)}
             mapsPlaceUrl={MAPS_PLACE_URL}
             phoneDisplay={phoneDisplay}
             phoneHref={phoneHref}

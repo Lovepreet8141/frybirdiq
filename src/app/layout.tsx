@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Archivo, Baloo_2, Instrument_Sans, Instrument_Serif, Inter } from "next/font/google";
 import "./globals.css";
+import { siteUrl } from "@/lib/seo/site";
 
 /**
  * Three families, each with one job. design-system/MASTER.md §3.
@@ -48,11 +49,22 @@ const baloo = Baloo_2({
 });
 
 export const metadata: Metadata = {
+  // Resolves every relative URL below (share image, canonical) to the real
+  // origin. SITE_URL is read at runtime; the default is the production domain.
+  metadataBase: new URL(siteUrl()),
   title: {
     default: "FRYBIRD",
     template: "%s · FRYBIRD",
   },
   description: "Born crispy. Built bold. Fried chicken in Sector 9, Ambala City.",
+  openGraph: {
+    type: "website",
+    siteName: "FRYBIRD",
+    locale: "en_IN",
+    title: "FRYBIRD, Ambala City. Born crispy. Built bold.",
+    description: "Hand-breaded fried chicken in Sector 9, Ambala City. Burgers, wraps, wings, loaded fries and party boxes, fried after you order.",
+  },
+  twitter: { card: "summary_large_image" },
 };
 
 export const viewport: Viewport = {

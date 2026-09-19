@@ -2,6 +2,26 @@ import { describe, expect, it } from "vitest";
 
 import { formatHoursRange, restaurantSchema } from "./restaurant";
 
+describe("restaurantSchema location", () => {
+  const hours = { opens: "11:30", closes: "23:00" };
+
+  it("reads the stored pin, never a coordinate of its own", () => {
+    const schema = restaurantSchema(hours, { pin: { lat: 30.1234, lng: 76.5678 } }) as Record<string, unknown>;
+    expect(schema.geo).toEqual({ "@type": "GeoCoordinates", latitude: 30.1234, longitude: 76.5678 });
+  });
+
+  it("omits geo when no pin is stored instead of guessing one", () => {
+    expect((restaurantSchema(hours) as Record<string, unknown>).geo).toBeUndefined();
+    expect((restaurantSchema(hours, { pin: null }) as Record<string, unknown>).geo).toBeUndefined();
+  });
+
+  it("carries a telephone only when the outlet has one", () => {
+    expect((restaurantSchema(hours, { telephone: "98765 43210" }) as Record<string, unknown>).telephone).toBe("98765 43210");
+    expect((restaurantSchema(hours, { telephone: null }) as Record<string, unknown>).telephone).toBeUndefined();
+    expect((restaurantSchema(hours) as Record<string, unknown>).telephone).toBeUndefined();
+  });
+});
+
 describe("restaurantSchema", () => {
   const schema = restaurantSchema() as Record<string, unknown>;
 

@@ -11,7 +11,9 @@
  * a manual penalty.
  */
 
-const SITE = process.env.SITE_URL?.replace(/\/$/, "") ?? "https://frybirdiq.tech";
+import { siteUrl } from "./site";
+
+const SITE = siteUrl();
 
 /** The default hours this shipped with, before Restaurant settings (roadmap 5.5) could change them. */
 const DEFAULT_HOURS = { opens: "11:30", closes: "23:00" } as const;
@@ -34,7 +36,21 @@ export function formatHoursRange(opens: string, closes: string): string {
   return `${clock(opens)} – ${clock(closes)}`;
 }
 
-export function restaurantSchema(hours: { readonly opens: string; readonly closes: string } = DEFAULT_HOURS) {
+export interface RestaurantPin {
+  readonly lat: number;
+  readonly lng: number;
+}
+
+/**
+ * `pin` is the outlet's stored map pin (the same one delivery distance is
+ * measured from and the directions link points at). Nothing here supplies a
+ * coordinate of its own: with no pin stored, `geo` is omitted rather than
+ * guessed. `telephone` likewise appears only when the outlet has one.
+ */
+export function restaurantSchema(
+  hours: { readonly opens: string; readonly closes: string } = DEFAULT_HOURS,
+  details: { readonly pin?: RestaurantPin | null; readonly telephone?: string | null } = {},
+) {
   return {
     "@context": "https://schema.org",
     "@type": "Restaurant",
@@ -53,11 +69,10 @@ export function restaurantSchema(hours: { readonly opens: string; readonly close
       postalCode: "134003",
       addressCountry: "IN",
     },
-    geo: {
-      "@type": "GeoCoordinates",
-      latitude: 30.3752,
-      longitude: 76.7821,
-    },
+    ...(details.pin ? { geo: { "@type": "GeoCoordinates", latitude: details.pin.lat, longitude: details.pin.lng } } : {}),
+    ...(details.telephone ? { telephone: details.telephone } : {}),
+    image: `${SITE}/opengraph-image`,
+    sameAs: ["https://www.instagram.com/frybirdindia/"],
     openingHoursSpecification: [
       {
         "@type": "OpeningHoursSpecification",

@@ -6,11 +6,12 @@ import { ProductCard } from "@/components/menu/product-card";
 import { Stagger, StaggerItem } from "@/components/motion/reveal";
 import { EmptyState } from "@/components/states";
 import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
-import { getMenu } from "@/lib/repositories/menu";
+import { getMenuCached } from "@/lib/repositories/menu-cache";
 import { getOrg } from "@/lib/repositories/org";
 
 export const metadata: Metadata = {
   title: "Menu",
+  alternates: { canonical: "/menu" },
   description: "Burgers, smash burgers, wraps, wings, loaded fries and mac. Sector 9, Ambala City.",
 };
 
@@ -30,7 +31,7 @@ interface SearchParams {
 
 export default async function MenuPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const { q = "", diet = "" } = await searchParams;
-  const [menu, org] = await Promise.all([getMenu("ONLINE"), getOrg()]);
+  const [menu, org] = await Promise.all([getMenuCached("ONLINE"), getOrg()]);
 
   const query = q.trim().toLowerCase();
   const vegOnly = diet === "veg";
