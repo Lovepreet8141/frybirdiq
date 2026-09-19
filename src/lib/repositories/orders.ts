@@ -41,7 +41,7 @@ import { createPendingPayment, recordCashPayment } from "./payments";
 import { CASH_PROVIDER, RAZORPAY_PROVIDER, availableMethods, codAllowed, getProvider, type PaymentMethod } from "@/lib/payments";
 import { reversePointsForOrder, reverseStampForOrder, spendPointsForOrder } from "./loyalty";
 import { recordConsumption, reverseConsumption } from "./stock";
-import { IdempotencyConflict, withIdempotency } from "./idempotency";
+import { IdempotencyConflict, findIdempotentResult, withIdempotency } from "./idempotency";
 
 const ORG_SLUG = "frybird";
 
@@ -253,6 +253,36 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   assertChannelFulfilment(channel, fulfilment);
 
   /*
+   * A retry of an order that already exists is answered with that order,
+   * before the hours are consulted.
+   *
+   * The hours refusals below are rules for NEW orders. A customer whose order
+   * was written at 22:59:59 and whose response was lost retries with the same
+   * key at 23:00:02: without this, the retry hit "the kitchen is closed ...
+   * nothing has been ordered" for an order that does exist, left the cart in
+   * place, and invited a second (scheduled) order under a different
+   * fingerprint. The same holds for a scheduled retry that now falls inside
+   * the 20-minute lead window. Only a stored result for this exact request
+   * (same org, operation, key and fingerprint) counts, and it is read-only; a
+   * request with no stored result goes through the hours gate exactly as
+   * before. Built once so this lookup and `withIdempotency` below cannot
+   * disagree about what "the same request" is.
+   */
+  const idempotencyRequest = {
+    phone: details.phone,
+    lines: cart.lines.map((line) => ({ slug: line.product.slug, quantity: line.quantity, modifiers: line.modifiers.map((modifier) => modifier.slug) })),
+    promoCode: cart.promotion?.code ?? null,
+    points: cart.points?.points ?? 0,
+  };
+  const alreadyPlaced = await findIdempotentResult<PlaceOrderResult>({
+    key: details.idempotencyKey,
+    operation: "placeOrder",
+    orgId,
+    request: idempotencyRequest,
+  });
+  if (alreadyPlaced) return alreadyPlaced;
+
+  /*
    * A manual requested time, re-validated here against the server's own
    * clock and the org's real hours — never trusted from what the client's
    * picker computed. ASAP (the default) leaves `scheduledFor` unset,
@@ -415,12 +445,8 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
         // fingerprint would let a stale key from a lost-response retry
         // replay the *wrong* cart's order. Matches the precision
         // `placeCounterOrder`'s own fingerprint already uses below.
-        request: {
-          phone: details.phone,
-          lines: cart.lines.map((line) => ({ slug: line.product.slug, quantity: line.quantity, modifiers: line.modifiers.map((modifier) => modifier.slug) })),
-          promoCode: cart.promotion?.code ?? null,
-          points: cart.points?.points ?? 0,
-        },
+        // Built once, above, and shared with the early replay lookup.
+        request: idempotencyRequest,
       },
       () => writeOrder(),
     );
