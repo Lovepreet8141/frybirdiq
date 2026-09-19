@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight, TrendingDown, TrendingUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LimitedBadge } from "@/components/iq/limited-badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { ORDER_CHANNEL_LABELS, type OrderChannel } from "@/domain/order-channel";
@@ -23,13 +24,14 @@ export interface ChannelRow {
  * FRYBIRD's three direct channels; the export menu became a link to the
  * Channels report, because that is where the question continues.
  */
-export function ChannelPerformanceCard({ channels, total, periodLabel, className }: { channels: readonly ChannelRow[]; total: Paise; periodLabel: string; className?: string }) {
+export function ChannelPerformanceCard({ channels, total, periodLabel, className, limited }: { channels: readonly ChannelRow[]; total: Paise; periodLabel: string; className?: string; limited?: readonly string[] }) {
   const empty = total === 0n;
   return (
     <Card className={cn("h-full", className)}>
       <CardHeader>
         <CardTitle>Channels</CardTitle>
         <CardDescription>{empty ? `No paid orders ${periodLabel.toLowerCase()}` : `${formatINR(total, "whole")} ${periodLabel.toLowerCase()} · vs the previous period`}</CardDescription>
+        {limited && limited.length > 0 && <LimitedBadge reasons={limited} className="mt-1" />}
         <CardAction>
           <Button variant="outline" size="sm" asChild>
             <Link href="/app/iq/channels">

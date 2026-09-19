@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowRight, TrendingDown, TrendingUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { LimitedBadge } from "@/components/iq/limited-badge";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatBps } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -18,6 +19,8 @@ export interface KpiCompactProps {
   readonly linkLabel: string;
   readonly missing?: boolean;
   readonly emphasis?: boolean;
+  /** Readiness scores this figure rests on that are weak; shows a "Limited data" badge. */
+  readonly limited?: readonly string[];
   readonly className?: string;
 }
 
@@ -28,7 +31,7 @@ export interface KpiCompactProps {
  * kit's `text-2xl lg:text-3xl`, one line of context, and the whole card a
  * link to where the number is explained. Never a percentage without a base.
  */
-export function KpiCompact({ label, value, deltaBps, deltaInverted = false, note, href, linkLabel, missing = false, emphasis = false, className }: KpiCompactProps) {
+export function KpiCompact({ label, value, deltaBps, deltaInverted = false, note, href, linkLabel, missing = false, emphasis = false, limited, className }: KpiCompactProps) {
   const up = deltaBps !== null && deltaBps !== undefined && deltaBps > 0;
   const down = deltaBps !== null && deltaBps !== undefined && deltaBps < 0;
   const good = deltaInverted ? down : up;
@@ -50,6 +53,7 @@ export function KpiCompact({ label, value, deltaBps, deltaInverted = false, note
       <CardContent className="flex flex-col gap-1">
         <div className={cn("tabular font-money text-2xl leading-none tracking-[-0.01em] lg:text-[28px]", missing && "text-muted-foreground/70")}>{missing ? "—" : value}</div>
         <p className="text-[12.5px] leading-[1.4] text-muted-foreground">{note}</p>
+        {limited && limited.length > 0 && <LimitedBadge reasons={limited} />}
         <Link href={href} className="mt-auto inline-flex items-center gap-1 pt-2 text-[12px] font-semibold text-foreground underline-offset-2 hover:underline">
           {linkLabel}
           <ArrowRight className="size-3" aria-hidden="true" />

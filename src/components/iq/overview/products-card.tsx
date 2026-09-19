@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LimitedBadge } from "@/components/iq/limited-badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type Paise, formatINR } from "@/lib/money";
@@ -26,7 +27,7 @@ export interface GapRow {
  * second tab instead of a second card. Thumbnails are omitted: the top
  * sellers query carries no image, and a placeholder square is decoration.
  */
-export function ProductsCard({ top, gaps, periodLabel, className }: { top: readonly TopProductRow[]; gaps: readonly GapRow[]; periodLabel: string; className?: string }) {
+export function ProductsCard({ top, gaps, periodLabel, className, limited }: { top: readonly TopProductRow[]; gaps: readonly GapRow[]; periodLabel: string; className?: string; limited?: readonly string[] }) {
   const peak = Math.max(1, ...top.map((row) => row.quantity));
   return (
     <Card className={cn("h-full", className)}>
@@ -34,6 +35,7 @@ export function ProductsCard({ top, gaps, periodLabel, className }: { top: reado
         <CardHeader>
           <CardTitle>Products</CardTitle>
           <CardDescription>{periodLabel} · by revenue</CardDescription>
+        {limited && limited.length > 0 && <LimitedBadge reasons={limited} className="mt-1" />}
           <CardAction>
             <TabsList variant="line" className="h-8">
               <TabsTrigger value="top" className="text-[12.5px]">

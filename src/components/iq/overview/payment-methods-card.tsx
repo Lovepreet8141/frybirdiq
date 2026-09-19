@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { Label, Pie, PieChart } from "recharts";
 import { Button } from "@/components/ui/button";
+import { LimitedBadge } from "@/components/iq/limited-badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { type Paise, formatINR, toRupeesFloat } from "@/lib/money";
@@ -27,7 +28,7 @@ const COLORS = ["var(--chart-1)", "var(--chart-3)", "var(--chart-4)", "var(--cha
  * from the payments ledger's captured rows; the centre is captured, never
  * called revenue.
  */
-export function PaymentMethodsCard({ methods, capturedTotal, periodLabel, className }: { methods: readonly MethodSlice[]; capturedTotal: Paise; periodLabel: string; className?: string }) {
+export function PaymentMethodsCard({ methods, capturedTotal, periodLabel, className, limited }: { methods: readonly MethodSlice[]; capturedTotal: Paise; periodLabel: string; className?: string; limited?: readonly string[] }) {
   const slices = methods.slice(0, 5);
   const chartConfig = Object.fromEntries(slices.map((slice, index) => [slice.method, { label: slice.label, color: COLORS[index % COLORS.length] }])) satisfies ChartConfig;
   const data = slices.map((slice) => ({ method: slice.method, rupees: toRupeesFloat(slice.total), fill: `var(--color-${slice.method})`, paise: slice.total, count: slice.count }));
@@ -38,6 +39,7 @@ export function PaymentMethodsCard({ methods, capturedTotal, periodLabel, classN
       <CardHeader>
         <CardTitle>Payment methods</CardTitle>
         <CardDescription>Captured {periodLabel.toLowerCase()} · the till and the gateway</CardDescription>
+        {limited && limited.length > 0 && <LimitedBadge reasons={limited} className="mt-1" />}
         <CardAction>
           <Button variant="outline" size="sm" asChild>
             <Link href="/app/finance">

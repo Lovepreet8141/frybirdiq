@@ -6,7 +6,10 @@ import { type Capability, CapabilityPanel, DataTrust, Panel, PanelBody, PanelHea
 import { PageHeader } from "@/components/staff/page-header";
 import { PermissionDenied } from "@/components/states";
 import { Button } from "@/components/ui/button";
+import { ReadinessPanel } from "@/components/iq/readiness-panel";
 import { requireStaff, staffCan } from "@/lib/auth";
+import { readinessBriefLine } from "@/lib/iq/readiness/scores";
+import { getReadiness } from "@/lib/repositories/iq-readiness";
 
 export const metadata: Metadata = { title: "AI brief", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -19,7 +22,7 @@ export const dynamic = "force-dynamic";
  * yet, so there is no brief to show and no box to type into.
  */
 export default async function AiBriefPage() {
-  await requireStaff();
+  const staff = await requireStaff();
   if (!(await staffCan("analytics.view"))) {
     return (
       <div className="mx-auto w-full max-w-lg px-[var(--gutter)] py-16">
@@ -28,6 +31,7 @@ export default async function AiBriefPage() {
     );
   }
 
+  const readiness = await getReadiness(staff.orgId);
   const keyConfigured = Boolean(process.env.ANTHROPIC_API_KEY);
   const items: readonly Capability[] = [
     { name: "Conversation and tool-call tables", connected: true, note: "ai_conversations and ai_tool_calls exist in the schema; nothing writes to them yet" },
@@ -42,6 +46,12 @@ export default async function AiBriefPage() {
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
       <PageHeader title="AI brief" description="A morning brief and a place to ask questions — built on stored rows, never on guesses. Not connected yet; this page says what it will read and what is missing." />
       <CommandCenterNav current="brief" />
+
+      {/* The brief's one live line so far: readiness and the one action, counted from stored records. */}
+      <p className="rounded-lg border border-border bg-surface px-4 py-3 text-sm" data-brief-readiness="">
+        {readinessBriefLine(readiness)}
+      </p>
+      <ReadinessPanel readiness={readiness} />
 
       <DataTrust items={[{ tone: "flag", text: `Not connected · ${connected} of ${items.length} prerequisites in place` }, { tone: "neutral", text: "Roadmap Phase 11 — tool layer first, read-only tools only, Daily brief before Ask FRYBIRD" }]} />
 

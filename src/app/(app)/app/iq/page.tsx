@@ -12,6 +12,7 @@ import { OpenOrdersCard } from "@/components/iq/overview/open-orders-card";
 import { PaymentMethodsCard } from "@/components/iq/overview/payment-methods-card";
 import { ProductsCard } from "@/components/iq/overview/products-card";
 import { SalesTrendCard } from "@/components/iq/overview/sales-trend-card";
+import { ReadinessPanel } from "@/components/iq/readiness-panel";
 import { RightNow } from "@/components/iq/right-now";
 import { DataTrust } from "@/components/iq/ui";
 import { MotionStagger, MotionStaggerItem } from "@/components/motion";
@@ -21,12 +22,14 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { getStaff, staffCan } from "@/lib/auth";
 import { businessDate, resolveRange } from "@/lib/dates";
 import { attentionInput, urgentCount } from "@/lib/iq/alerts";
+import { limitedReasons } from "@/lib/iq/readiness/scores";
 import { type OverviewRange, OVERVIEW_RANGES, attentionCards, compareOptions, deltaBps, excludedNote, isMultiDay, isOverviewRange, resolveCompare } from "@/lib/iq/overview";
 import { type Paise, formatINR } from "@/lib/money";
 import { listRecentOrderEvents } from "@/lib/repositories/activity";
 import { getChannelBreakdown, getDashboard, notSelling } from "@/lib/repositories/analytics";
 import { foodCostWeeklySeries, getProfitAndLoss } from "@/lib/repositories/expenses";
 import { getPaymentsLedger } from "@/lib/repositories/finance";
+import { getReadiness } from "@/lib/repositories/iq-readiness";
 import { listActiveOrders } from "@/lib/repositories/orders";
 import { countExcluded, getOverviewSettings, getRangeComparison, getRightNow, productLastSales } from "@/lib/repositories/overview";
 import { METHOD_LABELS } from "@/lib/finance/ledger-view";
@@ -66,7 +69,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
   const options = compareOptions(range, settings.opening, today);
   const compare = resolveCompare(options, vs);
 
-  const [rightNow, comparison, week, dashboard, channels, ledger, pnl, foodCost, gaps, lastSales, activeOrders, events] = await Promise.all([
+  const [rightNow, comparison, week, dashboard, channels, ledger, pnl, foodCost, gaps, lastSales, activeOrders, events, readiness] = await Promise.all([
     getRightNow(staff.orgId, settings.kitchenCapacity, now.getTime()),
     getRangeComparison(staff.orgId, range, compare?.key ?? null, now),
     getDashboard(staff.orgId, resolveRange("7d")),
@@ -79,6 +82,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     productLastSales(staff.orgId, now),
     listActiveOrders(staff.orgId),
     listRecentOrderEvents(staff.orgId, 8),
+    getReadiness(staff.orgId, now),
   ]);
   const excluded = await countExcluded(staff.orgId, comparison.window);
 
@@ -139,7 +143,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
         <CommandCenterNav current="overview" alertCount={urgentCount(cards)} />
       </div>
 
-      <MotionStagger className="grid gap-4 lg:grid-cols-12 lg:gap-6" count={9}>
+      <MotionStagger className="grid gap-4 lg:grid-cols-12 lg:gap-6" count={10}>
         {/* Row 1 — the Sales dashboard's first row: trend beside four compact figures. */}
         <MotionStaggerItem className="lg:col-span-8">
           <SalesTrendCard series={trend} periodLabel={trendLabel} />
@@ -173,6 +177,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
           />
           <KpiCompact
             label="Net profit · month"
+            limited={limitedReasons(readiness, "netProfit")}
             value={pnl.hasExpenses ? formatINR(pnl.result.netProfit, "whole") : "—"}
             missing={!pnl.hasExpenses}
             note={pnl.hasExpenses ? `${costLinesRecorded} of 4 cost lines recorded` : "Not yet tracked — record what you spend"}
@@ -181,15 +186,20 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
           />
         </MotionStaggerItem>
 
+        {/* Readiness: how far the record-keeping behind these numbers can be trusted. Read-only. */}
+        <MotionStaggerItem className="lg:col-span-12">
+          <ReadinessPanel readiness={readiness} />
+        </MotionStaggerItem>
+
         {/* Row 2 — the E-commerce dashboard's 4 / 4 / 4. */}
         <MotionStaggerItem className="lg:col-span-4">
-          <ChannelPerformanceCard channels={channels.channels.map((stat) => ({ channel: stat.channel, revenue: stat.revenue.value, orders: stat.orders.value, shareBps: stat.shareBps, changeBps: stat.revenue.changeBps }))} total={channels.total} periodLabel={rangeLabel} />
+          <ChannelPerformanceCard limited={limitedReasons(readiness, "channels")} channels={channels.channels.map((stat) => ({ channel: stat.channel, revenue: stat.revenue.value, orders: stat.orders.value, shareBps: stat.shareBps, changeBps: stat.revenue.changeBps }))} total={channels.total} periodLabel={rangeLabel} />
         </MotionStaggerItem>
         <MotionStaggerItem className="lg:col-span-4">
-          <PaymentMethodsCard methods={ledger.byMethod.map((row) => ({ method: row.method, label: METHOD_LABELS[row.method], count: row.count, total: row.total }))} capturedTotal={ledger.capturedTotal} periodLabel={rangeLabel} />
+          <PaymentMethodsCard limited={limitedReasons(readiness, "paymentMethods")} methods={ledger.byMethod.map((row) => ({ method: row.method, label: METHOD_LABELS[row.method], count: row.count, total: row.total }))} capturedTotal={ledger.capturedTotal} periodLabel={rangeLabel} />
         </MotionStaggerItem>
         <MotionStaggerItem className="lg:col-span-4">
-          <AttentionCard cards={cards} />
+          <AttentionCard cards={cards} limited={limitedReasons(readiness, "attention")} />
         </MotionStaggerItem>
 
         {/* Row 3 — 8 / 4: what the kitchen and counter look like right now, and what is selling. */}
@@ -213,7 +223,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
           </Card>
         </MotionStaggerItem>
         <MotionStaggerItem className="lg:col-span-4">
-          <ProductsCard top={dashboard.topProducts} gaps={gaps} periodLabel={rangeLabel} />
+          <ProductsCard limited={limitedReasons(readiness, "topProducts")} top={dashboard.topProducts} gaps={gaps} periodLabel={rangeLabel} />
         </MotionStaggerItem>
 
         {/* Row 4 — 8 / 4: the open orders table and the latest movements. */}
