@@ -2,25 +2,29 @@ import { describe, expect, it } from "vitest";
 import { RAW_BY_CLAIM } from "@/lib/iq/engine/__test-support__/insights";
 import { InsightSchema, type Insight } from "@/lib/iq/engine/insight";
 import { present } from "@/lib/iq/engine/present";
-import { forPresentation, humanize } from "./insight-card";
+import { forPresentation, titleFor } from "./insight-card";
 
 const parse = (raw: unknown): Insight => InsightSchema.parse(raw);
 
-describe("humanize", () => {
-  it("turns a dotted rule id into a sentence-cased phrase", () => {
-    expect(humanize("sales.below_weekday_baseline")).toBe("Sales below weekday baseline");
+describe("titleFor", () => {
+  it("a caller-supplied title wins", () => {
+    expect(titleFor(present(parse(RAW_BY_CLAIM.DETECTION())), "Food cost is running high")).toBe("Food cost is running high");
   });
 
-  it("turns a metric id into a sentence-cased phrase", () => {
-    expect(humanize("food_cost.above_baseline")).toBe("Food cost above baseline");
+  it("FACT falls back to the metric's owner-facing label, never the id", () => {
+    expect(titleFor(present(parse(RAW_BY_CLAIM.FACT())))).toBe("Net sales (excl. GST)");
+  });
+
+  it("other kinds fall back to a neutral word, never the rule id", () => {
+    expect(titleFor(present(parse(RAW_BY_CLAIM.DETECTION())))).toBe("Finding");
   });
 });
 
 describe("forPresentation", () => {
-  it("FACT: neutral tone, metricId as the title, the figure as the impact", () => {
+  it("FACT: neutral tone, metric label as the title, the figure as the impact", () => {
     const shape = forPresentation(present(parse(RAW_BY_CLAIM.FACT())));
     expect(shape.tone).toBe("neutral");
-    expect(shape.title).toBe("Revenue net");
+    expect(shape.title).toBe("Net sales (excl. GST)");
     expect(shape.impact).toBe("₹42,500");
   });
 
@@ -28,7 +32,7 @@ describe("forPresentation", () => {
     const shape = forPresentation(present(parse(RAW_BY_CLAIM.DETECTION())));
     expect(shape.tone).toBe("flag");
     expect(shape.level).toBe("CHECK");
-    expect(shape.title).toBe("Food cost above baseline");
+    expect(shape.title).toBe("Finding");
     expect(shape.impact).toBe("34.0%");
     expect(shape.evidence).toBe("Usual 30.0% · 13.3%");
   });

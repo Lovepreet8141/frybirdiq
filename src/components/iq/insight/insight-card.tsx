@@ -1,6 +1,7 @@
 import { InsightCard as AttentionLayout, type SignalTone } from "@/components/iq/ui";
 import { EmptyState } from "@/components/states";
 import { BUSINESS_TIMEZONE } from "@/lib/dates";
+import { METRIC_LABELS } from "@/lib/iq/metrics/labels";
 import type { Presentation } from "@/lib/iq/engine/present";
 import type { InsightsForViewer, PresentedInsight } from "@/lib/repositories/iq-insights";
 import { ClaimBadge, TONE_BY_BADGE_LABEL } from "./claim-badge";
@@ -8,11 +9,23 @@ import { TrustNote } from "./trust-note";
 
 const asOfFormat = new Intl.DateTimeFormat("en-IN", { timeZone: BUSINESS_TIMEZONE, dateStyle: "medium", timeStyle: "short" });
 
-/** "sales.below_weekday_baseline" -> "Sales below weekday baseline". The only identifier every kind is guaranteed to carry is `copy.templateId`; FACT and DETECTION have a more precise one (metricId/ruleId) and use it instead. */
-export function humanize(id: string): string {
+/**
+ * The owner never sees a rule or metric id (DESIGN.md R2.10). A caller-supplied
+ * title always wins (the brief passes its template sentence); a FACT otherwise
+ * uses its metric's owner-facing label; anything else gets a neutral word, never
+ * an id turned into a phrase.
+ */
+export function titleFor(p: Presentation, title?: string): string {
+  if (title) return title;
+  if (p.kind === "FACT") return (METRIC_LABELS as Readonly<Record<string, string>>)[p.metricId.replace(/[.-]/g, "_")] ?? "Figure";
+  return "Finding";
+}
+
+/** Driver ids are internal names too; sentence-case them so evidence reads as words. */
+const sentence = (id: string): string => {
   const words = id.replace(/[._-]/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
-}
+};
 
 const SEVERITY_LABEL: Record<1 | 2 | 3, string> = { 1: "NOTE", 2: "CHECK", 3: "URGENT" };
 
@@ -27,42 +40,43 @@ const SEVERITY_TONE: Record<1 | 2 | 3, SignalTone> = { 1: "neutral", 2: "flag", 
 export type CardShape = { readonly tone: SignalTone; readonly title: string; readonly evidence?: string; readonly impact?: string; readonly impactLabel?: string; readonly level?: string };
 
 /** Pure mapping from a `Presentation` to what the layout needs — no JSX, so it is exercised directly rather than through a render (this suite has no DOM environment). */
-export function forPresentation(p: Presentation): CardShape {
+export function forPresentation(p: Presentation, title?: string): CardShape {
+  const heading = titleFor(p, title);
   switch (p.kind) {
     case "FACT":
-      return { tone: "neutral", title: humanize(p.metricId), impact: p.figure.text };
+      return { tone: "neutral", title: heading, impact: p.figure.text };
     case "DETECTION":
       return {
         tone: SEVERITY_TONE[p.severity],
-        title: humanize(p.ruleId),
+        title: heading,
         impact: p.observed.text,
         impactLabel: "Observed",
         evidence: `Usual ${p.baseline.text} · ${p.deviation}`,
         level: SEVERITY_LABEL[p.severity],
       };
     case "FORECAST":
-      return { tone: "neutral", title: humanize(p.copy.templateId), impact: p.range.text, impactLabel: `${p.range.coverage}, next ${p.horizonDays}d` };
+      return { tone: "neutral", title: heading, impact: p.range.text, impactLabel: `${p.range.coverage}, next ${p.horizonDays}d` };
     case "EXPLANATION":
       // Drivers summing to the total, with the residual, is what makes this
       // an explanation rather than a repeat of the total (UX-ARCHITECTURE,
       // DESIGN.md line 40): every driver renders, never just the residual.
       return {
         tone: "neutral",
-        title: humanize(p.copy.templateId),
+        title: heading,
         impact: p.total.text,
-        evidence: [...p.drivers.map((driver) => `${humanize(driver.driverId)}: ${driver.contribution.text}`), `Residual ${p.residual}`].join(" · "),
+        evidence: [...p.drivers.map((driver) => `${sentence(driver.driverId)}: ${driver.contribution.text}`), `Residual ${p.residual}`].join(" · "),
       };
     case "RECOMMENDATION":
-      return { tone: "gain", title: humanize(p.copy.templateId), impact: `${p.impact.low} – ${p.impact.high}`, impactLabel: "Estimated impact" };
+      return { tone: "gain", title: heading, impact: `${p.impact.low} – ${p.impact.high}`, impactLabel: "Estimated impact" };
     case "AUTOMATION":
-      return { tone: TONE_BY_BADGE_LABEL[p.badge.label], title: humanize(p.copy.templateId) };
+      return { tone: TONE_BY_BADGE_LABEL[p.badge.label], title: heading };
   }
 }
 
 /** One insight, in whichever of the six `Presentation` kinds `present()` produced, plus when it was true as of. */
-export function PresentationCard({ item }: { item: PresentedInsight }) {
+export function PresentationCard({ item, title }: { item: PresentedInsight; title?: string }) {
   const { presentation } = item;
-  const shape = forPresentation(presentation);
+  const shape = forPresentation(presentation, title);
   return (
     <AttentionLayout
       tone={shape.tone}
@@ -91,18 +105,22 @@ export function PresentationCard({ item }: { item: PresentedInsight }) {
  */
 export function InsightList({
   result,
-  emptyTitle = "No findings for this period",
+  emptyTitle,
   emptyDetail,
+  titleOf,
 }: {
   result: InsightsForViewer;
-  emptyTitle?: string;
+  /** Required: an empty list can mean the checks did not run, so no default may claim an all-clear. */
+  emptyTitle: string;
   emptyDetail?: string;
+  /** Caller-supplied heading per insight (e.g. the brief's template sentence). */
+  titleOf?: (item: PresentedInsight) => string | undefined;
 }) {
   return (
     <div className="flex flex-col gap-3">
       {result.restricted && (
         <p className="rounded-md border border-dashed border-border-strong px-3 py-2 text-[13px] text-muted-foreground">
-          Some findings are restricted to Finance and above.
+          Payment checks are shown to finance roles only.
         </p>
       )}
       {result.items.length === 0 ? (
@@ -111,7 +129,7 @@ export function InsightList({
         <ul className="flex flex-col gap-3">
           {result.items.map((item) => (
             <li key={item.presentation.insightId}>
-              <PresentationCard item={item} />
+              <PresentationCard item={item} title={titleOf?.(item)} />
             </li>
           ))}
         </ul>
