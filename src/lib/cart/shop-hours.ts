@@ -94,6 +94,6 @@ export function shopOrderingState(now: Date, shop: ShopStatus): ShopOrderingStat
 }
 
 /** "today at 11:30 AM" / "tomorrow at 11:30 AM" — the same phrasing the hours refusal uses. */
-function dayAndClock(at: Date, now: Date): string {
+export function dayAndClock(at: Date, now: Date): string {
   return `${businessDate(at) === businessDate(now) ? "today" : "tomorrow"} at ${formatBusinessClock(at)}`;
 }

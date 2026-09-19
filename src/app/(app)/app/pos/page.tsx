@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { DeviceAgent } from "@/components/hardware/device-agent";
 import { PosShell } from "@/components/pos/pos-shell";
 import { PosViewTabs } from "@/components/pos/pos-view-tabs";
+import { ShopSwitch } from "@/components/pos/shop-switch";
 import { TablesView } from "@/components/pos/tables-view";
 import { PermissionDenied } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
@@ -9,6 +10,7 @@ import { getMenu } from "@/lib/repositories/menu";
 import { requireOrg } from "@/lib/repositories/org";
 import { getOrder, type OrderView } from "@/lib/repositories/orders";
 import { getActiveReceiptTemplate } from "@/lib/repositories/receipt";
+import { getOrderingStatusForStaff } from "@/lib/repositories/shop-status";
 import { listTables, listUnassignedDineInOrders } from "@/lib/repositories/tables";
 
 export const metadata: Metadata = { title: "POS", robots: { index: false, follow: false } };
@@ -55,11 +57,15 @@ export default async function PosPage() {
   const canAddTable = await staffCan("settings.manage");
   // A second copy of a bill is a manager's call, like a refund.
   const canDuplicate = await staffCan("orders.refund");
-  const [tables, unassignedOrders, receiptTemplate] = await Promise.all([
+  // Pausing online orders is a counter decision (ops-1 ruling D2): orders.update, which the action checks again.
+  const canSwitchOrdering = await staffCan("orders.update");
+  const [tables, unassignedOrders, receiptTemplate, orderingStatus] = await Promise.all([
     listTables(staff.orgId),
     listUnassignedDineInOrders(staff.orgId),
     // The design the owner last applied on Bill & Receipt; the till prints it without knowing there is a designer.
     getActiveReceiptTemplate(staff.orgId),
+    // The Close Shop switch reads the same state the ordering gate does, never the columns (ops-1 RULE 1).
+    getOrderingStatusForStaff(staff.orgId),
   ]);
 
   const openOrders = await Promise.all(
@@ -70,6 +76,11 @@ export default async function PosPage() {
 
   return (
     <PosViewTabs
+      headerEnd={
+        orderingStatus && (
+          <ShopSwitch orgId={staff.orgId} initialStatus={orderingStatus} renderedAt={new Date().toISOString()} canSwitch={canSwitchOrdering} />
+        )
+      }
       order={
         // The device agent registers a FRYBIRD POS device, watches its printer and prints; a plain browser gets nothing but the truth.
         <DeviceAgent autoRegister>

@@ -19,11 +19,22 @@ import { revalidatePath } from "next/cache";
 import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
-import { type PauseOrderingResult, type ResumeOrderingResult, pauseOrdering, resumeOrdering } from "@/lib/repositories/shop-status";
+import {
+  type PauseOrderingResult,
+  type PausePreview,
+  type ResumeOrderingResult,
+  type StaffOrderingStatus,
+  getOrderingStatusForStaff,
+  pauseOrdering,
+  previewPause,
+  resumeOrdering,
+} from "@/lib/repositories/shop-status";
 
 type ActionFailure = { readonly ok: false; readonly code: "INVALID_INPUT" | "SIGNED_OUT" | "NOT_PERMITTED" | "SERVER_ERROR"; readonly error: string };
 
 export type PauseOrderingActionResult = PauseOrderingResult | ActionFailure;
+export type ReadOrderingStatusActionResult = { readonly ok: true; readonly status: StaffOrderingStatus } | ActionFailure;
+export type PreviewPauseActionResult = { readonly ok: true; readonly preview: PausePreview } | ActionFailure;
 export type ResumeOrderingActionResult = ResumeOrderingResult | ActionFailure;
 
 const pauseSchema = z.object({
@@ -62,6 +73,36 @@ export async function resumeOrderingAction(input: unknown): Promise<ResumeOrderi
     // A PAUSE_CHANGED answer also changes what every screen should show.
     if (result.ok || result.code === "PAUSE_CHANGED") revalidateEverywhere();
     return result;
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * The switch's state, for a POS that has been open a while: another till, or
+ * Admin, may have moved it, and a timed pause may have ended by itself. The
+ * same read the page used (RULE 1) — never the columns. `orders.view`, because
+ * everyone who can see the counter should see whether the shop is open, even
+ * a role that cannot change it.
+ */
+export async function readOrderingStatusAction(): Promise<ReadOrderingStatusActionResult> {
+  try {
+    const staff = await requirePermission("orders.view");
+    const status = await getOrderingStatusForStaff(staff.orgId);
+    if (!status) return { ok: false, code: "SERVER_ERROR", error: "That shop could not be found." };
+    return { ok: true, status };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** The confirm dialog's "Orders restart …" line and still-due count, on the server's clock at the moment it opens. */
+export async function previewPauseAction(): Promise<PreviewPauseActionResult> {
+  try {
+    const staff = await requirePermission("orders.update");
+    const preview = await previewPause(staff.orgId);
+    if (!preview) return { ok: false, code: "SERVER_ERROR", error: "That shop could not be found." };
+    return { ok: true, preview };
   } catch (error) {
     return failure(error);
   }

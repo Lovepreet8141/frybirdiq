@@ -26,7 +26,7 @@ vi.mock("@/lib/cart", async (importOriginal) => {
 });
 
 import { placeOrder } from "./orders";
-import { getOrderingStatus, getOrderingStatusForStaff, pauseOrdering, resumeOrdering } from "./shop-status";
+import { getOrderingStatus, getOrderingStatusForStaff, pauseOrdering, previewPause, resumeOrdering } from "./shop-status";
 
 // 2026-06-10 18:00 IST — well inside the hours.
 const EVENING = new Date("2026-06-10T12:30:00.000Z");
@@ -328,5 +328,36 @@ describe("pauseOrdering / resumeOrdering", () => {
 
     await db().update(orders).set({ status: "COMPLETED" }).where(eq(orders.orgId, org.orgId));
     expect((await getOrderingStatusForStaff(org.orgId, EVENING))?.ordersStillDue).toBe(0);
+  });
+});
+
+describe("the POS switch's server facts (ops-1 S4a)", () => {
+  const cashier = randomUUID();
+  // 2026-06-11 10:00 IST — the next morning's set-up, before the 11:30 opening.
+  const NEXT_MORNING = new Date("2026-06-11T04:30:00.000Z");
+  // 2026-06-10 09:00 IST — a morning pause, before opening.
+  const NINE_AM = new Date("2026-06-10T03:30:00.000Z");
+
+  it("carriedOver is true the next morning for a pause nobody reopened, and false for a pause set today", async () => {
+    await pauseOrdering({ orgId: org.orgId, actorUserId: cashier, reason: "power cut", mode: "UNTIL_RESUMED", now: PAUSED_AT });
+    expect((await getOrderingStatusForStaff(org.orgId, EVENING_AFTER_PAUSE))?.carriedOver).toBe(false);
+    expect((await getOrderingStatusForStaff(org.orgId, NEXT_MORNING))?.carriedOver).toBe(true);
+  });
+
+  it("previewPause at 9 am says the default ends TODAY at 11:30 — the line the confirm must show", async () => {
+    expect(await previewPause(org.orgId, NINE_AM)).toMatchObject({
+      nextOpeningAt: new Date("2026-06-10T06:00:00.000Z"),
+      nextOpeningLabel: "today at 11:30 AM",
+    });
+  });
+
+  it("previewPause mid-service says tomorrow, and counts the orders still due now", async () => {
+    const preview = await previewPause(org.orgId, EVENING);
+    expect(preview).toMatchObject({ nextOpeningAt: NEXT_OPENING, nextOpeningLabel: "tomorrow at 11:30 AM" });
+    expect(preview?.ordersStillDue).toBe((await getOrderingStatusForStaff(org.orgId, EVENING))?.ordersStillDue);
+  });
+
+  it("previewPause for an org that does not exist is null, not a guess", async () => {
+    expect(await previewPause(randomUUID(), EVENING)).toBeNull();
   });
 });

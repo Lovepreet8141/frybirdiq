@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   requirePermission: vi.fn(),
   pauseOrdering: vi.fn(),
   resumeOrdering: vi.fn(),
+  getOrderingStatusForStaff: vi.fn(),
+  previewPause: vi.fn(),
   revalidatePath: vi.fn(),
 }));
 
@@ -15,10 +17,15 @@ vi.mock("@/lib/auth", () => ({
   NotPermitted: class NotPermitted extends Error {},
   requirePermission: mocks.requirePermission,
 }));
-vi.mock("@/lib/repositories/shop-status", () => ({ pauseOrdering: mocks.pauseOrdering, resumeOrdering: mocks.resumeOrdering }));
+vi.mock("@/lib/repositories/shop-status", () => ({
+  pauseOrdering: mocks.pauseOrdering,
+  resumeOrdering: mocks.resumeOrdering,
+  getOrderingStatusForStaff: mocks.getOrderingStatusForStaff,
+  previewPause: mocks.previewPause,
+}));
 
 import { NotPermitted, NotSignedIn } from "@/lib/auth";
-import { pauseOrderingAction, resumeOrderingAction } from "./shop-status-actions";
+import { pauseOrderingAction, previewPauseAction, readOrderingStatusAction, resumeOrderingAction } from "./shop-status-actions";
 
 const staff = { userId: "11111111-1111-4111-8111-111111111111", orgId: "22222222-2222-4222-8222-222222222222", roles: ["CASHIER"] };
 
@@ -107,5 +114,37 @@ describe("resumeOrderingAction", () => {
       expect(await resumeOrderingAction(input)).toMatchObject({ ok: false, code: "INVALID_INPUT" });
     }
     expect(mocks.requirePermission).not.toHaveBeenCalled();
+  });
+});
+
+describe("readOrderingStatusAction — the POS poll", () => {
+  it("anyone who can see orders may read the state, for their own org — and nothing is revalidated", async () => {
+    mocks.getOrderingStatusForStaff.mockResolvedValue({ state: "open" });
+    expect(await readOrderingStatusAction()).toEqual({ ok: true, status: { state: "open" } });
+    expect(mocks.requirePermission).toHaveBeenCalledWith("orders.view");
+    expect(mocks.getOrderingStatusForStaff).toHaveBeenCalledWith(staff.orgId);
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("a missing shop is an error, not an empty state", async () => {
+    mocks.getOrderingStatusForStaff.mockResolvedValue(null);
+    expect(await readOrderingStatusAction()).toMatchObject({ ok: false, code: "SERVER_ERROR" });
+  });
+});
+
+describe("previewPauseAction — the confirm line, before anything changes", () => {
+  it("needs orders.update, like the switch itself, and writes nothing", async () => {
+    mocks.previewPause.mockResolvedValue({ nextOpeningAt: new Date(), nextOpeningLabel: "today at 11:30 AM", ordersStillDue: 2 });
+    expect(await previewPauseAction()).toMatchObject({ ok: true, preview: { nextOpeningLabel: "today at 11:30 AM" } });
+    expect(mocks.requirePermission).toHaveBeenCalledWith("orders.update");
+    expect(mocks.previewPause).toHaveBeenCalledWith(staff.orgId);
+    expect(mocks.pauseOrdering).not.toHaveBeenCalled();
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("refused without orders.update", async () => {
+    mocks.requirePermission.mockRejectedValue(new NotPermitted("orders.update"));
+    expect(await previewPauseAction()).toMatchObject({ ok: false, code: "NOT_PERMITTED" });
+    expect(mocks.previewPause).not.toHaveBeenCalled();
   });
 });
