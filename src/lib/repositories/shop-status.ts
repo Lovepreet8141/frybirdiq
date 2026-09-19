@@ -28,7 +28,7 @@ import { and, eq, notInArray, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, memberships, orders, organizations } from "@/db/schema";
 import { TERMINAL_STATUSES } from "@/domain/order-status";
-import { type PauseMode, type ShopStatus, pausedUntilFor } from "@/lib/orders/opening-hours";
+import { type PauseMode, type ShopStatus, isPaused, pausedUntilFor } from "@/lib/orders/opening-hours";
 import { type ShopOrderingState, shopOrderingState } from "@/lib/cart/shop-hours";
 
 type OrgRow = typeof organizations.$inferSelect;
@@ -54,6 +54,17 @@ export function shopStatusFromOrg(org: Pick<OrgRow, "openingTime" | "closingTime
  */
 function pausedNow(now: Date): SQL {
   return sql`(${organizations.orderingPausedAt} IS NOT NULL AND (${organizations.orderingPausedUntil} IS NULL OR ${organizations.orderingPausedUntil} > ${instant(now)}))`;
+}
+
+/**
+ * The pause in force has an end, and a new pause ending at `newUntil` would
+ * outlast it — never (`null`) or later. Only meaningful OR-ed with "not paused
+ * right now"; on its own it would also match an expired timed pause, which the
+ * other branch already covers.
+ */
+function endsLaterThanPauseInForce(newUntil: Date | null): SQL {
+  const outlasts = newUntil === null ? sql`TRUE` : sql`${instant(newUntil)} > ${organizations.orderingPausedUntil}`;
+  return sql`(${organizations.orderingPausedUntil} IS NOT NULL AND ${outlasts})`;
 }
 
 /**
@@ -156,6 +167,19 @@ export type PauseOrderingResult =
  * pause that has already reopened leaves `paused_at` in the row, and a check
  * on that column alone would refuse to pause a shop that is taking orders.
  *
+ * A STRICTER PAUSE REPLACES A WEAKER ONE (RELIABILITY, ops-1 S3, blocking).
+ * Till A pauses "out of chicken, until we next open"; half an hour later till
+ * B pauses "kitchen fire, until I switch it back on". If any pause in force
+ * blocked every later one, B's pause would be dropped, B would see "paused"
+ * and believe the fire was on record, and the shop would reopen itself into
+ * that kitchen at 11:30. So the update also matches when the pause in force
+ * has an end and the new one ends later, or never. The replacement writes a
+ * NEW paused_at, by and reason, and its audit row says what it replaced: the
+ * resume rule depends on paused_at changing whenever the pause does, or a
+ * Resume pressed on A's out-of-date screen would lift B's fire pause. A
+ * weaker or equal pause (ending sooner, or at the same next opening) still
+ * changes nothing.
+ *
  * `paused_at` is the app's own `now` — a JS Date, so milliseconds — which is
  * what makes `resumeOrdering`'s exact match work; `now()` in SQL would store
  * microseconds that the millisecond value read back can never equal.
@@ -176,10 +200,20 @@ export async function pauseOrdering(input: {
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const outcome = await db().transaction(async (tx) => {
+      // Locked, so the audit row can say exactly which pause this one replaced.
+      // The UPDATE's own conditions still decide whether anything changes.
       const [org] = await tx
-        .select({ openingTime: organizations.openingTime, closingTime: organizations.closingTime })
+        .select({
+          openingTime: organizations.openingTime,
+          closingTime: organizations.closingTime,
+          orderingPausedAt: organizations.orderingPausedAt,
+          orderingPausedBy: organizations.orderingPausedBy,
+          orderingPausedReason: organizations.orderingPausedReason,
+          orderingPausedUntil: organizations.orderingPausedUntil,
+        })
         .from(organizations)
         .where(eq(organizations.id, input.orgId))
+        .for("update")
         .limit(1);
       if (!org) return "missing" as const;
 
@@ -193,9 +227,21 @@ export async function pauseOrdering(input: {
           orderingPausedUntil: pausedUntil,
           updatedAt: now,
         })
-        .where(and(eq(organizations.id, input.orgId), sql`NOT ${pausedNow(now)}`))
+        .where(and(eq(organizations.id, input.orgId), sql`(NOT ${pausedNow(now)} OR ${endsLaterThanPauseInForce(pausedUntil)})`))
         .returning({ id: organizations.id });
       if (!paused) return "notChanged" as const;
+
+      // What this pause replaced, if one was still in force — "out of chicken
+      // until we next open", superseded by "kitchen fire until switched back on".
+      const replaced = isPaused(shopStatusFromOrg(org), now) && org.orderingPausedAt
+        ? {
+            pausedAt: org.orderingPausedAt.toISOString(),
+            pausedBy: org.orderingPausedBy,
+            mode: org.orderingPausedUntil ? "UNTIL_NEXT_OPENING" : "UNTIL_RESUMED",
+            reopensAt: org.orderingPausedUntil?.toISOString() ?? null,
+            reason: org.orderingPausedReason,
+          }
+        : null;
 
       await tx.insert(auditLogs).values({
         orgId: input.orgId,
@@ -203,6 +249,7 @@ export async function pauseOrdering(input: {
         action: "ordering_paused",
         entity: "organizations",
         entityId: input.orgId,
+        before: replaced,
         after: {
           mode: input.mode,
           pausedAt: now.toISOString(),
