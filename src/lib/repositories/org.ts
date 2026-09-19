@@ -23,6 +23,7 @@ import { locations, organizations } from "@/db/schema";
 import { type Paise, paise } from "@/lib/money";
 import { DEFAULT_PRICE_BASIS, type PriceBasis, type PricingContext, pricingContext } from "@/lib/pricing";
 import { isSupabaseConfigured } from "@/lib/env";
+import { readStoredPhone } from "@/lib/settings/phone";
 
 export const ORG_SLUG = "frybird";
 
@@ -126,5 +127,5 @@ export const getStoreContact = cache(async (): Promise<StoreContact | null> => {
     .orderBy(locations.createdAt)
     .limit(1);
   if (!location) return null;
-  return location;
+  return { ...location, phone: readStoredPhone(location.phone) };
 });
