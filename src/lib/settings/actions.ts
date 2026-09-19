@@ -19,6 +19,7 @@ import {
   updatePaymentSettings,
 } from "@/lib/repositories/settings";
 import { type DeliveryBandInput, updateDeliveryPricing } from "@/lib/repositories/delivery";
+import { overnightHoursError } from "./hours";
 
 export type OperationsSettingsState = { status: "idle" } | { status: "error"; message: string } | { status: "success"; message: string };
 
@@ -65,7 +66,11 @@ const businessProfileSchema = z
     openingTime: z.string().trim().regex(HOURS_PATTERN, "Enter a time as HH:MM, 24-hour."),
     closingTime: z.string().trim().regex(HOURS_PATTERN, "Enter a time as HH:MM, 24-hour."),
   })
-  .refine((value) => value.openingTime !== value.closingTime, { message: "Opening and closing time can't be the same.", path: ["closingTime"] });
+  // Overnight hours are refused on purpose — the reason and the route forward (card td-1) are in ./hours.
+  .superRefine((value, ctx) => {
+    const message = overnightHoursError(value.openingTime, value.closingTime);
+    if (message) ctx.addIssue({ code: "custom", message, path: ["closingTime"] });
+  });
 
 /**
  * Trading name and opening hours. Read by the website's homepage and its
