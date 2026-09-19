@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { isUuid } from "@/lib/uuid";
 import { Check, Circle, Clock, FileText, Flame, Gift } from "lucide-react";
 import { formatINR } from "@/lib/money";
 import { type Paise, paise } from "@/lib/money";
@@ -69,6 +70,8 @@ function stepsFor(fulfilment: FulfilmentType) {
 
 export default async function OrderPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ pay?: string }> }) {
   const [{ id }, { pay }] = await Promise.all([params, searchParams]);
+  // A mangled link is not a uuid; querying a uuid column with it throws (a 500), so it is a 404 here.
+  if (!isUuid(id)) notFound();
   const [order, customer, remembered] = await Promise.all([getOrder(id), getCustomer(), readRememberedContact()]);
   if (!order) notFound();
   // The number comes from the outlet row; null when unset or unusable, and then

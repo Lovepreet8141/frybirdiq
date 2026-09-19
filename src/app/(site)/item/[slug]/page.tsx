@@ -7,17 +7,26 @@ import { Customizer } from "@/components/menu/customizer";
 import { SpiceMark, VegMark } from "@/components/menu/marks";
 import { Price } from "@/components/menu/price";
 import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
-import { getProduct } from "@/lib/repositories/menu";
+import { getProductCached } from "@/lib/repositories/menu-cache";
+import { itemShareImage } from "@/lib/seo/item-share";
+import { absoluteUrl } from "@/lib/seo/site";
 import { getOrg } from "@/lib/repositories/org";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const product = await getProduct(slug, "ONLINE");
-  if (!product) return { title: "Not found" };
+  const product = await getProductCached(slug, "ONLINE");
+  if (!product) return { title: "Not found", robots: { index: false } };
 
+  const description = product.description ?? `${product.name} at FRYBIRD, Sector 9, Ambala City.`;
+  // This page's openGraph/twitter objects replace the root layout's, so they
+  // must carry an image themselves: the item's photo, else the site share image.
+  const image = itemShareImage(product.image, product.name);
   return {
     title: product.name,
-    description: product.description ?? `${product.name} at FRYBIRD, Sector 9, Ambala City.`,
+    description,
+    alternates: { canonical: `/item/${product.slug}` },
+    openGraph: { type: "website", siteName: "FRYBIRD", locale: "en_IN", title: `${product.name} · FRYBIRD`, description, url: absoluteUrl(`/item/${product.slug}`), images: [image] },
+    twitter: { card: "summary_large_image", title: `${product.name} · FRYBIRD`, description, images: [image.url] },
   };
 }
 
@@ -29,13 +38,13 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
  * routes (`prerender-manifest.json` showed 0 entries for `/item/*`, and the
  * production build output marked this route "ƒ Dynamic", not static) — so
  * it had no effect and only implied a caching behaviour this route doesn't
- * actually have. Every request already calls `getProduct` fresh; that's the
- * correct behaviour for a route revalidated by `revalidateMenuSurfaces()`
- * after every menu mutation and is being kept exactly as-is.
+ * actually have. Requests read the menu through `getProductCached` (a 45 s copy,
+ * cleared by `revalidateMenuSurfaces()` on every menu mutation) so a crowd
+ * on one item does not hit the database each time; the route stays dynamic.
  */
 export default async function ProductPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const [product, org] = await Promise.all([getProduct(slug, "ONLINE"), getOrg()]);
+  const [product, org] = await Promise.all([getProductCached(slug, "ONLINE"), getOrg()]);
   if (!product) notFound();
 
   return (

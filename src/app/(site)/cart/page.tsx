@@ -15,7 +15,7 @@ import { getAvailableStampReward } from "@/lib/repositories/loyalty";
 import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
 import { getOrg } from "@/lib/repositories/org";
 
-export const metadata: Metadata = { title: "Your order" };
+export const metadata: Metadata = { title: "Your order", robots: { index: false } };
 
 export default async function CartPage() {
   const [cart, customer, stampConfig] = await Promise.all([getPricedCart(), getCustomer(), getStampConfig()]);
