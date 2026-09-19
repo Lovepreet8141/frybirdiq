@@ -643,8 +643,8 @@ read -rsp 'ALERT_URL: ' u && printf 'ALERT_URL=%s\n' "$u" > /etc/frybird/alert.e
 cp deploy/frybird-alert@.service deploy/frybird-backup.service deploy/frybird-job@.service deploy/frybird-job-failed@.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl start frybird-alert@test.service     # one test alert; owner confirms it arrived
-systemctl start frybird-job@nosuchjob          # MUST also produce an alert (proves the OnFailure chain fires;
-                                               # a clean systemd-analyze verify does not). Then: systemctl reset-failed 'frybird-job@*'
+systemctl start frybird-job@nosuchjob          # MUST also produce an alert, but NOT for ~12 minutes (see below)
+# afterwards: systemctl reset-failed 'frybird-job@*'
 ```
 
 `frybird-job@.service` is in that `cp` on purpose and is the one that matters:
@@ -653,6 +653,19 @@ single entry, so skipping it leaves job alerts silent. The four units plus
 `notify.sh` are every deploy/ file this card changed. The `nosuchjob` start runs
 after the `cp` and `daemon-reload`, so it exercises the installed unit, not the
 old one (replacing a template unit does not disturb running instances).
+
+**The `nosuchjob` alert takes about twelve minutes. That is correct, not broken.**
+`frybird-job@.service` retries (`Restart=on-failure`, `RestartSec=360`,
+`StartLimitBurst=3`) and only reaches *failed*, which is what fires `OnFailure=`,
+when the third start is refused. Timeline measured on real systemd 255 with these
+exact settings: start at 0:00, first retry 6:00, second refused at 12:00, alert
+at 12:00 (measured 12 min 1 s). While waiting, `systemctl is-active
+frybird-job@nosuchjob` says `activating` and `journalctl -u frybird-job@nosuchjob -f`
+shows `Scheduled restart job`; nothing arrives on the phone until 12:00. Do not
+change anything before then. Only if no alert has arrived by ~15 minutes is
+something wrong: check `systemctl status frybird-alert@job-nosuchjob` and
+`journalctl -t frybird-alert`. Then run the `reset-failed` above. The
+`frybird-alert@test` line alone (immediate) is the quick check of the channel.
 
 **What each check proves.** The container test on real systemd 255 (files copied
 in directly) proves the *unit contents* fire the chain. It does not prove this
