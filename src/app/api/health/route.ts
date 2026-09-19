@@ -5,6 +5,11 @@ import { createHealthCheck } from "@/lib/health/check";
 
 export const dynamic = "force-dynamic";
 
+// Known limit: when the database HANGS (rather than refuses), the 3 s timeout
+// reports "unavailable" but does not cancel the query, so each expired probe
+// keeps its pool connection until the database answers or the socket dies.
+// Bounded to about one probe per cache window (~5 s) and the app is already
+// down in that state, so it is left unfixed on purpose.
 const check = createHealthCheck({ probe: () => db().execute(sql`select 1`) });
 
 /**
