@@ -199,7 +199,7 @@ export function CheckoutForm({
               className={cn(
                 "flex min-h-[56px] cursor-pointer items-center gap-3 rounded-md border px-4 py-3 transition-colors duration-[var(--duration-micro)]",
                 when === option.value ? "border-primary bg-primary/10" : "border-border bg-surface hover:border-border-strong",
-                option.value === "ASAP" && !asapOk && "cursor-not-allowed opacity-50",
+                option.value === "ASAP" && !asapOk && "cursor-not-allowed",
               )}
             >
               <input
@@ -211,9 +211,10 @@ export function CheckoutForm({
                 onChange={() => setWhen(option.value)}
                 className="size-4 accent-[var(--primary)]"
               />
-              <option.icon className="size-4 shrink-0 text-primary" aria-hidden="true" />
+              <option.icon className={cn("size-4 shrink-0 text-primary", option.value === "ASAP" && !asapOk && "opacity-50")} aria-hidden="true" />
               <span className="flex flex-col">
-                <span className="font-semibold">{option.label}</span>
+                {/* Only the icon and title dim; the reason line stays at full contrast. */}
+                <span className={cn("font-semibold", option.value === "ASAP" && !asapOk && "opacity-50")}>{option.label}</span>
                 <span className="text-sm text-muted-foreground">{option.detail}</span>
               </span>
             </label>
