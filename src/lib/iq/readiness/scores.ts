@@ -15,24 +15,26 @@ export type ReadinessId = (typeof READINESS_IDS)[number];
 
 /** An insight that depends on a score under this is marked limited. */
 export const LIMITED_BELOW_PERCENT = 80;
+/** Under this many orders or items, the row says the figure rests on only a few. */
+export const SMALL_SAMPLE = 10;
 /** The stock count turns red when the last one is older than this many days. */
 export const STOCK_COUNT_RED_DAYS = 7;
 
 export const READINESS_LABELS: Readonly<Record<ReadinessId, string>> = {
   closedSameDay: "Orders closed the same day",
   cashRecorded: "Cash recorded for completed cash orders",
-  recipeCoverage: "Top-20 items with a recipe",
-  stockCount: "Stock counted in the last 7 days",
+  recipeCoverage: "Your 20 best sellers with a recipe",
+  stockCount: "Stock counts recorded in the last 7 days",
   customerAttached: "Orders with a customer attached",
 };
 
 /** What each score counts, in one plain sentence (shown under the figure). */
 export const READINESS_DEFINITIONS: Readonly<Record<ReadinessId, string>> = {
-  closedSameDay: "Orders from the last 7 finished days that were completed or cancelled before that day ended.",
-  cashRecorded: "Completed orders paid by cash, from the last 7 finished days, that have the cash recorded as received.",
-  recipeCoverage: "Of the 20 items sold most in the last 30 days, how many have a costed recipe.",
-  stockCount: "Of the ingredients kept in stock, how many had a physical count that changed the balance in the last 7 days. A count that matches the balance leaves no record.",
-  customerAttached: "Orders from the last 7 finished days with a customer on them.",
+  closedSameDay: "Orders from the last 7 finished days that were completed, cancelled, failed or refunded before midnight of the day they were placed.",
+  cashRecorded: "Of completed orders from the last 7 finished days that have a cash payment entry, how many show the cash as received. Orders with no payment entry at all are not counted here.",
+  recipeCoverage: "Of the 20 items sold most (by units) in the last 30 finished days, how many have a recipe saved. The change on last week is rebuilt from the dates recipes were created.",
+  stockCount: "Of the ingredients you keep in stock, how many had a stock count recorded in the last 7 days (up to now). A count that matches the amount in stock leaves no record, so this can read low even when you counted everything.",
+  customerAttached: "Orders from the last 7 finished days that were not cancelled or failed, and that have a customer saved on them.",
 };
 
 /** Counts for one score: this period, and the same measure a week earlier. */
@@ -73,6 +75,8 @@ export interface ReadinessAction {
   readonly scoreId: ReadinessId;
   readonly text: string;
   readonly href: string;
+  /** The words on the link, naming where it goes. */
+  readonly linkLabel: string;
 }
 
 export interface Readiness {
@@ -86,7 +90,10 @@ export interface Readiness {
 
 export function percentOf(numerator: number, denominator: number): number | null {
   if (denominator <= 0) return null;
-  return Math.round((numerator * 100) / denominator);
+  const rounded = Math.round((numerator * 100) / denominator);
+  // A partial result never reads as 0% or 100%: "1 of 300" is not none, and "299 of 300" is not all.
+  if (numerator > 0 && numerator < denominator) return Math.min(99, Math.max(1, rounded));
+  return rounded;
 }
 
 function stateOf(percent: number | null): ScoreState {
@@ -112,25 +119,25 @@ function score(id: ReadinessId, raw: RawScore): Score {
 const ACTIONS: Readonly<Record<ReadinessId, (raw: ReadinessRaw) => ReadinessAction>> = {
   closedSameDay: (raw) => {
     const open = raw.closedSameDay.denominator - raw.closedSameDay.numerator;
-    return { scoreId: "closedSameDay", text: `${open} of ${raw.closedSameDay.denominator} orders in the last 7 days were not closed the same day. Open Orders and finish or cancel the old ones.`, href: "/app/orders" };
+    return { scoreId: "closedSameDay", text: `${open} of ${raw.closedSameDay.denominator} orders in the last 7 days were still open after their day ended. Close orders before you shut each night. Any order still open now is on the Orders page.`, href: "/app/orders", linkLabel: "Open Orders" };
   },
   cashRecorded: (raw) => {
     const missing = raw.cashRecorded.denominator - raw.cashRecorded.numerator;
-    return { scoreId: "cashRecorded", text: `${missing} completed cash ${missing === 1 ? "order has" : "orders have"} no cash recorded. Record it against the person who took it.`, href: "/app/finance" };
+    return { scoreId: "cashRecorded", text: `${missing} completed cash ${missing === 1 ? "order has" : "orders have"} no cash recorded as received. Record it against the person who took it.`, href: "/app/finance", linkLabel: "Open Finance" };
   },
   recipeCoverage: (raw) => {
     const missing = raw.recipeCoverage.denominator - raw.recipeCoverage.numerator;
     const start = raw.recipeCoverage.firstMissingItem ? `, starting with ${raw.recipeCoverage.firstMissingItem}` : "";
-    return { scoreId: "recipeCoverage", text: `${missing} of your top ${raw.recipeCoverage.denominator} items ${missing === 1 ? "has" : "have"} no costed recipe${start}. Add the ingredients so food cost is real.`, href: "/app/inventory" };
+    return { scoreId: "recipeCoverage", text: `${missing} of your top ${raw.recipeCoverage.denominator} items ${missing === 1 ? "has" : "have"} no recipe saved${start}. Add its ingredients so food cost can be worked out.`, href: "/app/inventory", linkLabel: "Open Inventory" };
   },
   stockCount: (raw) => {
     const days = raw.stockCount.daysSinceLastCount;
-    const when = days === null ? "nothing has been counted yet" : days === 0 ? "the last count was today" : `the last count was ${days} ${days === 1 ? "day" : "days"} ago`;
-    return { scoreId: "stockCount", text: `Count stock today: ${when}.`, href: "/app/inventory" };
+    const when = days === null ? "no stock count is on record" : days === 0 ? "the last recorded count was today" : `the last recorded count was ${days} ${days === 1 ? "day" : "days"} ago`;
+    return { scoreId: "stockCount", text: `Count your stock and correct anything that differs: ${when}.`, href: "/app/inventory", linkLabel: "Open Inventory" };
   },
   customerAttached: (raw) => {
     const missing = raw.customerAttached.denominator - raw.customerAttached.numerator;
-    return { scoreId: "customerAttached", text: `${missing} of ${raw.customerAttached.denominator} orders in the last 7 days have no customer on them. Ask for a phone number at the counter.`, href: "/app/pos" };
+    return { scoreId: "customerAttached", text: `${missing} of ${raw.customerAttached.denominator} orders in the last 7 days have no customer saved.`, href: "/app/pos", linkLabel: "Open the till" };
   },
 };
 

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ArrowRight, ArrowDown, ArrowUp, Minus } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { LIMITED_BELOW_PERCENT, type Readiness, type Score, STOCK_COUNT_RED_DAYS } from "@/lib/iq/readiness/scores";
+import { LIMITED_BELOW_PERCENT, type Readiness, type Score, SMALL_SAMPLE, STOCK_COUNT_RED_DAYS } from "@/lib/iq/readiness/scores";
 import { cn } from "@/lib/utils";
 
 /**
@@ -25,7 +25,7 @@ function Trend({ points }: { readonly points: number | null }) {
   return (
     <span className={cn("inline-flex items-center gap-1 font-medium", up ? "text-gain" : "text-loss")}>
       {up ? <ArrowUp className="size-3" aria-hidden="true" /> : <ArrowDown className="size-3" aria-hidden="true" />}
-      {up ? "up" : "down"} {Math.abs(points)} {Math.abs(points) === 1 ? "point" : "points"} on last week
+      {up ? "up" : "down"} {Math.abs(points)} percentage {Math.abs(points) === 1 ? "point" : "points"} on last week
     </span>
   );
 }
@@ -39,32 +39,30 @@ function Row({ score }: { readonly score: Score }) {
         <span className="text-[13px] font-medium">{score.label}</span>
         <span className="tabular font-money text-lg leading-none">{percent === null ? "No data yet" : `${percent}%`}</span>
       </div>
-      <div
-        role="progressbar"
-        aria-label={score.label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percent ?? undefined}
-        aria-valuetext={percent === null ? "no data yet" : `${percent} percent`}
-        className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
-      >
-        <div className={cn("h-full rounded-full", limited ? "bg-flag" : "bg-gain")} style={{ width: `${percent ?? 0}%` }} />
-      </div>
+      {/* A bar only when there is a value: an unmeasured score is text, never an empty or indeterminate bar. */}
+      {percent !== null && (
+        <div role="progressbar" aria-label={score.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-valuetext={`${percent} percent`} className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div className={cn("h-full rounded-full", limited ? "bg-flag" : "bg-gain")} style={{ width: `${percent}%` }} />
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 text-[12.5px] text-muted-foreground">
         <span>
           {score.denominator === 0 ? "Nothing to measure yet" : `${score.numerator} of ${score.denominator}`}
-          {limited ? ` · under ${LIMITED_BELOW_PERCENT}%: insights that rely on it are marked limited` : ""}
+          {score.state === "nodata" ? " · No data yet: cards that rely on this are marked limited" : score.state === "limited" ? ` · Under ${LIMITED_BELOW_PERCENT}%: cards that rely on this are marked limited` : ""}
+          {score.denominator > 0 && score.denominator < SMALL_SAMPLE ? ` · based on only ${score.denominator}` : ""}
         </span>
         <Trend points={score.trendPoints} />
       </div>
-      {score.id === "stockCount" && (
+      {score.id === "stockCount" && score.denominator > 0 && (
         <p className={cn("text-[12.5px]", score.red ? "font-semibold text-loss" : "text-muted-foreground")}>
           {score.daysSinceLastCount === null
-            ? "Red: no stock count on record."
-            : `${score.red ? `Red: last counted ${score.daysSinceLastCount} days ago (over ${STOCK_COUNT_RED_DAYS}).` : `Last counted ${score.daysSinceLastCount === 0 ? "today" : `${score.daysSinceLastCount} ${score.daysSinceLastCount === 1 ? "day" : "days"} ago`}.`}`}
+            ? "Overdue: no stock count is on record."
+            : score.red
+              ? `Overdue: the last recorded count was ${score.daysSinceLastCount} days ago (more than ${STOCK_COUNT_RED_DAYS}).`
+              : `The last recorded count was ${score.daysSinceLastCount === 0 ? "today" : `${score.daysSinceLastCount} ${score.daysSinceLastCount === 1 ? "day" : "days"} ago`}.`}
         </p>
       )}
-      <p className="text-[12px] leading-snug text-muted-foreground/90">{score.definition}</p>
+      <p className="text-[13px] leading-snug text-muted-foreground">{score.definition}</p>
     </li>
   );
 }
@@ -75,7 +73,7 @@ export function ReadinessPanel({ readiness, className }: { readonly readiness: R
     <Card className={cn("h-full", className)} data-iq-readiness="">
       <CardHeader>
         <CardTitle>IQ readiness</CardTitle>
-        <CardDescription>How much of your own record-keeping the numbers can lean on · last 7 finished days · counted from stored records</CardDescription>
+        <CardDescription>How complete your own records are, so you know how far to trust the numbers · most scores use the last 7 finished days · each line says exactly what it counts</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5 lg:grid-cols-[minmax(0,15rem)_1fr] lg:gap-8">
         <div className="flex flex-col gap-3">
@@ -90,8 +88,8 @@ export function ReadinessPanel({ readiness, className }: { readonly readiness: R
             {action ? (
               <>
                 <p className="mt-1 leading-snug">{action.text}</p>
-                <Link href={action.href} className="mt-2 inline-flex min-h-9 items-center gap-1 text-[13px] font-semibold underline underline-offset-2">
-                  Go there
+                <Link href={action.href} className="mt-2 inline-flex min-h-11 items-center gap-1 text-[13px] font-semibold underline underline-offset-2">
+                  {action.linkLabel}
                   <ArrowRight className="size-3.5" aria-hidden="true" />
                 </Link>
               </>

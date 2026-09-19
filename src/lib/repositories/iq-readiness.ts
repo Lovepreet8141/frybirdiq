@@ -30,6 +30,10 @@ interface Window {
   readonly to: string;
 }
 
+function calendarDaysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY_MS);
+}
+
 /** The last 7 finished business days, and the 7 before them. */
 export function readinessWindows(now: Date): { readonly current: Window; readonly previous: Window } {
   const today = businessDate(now);
@@ -145,7 +149,8 @@ async function stockCount(orgId: string, now: Date): Promise<ReadinessRaw["stock
     denominator: n(row?.stocked),
     previousNumerator: n(row?.counted_before),
     previousDenominator: n(row?.stocked),
-    daysSinceLastCount: last ? Math.max(0, Math.floor((now.getTime() - last.getTime()) / DAY_MS)) : null,
+    // Calendar days in the shop's own timezone, so a count at 9 am yesterday reads "1 day", not "0 days" at 8 am today.
+    daysSinceLastCount: last ? Math.max(0, calendarDaysBetween(businessDate(last), businessDate(now))) : null,
   };
 }
 

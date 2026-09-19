@@ -21,6 +21,19 @@ describe("percentOf", () => {
   });
 });
 
+describe("a partial result never reads as none or all", () => {
+  it("1 of 300 is 1%, 299 of 300 is 99%; only 0 of n and n of n are 0% and 100%", () => {
+    expect(percentOf(1, 300)).toBe(1);
+    expect(percentOf(299, 300)).toBe(99);
+    expect(percentOf(0, 300)).toBe(0);
+    expect(percentOf(300, 300)).toBe(100);
+  });
+  it("so an almost-complete score still gets an action", () => {
+    const r = buildReadiness(raw({ closedSameDay: { ...z, numerator: 299, denominator: 300 }, cashRecorded: { ...z, numerator: 2, denominator: 2 }, recipeCoverage: { ...z, numerator: 20, denominator: 20, firstMissingItem: null }, stockCount: { ...z, numerator: 9, denominator: 9, daysSinceLastCount: 1 }, customerAttached: { ...z, numerator: 5, denominator: 5 } }));
+    expect(r.action?.scoreId).toBe("closedSameDay");
+  });
+});
+
 describe("buildReadiness", () => {
   const r = buildReadiness(raw());
 
@@ -69,17 +82,17 @@ describe("buildReadiness", () => {
 
 describe("the one action", () => {
   it("is the weakest measured score, in the owner's terms, with where to go", () => {
-    expect(buildReadiness(raw()).action).toEqual({ scoreId: "stockCount", text: "Count stock today: the last count was 9 days ago.", href: "/app/inventory" });
+    expect(buildReadiness(raw()).action).toEqual({ scoreId: "stockCount", text: "Count your stock and correct anything that differs: the last recorded count was 9 days ago.", href: "/app/inventory", linkLabel: "Open Inventory" });
   });
   it("names the count of what is missing and the first missing item", () => {
     const a = buildReadiness(raw({ stockCount: { ...raw().stockCount, numerator: 30 }, customerAttached: { ...z, numerator: 9, denominator: 10 } })).action;
     expect(a).toMatchObject({ scoreId: "recipeCoverage", href: "/app/inventory" });
-    expect(a?.text).toBe("8 of your top 20 items have no costed recipe, starting with Nashville Bomb. Add the ingredients so food cost is real.");
+    expect(a?.text).toBe("8 of your top 20 items have no recipe saved, starting with Nashville Bomb. Add its ingredients so food cost can be worked out.");
   });
   it("singular wording, and a never-counted stock", () => {
     const a = buildReadiness(raw({ cashRecorded: { ...z, numerator: 4, denominator: 5 }, closedSameDay: { ...z, numerator: 10, denominator: 10 }, recipeCoverage: { ...z, numerator: 20, denominator: 20, firstMissingItem: null }, stockCount: { ...raw().stockCount, numerator: 30, daysSinceLastCount: 0 }, customerAttached: { ...z, numerator: 10, denominator: 10 } })).action;
-    expect(a?.text).toBe("1 completed cash order has no cash recorded. Record it against the person who took it.");
-    expect(buildReadiness(raw({ stockCount: { ...raw().stockCount, numerator: 0, daysSinceLastCount: null }, customerAttached: { ...z, numerator: 10, denominator: 10 }, recipeCoverage: { ...z, numerator: 20, denominator: 20, firstMissingItem: null } })).action?.text).toBe("Count stock today: nothing has been counted yet.");
+    expect(a?.text).toBe("1 completed cash order has no cash recorded as received. Record it against the person who took it.");
+    expect(buildReadiness(raw({ stockCount: { ...raw().stockCount, numerator: 0, daysSinceLastCount: null }, customerAttached: { ...z, numerator: 10, denominator: 10 }, recipeCoverage: { ...z, numerator: 20, denominator: 20, firstMissingItem: null } })).action?.text).toBe("Count your stock and correct anything that differs: no stock count is on record.");
   });
   it("ties break in the fixed order; unmeasured scores never win", () => {
     const tied = buildReadiness(raw({ closedSameDay: { ...z, numerator: 5, denominator: 10 }, customerAttached: { ...z, numerator: 5, denominator: 10 }, recipeCoverage: { ...z, numerator: 20, denominator: 20, firstMissingItem: null }, stockCount: { ...raw().stockCount, numerator: 30 }, cashRecorded: z }));
@@ -101,7 +114,7 @@ describe("the one action", () => {
 describe("limited badges", () => {
   const r = buildReadiness(raw());
   it("a card is limited by each score it rests on that is under 80% or has no data, and says which", () => {
-    expect(limitedReasons(r, "netProfit")).toEqual(["Top-20 items with a recipe: 60%", "Stock counted in the last 7 days: 10%"]);
+    expect(limitedReasons(r, "netProfit")).toEqual(["Your 20 best sellers with a recipe: 60%", "Stock counts recorded in the last 7 days: 10%"]);
     expect(limitedReasons(r, "paymentMethods")).toEqual([]); // cash 100, closed 90
     expect(limitedReasons(buildReadiness(raw({ cashRecorded: z })), "paymentMethods")).toEqual(["Cash recorded for completed cash orders: no data yet"]);
   });
@@ -116,7 +129,7 @@ describe("limited badges", () => {
 
 describe("the brief line", () => {
   it("carries the overall percent and the one action, all from the scores", () => {
-    expect(readinessBriefLine(buildReadiness(raw()))).toBe("IQ readiness 60% (from 5 of 5 scores). Today's action: Count stock today: the last count was 9 days ago.");
+    expect(readinessBriefLine(buildReadiness(raw()))).toBe("IQ readiness 60% (from 5 of 5 scores). Today's action: Count your stock and correct anything that differs: the last recorded count was 9 days ago.");
   });
   it("says so when nothing can be scored yet", () => {
     expect(readinessBriefLine(buildReadiness({ closedSameDay: z, cashRecorded: z, recipeCoverage: { ...z, firstMissingItem: null }, stockCount: { ...z, daysSinceLastCount: null }, customerAttached: z }))).toBe("IQ readiness: not enough recorded data to score yet.");

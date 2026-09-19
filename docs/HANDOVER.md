@@ -453,3 +453,10 @@ PARKED, do not start: item descriptions, order #1226, offsite backups (until the
 
 State now: Release 5 live (`eddba18`, migration 0040, Tuesday marked). Working tree on `kit-radix-nova` @ `04975ad`. Starting card 1.
 
+## 18. Card 1a built (2026-09-20): IQ readiness panel (UI-only, read-only, no migration)
+
+- **Branch:** `release/rc-19-iq-readiness`. Panel on the IQ overview (under the KPI row) and on the AI brief page (with the one-line "readiness + action"); "Limited data" badge (visible reasons) on Payment methods, Top products, Attention, Channels and Net profit. Live-table counts, because `iq_daily_trust` is EMPTY in production and no fact job is scheduled there (only heartbeat and backup timers exist).
+- **Reviews:** owner-guide review (a general-purpose reviewer; no agent by that name exists in `.claude/agents`): 3 must-fix (stock-count score punishing good counting; cash score blind to orders with no payment row; badge reasons hidden on phones), 8 should-fix. All wording/definition/badge items fixed; QA 7/7 on `f87cd2c`, re-run on the fixed commit.
+- **Known limits, stated on the screen or here:** (1) `countStock` writes nothing when a count matches the balance, so the stock score is a floor (card `stock-count-trace`, low: write an audit row for a zero-difference count, then score from that); (2) the cash score cannot see a completed order that has no payment row at all (card `cash-no-payment-row`, low: needs a definition of "cash order" that does not depend on the payment row); (3) Revenue / Paid orders / Average order KPIs are not badged even though they too rest on closed and paid orders; (4) recipe trend is rebuilt from recipe creation dates; (5) the brief page shows the line AND the panel (repeat, harmless).
+- **Card 1b still to do:** IQ-2 integration itself (daily brief job, reconciliation, detectors; nine unmerged branches, one blocking finding `iq2-s5c`). Needs server job changes, so it is a go/no-go.
+

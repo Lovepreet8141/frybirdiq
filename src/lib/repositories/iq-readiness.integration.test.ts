@@ -124,6 +124,21 @@ describe("stock counted in the last 7 days", () => {
   });
 });
 
+describe("days since the last count are calendar days in the shop's own timezone", () => {
+  it("a count at 23:30 last night reads 1 day at 00:10, not 0", async () => {
+    const solo = await createTestOrg();
+    try {
+      const ing = await createTestIngredient(solo.orgId);
+      await db().insert(inventoryItems).values({ orgId: solo.orgId, ingredientId: ing.id, locationId: solo.locationId, quantityOnHand: 100 });
+      await db().insert(inventoryMovements).values({ orgId: solo.orgId, ingredientId: ing.id, locationId: solo.locationId, type: "ADJUSTMENT", quantity: -1, notes: "Physical count: 99 g counted, 100 g on hand.", occurredAt: ist("2026-09-20", "23:30") });
+      expect((await getReadinessRaw(solo.orgId, ist("2026-09-21", "00:10"))).stockCount.daysSinceLastCount).toBe(1);
+      expect((await getReadinessRaw(solo.orgId, ist("2026-09-20", "23:45"))).stockCount.daysSinceLastCount).toBe(0);
+    } finally {
+      await deleteTestOrg(solo.orgId);
+    }
+  });
+});
+
 describe("scoping and shape", () => {
   it("another org sees none of this org's rows", async () => {
     const raw = await getReadinessRaw(other.orgId, NOW);
