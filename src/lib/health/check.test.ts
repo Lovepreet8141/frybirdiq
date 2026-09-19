@@ -14,6 +14,11 @@ describe("createHealthCheck", () => {
     expect(JSON.stringify(r)).not.toMatch(/password|secret|postgres/);
   });
 
+  it("is unavailable when the probe throws synchronously (e.g. serverEnv() broken) rather than rejecting", async () => {
+    const check = createHealthCheck({ probe: () => { throw new Error("DATABASE_URL is required"); } });
+    expect(await check()).toEqual({ ok: false, body: { status: "unavailable" } });
+  });
+
   it("is unavailable when the probe hangs past the timeout", async () => {
     vi.useFakeTimers();
     try {

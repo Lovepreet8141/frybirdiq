@@ -26,7 +26,10 @@ After=frybird.service
 # unit gives up around the same point rather than retrying forever.
 # (OnFailure=, StartLimit*= are [Unit]-section keys, not [Service] — systemd
 # silently ignores them in the wrong section instead of failing to start.)
-OnFailure=frybird-job-failed@%i.service
+# Two units, both started once retries are exhausted. failed@ only logs (and
+# succeeds, so it cannot carry an OnFailure of its own: OnFailure fires only
+# on a unit that ENDS failed). The alert hangs here, off the unit that really fails.
+OnFailure=frybird-job-failed@%i.service frybird-alert@job-%i.service
 StartLimitIntervalSec=1200
 StartLimitBurst=3
 

@@ -609,6 +609,101 @@ rest of the disable/rollback steps if you need to back out after step 6; to
 roll back step 4 alone, restore the newest `frybird.bak-*` file and
 `nginx -t && systemctl reload nginx` again (§5a).
 
+## 11. Alerting (card `p0-1`) — written, NOT installed
+
+Before this, nothing told a human that production was down, that a job
+failed, or that the nightly backup failed: the failure units wrote one journal
+line. Three parts. **Nothing here has been run on the VPS.**
+
+**11.1 `/api/health` — code, ships with the next deploy.** `GET` returns
+`200 {"status":"ok"}` only if the app answered and Postgres answered
+`select 1`; otherwise `503 {"status":"unavailable"}`. Public, no auth, no
+version/commit/schema/error text, `Cache-Control: no-store`, answer cached 5 s
+so the URL cannot hammer the database, 3 s probe timeout. It does **not** check
+that scheduled jobs are running (see 11.4).
+
+**11.2 On-box failure alerts — files in `deploy/`, VPS change, needs an owner
+channel.** `deploy/notify.sh` POSTs one plain-text line (unit, host, UTC time;
+never journal contents) to `ALERT_URL` from `/etc/frybird/alert.env`.
+`frybird-alert@.service` (hardened; the only unit that reads `alert.env`) runs it; `frybird-backup.service` gets
+`OnFailure=frybird-alert@%n.service`; `frybird-job-failed@.service` (already
+fired by `frybird-job@.service`'s `OnFailure=`) is unchanged (logs only); the alert is a second entry in
+`frybird-job@.service`'s `OnFailure=` list, `frybird-alert@job-%i.service`, because
+`OnFailure=` fires only on a unit that ends *failed* and the logger succeeds.
+Both paths share one alert unit. The
+URL is passed to curl on stdin (`--config -`), never on the command line, so
+it is not readable from `ps` or `/proc/<pid>/cmdline`.
+Install, in this order, as root, after the owner has given the URL:
+
+```bash
+install -m 750 deploy/notify.sh /usr/local/bin/frybird-notify
+install -m 600 -o root -g root /dev/null /etc/frybird/alert.env
+# history-safe: read -s does not echo or record the value; printf is a builtin, so it is not in ps
+read -rsp 'ALERT_URL: ' u && printf 'ALERT_URL=%s\n' "$u" > /etc/frybird/alert.env; unset u; echo
+cp deploy/frybird-alert@.service deploy/frybird-backup.service deploy/frybird-job@.service deploy/frybird-job-failed@.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl start frybird-alert@test.service     # one test alert; owner confirms it arrived
+systemctl start frybird-job@nosuchjob          # MUST also produce an alert, but NOT for ~12 minutes (see below)
+# afterwards: systemctl reset-failed 'frybird-job@*'
+```
+
+`frybird-job@.service` is in that `cp` on purpose and is the one that matters:
+it carries the `OnFailure=` list and is already live from section 9 with the old
+single entry, so skipping it leaves job alerts silent. The four units plus
+`notify.sh` are every deploy/ file this card changed. The `nosuchjob` start runs
+after the `cp` and `daemon-reload`, so it exercises the installed unit, not the
+old one (replacing a template unit does not disturb running instances).
+
+**The `nosuchjob` alert takes about twelve minutes. That is correct, not broken.**
+`frybird-job@.service` retries (`Restart=on-failure`, `RestartSec=360`,
+`StartLimitBurst=3`) and only reaches *failed*, which is what fires `OnFailure=`,
+when the third start is refused. Timeline measured on real systemd 255 with these
+exact settings: start at 0:00, first retry 6:00, second refused at 12:00, alert
+at 12:00 (measured 12 min 1 s). While waiting, `systemctl is-active
+frybird-job@nosuchjob` says `activating` and `journalctl -u frybird-job@nosuchjob -f`
+shows `Scheduled restart job`; nothing arrives on the phone until 12:00. Do not
+change anything before then. Only if no alert has arrived by ~15 minutes is
+something wrong: check `systemctl status frybird-alert@job-nosuchjob` and
+`journalctl -t frybird-alert`. Then run the `reset-failed` above. The
+`frybird-alert@test` line alone (immediate) is the quick check of the channel.
+
+**What each check proves.** The container test on real systemd 255 (files copied
+in directly) proves the *unit contents* fire the chain. It does not prove this
+*install step* puts those contents on the VPS. Only the `nosuchjob` start,
+run on the VPS after this `cp`, proves that, and only a real alert arriving
+proves the channel. Neither substitutes for the other.
+
+Without `alert.env` the units still log and `frybird-notify` exits non-zero,
+so the unconfigured state shows in `systemctl --failed` instead of passing
+silently. `OnFailure=` on `frybird.service` itself was deliberately not added:
+it has `Restart=always, RestartSec=5`, which never reaches systemd's start limit,
+so the hook would never fire. An app that is down is caught by 11.3.
+
+**11.3 External uptime monitor — design only, nothing created.** Service:
+UptimeRobot, free plan (or Better Stack; same shape). Monitors: (a) HTTPS
+`https://frybirdiq.tech/api/health`, expect status 200 and keyword `ok`;
+(b) HTTPS `https://frybirdiq.tech/` expect 200. Interval 5 min (free-plan
+floor), alert after 2 consecutive failures (so ~10 min to alert), plus
+recovery notice. Alert lands: owner's email + the provider's mobile push app.
+Also turn on its SSL-expiry reminder if the plan offers one (certbot renews
+automatically; this is the check that it actually did). It polls from outside,
+so it is the only part that catches "the whole VPS is down".
+
+**Owner approvals and credentials for 11.2/11.3 (nothing below exists yet):**
+1. Approve creating an UptimeRobot account (owner's email) and the two monitors.
+2. Say where alerts go: which email, and install the provider's phone app for push.
+3. Choose the on-box channel and supply its URL for `ALERT_URL`: simplest is
+   an ntfy.sh topic (no account; pick a long random topic name, install the ntfy
+   phone app, subscribe). That URL is a secret. Telegram/Slack need their own
+   bot/webhook and a small change to `notify.sh`.
+4. Approve the VPS change in 11.2 (god runs it under the §10 rules).
+
+**11.4 Not covered.** No app error tracker (Sentry, needs account + a dependency,
+own card). No dead-man check that the hourly heartbeat still ran: the job unit
+is `IPAddressDeny=any` except localhost, so pinging out from it needs a
+hardening change; decide separately. `/api/health` proves the DB is
+reachable, not that jobs are running.
+
 ## What this does not have yet
 
 - **No zero-downtime deploy.** `systemctl restart` stops the old process before

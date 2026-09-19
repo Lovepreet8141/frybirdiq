@@ -1,0 +1,30 @@
+# Sends a failure alert to a human. Instance name is the unit that failed:
+#   OnFailure=frybird-alert@%n.service   (%n = the failing unit, e.g. frybird-backup.service)
+#   OnFailure=frybird-alert@job-%i.service (from frybird-job@, e.g. job-heartbeat)
+#
+# Not installed by itself. Needs, on the VPS (owner-approved, docs/DEPLOY.md s11):
+#   install -m 750 deploy/notify.sh /usr/local/bin/frybird-notify
+#   install -m 600 -o root -g root /dev/null /etc/frybird/alert.env   # then ALERT_URL=...
+#   cp deploy/frybird-alert@.service /etc/systemd/system/ && systemctl daemon-reload
+#
+# The URL is a secret (whoever has it can post to the owner's phone), so it
+# lives in a root-only file and is read by systemd, never written here. This is
+# the ONE unit that holds it (hardened below); every alert path goes through it.
+
+[Unit]
+Description=FRYBIRD failure alert (%i)
+# No After=network-online: this runs because something already failed and must
+# not wait on, or be blocked by, anything else.
+
+[Service]
+Type=oneshot
+User=root
+# The dash: a missing file must still reach frybird-notify, which then logs
+# the failure and exits non-zero, instead of systemd refusing to start at all.
+EnvironmentFile=-/etc/frybird/alert.env
+ExecStart=/usr/local/bin/frybird-notify %i
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+SyslogIdentifier=frybird-alert

@@ -5,8 +5,9 @@
 #
 # journalctl already has the real failure; this exists so a failed job shows
 # up as its own `user.err` line, greppable without knowing systemd unit
-# names, and so a future paging setup (owner gate 8, not decided) has a
-# single log line to hook into rather than parsing unit-state transitions.
+# names. It only logs: it succeeds, so it can never fire an OnFailure= of its own.
+# Reaching a person is frybird-job@.service's OnFailure= list, which starts the
+# one hardened alert unit (frybird-alert@.service) alongside this one.
 #
 #   cp deploy/frybird-job-failed@.service /etc/systemd/system/
 #   systemctl daemon-reload
