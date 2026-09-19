@@ -10,7 +10,8 @@
  * client for money or authorization" applies just as much to a time).
  */
 
-import { addDays, businessDate, timeOnBusinessDate } from "@/lib/dates";
+import { addDays, businessDate } from "@/lib/dates";
+import { businessHoursWindow } from "@/lib/orders/opening-hours";
 
 /** Shortest notice a scheduled order gets, same idea as a kitchen needing warning before an ASAP ticket lands. */
 export const MIN_LEAD_MINUTES = 20;
@@ -44,17 +45,6 @@ function dayLabel(date: string, today: string, tomorrow: string): string {
   return date;
 }
 
-/**
- * Same closing-instant computation `getSmart86Projections`/`inventoryAvailability`
- * already use — `timeOnBusinessDate` alone, no overnight-wrap adjustment.
- * FRYBIRD's real hours (11:30–23:00) never cross midnight, so this matches
- * the rest of the codebase rather than introducing a stricter rule nothing
- * else follows.
- */
-function closingInstant(date: string, closingTime: string): Date {
-  return timeOnBusinessDate(date, closingTime);
-}
-
 /** Rounds an instant forward to the next slot boundary. */
 function roundUpToSlot(at: Date): Date {
   const ms = SLOT_INTERVAL_MINUTES * 60_000;
@@ -69,8 +59,7 @@ function roundUpToSlot(at: Date): Date {
  * rollover to tomorrow the roadmap asks for is just this array being empty.
  */
 function slotsForDay(date: string, now: Date, openingTime: string, closingTime: string): readonly TimeSlot[] {
-  const opening = timeOnBusinessDate(date, openingTime);
-  const closing = closingInstant(date, closingTime);
+  const { opening, closing } = businessHoursWindow(date, openingTime, closingTime);
   const earliest = new Date(Math.max(opening.getTime(), now.getTime() + MIN_LEAD_MINUTES * 60_000));
   const first = roundUpToSlot(earliest);
 
@@ -119,7 +108,6 @@ export function isValidScheduledTime(candidate: Date, now: Date, openingTime: st
   const candidateDate = businessDate(candidate);
   if (candidateDate < today || candidateDate > horizon) return false;
 
-  const opening = timeOnBusinessDate(candidateDate, openingTime);
-  const closing = closingInstant(candidateDate, closingTime);
+  const { opening, closing } = businessHoursWindow(candidateDate, openingTime, closingTime);
   return candidate.getTime() >= opening.getTime() && candidate.getTime() < closing.getTime();
 }
