@@ -11,7 +11,7 @@
  */
 
 import { addDays, businessDate } from "@/lib/dates";
-import { businessHoursWindow } from "@/lib/orders/opening-hours";
+import { businessHoursWindow, isOpenAt } from "@/lib/orders/opening-hours";
 
 /** Shortest notice a scheduled order gets, same idea as a kitchen needing warning before an ASAP ticket lands. */
 export const MIN_LEAD_MINUTES = 20;
@@ -108,6 +108,11 @@ export function isValidScheduledTime(candidate: Date, now: Date, openingTime: st
   const candidateDate = businessDate(candidate);
   if (candidateDate < today || candidateDate > horizon) return false;
 
-  const { opening, closing } = businessHoursWindow(candidateDate, openingTime, closingTime);
-  return candidate.getTime() >= opening.getTime() && candidate.getTime() < closing.getTime();
+  // The same predicate the ASAP gate uses, asked about a future instant rather
+  // than about now. Not `businessHoursWindow(candidateDate)` alone: under
+  // overnight hours a 1am slot belongs to the session that opened the previous
+  // evening, and `slotsForDay` below will happily offer it — a validator that
+  // only looked at its own date's session would refuse a time the picker had
+  // just shown.
+  return isOpenAt(candidate, openingTime, closingTime);
 }
