@@ -22,10 +22,15 @@ describe("site url", () => {
   });
 
   it("ignores a SITE_URL that would publish a local address (build-time hazard)", () => {
-    for (const bad of ["http://localhost:3000", "http://127.0.0.1:3000", "https://localhost", "http://frybirdiq.tech", "not a url", "https://192.168.1.5"]) {
+    for (const bad of ["http://localhost:3000", "http://127.0.0.1:3000", "https://localhost", "http://frybirdiq.tech", "not a url", "https://192.168.1.5", "https://172.16.0.1", "https://172.20.5.5", "https://172.31.255.255", "https://169.254.1.1"]) {
       process.env.SITE_URL = bad;
       expect(siteUrl()).toBe("https://frybirdiq.tech");
     }
+  });
+
+  it("does not mistake public 172.x addresses outside 16-31 for private ones", () => {
+    process.env.SITE_URL = "https://172.32.0.1";
+    expect(siteUrl()).toBe("https://172.32.0.1");
   });
 
   it("keeps staff, account, order and checkout out of the index", () => {

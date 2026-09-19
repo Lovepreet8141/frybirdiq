@@ -10,7 +10,7 @@
  */
 export const DEFAULT_SITE_URL = "https://frybirdiq.tech";
 
-const LOCAL_HOST = /^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|\[::1\])/i;
+const LOCAL_HOST = /^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[::1\])/i;
 
 export function siteUrl(): string {
   const raw = process.env.SITE_URL?.trim().replace(/\/$/, "");
