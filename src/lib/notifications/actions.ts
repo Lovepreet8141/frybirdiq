@@ -1,13 +1,19 @@
 "use server";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { orderItems, orders } from "@/db/schema";
+import { viewerOwnsOrder } from "@/components/order/viewer-owns-order";
+import { readRememberedContact } from "@/lib/cart/remembered-contact";
+import { getCustomer } from "@/lib/customer";
 import { paise } from "@/lib/money";
+import { getOrg } from "@/lib/repositories/org";
 import { orderMessage } from "./messages";
 import { whatsappLinkProvider } from "./whatsapp-link";
 
 export type ShareResult = { ok: true; url: string } | { ok: false; error: string };
+
+const DENIED: ShareResult = { ok: false, error: "You can only share your own order." };
 
 /**
  * Builds the WhatsApp link for an order.
@@ -15,11 +21,29 @@ export type ShareResult = { ok: true; url: string } | { ok: false; error: string
  * Composed on the server from the stored order, not from whatever the page
  * happened to be showing — a message quoting a total is a statement about
  * money and should come from the row, not the DOM.
+ *
+ * The link embeds the customer's phone, and this action is reachable by any
+ * anonymous visitor (the receipt page is public), so the caller must own the
+ * order by the same rule the page uses to reveal that phone. A missing order
+ * and someone else's order return the same denial: no phone, and no way to
+ * tell which order ids exist.
  */
 export async function whatsappOrderLink(input: { orderId: string }): Promise<ShareResult> {
+  const org = await getOrg();
+  if (!org) return DENIED;
+
   const database = db();
-  const [order] = await database.select().from(orders).where(eq(orders.id, input.orderId)).limit(1);
-  if (!order) return { ok: false, error: "That order does not exist." };
+  const [order] = await database
+    .select()
+    .from(orders)
+    .where(and(eq(orders.id, input.orderId), eq(orders.orgId, org.id)))
+    .limit(1);
+  if (!order) return DENIED;
+
+  const [customer, remembered] = await Promise.all([getCustomer(), readRememberedContact()]);
+  // Phone only, exactly as the invoice page decides it: orders carry no email.
+  if (!viewerOwnsOrder({ customerPhone: order.customerPhone, customerEmail: null }, customer, remembered)) return DENIED;
+
   if (!order.customerPhone) return { ok: false, error: "There is no phone number on this order." };
 
   const items = await database.select().from(orderItems).where(eq(orderItems.orderId, order.id));
