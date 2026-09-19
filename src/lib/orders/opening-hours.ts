@@ -247,7 +247,17 @@ export interface ShopPausedRefusal {
 export interface ShopStatus extends OpeningHours {
   /** When ordering was paused, or null when it is not. From the org row; never from the client. */
   readonly orderingPausedAt: Date | null;
+  /**
+   * When a timed pause ends by itself ("until we next open"), or null for one
+   * that holds until someone switches ordering back on. A pause whose
+   * `orderingPausedUntil` has passed is over, even though `orderingPausedAt`
+   * is still set in the row: reopening is by time, with no job to clear it.
+   */
+  readonly orderingPausedUntil: Date | null;
 }
+
+/** How long a pause lasts. The owner's two choices; UNTIL_NEXT_OPENING is the default. */
+export type PauseMode = "UNTIL_NEXT_OPENING" | "UNTIL_RESUMED";
 
 export type OrderingRefusal =
   | { readonly kind: "PAUSED"; readonly paused: ShopPausedRefusal }
@@ -276,7 +286,7 @@ export type OrderingRefusal =
  * signature the customer site's helper is built against.
  */
 export function orderingRefusal(now: Date, shop: ShopStatus, when: "ASAP" | "SCHEDULED"): OrderingRefusal | null {
-  if (isPaused(shop)) return { kind: "PAUSED", paused: { code: "PAUSED" } };
+  if (isPaused(shop, now)) return { kind: "PAUSED", paused: { code: "PAUSED" } };
   if (when === "SCHEDULED") return null;
   const closed = asapRefusal(now, shop);
   return closed ? { kind: "CLOSED", closed } : null;
@@ -297,9 +307,28 @@ export function orderingRefusal(now: Date, shop: ShopStatus, when: "ASAP" | "SCH
  * ("pause, then confirm the site refuses") catches it. Missing-reads-as-paused
  * fails silently, for everyone, with nobody having touched anything. So a
  * pause has to be a real, present timestamp.
+ *
+ * THE ONE RULE for "paused right now", which also lives in SQL in two places
+ * that must move with it:
+ *
+ *   ordering_paused_at IS NOT NULL
+ *     AND (ordering_paused_until IS NULL OR ordering_paused_until > now())
+ *
+ * — the compare-and-set that pauses and resumes (shop-status.ts), and the
+ * 0039 down script's refusal to run while a shop is paused. Checking
+ * `ordering_paused_at IS NOT NULL` alone is wrong everywhere: a timed pause
+ * that has already reopened leaves `ordering_paused_at` set, so that test
+ * would refuse to pause a shop that is open, and would block a rollback for
+ * ever. Closing is exclusive, like the hours: at `orderingPausedUntil` exactly
+ * the shop is taking orders again.
  */
-function isPaused(shop: ShopStatus): boolean {
-  return shop.orderingPausedAt instanceof Date;
+export function isPaused(shop: ShopStatus, now: Date): boolean {
+  if (!(shop.orderingPausedAt instanceof Date)) return false;
+  // Bounded only by a real instant. A missing `orderingPausedUntil` next to a
+  // real `orderingPausedAt` leaves the pause holding: someone did press Pause,
+  // and failing toward the thing they asked for is right here, unlike above.
+  if (!(shop.orderingPausedUntil instanceof Date)) return true;
+  return now.getTime() < shop.orderingPausedUntil.getTime();
 }
 
 /**
@@ -318,8 +347,31 @@ function isPaused(shop: ShopStatus): boolean {
  * morning before opening also counts; prompting again is harmless, and
  * showing the prompt once per day is the POS's job, not this function's.
  */
-export function pauseCarriedOver(orderingPausedAt: Date | null, now: Date, openingTime: string, closingTime: string): boolean {
-  if (!(orderingPausedAt instanceof Date)) return false;
-  const { opening } = businessHoursWindow(businessDate(now), openingTime, closingTime);
-  return orderingPausedAt.getTime() < opening.getTime();
+export function pauseCarriedOver(shop: ShopStatus, now: Date): boolean {
+  if (!isPaused(shop, now) || !(shop.orderingPausedAt instanceof Date)) return false;
+  const { opening } = businessHoursWindow(businessDate(now), shop.openingTime, shop.closingTime);
+  return shop.orderingPausedAt.getTime() < opening.getTime();
+}
+
+/**
+ * When a pause made now, in this mode, ends by itself — `ordering_paused_until`.
+ *
+ * UNTIL_NEXT_OPENING is the next opening instant from the trading hours, the
+ * same `nextOpening` the closed-by-hours refusal uses, computed at the moment
+ * of pausing on the server's clock. UNTIL_RESUMED has no end: null.
+ *
+ * Read the edge before you rely on the default. Paused during trading hours
+ * (7 pm, a kitchen fire) it ends at tomorrow's opening, which is what anyone
+ * means. Paused BEFORE opening (9 am, the fryer broken) it ends at 11:30
+ * TODAY — so the default pause does nothing the hours were not already doing,
+ * and orders flow at 11:30 into the kitchen that was broken. No rule on the
+ * clock alone can tell that case from a 1 am pause after a late close, which
+ * genuinely does mean "until 11:30 today": both are "before today's opening".
+ * So this returns the literal next opening, and the answer lives in the UI: the
+ * confirm must say, in words, "Orders restart today at 11:30 AM", so the
+ * person pausing sees it and chooses UNTIL_RESUMED if that is not what they
+ * mean.
+ */
+export function pausedUntilFor(mode: PauseMode, now: Date, openingTime: string, closingTime: string): Date | null {
+  return mode === "UNTIL_NEXT_OPENING" ? nextOpening(now, openingTime, closingTime).at : null;
 }
