@@ -593,11 +593,41 @@ payment.
   org made the down refuse with its columns intact; after the resume it ran,
   0 columns were left and the org was kept; then `test-db.sh migrate`
   re-applied it. Drizzle migrator path not tested (CLI-managed local stack).
+- **Drilled for real (FACT, 2026-09-20, Release 2):** on a throwaway database
+  (`frybird_drill_0039`, the `organizations` table copied from the local stack,
+  dropped afterwards) with psql: pre-0039 → apply 0039 (4 columns, CHECK) →
+  down file **refused** while a pause was in force, schema untouched → resume →
+  down file ran (0 columns, 0 CHECK) → re-apply (4 columns, CHECK). All clean.
+  The down file prints two harmless "transaction" warnings under
+  `--single-transaction` because it has its own BEGIN/COMMIT.
 - **Data at risk:** only the current pause state (when, who, why, until). Each pause
   and resume keeps its `audit_logs` row.
 - **Journal (FACT):** `when` set by hand to 1790400000000, above 0038.
 
 ---
+
+### Rollback runbook for the Close Shop release (Release 2) — written 2026-09-20
+
+Live before it: `383e693` (BUILD_ID `QfcS3cFFTWYktErhEU-8Q`, migration head 0038).
+The code-only rollback below keeps 0039 in place. That is safe because 0039 is
+additive and nullable: the old build names none of the four columns, and its
+Drizzle column lists ignore them (checked 2026-09-20: the old build's
+integration suite, 45 files / 437 tests, run against a database that has 0039, passes).
+
+1. **Resume ordering FIRST.** Admin → Restaurant → "Switch orders back on" (or
+   the POS switch). Confirm the panel says "Shop is OPEN for orders". The old
+   build has no pause check: a pause left in force is silently ignored, orders
+   flow, the switch and banner disappear, and an "until I switch it back on"
+   pause reappears on the next roll-forward, possibly days later.
+2. Redeploy the old commit from its worktree: `./deploy/deploy.sh
+   root@194.238.16.200` at `383e693` (code only; no database step).
+3. Smoke: `/` and `/menu` 200, `/api/health` 200, zero journal errors.
+4. Leave 0039 in place. Run the down file (`supabase/rollback/0039_ordering_pause.down.sql`)
+   only if the columns themselves must go, only after step 1, and never before
+   step 2: it refuses while a pause is in force, and the new build fails on
+   every organizations read if the columns are gone.
+5. Do NOT roll back the database first. New code without the columns is a
+   site-wide outage (every organizations read names them).
 
 ## 5. Rollback files 0022–0026: the known-safe procedure
 

@@ -80,7 +80,10 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   // The number comes from the outlet row; null when unset or unusable, and then
   // no copy below tells the customer to call.
   const phone = shopPhone((await getStoreContact())?.phone);
-  // While the Close Shop switch is on, a pending online order must not be offered a NEW payment attempt.
+  // While the Close Shop switch is on, the pay button is hidden for a pending online order. That is display
+  // only: the payment action has no pause check, so a Razorpay checkout that is already open can still be
+  // completed, and an order that was already placed may still be paid (owner decision, 2026-09-20). Only
+  // NEW orders are refused while paused, by the gate in placeOrder.
   // Tracking itself works as normal. Read through getOrderingStatus only (ops-1 RULE 1).
   const paused = !orderingControls(await getCustomerOrderingStatus()).canOrder;
   const isOwner = viewerOwnsOrder(order, customer, remembered);
