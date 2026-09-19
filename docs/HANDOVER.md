@@ -372,3 +372,22 @@ Order now: version-check card -> **status pill** -> write-time re-check + status
 - **Tests.** Each state and its text; read-only role; collapse at 375 px; a switch from the pill writes the same audit record as one from Admin.
 - **Release rule.** Display code plus reuse of the existing action, no migration: standing approval while the shop is closed. If it touches the pause action, permissions or order placement: go/no-go to the owner. After release: tell the owner which phone screens to check.
 - **What "Orders still to make" counts (verified in code and on the live database, 2026-09-20).** `countOrdersStillDue` (`src/lib/repositories/shop-status.ts`): every order of this shop, any channel (website and counter), any age, whose status is not COMPLETED, CANCELLED, FAILED, REFUNDED or DRAFT. PENDING_PAYMENT counts. It does not look at time or kitchen stage, so an old order nobody closed counts forever. Live today: **1** (one ACCEPTED ONLINE order from 2026-09-16). The earlier "27 ACCEPTED orders" are no longer open in production: they were closed since the handover (not by me). The label says "to make", but the number is really "not finished"; the ops-2 card (close paid counter orders / alert on old ACCEPTED) is what keeps it honest.
+
+## 11. Update, 2026-09-20 (Release 3: version check + status pill)
+
+- **Release 3 is live:** `4e6c6fe`, BUILD_ID `6b9c1b3950382ca5`, RELEASES row 7, no migration (head still 0039). UI only; server side unchanged.
+- **Owner decisions recorded:**
+  - Order #1226 (ONLINE DELIVERY, Rs 517, 16 Sep, cash on delivery still PENDING, ACCEPTED) is **parked**: do nothing on it until the owner decides.
+  - The Close Shop live check is **closed**. The audit record (`ordering_paused` 02:25:46 IST, mode until-switched-on, reason "Other"; `ordering_resumed` 02:25:48, both under the owner's name) is the evidence. **Nobody has watched the paused banner live; the first real pause is the observation.**
+  - The 26 counter orders that left ACCEPTED at 02:17-02:20 IST on 2026-09-20 went ACCEPTED -> PREPARING -> READY -> COMPLETED one at a time under the owner's account. Every change has an order_event (0 without); status changes write no audit_logs row by design; no loyalty, payment or stock side effects; sales stay on their original dates.
+- **Done:** version-check card; status pill card (with two-step Admin resume, "Cancel", "Orders not finished"). Realtime was not used: the pill converges by its own 60 s poll of the same read, and same-tab controls share state through `status-bus.ts`.
+- **Low findings left as they are (independent review of Release 3):**
+  1. `/api/version` is not excluded from the `proxy.ts` matcher, so each poll pays a Supabase session refresh (cost only; excluding it touches auth code, so it is left for a reviewed change).
+  2. The auto-reload fires 5 s after the state flips; if the server is mid-restart it can land on an error page (the cooldown prevents a loop).
+  3. POS has two hook instances (header switch and pill): 2 status reads a minute on POS; the morning prompt checks only its own instance and can open over the pill's dialog; both render a polite live region so a screen reader may announce a change twice; Admin's panel does not use the bus (it converges through revalidate and the poll).
+  4. Focus hand-over from the pill's popover/sheet to the dialog and the screen-reader announcements were not verified in a browser.
+  5. `useIsMobile` is false on the server, so a phone briefly renders the desktop popover before switching to the sheet (no hydration error).
+  6. The layout reads the shop status and hours sequentially on every staff layout render.
+  7. Only the POS marks "order in progress"; KDS and the orders board hold no local state, so a reload loses nothing there. Any filled-in text field (even a search box) blocks the automatic reload; the tap still works.
+- **Order now:** write-time re-check of pause and hours inside the order transaction + status-read timeout (GATED: order placement) -> day-off card (ops-3; gated if it needs a migration) -> the rest of section 2.
+
