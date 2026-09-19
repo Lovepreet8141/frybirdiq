@@ -276,8 +276,50 @@ export type OrderingRefusal =
  * signature the customer site's helper is built against.
  */
 export function orderingRefusal(now: Date, shop: ShopStatus, when: "ASAP" | "SCHEDULED"): OrderingRefusal | null {
-  if (shop.orderingPausedAt !== null) return { kind: "PAUSED", paused: { code: "PAUSED" } };
+  if (isPaused(shop)) return { kind: "PAUSED", paused: { code: "PAUSED" } };
   if (when === "SCHEDULED") return null;
   const closed = asapRefusal(now, shop);
   return closed ? { kind: "CLOSED", closed } : null;
+}
+
+/**
+ * Whether the switch is on — and, on purpose, NOT when the value is missing.
+ *
+ * The type says `Date | null`, but a value can still arrive `undefined` at run
+ * time: an org object mapped field by field that forgets the new column
+ * (`getOrg` in org.ts builds its object that way), or a field lost crossing a
+ * serialisation boundary. `!== null` would read that as PAUSED, and the result
+ * is a total outage nobody asked for — every customer told "paused", nothing
+ * erroring, found only when takings drop (RELIABILITY, ops-1 req 4).
+ *
+ * The two ways this can fail are not equal. Missing-reads-as-open fails at the
+ * moment someone presses Pause, in front of them, and the deploy check
+ * ("pause, then confirm the site refuses") catches it. Missing-reads-as-paused
+ * fails silently, for everyone, with nobody having touched anything. So a
+ * pause has to be a real, present timestamp.
+ */
+function isPaused(shop: ShopStatus): boolean {
+  return shop.orderingPausedAt instanceof Date;
+}
+
+/**
+ * Whether a pause has carried over into a new trading day — the
+ * forgot-to-reopen case, which is the likeliest real way this switch hurts the
+ * shop (ops-1 R1).
+ *
+ * True when the pause began before the opening of today's session: someone
+ * paused yesterday evening, the power came back, and nobody reopened. The POS
+ * uses it to turn the first screen of the day into a decision — keep paused,
+ * or resume — instead of a banner that has been there so long nobody reads it.
+ *
+ * True before opening as well as after, on purpose. The first POS load of the
+ * day is usually the morning set-up, before 11:30, and that is the best moment
+ * to decide: before the first customer is refused, not after. A pause set this
+ * morning before opening also counts; prompting again is harmless, and
+ * showing the prompt once per day is the POS's job, not this function's.
+ */
+export function pauseCarriedOver(orderingPausedAt: Date | null, now: Date, openingTime: string, closingTime: string): boolean {
+  if (!(orderingPausedAt instanceof Date)) return false;
+  const { opening } = businessHoursWindow(businessDate(now), openingTime, closingTime);
+  return orderingPausedAt.getTime() < opening.getTime();
 }

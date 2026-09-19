@@ -9,7 +9,7 @@
  */
 
 import { timeOnBusinessDate } from "@/lib/dates";
-import { formatBusinessClock, isOpenAt, nextOpening } from "@/lib/orders/opening-hours";
+import { type ShopStatus, formatBusinessClock, isOpenAt, nextOpening, orderingRefusal } from "@/lib/orders/opening-hours";
 
 export type ShopHoursState =
   | { readonly open: true; readonly closesAt: string }
@@ -32,4 +32,39 @@ export function clockLabel(time: string): string {
 /** The sentence a closed shop shows. Says when it opens, never promises an order will be taken. */
 export function closedMessage(state: Extract<ShopHoursState, { open: false }>): string {
   return `We're closed right now. We open ${state.opensToday ? "today" : "tomorrow"} at ${clockLabel(state.opensAt)}. You can look around, but ordering as soon as possible isn't available until then.`;
+}
+
+/**
+ * Open, closed by the hours, or paused by hand — the one answer every customer
+ * page should render from (ops-1, RELIABILITY req R1).
+ *
+ * `shopHoursState` above answers from the hours alone, and three pages read it
+ * (home, checkout's ASAP default, the closed notice). None of them know about
+ * the Close Shop switch, so while paused in trading hours the home page shows
+ * nothing, checkout pre-selects ASAP, and the customer builds a cart only to be
+ * refused at submit. Asking each page to also read the pause would put three
+ * call sites in charge of "paused or closed?" — the two-predicates problem this
+ * module exists to prevent.
+ *
+ * So the decision comes from `orderingRefusal`, the server gate itself, and
+ * cannot disagree with what submitting would do. `shopHoursState` is left
+ * exactly as it is, because its callers are not this module's to change; they
+ * move over to this one in their own slice (S5) and it can then go.
+ *
+ * - OPEN: ASAP and scheduling both available.
+ * - CLOSED: the hours say no; scheduling is the way forward.
+ * - PAUSED: neither. `withinHours` is for the copy only — "check back soon"
+ *   invites a retry at 01:00 that the hours would refuse anyway, so a page
+ *   should drop it when the pause and the hours agree.
+ */
+export type ShopOrderingState =
+  | { readonly state: "OPEN"; readonly closesAt: string }
+  | { readonly state: "CLOSED"; readonly opensAt: string; readonly opensToday: boolean }
+  | { readonly state: "PAUSED"; readonly withinHours: boolean };
+
+export function shopOrderingState(now: Date, shop: ShopStatus): ShopOrderingState {
+  const refusal = orderingRefusal(now, shop, "ASAP");
+  if (refusal?.kind === "PAUSED") return { state: "PAUSED", withinHours: isOpenAt(now, shop.openingTime, shop.closingTime) };
+  if (refusal?.kind === "CLOSED") return { state: "CLOSED", opensAt: shop.openingTime, opensToday: refusal.closed.opensDay === "TODAY" };
+  return { state: "OPEN", closesAt: shop.closingTime };
 }

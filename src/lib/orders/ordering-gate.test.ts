@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { orderingRefusal, type ShopStatus } from "./opening-hours";
+import { orderingRefusal, pauseCarriedOver, type ShopStatus } from "./opening-hours";
 
 const HOURS = { openingTime: "11:30", closingTime: "23:00" };
 const OPEN_SHOP: ShopStatus = { ...HOURS, orderingPausedAt: null };
@@ -76,5 +76,49 @@ describe("orderingRefusal — not paused, behaves exactly as the P0-3a gate did"
   it("lets a scheduled order through at any hour — its requested time is isValidScheduledTime's question", () => {
     expect(orderingRefusal(TWO_AM, OPEN_SHOP, "SCHEDULED")).toBeNull();
     expect(orderingRefusal(MIDDAY, OPEN_SHOP, "SCHEDULED")).toBeNull();
+  });
+});
+
+describe("a missing pause value is not a pause (RELIABILITY ops-1 req 4)", () => {
+  it("takes orders when orderingPausedAt arrives undefined, instead of refusing everyone", () => {
+    // What a hand-mapped org object that forgets the new column looks like at
+    // run time. Reading it as paused would be a silent total outage.
+    const forgotten = { ...HOURS } as unknown as ShopStatus;
+    expect(orderingRefusal(MIDDAY, forgotten, "ASAP")).toBeNull();
+    expect(orderingRefusal(MIDDAY, forgotten, "SCHEDULED")).toBeNull();
+  });
+
+  it("still pauses on a real timestamp", () => {
+    expect(orderingRefusal(MIDDAY, PAUSED_SHOP, "ASAP")?.kind).toBe("PAUSED");
+  });
+});
+
+describe("pauseCarriedOver — the forgot-to-reopen case (ops-1 R1)", () => {
+  const PAUSED_YESTERDAY_EVENING = new Date("2026-09-18T14:12:00.000Z"); // 2026-09-18 19:42 IST
+
+  it("is true on the next day's set-up, before opening — the moment to decide", () => {
+    // 2026-09-19 10:00 IST, before the 11:30 opening.
+    expect(pauseCarriedOver(PAUSED_YESTERDAY_EVENING, new Date("2026-09-19T04:30:00.000Z"), "11:30", "23:00")).toBe(true);
+  });
+
+  it("is true after opening too, if nobody decided at set-up", () => {
+    // 2026-09-19 12:00 IST
+    expect(pauseCarriedOver(PAUSED_YESTERDAY_EVENING, new Date("2026-09-19T06:30:00.000Z"), "11:30", "23:00")).toBe(true);
+  });
+
+  it("is false for a pause set during today's trade", () => {
+    const pausedAtOne = new Date("2026-09-19T07:30:00.000Z"); // 2026-09-19 13:00 IST
+    expect(pauseCarriedOver(pausedAtOne, new Date("2026-09-19T09:30:00.000Z"), "11:30", "23:00")).toBe(false); // 15:00 IST
+  });
+
+  it("is false when nothing is paused, or the value is missing", () => {
+    const now = new Date("2026-09-19T06:30:00.000Z");
+    expect(pauseCarriedOver(null, now, "11:30", "23:00")).toBe(false);
+    expect(pauseCarriedOver(undefined as unknown as Date | null, now, "11:30", "23:00")).toBe(false);
+  });
+
+  it("counts a pause set just after midnight as carried into the new day", () => {
+    // Paused 2026-09-19 00:30 IST (after close), checked 10:00 IST the same date.
+    expect(pauseCarriedOver(new Date("2026-09-18T19:00:00.000Z"), new Date("2026-09-19T04:30:00.000Z"), "11:30", "23:00")).toBe(true);
   });
 });
