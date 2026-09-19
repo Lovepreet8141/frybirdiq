@@ -1,7 +1,7 @@
 /** Organizations, locations, staff and roles. BUILD-PLAN.md §41, §42. */
 
 import { sql } from "drizzle-orm";
-import { boolean, date, index, integer, pgEnum, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, date, index, integer, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { ROLES } from "@/domain/permissions";
 import { ZERO_MONEY, money, primaryId, priceBasisEnum, timestamps } from "./_shared";
 
@@ -111,8 +111,49 @@ export const organizations = pgTable("organizations", {
   openingTime: text("opening_time").notNull().default("11:30"),
   /** Closing time, 24-hour "HH:MM". */
   closingTime: text("closing_time").notNull().default("23:00"),
+
+  /*
+   * The Close Shop switch (ops-1). Staff pause online ordering for a while —
+   * a power cut, the fryer down, a rush — without touching the hours above.
+   * While paused, every new order is refused before any payment is taken.
+   *
+   * A timestamp, not a boolean: staff see "paused 3 h ago", and an alert can
+   * fire on a pause nobody lifted. Null means taking orders.
+   */
+  orderingPausedAt: timestamp("ordering_paused_at", { withTimezone: true }),
+  /**
+   * Who paused, as the auth user id. Loose, not a foreign key: a staff record
+   * leaving must not break history (same as `inventory.ts`, `menu.ts`).
+   */
+  orderingPausedBy: uuid("ordering_paused_by"),
+  /** Why, for staff only; never shown to a customer. Null when not paused. */
+  orderingPausedReason: text("ordering_paused_reason"),
+  /**
+   * When the pause lifts by itself. The staff member chooses when pausing:
+   * "until we next open" (the default) sets it, "until I switch it back on"
+   * leaves it null. Nothing writes at that instant: a pause whose `until` has
+   * passed simply no longer counts, so the row can still carry `paused_at`
+   * after the shop has reopened. Null when not paused.
+   */
+  orderingPausedUntil: timestamp("ordering_paused_until", { withTimezone: true }),
   ...timestamps,
-});
+}, (table) => [
+  /*
+   * A pause is all-or-nothing. When and who are set together: every pause has
+   * a person behind it, and a pause with no human actor (an automatic one)
+   * would need this CHECK changed first — deliberately, since none exists.
+   * Resuming clears the reason and the end time with them, so neither
+   * outlives its pause, and a pause cannot end before it began. The reason
+   * is optional here; the staff form requires one (3–200 characters).
+   */
+  check(
+    "organizations_ordering_pause_check",
+    sql`(${table.orderingPausedAt} IS NULL) = (${table.orderingPausedBy} IS NULL)
+      AND (${table.orderingPausedAt} IS NOT NULL OR ${table.orderingPausedReason} IS NULL)
+      AND (${table.orderingPausedReason} IS NULL OR char_length(${table.orderingPausedReason}) BETWEEN 1 AND 200)
+      AND (${table.orderingPausedUntil} IS NULL OR (${table.orderingPausedAt} IS NOT NULL AND ${table.orderingPausedUntil} > ${table.orderingPausedAt}))`,
+  ),
+]);
 
 export const locations = pgTable(
   "locations",

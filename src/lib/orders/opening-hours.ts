@@ -217,3 +217,67 @@ export function formatBusinessClock(at: Date): string {
     .replace(/\s+/gu, " ")
     .replace(/\b(am|pm)\b/iu, (meridiem) => meridiem.toUpperCase());
 }
+
+/**
+ * Ordering paused by hand — the Close Shop switch (ops-1).
+ *
+ * A power cut or a kitchen fire does not change the trading hours, so the
+ * hours are left alone and this sits on top of them: while paused, nothing
+ * can be ordered online, whatever the clock says.
+ *
+ * Deliberately NOT a variant of `ShopClosedRefusal`, and deliberately not
+ * called "closed". The checkout form reads `closed` as "the hours say no, so
+ * move the customer onto Choose a time" (`checkout-form.tsx`, `asapOk`), and
+ * the copy it renders from it ends "Choose a time to order ahead." A paused
+ * shop refuses scheduled orders too, so reusing that refusal would send the
+ * customer to a choice that is refused in turn — the same dead escape hatch
+ * RELIABILITY found under overnight hours. A distinct code keeps the two
+ * states apart at every layer, and a form that does not know about it yet
+ * falls back to the plain `error` sentence, which is safe.
+ *
+ * Carries nothing about why. The reason staff type when they pause ("gas
+ * leak", a name) is for staff and the audit trail; it never reaches a
+ * customer, so it is not in the refusal at all.
+ */
+export interface ShopPausedRefusal {
+  readonly code: "PAUSED";
+}
+
+/** Everything the ordering gate needs to know about the shop: its hours, and whether someone has paused it. */
+export interface ShopStatus extends OpeningHours {
+  /** When ordering was paused, or null when it is not. From the org row; never from the client. */
+  readonly orderingPausedAt: Date | null;
+}
+
+export type OrderingRefusal =
+  | { readonly kind: "PAUSED"; readonly paused: ShopPausedRefusal }
+  | { readonly kind: "CLOSED"; readonly closed: ShopClosedRefusal };
+
+/**
+ * The whole online-ordering gate: null to proceed, or why not.
+ *
+ * Paused wins over everything, for ASAP and scheduled alike. The switch has no
+ * end time — it holds "until someone reopens" — so no future slot can be
+ * promised while it is on: accepting a 9pm order during a 7pm power cut is a
+ * bet that someone will remember to reopen by then, and the customer's money
+ * is the stake. It also wins over the hours, so a paused shop that is also
+ * outside its hours says "paused", not "we open at 11:30" — the second is a
+ * promise nobody can keep until the switch is turned back.
+ *
+ * Not paused, an ASAP order is refused outside the hours (`asapRefusal`); a
+ * scheduled one passes here and has its requested time checked by
+ * `isValidScheduledTime`, which answers a different question — whether the
+ * shop will be open THEN.
+ *
+ * Why the pause lives here and not inside `isOpenAt`: "paused" is a fact about
+ * now, not about an instant. `isOpenAt` is asked about future times by the
+ * scheduler; folding the switch into it would make "is 9pm tomorrow within
+ * hours" answer no because of a power cut this afternoon, and would change a
+ * signature the customer site's helper is built against.
+ */
+export function orderingRefusal(now: Date, shop: ShopStatus, when: "ASAP" | "SCHEDULED"): OrderingRefusal | null {
+  if (shop.orderingPausedAt !== null) return { kind: "PAUSED", paused: { code: "PAUSED" } };
+  if (when === "SCHEDULED") return null;
+  const closed = asapRefusal(now, shop);
+  return closed ? { kind: "CLOSED", closed } : null;
+}
