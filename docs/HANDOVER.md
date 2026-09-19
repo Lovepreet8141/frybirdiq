@@ -429,3 +429,10 @@ Order now: version-check card -> **status pill** -> write-time re-check + status
 - **First Tuesday check (owner asked for care):** read-only: `/` and `/menu` show "We're closed today…"; checkout picker lists Tuesday as "we're closed"; pill says "Closed today"; a query lists any pre-order booked for that Tuesday (number, time, status, no phone copied). No order placed by me.
 - **Order now:** deploy decision for ops-3 (waiting on the owner) -> the rest of section 2.
 
+## 16. Update, 2026-09-20 (Release 5: day off live)
+
+- **Release 5 is live:** `eddba18`, BUILD_ID `f094f7a2953c1cc7`, migration head 0040, RELEASES row 9. Tuesday is marked closed all day (option A, one audited statement). Rollback: see RELEASES row 9 and MIGRATION-RECOVERY 4g (switch orders off first).
+- **Owner decisions:** deploy while closed, Tuesday by option A; first Tuesday check on 2026-09-22 (read-only, place nothing, switch nothing); log the IQ insights flake as a low card.
+- **Low card `iq-flaky-1`:** `iq-insights-recommendations.integration.test.ts` "M1(b): a proposal racing the supersede of its evidence is refused instead of resting on a SUPERSEDED insight" failed once in three full-suite QA runs (2026-09-20, `6ca6095`, run under load) and passed 6/6 in isolation on the live commit and 3/3 full-suite runs on `eddba18`. Load-sensitive race test; not caused by ops-3. Investigate when the IQ-2 work is next touched.
+- **Order now:** the autonomous queue the owner pastes next, then the rest of section 2.
+
