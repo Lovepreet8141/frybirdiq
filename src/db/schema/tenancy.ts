@@ -1,7 +1,7 @@
 /** Organizations, locations, staff and roles. BUILD-PLAN.md §41, §42. */
 
 import { sql } from "drizzle-orm";
-import { boolean, date, index, integer, pgEnum, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, date, index, integer, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { ROLES } from "@/domain/permissions";
 import { ZERO_MONEY, money, primaryId, priceBasisEnum, timestamps } from "./_shared";
 
@@ -111,8 +111,38 @@ export const organizations = pgTable("organizations", {
   openingTime: text("opening_time").notNull().default("11:30"),
   /** Closing time, 24-hour "HH:MM". */
   closingTime: text("closing_time").notNull().default("23:00"),
+
+  /*
+   * The Close Shop switch (ops-1). Staff pause online ordering for a while —
+   * a power cut, the fryer down, a rush — without touching the hours above.
+   * While paused, every new order is refused before any payment is taken.
+   *
+   * A timestamp, not a boolean: staff see "paused 3 h ago", and an alert can
+   * fire on a pause nobody lifted. Null means taking orders.
+   */
+  orderingPausedAt: timestamp("ordering_paused_at", { withTimezone: true }),
+  /**
+   * Who paused, as the auth user id. Loose, not a foreign key: a staff record
+   * leaving must not break history (same as `inventory.ts`, `menu.ts`).
+   */
+  orderingPausedBy: uuid("ordering_paused_by"),
+  /** Why, for staff only; never shown to a customer. Null when not paused. */
+  orderingPausedReason: text("ordering_paused_reason"),
   ...timestamps,
-});
+}, (table) => [
+  /*
+   * A pause is all-or-nothing: when and who are set together, and resuming
+   * clears the reason with them, so a stale reason never outlives its pause.
+   * The reason itself is optional here — the staff form requires one; a
+   * future automatic pause might not have one.
+   */
+  check(
+    "organizations_ordering_pause_check",
+    sql`(${table.orderingPausedAt} IS NULL) = (${table.orderingPausedBy} IS NULL)
+      AND (${table.orderingPausedAt} IS NOT NULL OR ${table.orderingPausedReason} IS NULL)
+      AND (${table.orderingPausedReason} IS NULL OR char_length(${table.orderingPausedReason}) BETWEEN 1 AND 200)`,
+  ),
+]);
 
 export const locations = pgTable(
   "locations",

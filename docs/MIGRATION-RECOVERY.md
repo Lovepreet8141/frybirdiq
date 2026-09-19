@@ -526,6 +526,56 @@ in production is owner gate 1, and changing the live cash refund path is gate 7.
   RESERVED/FAILED rows in production, fix forward.
 - **Journal (FACT):** `when` set by hand to 1790300000000, above 0037.
 
+## 4f. 0039 `ordering_pause` (not deployed; `agent/database-ops-1-s2`, card ops-1 S2)
+
+Added 2026-09-20. Requires 0038. The Close Shop switch
+(`hive/research/ops-1/DESIGN.md` S2): staff pause online ordering without
+touching the opening hours, and `placeOrder` refuses while paused, before any
+payment.
+
+> **Roll back only while no shop is paused.** The code before 0039 has no idea
+> a pause exists. Dropping the columns while a shop is paused **silently
+> REOPENS it**: customers can order again, and nothing tells anyone. Resume
+> ordering first. The down file enforces this and refuses otherwise.
+
+### Classification — **Reversible while not paused**
+- **What it does (FACT):** on `organizations` adds `ordering_paused_at
+  timestamptz`, `ordering_paused_by uuid` (loose, not a foreign key: the auth
+  user id, as in `inventory.ts` and `menu.ts`) and `ordering_paused_reason
+  text`, all nullable, no default, no backfill. One CHECK,
+  `organizations_ordering_pause_check`: `paused_at` and `paused_by` are set
+  together; the reason is null whenever not paused (a resume clears it); a
+  reason is 1–200 characters. The staff form is stricter (3–200, required); the
+  DB leaves room for a future automatic pause. `SET LOCAL lock_timeout = '5s'`
+  first: `organizations` is read on every request.
+- **Expand-only (FACT):** safe to run before the deploy. Every existing org
+  reads as taking orders, and the code already live never names these columns.
+  It reads `organizations` only through Drizzle's explicit column lists; there
+  is no raw `SELECT *` on it in `src/` or `scripts/`.
+- **RLS (FACT):** unchanged. `organizations_tenant_read` (0033) is `FOR SELECT
+  TO authenticated USING (id IN (SELECT auth_org_ids()))`, and `auth_org_ids()`
+  (0001) reads `memberships` only, so `paused_by` and the reason never reach a
+  customer or an anonymous caller.
+- **Down file (FACT):** `supabase/rollback/0039_ordering_pause.down.sql`, one
+  transaction: `SET LOCAL lock_timeout = '5s'` → `LOCK TABLE organizations IN
+  ACCESS EXCLUSIVE MODE` → guard that **refuses** (55000, naming each paused
+  org's slug and pause time) while any org is paused → drop the CHECK → drop
+  the three columns. Journal-row delete is a manual step outside the
+  transaction (production: `created_at = 1790400000000`).
+- **Tested locally (FACT, 2026-09-20, local Postgres 17.6, per-worktree
+  database):** `ordering-pause-0039.integration.test.ts` failed before 0039
+  was applied and passes 10/10 after it. It covers the defaults, pause and
+  resume, a pause without a reason, 200 characters accepted and 201 refused,
+  four CHECK refusals, and the down file inside a rolled-back transaction:
+  it refuses while paused and names the org, and otherwise sets a 5 s timeout
+  and removes exactly 0039's columns and CHECK. Also drilled for real with psql:
+  a paused org made the down refuse with 3 columns intact; after the resume it
+  ran, 0 columns were left and the org was kept; then `test-db.sh migrate`
+  re-applied it. Drizzle migrator path not tested (CLI-managed local stack).
+- **Data at risk:** only the current pause state (when, who, why). Each pause
+  and resume keeps its `audit_logs` row.
+- **Journal (FACT):** `when` set by hand to 1790400000000, above 0038.
+
 ---
 
 ## 5. Rollback files 0022–0026: the known-safe procedure
