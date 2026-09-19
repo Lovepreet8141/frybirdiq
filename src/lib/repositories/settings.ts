@@ -17,6 +17,7 @@ import { db } from "@/db";
 import { locations, organizations, taxRates } from "@/db/schema";
 import { type Paise, paise } from "@/lib/money";
 import type { PriceBasis } from "@/lib/pricing";
+import { parseContactPhone } from "@/lib/settings/phone";
 import { type DeliverySettings, getDeliverySettings } from "./delivery";
 
 export interface RestaurantSettings {
@@ -184,6 +185,8 @@ export async function updateLocationProfile(
   },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const database = db();
+  const phone = parseContactPhone(input.phone);
+  if (!phone.ok) return { ok: false, error: phone.error };
   const [location] = await database.select({ id: locations.id }).from(locations).where(eq(locations.orgId, orgId)).orderBy(asc(locations.createdAt)).limit(1);
   if (!location) return { ok: false, error: "No outlet is configured yet." };
 
@@ -194,7 +197,7 @@ export async function updateLocationProfile(
       addressLine2: input.addressLine2,
       city: input.city,
       pincode: input.pincode,
-      phone: input.phone,
+      phone: phone.value,
       updatedAt: new Date(),
     })
     .where(eq(locations.id, location.id));

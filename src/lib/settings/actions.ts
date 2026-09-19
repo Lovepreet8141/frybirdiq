@@ -18,6 +18,7 @@ import {
   updateOperationsSettings,
   updatePaymentSettings,
 } from "@/lib/repositories/settings";
+import { parseContactPhone } from "./phone";
 import { type DeliveryBandInput, updateDeliveryPricing } from "@/lib/repositories/delivery";
 import { overnightHoursError } from "./hours";
 
@@ -107,10 +108,12 @@ const locationProfileSchema = z.object({
     .transform((value) => (value === "" ? null : value)),
   city: z.string().trim().min(1, "The city can't be blank."),
   pincode: z.string().trim().regex(/^\d{6}$/, "Enter a 6-digit PIN code."),
-  phone: z
-    .string()
-    .trim()
-    .regex(/^[0-9+\-\s()]{7,20}$/, "Enter a contact number."),
+  phone: z.string().transform((value, ctx) => {
+    const parsed = parseContactPhone(value);
+    if (parsed.ok) return parsed.value;
+    ctx.addIssue({ code: "custom", message: parsed.error });
+    return z.NEVER;
+  }),
 });
 
 /** The outlet's address and phone — printed on the invoice and shown on the website. */
