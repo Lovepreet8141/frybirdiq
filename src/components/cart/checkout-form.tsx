@@ -26,12 +26,13 @@ export interface ScheduleDayOption {
   readonly slots: readonly ScheduleSlotOption[];
 }
 
-function SubmitButton({ label }: { label: string }) {
+function SubmitButton({ label, blockedReason }: { label: string; blockedReason: string | null }) {
   const { pending } = useFormStatus();
   return (
     <button
       type="submit"
-      disabled={pending}
+      disabled={pending || blockedReason !== null}
+      aria-describedby={blockedReason ? "checkout-blocked" : undefined}
       className="flex min-h-[56px] w-full items-center justify-center gap-3 rounded-md bg-primary px-6 text-base font-semibold text-primary-foreground transition-opacity duration-[var(--duration-micro)] hover:opacity-90 disabled:opacity-50"
     >
       {pending ? (
@@ -67,6 +68,7 @@ export function CheckoutForm({
   methods,
   scheduleOptions,
   asapAvailable = true,
+  orderingPausedReason = null,
   shopPhone = null,
 }: {
   idempotencyKey: string;
@@ -97,6 +99,13 @@ export function CheckoutForm({
    * never handed a default the server would refuse.
    */
   asapAvailable?: boolean;
+  /**
+   * Set while the Close Shop switch is on (`orderingControls`). Nothing can be
+   * placed: ASAP and "Choose a time" are both disabled and so is the button, with
+   * this as the reason. A server refusal with `paused` sets the same state, for
+   * a page that was open when the switch was pressed.
+   */
+  orderingPausedReason?: string | null;
   /** From the outlet record; null when unset, and then no call line shows. */
   shopPhone?: ShopPhone | null;
 }) {
@@ -127,7 +136,9 @@ export function CheckoutForm({
   // the customer is moved onto "Choose a time" rather than left on a choice
   // that will be refused again. No browser clock is consulted.
   const closed = state.status === "error" ? state.closed : undefined;
-  const asapOk = asapAvailable && !closed;
+  const pausedRefusal = state.status === "error" ? state.paused : undefined;
+  const blockedReason = orderingPausedReason ?? (pausedRefusal ? "Ordering is paused right now." : null);
+  const asapOk = asapAvailable && !closed && blockedReason === null;
   const when = asapOk ? whenChoice : "SCHEDULED";
   const fieldErrors = state.status === "error" ? (state.fieldErrors ?? {}) : {};
 
@@ -207,7 +218,7 @@ export function CheckoutForm({
                 name="whenChoice"
                 value={option.value}
                 checked={when === option.value}
-                disabled={option.value === "ASAP" && !asapOk}
+                disabled={blockedReason !== null || (option.value === "ASAP" && !asapOk)}
                 onChange={() => setWhen(option.value)}
                 className="size-4 accent-[var(--primary)]"
               />
@@ -291,7 +302,7 @@ export function CheckoutForm({
       {fulfilment === "DELIVERY" && shop && <DeliveryFields shop={shop} saved={savedAddresses} />}
       {state.status === "error" && !state.fieldErrors && (
         <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm leading-relaxed">
-          {closed ? refusedClosedText(closed) : state.message}
+          {closed ? refusedClosedText(closed) : state.message /* a paused refusal's message is the server's own wording */}
           {shopPhone && (
             <span className="mt-1 block">
               <CallShop phone={shopPhone} lead="Still stuck? Call" />
@@ -458,7 +469,12 @@ export function CheckoutForm({
 
       {extras}
 
-      <SubmitButton label={payment === "ONLINE" ? "Continue to payment" : "Place order"} />
+      <SubmitButton label={payment === "ONLINE" ? "Continue to payment" : "Place order"} blockedReason={blockedReason} />
+      {blockedReason && (
+        <p id="checkout-blocked" className="text-center text-sm text-muted-foreground">
+          {blockedReason}
+        </p>
+      )}
     </form>
   );
 }

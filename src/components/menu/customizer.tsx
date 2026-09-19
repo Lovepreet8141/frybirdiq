@@ -21,7 +21,8 @@ import { cn } from "@/lib/utils";
  * for itself from the slugs this sends, so a tampered client changes what it
  * sees and nothing else. §13.
  */
-export function Customizer({ product }: { product: MenuProduct }) {
+export function Customizer({ product, orderingPausedReason = null }: { product: MenuProduct; /** Set while the Close Shop switch is on: adding is disabled and this says why. */ orderingPausedReason?: string | null }) {
+  const paused = orderingPausedReason !== null;
   const router = useRouter();
   const reduced = useReducedMotion();
   const { show } = useToast();
@@ -110,7 +111,9 @@ export function Customizer({ product }: { product: MenuProduct }) {
 
   /* One label, rendered in two places. The sticky bar is the same control as
      the main button, not a second one that can disagree with it. */
-  const ctaLabel = pending
+  const ctaLabel = paused
+    ? "Ordering paused"
+    : pending
     ? "Adding"
     : unanswered.length > 0
       ? `Choose ${unanswered[0]!.name.toLowerCase()}`
@@ -209,12 +212,15 @@ export function Customizer({ product }: { product: MenuProduct }) {
         ref={ctaRef}
         type="button"
         onClick={submit}
-        disabled={pending || unanswered.length > 0}
+        disabled={paused || pending || unanswered.length > 0}
+        aria-describedby={paused ? "add-paused" : undefined}
         whileTap={reduced || pending ? undefined : { scale: 0.98 }}
         transition={{ duration: 0.12, ease: [0.2, 0, 0, 1] }}
         className="flex min-h-[56px] cursor-pointer items-center justify-center gap-3 rounded-xl border-[2.5px] border-[var(--ink)] bg-primary px-6 font-heading text-base font-extrabold text-primary-foreground shadow-[5px_5px_0_var(--ink)] transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[7px_8px_0_var(--ink)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-[5px_5px_0_var(--ink)]"
       >
-        {pending ? (
+        {paused ? (
+          "Ordering paused"
+        ) : pending ? (
           <>
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             Adding
@@ -233,6 +239,12 @@ export function Customizer({ product }: { product: MenuProduct }) {
           </>
         )}
       </motion.button>
+
+      {paused && (
+        <p id="add-paused" className="text-sm text-muted-foreground">
+          {orderingPausedReason}
+        </p>
+      )}
 
       {/* Sticky bar. Mirrors the button above rather than duplicating its
           state, and is hidden from assistive tech — the real control is already
@@ -259,7 +271,7 @@ export function Customizer({ product }: { product: MenuProduct }) {
                 type="button"
                 tabIndex={-1}
                 onClick={submit}
-                disabled={pending || unanswered.length > 0}
+                disabled={paused || pending || unanswered.length > 0}
                 className="flex min-h-[48px] shrink-0 cursor-pointer items-center gap-2 rounded-xl border-[2.5px] border-[var(--ink)] bg-primary px-5 font-heading text-sm font-extrabold text-primary-foreground shadow-[4px_4px_0_var(--ink)] transition-transform duration-200 ease-out active:translate-y-0.5 disabled:opacity-50"
               >
                 {ctaLabel}

@@ -8,7 +8,6 @@ import { CheckoutExtras } from "@/components/cart/extras";
 import { OrderSummary } from "@/components/cart/summary";
 import type { SavedAddressOption } from "@/components/delivery/delivery-fields";
 import { CallShop } from "@/components/site/call-shop";
-import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
 import { getPricedCart } from "@/lib/cart";
 import { shopPhone } from "@/lib/contact/phone";
 import { readRememberedAddress } from "@/lib/cart/remembered-address";
@@ -16,7 +15,8 @@ import { readRememberedContact } from "@/lib/cart/remembered-contact";
 import { scheduleDays } from "@/lib/cart/scheduled-time";
 import { getCustomer } from "@/lib/customer";
 import { toLatLng } from "@/lib/delivery";
-import { shopHoursState } from "@/lib/cart/shop-hours";
+import { getCustomerOrderingStatus } from "@/lib/cart/ordering-status";
+import { orderingControls } from "@/lib/cart/ordering-banner";
 import { isLoyaltyEnabled, maxRedeemable } from "@/lib/loyalty";
 import { getLoyaltyConfig } from "@/lib/loyalty/config";
 import { formatINR } from "@/lib/money";
@@ -58,7 +58,9 @@ export default async function CheckoutPage() {
     label: day.label,
     slots: day.slots.map((slot) => ({ iso: slot.at.toISOString(), label: slot.label })),
   }));
-  const asapAvailable = shopHoursState(now, org.openingTime, org.closingTime).open;
+  // Read through getOrderingStatus only (ops-1 RULE 1): hours and the Close Shop switch in one answer.
+  const controls = orderingControls(await getCustomerOrderingStatus());
+  const asapAvailable = controls.asapAllowed;
   const methods = availableMethods({ cash: org.cashEnabled, online: org.onlineEnabled });
   const delivery = await getDeliverySettings();
   const phone = shopPhone((await getStoreContact())?.phone);
@@ -107,7 +109,6 @@ export default async function CheckoutPage() {
       </Link>
 
       <h1 className="mt-3 font-heading text-3xl font-bold tracking-tight sm:text-4xl">Checkout</h1>
-      <ShopClosedNotice openingTime={org.openingTime} closingTime={org.closingTime} now={now} className="mt-4" />
 
       <div className="mt-6 grid gap-8 lg:grid-cols-[1fr_320px] lg:items-start">
         <CheckoutForm
@@ -120,6 +121,7 @@ export default async function CheckoutPage() {
           methods={methods}
           scheduleOptions={scheduleOptions}
           asapAvailable={asapAvailable}
+          orderingPausedReason={controls.disabledReason}
           shopPhone={phone}
           extras={
             <CheckoutExtras

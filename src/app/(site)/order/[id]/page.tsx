@@ -10,6 +10,8 @@ import { shopPhone } from "@/lib/contact/phone";
 import { CallShop } from "@/components/site/call-shop";
 import { getRating } from "@/lib/ratings";
 import { getCustomer } from "@/lib/customer";
+import { getCustomerOrderingStatus } from "@/lib/cart/ordering-status";
+import { orderingControls } from "@/lib/cart/ordering-banner";
 import { readRememberedContact } from "@/lib/cart/remembered-contact";
 import { OrderRating } from "@/components/order/rating";
 import { PayOnline } from "@/components/order/pay-online";
@@ -74,6 +76,9 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   // The number comes from the outlet row; null when unset or unusable, and then
   // no copy below tells the customer to call.
   const phone = shopPhone((await getStoreContact())?.phone);
+  // While the Close Shop switch is on, a pending online order must not be offered a NEW payment attempt.
+  // Tracking itself works as normal. Read through getOrderingStatus only (ops-1 RULE 1).
+  const paused = !orderingControls(await getCustomerOrderingStatus()).canOrder;
   const isOwner = viewerOwnsOrder(order, customer, remembered);
   const greetedName = greetingName(order.customerName, isOwner);
 
@@ -94,7 +99,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   const status = order.status as OrderStatus;
   const isDelivery = order.fulfilment === "DELIVERY";
   // Same condition gates the pay widget, the "pay below" line and the fallback.
-  const canPayOnline = awaitingOnline && online !== null && razorpay !== null && Boolean(online.providerOrderId);
+  const canPayOnline = !paused && awaitingOnline && online !== null && razorpay !== null && Boolean(online.providerOrderId);
   const STEPS = stepsFor(order.fulfilment);
 
   // The repository already decided whether the promised time has passed; this
@@ -133,7 +138,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
             : "We'll call when it's ready to collect."}
       </p>
 
-      {awaitingOnline && online && razorpay && online.providerOrderId && (
+      {canPayOnline && online && razorpay && online.providerOrderId && (
         <PayOnline
           orderId={order.id}
           orderNumber={order.orderNumber}
@@ -146,7 +151,17 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           failureReason={online.failureReason}
         />
       )}
-      {awaitingOnline && !canPayOnline && (
+      {awaitingOnline && paused && (
+        <p role="status" className="mt-6 rounded-lg border border-border bg-surface px-4 py-3 text-sm">
+          Paying online is on hold while we&rsquo;re not taking orders. Your order is saved, and the pay button comes back when ordering resumes.
+          {phone && (
+            <span className="mt-1 block">
+              <CallShop phone={phone} lead="Questions? Call" />
+            </span>
+          )}
+        </p>
+      )}
+      {awaitingOnline && !paused && !canPayOnline && (
         <p role="alert" className="mt-6 rounded-lg border border-border bg-surface px-4 py-3 text-sm">
           Online payment isn&rsquo;t available right now.{" "}
           {isDelivery
