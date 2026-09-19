@@ -28,8 +28,8 @@ import { and, eq, notInArray, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, memberships, orders, organizations } from "@/db/schema";
 import { TERMINAL_STATUSES } from "@/domain/order-status";
-import { type PauseMode, type ShopStatus, pausedUntilFor } from "@/lib/orders/opening-hours";
-import { type ShopOrderingState, shopOrderingState } from "@/lib/cart/shop-hours";
+import { type PauseMode, type ShopStatus, pauseCarriedOver, pausedUntilFor } from "@/lib/orders/opening-hours";
+import { type ShopOrderingState, dayAndClock, shopOrderingState } from "@/lib/cart/shop-hours";
 
 type OrgRow = typeof organizations.$inferSelect;
 
@@ -90,6 +90,13 @@ export type StaffOrderingStatus = ShopOrderingState & {
    * confirm says how many there are so nobody forgets those customers.
    */
   readonly ordersStillDue: number;
+  /**
+   * The pause began before today's opening and is still in force — the
+   * forgot-to-reopen case. The POS turns its first screen of the day into a
+   * keep-closed-or-open decision (ops-1 R1). Computed here, from the same row
+   * as everything else, so the screen never works it out from columns itself.
+   */
+  readonly carriedOver: boolean;
 };
 
 export async function getOrderingStatusForStaff(orgId: string, now: Date = new Date()): Promise<StaffOrderingStatus | null> {
@@ -115,7 +122,32 @@ async function staffStatus(orgId: string, org: OrgRow, now: Date): Promise<Staff
     pausedBy: paused && org.orderingPausedBy ? { userId: org.orderingPausedBy, name } : null,
     reason: paused ? org.orderingPausedReason : null,
     ordersStillDue,
+    carriedOver: pauseCarriedOver(shopStatusFromOrg(org), now),
   };
+}
+
+/** What a pause taken right now would mean — shown BEFORE anyone confirms it. */
+export interface PausePreview {
+  /** When "until we next open" would end, if chosen now. */
+  readonly nextOpeningAt: Date;
+  /** "today at 11:30 AM" — so a 9 am pause says plainly that the default ends at 11:30 today. */
+  readonly nextOpeningLabel: string;
+  /** Orders already placed and not finished — the customers who may need a call. */
+  readonly ordersStillDue: number;
+}
+
+/**
+ * The confirm dialog's facts, on the server's clock at the moment it opens.
+ * Not from the page load: a POS left open at 10:55 and pressed at 11:40 would
+ * otherwise promise "today at 11:30" for a pause that actually runs to
+ * tomorrow. The pause itself still computes its end again when it is taken.
+ */
+export async function previewPause(orgId: string, now: Date = new Date()): Promise<PausePreview | null> {
+  const org = await readOrg(orgId);
+  if (!org) return null;
+  const nextOpeningAt = pausedUntilFor("UNTIL_NEXT_OPENING", now, org.openingTime, org.closingTime);
+  if (!nextOpeningAt) return null;
+  return { nextOpeningAt, nextOpeningLabel: dayAndClock(nextOpeningAt, now), ordersStillDue: await countOrdersStillDue(orgId) };
 }
 
 async function displayName(orgId: string, userId: string): Promise<string | null> {

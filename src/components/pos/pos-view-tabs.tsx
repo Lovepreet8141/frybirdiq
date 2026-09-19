@@ -11,12 +11,27 @@ import { cn } from "cn";
  * (category, lines, channel, the priced total) must survive a trip to check
  * the floor plan and back, and unmounting it would throw all of that away.
  */
-export function PosViewTabs({ order, tables }: { order: React.ReactNode; tables: React.ReactNode }) {
+export function PosViewTabs({
+  order,
+  tables,
+  headerEnd,
+}: {
+  order: React.ReactNode;
+  tables: React.ReactNode;
+  /**
+   * Right-hand end of the tab bar, and anything it wraps onto a full row below
+   * it — the Close Shop switch and, while closed, its who/when/reopens strip
+   * (ops-1). Shown on both tabs: whether the shop is taking orders is not an
+   * Order-tab fact.
+   */
+  headerEnd?: React.ReactNode;
+}) {
   const [view, setView] = useState<"order" | "tables">("order");
 
   return (
     <div className="flex flex-col lg:h-[calc(100dvh-68px)]">
-      <div className="flex items-center gap-1 border-b border-border bg-surface px-2 py-1.5" role="tablist">
+      <div className="flex flex-wrap items-center gap-1 border-b border-border bg-surface px-2 py-1.5">
+        <div className="flex items-center gap-1" role="tablist">
         <button
           type="button"
           role="tab"
@@ -41,6 +56,8 @@ export function PosViewTabs({ order, tables }: { order: React.ReactNode; tables:
         >
           Tables
         </button>
+        </div>
+        {headerEnd}
       </div>
 
       <div className="min-h-0 flex-1" hidden={view !== "order"}>
