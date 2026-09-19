@@ -53,7 +53,8 @@ age-keygen -o /root/owner.key 2>/root/pub.txt; pub=$(awk "/Public key/{print \$3
 # with an encoded @), so a run proves the password really reaches the server, and
 # the argv probe below has something to look for.
 psql -U postgres -q -c "alter role postgres password 'S3cretMARKER@x'" >/dev/null
-sed -i "s/^host all all all .*/host all all all scram-sha-256/;s/^host all all 127.0.0.1\/32 .*/host all all 127.0.0.1\/32 scram-sha-256/" "$(psql -U postgres -At -c 'show hba_file')"
+# Every TCP line demands the password (postgres:17 pads its columns, so match with [[:space:]]).
+sed -E -i 's/^(host[[:space:]].*[[:space:]])trust[[:space:]]*$/\1scram-sha-256/' "$(psql -U postgres -At -c 'show hba_file')"
 psql -U postgres -q -c "select pg_reload_conf()" >/dev/null
 printf "%s\n" "SUPABASE_SERVICE_ROLE_KEY=svc-must-not-leak" "DATABASE_URL=\"postgres://postgres:S3cretMARKER%40x@127.0.0.1/srcdb\"" > /root/env
 # Slow the DB tools by 2s so the argv probe has a wide window to look in.
@@ -77,6 +78,7 @@ chmod 755 /root; chmod 644 /root/env
 
 echo "== 1. happy path"
 run_backup "BACKUP_RCLONE_REMOTE=/off\nBACKUP_AGE_RECIPIENT=$pub\n"; r=$?
+check "TCP really enforces the password (no password -> refused)" "! psql 'postgres://postgres@127.0.0.1/srcdb' -w -c 'select 1' >/dev/null 2>&1"
 check "backup.sh exits 0 (password reached the server through PGPASSWORD, @ decoded)" "[ $r -eq 0 ]"
 check "database password never appears in ANY process argv during the run" "[ ! -s /root/argv.hits ] || { head -3 /root/argv.hits | cut -c1-200; false; }"
 check "the backup directory is mode 700" "[ \$(stat -c %a /bk) = 700 ]"
@@ -121,6 +123,25 @@ check "message says refused" "grep -q 'offsite refused' /root/backup.out"
 echo "== 5. offsite not configured: warns, still succeeds"
 run_backup ""; r=$?
 check "exit 0 and says offsite NOT configured" "[ $r -eq 0 ] && grep -q 'offsite NOT configured' /root/backup.out"
+
+echo "== 7. DATABASE_URL password forms (auth is enforced, so each must really authenticate)"
+setpw() { psql -U postgres -q -c "alter role postgres password \$q\$$1\$q\$" >/dev/null; }
+useurl() { printf "%s\n" "DATABASE_URL=$1" > /root/env; }
+try() { # <label> <role password> <url> <expect: ok|refuse>
+  setpw "$2"; useurl "$3"; run_backup ""; local r=$?
+  if [ "$4" = ok ]; then
+    check "$1: backup succeeds" "[ $r -eq 0 ] && ls /bk/frybird-*[0-9].dump >/dev/null 2>&1"
+  else
+    check "$1: exits non-zero and writes no dump" "[ $r -ne 0 ] && ! ls /bk/*.dump >/dev/null 2>&1"
+  fi
+  check "$1: password never in any argv" "[ ! -s /root/argv.hits ]"
+}
+try "raw backslash and raw % not followed by hex" 'S3cretMARKER\x%zz' 'postgres://postgres:S3cretMARKER\x%zz@127.0.0.1/srcdb' ok
+try "encoded %40 and %25 decode" 'S3cretMARKER@x%1' 'postgres://postgres:S3cretMARKER%40x%251@127.0.0.1/srcdb' ok
+try "?password= query parameter" 'S3cretMARKER@x' 'postgres://postgres@127.0.0.1/srcdb?sslmode=disable&password=S3cretMARKER%40x' ok
+try "?password= with a uppercase key and other params kept" 'S3cretMARKER@x' 'postgres://postgres@127.0.0.1/srcdb?PASSWORD=S3cretMARKER%40x&connect_timeout=5' ok
+try "password given twice is refused" 'S3cretMARKER@x' 'postgres://postgres:S3cretMARKER%40x@127.0.0.1/srcdb?password=S3cretMARKER%40x' refuse
+try "WRONG password fails closed" 'S3cretMARKER@x' 'postgres://postgres:S3cretWRONG@127.0.0.1/srcdb' refuse
 
 echo; echo "passed=$pass failed=$failn"; [ $failn -eq 0 ]
 INNER

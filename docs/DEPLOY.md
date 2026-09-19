@@ -372,6 +372,15 @@ non-zero, which fires the `OnFailure=` alert (§11). Each step is independent: a
 failed auth dump never stops the public dump, and a failed offsite copy never
 touches the local dumps.
 
+**`DATABASE_URL` shape the backup accepts.** `postgres://USER:PASSWORD@HOST:PORT/DB`
+in `/etc/frybird/env`. Inside the password only `%XX` hex pairs are decoded (write
+`@` as `%40`, `/` as `%2F`, `%` as `%25`); a raw backslash or a `%` not followed by
+two hex digits is kept literally. A `?password=...` parameter is also accepted
+(moved out of the URL like the userinfo form); giving the password both ways makes
+the backup refuse to run. The backup takes only this one line from the file and
+passes the password to `pg_dump`/`psql` through `PGPASSWORD`, never on their
+command line. If the password is wrong the run fails at once and writes no dump.
+
 **Staff logins.** They live in Supabase Auth, not in `public`, so the `public`
 dump alone would lose every staff account. The `auth` schema is dumped through the
 same `DATABASE_URL`, so **no paid Supabase plan is needed**. (Supabase's own

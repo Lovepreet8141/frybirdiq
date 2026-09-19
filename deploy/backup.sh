@@ -50,18 +50,48 @@ DATABASE_URL="${DATABASE_URL%\'}"; DATABASE_URL="${DATABASE_URL#\'}"
 # world-readable on Ubuntu, and pg_dump/psql run for as long as the dump does.
 # The password moves to PGPASSWORD (environment: /proc/<pid>/environ is owner-only)
 # and the URL handed to the tools has the password removed.
-db_url="$DATABASE_URL"
+#
+# Required shape (docs/DEPLOY.md s8):  postgres://USER:PASSWORD@HOST:PORT/DB
+# Only %XX hex pairs in the PASSWORD are decoded; every other character, including
+# a raw backslash or a % not followed by two hex digits, is taken literally.
+# A ?password=... query parameter is also accepted (removed from the URL and
+# moved to PGPASSWORD); giving a password BOTH ways is refused.
+urldecode() { # decode %XX hex pairs only
+  local s="$1" out=""
+  while [ -n "$s" ]; do
+    if [[ "$s" =~ ^%([0-9A-Fa-f]{2})(.*)$ ]]; then
+      # shellcheck disable=SC2059  # the format is two validated hex digits
+      out+="$(printf "\\x${BASH_REMATCH[1]}")"; s="${BASH_REMATCH[2]}"
+    else
+      out+="${s:0:1}"; s="${s:1}"
+    fi
+  done
+  printf '%s' "$out"
+}
+db_url="$DATABASE_URL"; qpw=""; have_qpw=0
+if [[ "$db_url" == *\?* ]]; then
+  base="${db_url%%\?*}"; query="${db_url#*\?}"; kept=""
+  IFS='&' read -r -a params <<< "$query"
+  for prm in "${params[@]}"; do
+    if [[ "${prm,,}" == password=* ]]; then qpw="${prm#*=}"; have_qpw=1
+    else kept="${kept:+$kept&}$prm"; fi
+  done
+  db_url="$base${kept:+?$kept}"
+fi
 scheme="${db_url%%://*}://"
 rest="${db_url#*://}"
-userinfo="${rest%@*}"
-if [ "$userinfo" != "$rest" ] && [ "${userinfo#*:}" != "$userinfo" ]; then
-  raw_pw="${userinfo#*:}"
-  # printf %b with \x turns %40-style escapes back into characters.
-  PGPASSWORD="$(printf '%b' "${raw_pw//%/\\x}")"
-  export PGPASSWORD
-  db_url="${scheme}${userinfo%%:*}@${rest#"$userinfo"@}"
+authority="${rest%%/*}"                     # userinfo@host:port (no path)
+tail_="${rest#"$authority"}"                # /db?params
+userinfo="${authority%@*}"
+hostpart="${authority##*@}"
+if [ "$userinfo" != "$authority" ] && [ "${userinfo#*:}" != "$userinfo" ]; then
+  [ "$have_qpw" -eq 0 ] || { echo "FAILED: DATABASE_URL gives the password twice (userinfo and ?password=); refusing" >&2; exit 1; }
+  PGPASSWORD="$(urldecode "${userinfo#*:}")"; export PGPASSWORD
+  db_url="${scheme}${userinfo%%:*}@${hostpart}${tail_}"
+elif [ "$have_qpw" -eq 1 ]; then
+  PGPASSWORD="$(urldecode "$qpw")"; export PGPASSWORD
 fi
-unset DATABASE_URL raw_pw userinfo rest
+unset DATABASE_URL qpw userinfo authority rest tail_ query kept params base
 
 umask 077
 mkdir -p "$BACKUP_DIR"
