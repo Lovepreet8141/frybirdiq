@@ -273,7 +273,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           <p className="mt-6 text-sm text-muted-foreground">This order earns a FRYBIRD REWARDS stamp once it&rsquo;s paid, if it qualifies.</p>
         )
       )}
-      <ProgressNote show={isOwner} />
+      <ProgressNote show={isOwner} orderCarriesReward={order.stampRewardDiscount > 0n} />
 
       {/* Only once the order is finished. Asking someone to score food that has
           not arrived turns a bad minute during the wait into a permanent one

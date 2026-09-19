@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { LOYALTY_DISABLED, type LoyaltyConfig } from "./index";
+import { LOYALTY_DISABLED, pointsEarned, type LoyaltyConfig } from "./index";
 import { earnPreview, pointsRule, stampProgress, stampRule, stampRuleShort } from "./copy";
-import { STAMP_DISABLED, type StampConfig } from "./stamps";
-import { fromRupees, paise } from "@/lib/money";
+import { qualifiesForStamp, STAMP_DISABLED, type StampConfig } from "./stamps";
+import { fromRupees, paise, type Paise } from "@/lib/money";
 
 const stamps = (over: Partial<StampConfig> = {}): StampConfig => ({ enabled: true, stampsRequired: 8, minOrderValue: fromRupees("200"), maxRewardValue: fromRupees("150"), ...over });
 const loyalty = (over: Partial<LoyaltyConfig> = {}): LoyaltyConfig => ({ earnBps: 500, pointValue: paise(100), minRedeemPoints: 0, ...over });
@@ -29,8 +29,8 @@ describe("rules come from the config", () => {
   });
 
   it("points rule follows the earn rate and minimum", () => {
-    expect(pointsRule(loyalty())).toBe("5% back as points on every order.");
-    expect(pointsRule(loyalty({ earnBps: 1000, minRedeemPoints: 50 }))).toBe("10% back as points on every order, spendable once you have 50.");
+    expect(pointsRule(loyalty())).toBe("Signed in, 5% of what you pay for food (after offers and points) comes back as points on paid orders.");
+    expect(pointsRule(loyalty({ earnBps: 1000, minRedeemPoints: 50 }))).toBe("Signed in, 10% of what you pay for food (after offers and points) comes back as points on paid orders, spendable once you have 50.");
   });
 });
 
@@ -71,21 +71,51 @@ describe("stampProgress maths", () => {
 });
 
 describe("earnPreview", () => {
-  it("signed in: names what this order earns", () => {
-    expect(earnPreview({ spend: fromRupees("400"), signedIn: true, loyalty: loyalty(), stamps: stamps() })).toEqual(["This order earns a stamp and 20 points, added when it's paid."]);
+  const preview = (spend: Paise, over: { signedIn?: boolean; loyalty?: LoyaltyConfig; stamps?: StampConfig } = {}) =>
+    earnPreview({ spend, signedIn: over.signedIn ?? true, loyalty: over.loyalty ?? loyalty(), stamps: over.stamps ?? stamps() });
+
+  it("signed in: the owner's wording, one line per thing earned", () => {
+    expect(preview(fromRupees("400"))).toEqual(["You'll earn 1 stamp when this order is completed.", "You'll earn 20 points when this order is completed."]);
   });
 
-  it("stamp threshold is strictly greater than", () => {
-    const exactly = earnPreview({ spend: fromRupees("200"), signedIn: true, loyalty: LOYALTY_DISABLED, stamps: stamps() });
-    expect(exactly).toEqual(["Spend over ₹200 to earn a stamp."]);
-    expect(earnPreview({ spend: paise(20001), signedIn: true, loyalty: LOYALTY_DISABLED, stamps: stamps() })[0]).toContain("a stamp");
+  it("says nothing for a part that earns nothing — never '0 stamps' or '0 points'", () => {
+    expect(preview(fromRupees("100"))).toEqual(["You'll earn 5 points when this order is completed."]);
+    expect(preview(fromRupees("400"), { loyalty: LOYALTY_DISABLED })).toEqual(["You'll earn 1 stamp when this order is completed."]);
+    expect(preview(paise(0))).toEqual([]);
+    expect(preview(fromRupees("400"), { loyalty: LOYALTY_DISABLED, stamps: STAMP_DISABLED })).toEqual([]);
+    for (const line of preview(fromRupees("100"))) expect(line).not.toMatch(/\b0 (stamps?|points?)/);
   });
 
-  it("guests are told to sign in, and the figures still come from config", () => {
-    expect(earnPreview({ spend: fromRupees("400"), signedIn: false, loyalty: loyalty({ earnBps: 1000 }), stamps: stamps() })[0]).toBe("Sign in to earn a stamp and 40 points on this order.");
+  it("uses singular for one point", () => {
+    expect(preview(paise(2000), { loyalty: loyalty({ earnBps: 500, pointValue: paise(100) }) })).toEqual(["You'll earn 1 point when this order is completed."]);
   });
 
-  it("is empty when both programmes are off", () => {
-    expect(earnPreview({ spend: fromRupees("400"), signedIn: true, loyalty: LOYALTY_DISABLED, stamps: STAMP_DISABLED })).toEqual([]);
+  it("agrees with the ledger's own functions at the threshold (200.00 vs 200.01)", () => {
+    for (const spend of [paise(20000), paise(20001), paise(19999), fromRupees("1000")]) {
+      const shows = preview(spend).some((line) => line.includes("1 stamp"));
+      expect(shows).toBe(qualifiesForStamp(spend, stamps()));
+      const pts = pointsEarned(spend, loyalty());
+      expect(preview(spend).some((line) => line.includes("point"))).toBe(pts > 0);
+      if (pts > 0) expect(preview(spend).join(" ")).toContain(`${pts} point`);
+    }
+    expect(preview(paise(20000)).some((line) => line.includes("stamp"))).toBe(false);
+    expect(preview(paise(20001)).some((line) => line.includes("stamp"))).toBe(true);
+  });
+
+  it("guests are told to sign in, with the same parts and the same figures", () => {
+    expect(preview(fromRupees("400"), { signedIn: false, loyalty: loyalty({ earnBps: 1000 }) })).toEqual(["Sign in to earn 1 stamp and 40 points on this order."]);
+    expect(preview(fromRupees("100"), { signedIn: false })).toEqual(["Sign in to earn 5 points on this order."]);
+    expect(preview(paise(0), { signedIn: false })).toEqual([]);
+  });
+});
+
+describe("rule text says who and what earns", () => {
+  it("names signed in, paid orders and food after offers, and no longer says 'every order'", () => {
+    for (const text of [stampRule(stamps())!, stampRuleShort(stamps())!, pointsRule(loyalty())!]) {
+      expect(text).toMatch(/[Ss]igned in|signed in/);
+      expect(text).toContain("paid");
+      expect(text).toContain("after offers");
+      expect(text.toLowerCase()).not.toContain("every");
+    }
   });
 });

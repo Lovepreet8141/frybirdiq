@@ -21,19 +21,19 @@ const plural = (count: number, one: string, many: string) => (count === 1 ? one 
 /** What earns a stamp and what a full card gives. Null when the card is off. */
 export function stampRule(config: StampConfig): string | null {
   if (!isStampProgramEnabled(config)) return null;
-  return `Spend over ${formatINR(config.minOrderValue)}, get a stamp. Collect ${config.stampsRequired}, and one item up to ${formatINR(config.maxRewardValue)} is free — you pick which one.`;
+  return `When you're signed in, a paid order over ${formatINR(config.minOrderValue)} (food, after offers and points) earns a stamp. Collect ${config.stampsRequired}, and one item up to ${formatINR(config.maxRewardValue)} is free — you pick which one.`;
 }
 
 /** One line for tight places (the menu). Null when the card is off. */
 export function stampRuleShort(config: StampConfig): string | null {
   if (!isStampProgramEnabled(config)) return null;
-  return `Every order over ${formatINR(config.minOrderValue)} earns a stamp. ${config.stampsRequired} stamps = a free item up to ${formatINR(config.maxRewardValue)}.`;
+  return `Signed in, a paid order over ${formatINR(config.minOrderValue)} (food, after offers and points) earns a stamp. ${config.stampsRequired} stamps = a free item up to ${formatINR(config.maxRewardValue)}.`;
 }
 
 /** What points give. Null when points are off. */
 export function pointsRule(config: LoyaltyConfig): string | null {
   if (!isLoyaltyEnabled(config)) return null;
-  return `${formatBps(config.earnBps, 0)} back as points on every order${config.minRedeemPoints > 0 ? `, spendable once you have ${config.minRedeemPoints}` : ""}.`;
+  return `Signed in, ${formatBps(config.earnBps, 0)} of what you pay for food (after offers and points) comes back as points on paid orders${config.minRedeemPoints > 0 ? `, spendable once you have ${config.minRedeemPoints}` : ""}.`;
 }
 
 export interface StampProgress {
@@ -74,25 +74,25 @@ export function stampProgress(count: number, availableRewards: number, config: S
 /**
  * What placing this order will earn, for the cart and checkout.
  *
- * `spend` is what the customer will pay for the food (delivery is not earned
- * on, as at settlement). A preview, not a promise: stamps and points are
- * awarded when payment lands. Guests are told what an account would collect.
+ * `spend` must be the ledger's own qualifying spend for the order
+ * (`qualifyingStampSpend` in the loyalty repository: what the customer pays,
+ * after offers and points, delivery excluded), and the two decisions below are
+ * the ledger's own functions — `qualifiesForStamp` and `pointsEarned` — not a
+ * copy of their arithmetic. A part that would earn nothing is left out
+ * entirely: never "0 stamps", never "0 points".
  */
 export function earnPreview(input: { spend: Paise; signedIn: boolean; loyalty: LoyaltyConfig; stamps: StampConfig }): readonly string[] {
   const { spend, signedIn, loyalty, stamps } = input;
-  const earns: string[] = [];
-  const notes: string[] = [];
-
-  if (isStampProgramEnabled(stamps)) {
-    if (qualifiesForStamp(spend, stamps)) earns.push("a stamp");
-    else notes.push(`Spend over ${formatINR(stamps.minOrderValue)} to earn a stamp.`);
-  }
+  const stamp = qualifiesForStamp(spend, stamps);
   const points = pointsEarned(spend, loyalty);
-  if (points > 0) earns.push(`${points} ${plural(points, "point", "points")}`);
+  const pointsText = `${points} ${plural(points, "point", "points")}`;
 
-  const lines: string[] = [];
-  if (earns.length > 0) {
-    lines.push(signedIn ? `This order earns ${earns.join(" and ")}, added when it's paid.` : `Sign in to earn ${earns.join(" and ")} on this order.`);
+  if (!signedIn) {
+    const parts = [...(stamp ? ["1 stamp"] : []), ...(points > 0 ? [pointsText] : [])];
+    return parts.length > 0 ? [`Sign in to earn ${parts.join(" and ")} on this order.`] : [];
   }
-  return [...lines, ...notes];
+  return [
+    ...(stamp ? ["You'll earn 1 stamp when this order is completed."] : []),
+    ...(points > 0 ? [`You'll earn ${pointsText} when this order is completed.`] : []),
+  ];
 }
