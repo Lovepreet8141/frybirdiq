@@ -50,7 +50,7 @@ import type { ClaimRequest, FinishOutcome, JobRunStore } from "@/lib/jobs/handle
 import { DayLockBusy, DayTimeout, type FactsParity, type JobReadRepos, type JobWriteRepos } from "@/lib/jobs/repos";
 import { getProfitAndLoss } from "./expenses";
 import { countStuckRefundFollowUps, healLostRefundFollowUps } from "./payments";
-import { DayLockBusyError, DayTimeoutError, purgeIntradayFacts, readDailyFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
+import { DayLockBusyError, DayTimeoutError, assertBusinessDate, purgeIntradayFacts, readDailyFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
 import { expireInsights, getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
 import { TRUST_DEFINITION_VERSION, computeTrustDay } from "./iq-trust";
 import { listOpenRecommendations, proposeRecommendation } from "./iq-recommendations";
@@ -522,6 +522,9 @@ export type BriefRunState = {
  * rather than as zero mismatches (R2.6).
  */
 export async function readBriefRunState(orgId: string, date: string): Promise<BriefRunState> {
+  // `_` is a single-character wildcard in LIKE: an unchecked date would match
+  // another day's hourly period keys and report that day's checks as this day's.
+  assertBusinessDate(date);
   const jobs = [...Object.values(BRIEF_CHECK_JOBS), FACTS_NIGHTLY_JOB];
   const rows = await db()
     .select({ job: iqJobRuns.job, status: iqJobRuns.status, periodKey: iqJobRuns.periodKey, summary: iqJobRuns.summary })

@@ -247,6 +247,25 @@ describe("readBriefRunState — how the day's checks ran", () => {
   });
 });
 
+describe("a date that is not a date (RELIABILITY, iq2-s10a fix)", () => {
+  it("refuses a LIKE wildcard instead of matching another day's rows", async () => {
+    const date = "2026-09-15";
+    // The day this wildcard would reach: its runs succeeded, and a brief must never report them as another day's.
+    expect((await readBriefRunState(org.orgId, date)).checks.detect).toBe("SUCCEEDED");
+
+    await expect(readBriefRunState(org.orgId, "2026-09-1_")).rejects.toThrow(RangeError);
+    await expect(loadBriefInsightsFor(org.orgId, OWNER, "2026-09-1_")).rejects.toThrow(RangeError);
+    await expect(readBriefRunState(org.orgId, "2026-09-1%")).rejects.toThrow(RangeError);
+  });
+
+  it("refuses a date that does not exist and one of the wrong shape", async () => {
+    for (const bad of ["2026-02-30", "2026-9-15", "15-09-2026", ""]) {
+      await expect(readBriefRunState(org.orgId, bad)).rejects.toThrow(RangeError);
+      await expect(loadBriefInsightsFor(org.orgId, OWNER, bad)).rejects.toThrow(RangeError);
+    }
+  });
+});
+
 describe("both reads, composed", () => {
   it("renders a brief for the day from stored rows and the day's run state", async () => {
     const date = "2026-09-17";

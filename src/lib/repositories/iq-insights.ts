@@ -61,6 +61,7 @@ import {
 } from "@/lib/iq/engine";
 import { observed } from "@/lib/iq/engine/observed-factory";
 import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
+import { assertBusinessDate } from "./iq-facts";
 
 export type IqTx = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
 
@@ -599,6 +600,9 @@ export async function loadInsightsFor(
  *    including the two month-to-date windows, whose periods are not the day.
  *
  * FACT and DETECTION only, RETRACTED never: the brief ignores everything else.
+ *
+ * `date` is checked before it reaches a LIKE pattern: `_` is a single-character
+ * wildcard there, so an unchecked date would match other days' dedupe keys.
  */
 export async function loadBriefInsightsFor(
   orgId: string,
@@ -606,6 +610,7 @@ export async function loadBriefInsightsFor(
   date: string,
   options: { readonly limit?: number } = {},
 ): Promise<StoredInsightsRead> {
+  assertBusinessDate(date);
   const dayStart = startOfBusinessDay(date);
   const dayEnd = endOfBusinessDay(date);
   const ledgerOverlap = LEDGER_PRODUCER_PREFIXES.map((prefix) => like(iqInsights.producer, `${prefix}%`));
