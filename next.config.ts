@@ -1,6 +1,32 @@
+import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import type { NextConfig } from "next";
 
+/**
+ * One opaque id per build, shared by the server and the browser bundle.
+ *
+ * The staff screens compare the id baked into their own bundle with what
+ * `/api/version` says the running server has, and offer a reload when they
+ * differ (deploy.sh restarts the process, so a screen left open across a deploy
+ * keeps running the old client). Derived from the commit so every config
+ * evaluation inside one build agrees, hashed so the URL does not publish the
+ * commit. Not a secret; just not the commit hash itself.
+ */
+function buildId(): string {
+  let source = "dev";
+  try {
+    source = execSync("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim() || source;
+  } catch {
+    // No git (an unpacked tarball): every build then shares "dev" and the check stays quiet.
+  }
+  return createHash("sha256").update(`frybird:${source}`).digest("hex").slice(0, 16);
+}
+const BUILD_ID = buildId();
+
 const nextConfig: NextConfig = {
+  generateBuildId: async () => BUILD_ID,
+  env: { NEXT_PUBLIC_BUILD_ID: BUILD_ID },
+
   /**
    * Standalone output, for deploying to a VPS.
    *

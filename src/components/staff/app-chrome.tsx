@@ -11,6 +11,7 @@ import { NewOrderAlert } from "@/components/staff/new-order-alert";
 import { buildNavGroups } from "@/components/staff/nav-items";
 import { SiteHeader } from "@/components/staff/site-header";
 import { SoundCheck } from "@/components/staff/sound-check";
+import { VersionCheck } from "@/components/staff/version-check";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import type { Role } from "@/domain/permissions";
 
@@ -145,6 +146,7 @@ export function AppChrome({
         )}
 
         <main className="flex-1">{children}</main>
+        <VersionCheck />
       </>
     );
   }
@@ -218,6 +220,7 @@ export function AppChrome({
           </div>
         </div>
         <BottomTabs groups={navGroups} />
+        <VersionCheck />
       </SidebarInset>
     </SidebarProvider>
   );
