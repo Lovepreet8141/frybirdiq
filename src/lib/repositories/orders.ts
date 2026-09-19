@@ -26,7 +26,8 @@ import { isSupabaseConfigured } from "@/lib/env";
 import { type Paise, ZERO, formatINR, paise, subtract } from "@/lib/money";
 import { type PricedOrder, priceOrder } from "@/lib/pricing";
 import { fromMicro, toPoint } from "@/lib/delivery";
-import { type ShopClosedRefusal, type ShopPausedRefusal, orderingRefusal } from "@/lib/orders/opening-hours";
+import { type ShopClosedRefusal, type ShopPausedRefusal, type ShopStatus, orderingRefusal } from "@/lib/orders/opening-hours";
+import { OrderingRefusedAtWrite, type WriteRefusal, writeGate } from "@/lib/orders/write-gate";
 import { shopOrderingState } from "@/lib/cart/shop-hours";
 import { shopStatusFromOrg } from "./shop-status";
 import { type SnapshotLineInput, snapshotLines } from "@/lib/orders/snapshot";
@@ -191,6 +192,54 @@ export async function findResumableOnlineOrder(orgId: string, phone: string, sin
  * created PENDING_PAYMENT and the counter moves it.
  */
 /**
+ * What the customer is told for each ordering refusal. One place, used by the
+ * gate at the top of the request AND the re-check at the moment of writing, so
+ * the two can never word (or shape) a refusal differently. `paused` and
+ * `closed` are never set together: the form reads `closed` as "choose a time".
+ */
+function pausedResult(now: Date, shop: ShopStatus, paused: ShopPausedRefusal): PlaceOrderResult {
+  const state = shopOrderingState(now, shop);
+  const reopens = state.state === "paused" && state.reopensAtLabel ? `We open again ${state.reopensAtLabel}.` : "Please check back soon.";
+  return { ok: false, error: `We're not taking orders right now. ${reopens} Nothing has been ordered or charged.`, paused };
+}
+
+function closedResult(closed: ShopClosedRefusal): PlaceOrderResult {
+  return {
+    ok: false,
+    error: `The kitchen is closed right now. We open ${closed.opensAtLabel} — nothing has been ordered or charged. You can still choose a time instead.`,
+    closed,
+  };
+}
+
+const SCHEDULE_SLIPPED_RESULT: PlaceOrderResult = {
+  ok: false,
+  error: "That time isn't available anymore. Pick another.",
+  fieldErrors: { scheduledFor: "Choose a time within opening hours, at least 20 minutes from now." },
+};
+
+/** A fresh read of the org's hours and pause: the four columns the gate needs, nothing else. Fails closed (throws) when the org is gone. */
+async function readShopStatus(orgId: string): Promise<ShopStatus> {
+  const [row] = await db()
+    .select({
+      openingTime: organizations.openingTime,
+      closingTime: organizations.closingTime,
+      orderingPausedAt: organizations.orderingPausedAt,
+      orderingPausedUntil: organizations.orderingPausedUntil,
+    })
+    .from(organizations)
+    .where(eq(organizations.id, orgId))
+    .limit(1);
+  if (!row) throw new Error("placeOrder: the shop row could not be read for the ordering gate");
+  return shopStatusFromOrg(row);
+}
+
+function writeRefusalResult(refusal: WriteRefusal, now: Date, shop: ShopStatus): PlaceOrderResult {
+  if (refusal.kind === "PAUSED") return pausedResult(now, shop, refusal.paused);
+  if (refusal.kind === "CLOSED") return closedResult(refusal.closed);
+  return SCHEDULE_SLIPPED_RESULT;
+}
+
+/**
  * Places an order.
  *
  * Takes `unknown` and validates. This is reached from a Server Action, which
@@ -317,13 +366,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     // The switch outranks the hours and refuses pre-orders too, so this never
     // says "choose a time" and never carries `closed` (the form would move the
     // customer onto Choose a time). The owner's own words; nothing staff typed.
-    const state = shopOrderingState(now, shop);
-    const reopens = state.state === "paused" && state.reopensAtLabel ? `We open again ${state.reopensAtLabel}.` : "Please check back soon.";
-    return {
-      ok: false,
-      error: `We're not taking orders right now. ${reopens} Nothing has been ordered or charged.`,
-      paused: refusal.paused,
-    };
+    return pausedResult(now, shop, refusal.paused);
   }
 
   if (details.when === "SCHEDULED") {
@@ -354,12 +397,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
      * sentence.
      */
     if (refusal?.kind === "CLOSED") {
-      const { closed } = refusal;
-      return {
-        ok: false,
-        error: `The kitchen is closed right now. We open ${closed.opensAtLabel} — nothing has been ordered or charged. You can still choose a time instead.`,
-        closed,
-      };
+      return closedResult(refusal.closed);
     }
   }
 
@@ -492,11 +530,34 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     if (error instanceof IdempotencyConflict) {
       return { ok: false, error: "That looks like a repeat submission. Refresh and try again." };
     }
+    // Refused at the moment of writing (paused, closed, or the slot slipped): nothing was ordered or charged,
+    // and the idempotency claim was released, so a retry after the shop reopens is a fresh attempt.
+    if (error instanceof OrderingRefusedAtWrite) return writeRefusalResult(error.refusal, error.at, error.shop);
     throw error;
   }
 
   async function writeOrder(): Promise<PlaceOrderResult> {
   const now = new Date();
+
+  /*
+   * Ask the gate again, on a fresh read, before anything is written.
+   *
+   * The gate at the top of the request read the organization seconds ago: the
+   * delivery quote, pricing and the Razorpay intent have run since, and a pause
+   * (or closing time) may have landed in between. Refused here nothing has been
+   * written, so no customer row is touched and no promo slot is burned. The
+   * refusal is THROWN, not returned: `withIdempotency` stores a returned result
+   * as the key's answer and would replay "not taking orders" to a retry after the
+   * shop reopens; a throw releases the claim (the catch below turns it into the
+   * customer's message). The last, airtight check is inside `persistOrder`, under
+   * a lock, in the same transaction as the order row.
+   */
+  {
+    const fresh = await readShopStatus(orgId);
+    const at = new Date();
+    const refused = writeGate({ now: at, shop: fresh, when: details.when, scheduledFor });
+    if (refused) throw new OrderingRefusedAtWrite(refused, at, fresh);
+  }
 
   /*
    * The customer record.
@@ -598,6 +659,8 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     payment,
     actorUserId: null,
     eventReason: `Placed on the website for ${fulfilment === "DELIVERY" ? "delivery" : "collection"}`,
+    // Website orders only: re-checked under a lock in the transaction that inserts the row. The counter passes none (it stays ungated).
+    gate: { when: details.when, scheduledFor },
     extra: {
       scheduledFor,
       deliveryAddress:
@@ -705,6 +768,17 @@ export interface PersistOrderInput {
   readonly eventReason: string;
   /** Channel-specific columns (delivery pin, promo, points, stamp reward) the core does not decide. */
   readonly extra?: Partial<typeof orders.$inferInsert>;
+  /**
+   * Website orders only. When set, the order row is inserted in a transaction
+   * that first takes a SHARE lock on the organization row and re-decides the
+   * ordering gate (paused, hours, scheduled slot) on that fresh, locked read;
+   * a refusal throws `OrderingRefusedAtWrite` and nothing is written. The
+   * pause's own write takes `FOR UPDATE` on the same row, so a pause and an
+   * order cannot pass each other: either the pause commits first and this
+   * refuses, or this commits first and the pause waits. The counter passes
+   * nothing here and stays ungated (owner ruling: the till keeps working).
+   */
+  readonly gate?: { readonly when: "ASAP" | "SCHEDULED"; readonly scheduledFor: Date | null };
 }
 
 export type PersistOrderResult = { ok: true; order: typeof orders.$inferSelect } | { ok: false; error: string };
@@ -730,34 +804,55 @@ export async function persistOrder(input: PersistOrderInput): Promise<PersistOrd
   const now = new Date();
   let orderNumber = await nextOrderNumber();
 
-  const insertOrder = () =>
-    database
-      .insert(orders)
-      .values({
-        ...input.extra,
-        orgId: input.orgId,
-        locationId: input.locationId,
-        orderNumber,
-        businessDate: businessDay,
-        customerId: input.customerId,
-        status: "PENDING_PAYMENT",
-        channel: input.channel,
-        fulfilment: input.fulfilment,
-        tableId: input.tableId,
-        customerName: input.customerName,
-        customerPhone: input.customerPhone,
-        notes: input.notes,
-        subtotal: input.totals.listed,
-        discountTotal: input.totals.discount,
-        taxableTotal: input.totals.taxable,
-        cgstTotal: input.totals.cgst,
-        sgstTotal: input.totals.sgst,
-        igstTotal: input.totals.igst,
-        taxTotal: input.totals.total,
-        grandTotal: input.payable,
-        placedAt: now,
-      })
-      .returning();
+  const insertOrder = () => {
+    const values: typeof orders.$inferInsert = {
+      ...input.extra,
+      orgId: input.orgId,
+      locationId: input.locationId,
+      orderNumber,
+      businessDate: businessDay,
+      customerId: input.customerId,
+      status: "PENDING_PAYMENT",
+      channel: input.channel,
+      fulfilment: input.fulfilment,
+      tableId: input.tableId,
+      customerName: input.customerName,
+      customerPhone: input.customerPhone,
+      notes: input.notes,
+      subtotal: input.totals.listed,
+      discountTotal: input.totals.discount,
+      taxableTotal: input.totals.taxable,
+      cgstTotal: input.totals.cgst,
+      sgstTotal: input.totals.sgst,
+      igstTotal: input.totals.igst,
+      taxTotal: input.totals.total,
+      grandTotal: input.payable,
+      placedAt: now,
+    };
+    if (!input.gate) return database.insert(orders).values(values).returning();
+
+    // The last check, and the airtight one: under a SHARE lock on the org row, in the transaction that inserts the order.
+    const gate = input.gate;
+    return database.transaction(async (tx) => {
+      const [row] = await tx
+        .select({
+          openingTime: organizations.openingTime,
+          closingTime: organizations.closingTime,
+          orderingPausedAt: organizations.orderingPausedAt,
+          orderingPausedUntil: organizations.orderingPausedUntil,
+        })
+        .from(organizations)
+        .where(eq(organizations.id, input.orgId))
+        .for("share")
+        .limit(1);
+      if (!row) throw new Error("persistOrder: the shop row could not be read for the ordering gate");
+      const shop = shopStatusFromOrg(row);
+      const at = new Date();
+      const refused = writeGate({ now: at, shop, when: gate.when, scheduledFor: gate.scheduledFor });
+      if (refused) throw new OrderingRefusedAtWrite(refused, at, shop);
+      return tx.insert(orders).values(values).returning();
+    });
+  };
 
   let order: typeof orders.$inferSelect | undefined;
   for (let attempt = 0; attempt < 4; attempt += 1) {

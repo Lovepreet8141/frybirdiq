@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { orderingBanner, orderingControls } from "./ordering-banner";
-import { readStatusSafely } from "./safe-status";
+import { STATUS_READ_TIMEOUT_MS, readStatusSafely } from "./safe-status";
 import type { ShopOrderingState } from "./shop-hours";
 
 const paused: ShopOrderingState = { state: "paused", mode: "UNTIL_RESUMED", pausedAt: new Date(), reopensAt: null, reopensAtLabel: null, withinHours: true };
@@ -36,5 +36,35 @@ describe("readStatusSafely", () => {
     const status = await readStatusSafely(() => Promise.reject(new Error("x")), () => {});
     expect(status === null ? null : orderingBanner(status)).toBeNull();
     expect(orderingControls(status)).toMatchObject({ canOrder: true, asapAllowed: true, preorderAllowed: true, disabledReason: null });
+  });
+});
+
+describe("readStatusSafely: a read that hangs", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("gives up after the timeout: null, logged, and the page renders without a banner", async () => {
+    vi.useFakeTimers();
+    const log = vi.fn();
+    const hung = new Promise<ShopOrderingState | null>(() => undefined); // never settles: a database that hangs
+    const pending = readStatusSafely(() => hung, log);
+    await vi.advanceTimersByTimeAsync(STATUS_READ_TIMEOUT_MS - 1);
+    expect(log).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toBeNull();
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0]![0]).toContain("timed out");
+  });
+
+  it("a read that answers in time is returned and leaves no timer behind", async () => {
+    vi.useFakeTimers();
+    const log = vi.fn();
+    const result = await readStatusSafely(async () => paused, log);
+    expect(result).toBe(paused);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("the timeout is 2.5 s: long enough for a slow query, short enough that a page is not held", () => {
+    expect(STATUS_READ_TIMEOUT_MS).toBe(2500);
   });
 });
