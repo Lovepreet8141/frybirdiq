@@ -51,3 +51,15 @@ describe("observedMedian and observedShare", () => {
     expect(typeof misuse).toBe("function");
   });
 });
+
+describe("observedSum and observedMean", () => {
+  it("sums one unit, with an empty sum of zero", async () => {
+    const { observedSum, observedMean } = await import("./observed-stats");
+    const paise = (value: string) => observed({ unit: "paise", value });
+    expect(observedSum("paise", [paise("100"), paise("250")])).toEqual({ unit: "paise", value: "350" });
+    expect(observedSum("count", [])).toEqual({ unit: "count", value: 0 });
+    expect(() => observedSum("paise", [observed({ unit: "count", value: 1 })])).toThrow(/cannot add/);
+    expect(observedMean(observed({ unit: "count", value: 7197 }), observed({ unit: "count", value: 8 }), "seconds")).toEqual({ unit: "seconds", value: 900 });
+    expect(() => observedMean(observed({ unit: "count", value: 1 }), observed({ unit: "count", value: 0 }), "seconds")).toThrow(/zero items/);
+  });
+});
