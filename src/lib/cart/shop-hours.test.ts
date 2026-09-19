@@ -38,3 +38,11 @@ describe("closed message (what the customer is told, and what a refused ASAP ord
     expect(clockLabel("13:00")).toBe("1:00 PM");
   });
 });
+
+describe("clockLabel agrees with the server's refusal label", () => {
+  it("spells the same instant the same way as formatBusinessClock", async () => {
+    const { formatBusinessClock } = await import("@/lib/orders/opening-hours");
+    expect(clockLabel("11:30")).toBe(formatBusinessClock(new Date("2026-09-19T11:30:00+05:30")));
+    expect(clockLabel("23:00")).toBe(formatBusinessClock(new Date("2026-09-19T23:00:00+05:30")));
+  });
+});

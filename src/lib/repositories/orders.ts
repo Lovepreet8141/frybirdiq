@@ -20,13 +20,13 @@ import { assertChannelFulfilment, fulfilmentsFor, type OrderChannel } from "@/do
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition, foodWasCooking } from "@/domain/order-status";
 import type { Role } from "@/domain/permissions";
 import { REJECTION_LABELS, type RejectionReason } from "@/domain/rejection";
-import { BUSINESS_TIMEZONE, businessDate } from "@/lib/dates";
+import { businessDate } from "@/lib/dates";
 import { isValidScheduledTime } from "@/lib/cart/scheduled-time";
 import { isSupabaseConfigured } from "@/lib/env";
 import { type Paise, ZERO, formatINR, paise, subtract } from "@/lib/money";
 import { type PricedOrder, priceOrder } from "@/lib/pricing";
 import { fromMicro, toPoint } from "@/lib/delivery";
-import { isOpenAt, nextOpening } from "@/lib/orders/opening-hours";
+import { type ShopClosedRefusal, asapRefusal } from "@/lib/orders/opening-hours";
 import { type SnapshotLineInput, snapshotLines } from "@/lib/orders/snapshot";
 import type { CartLine } from "@/lib/cart/schema";
 import { priceDraft } from "@/lib/pos/pricing";
@@ -103,27 +103,13 @@ export const checkoutSchema = z.object({
 export type CheckoutInput = z.infer<typeof checkoutSchema>;
 
 /**
- * Why an order was refused, when the reason is a state of the shop rather than
- * a mistake in the form.
- *
- * `error` alone is a sentence; this is the same refusal as data, so the
- * customer-facing layer can render an open/closed state (a chip, a "we open at
- * 11:30" line, a disabled button) instead of parsing prose. Optional on
- * purpose: every existing refusal keeps working untouched and only says
- * `closed` when that is genuinely what happened.
+ * The refusal shape, defined beside the predicate that produces it
+ * (`@/lib/orders/opening-hours`) and re-exported here because this is the path
+ * callers already import it from — `checkout-action.ts` among them. A bare
+ * `export type { ... } from` would re-export it without binding the name
+ * locally, and `PlaceOrderResult` below needs both.
  */
-export interface ShopClosedRefusal {
-  readonly code: "CLOSED";
-  /** The org's configured hours, "HH:MM" in Asia/Kolkata. Read, never decided here. */
-  readonly openingTime: string;
-  readonly closingTime: string;
-  /** The next instant the shop opens, as an ISO string — a Date does not survive the Server Action boundary. */
-  readonly opensAt: string;
-  /** Whether `opensAt` is later today or the next day. */
-  readonly opensDay: "TODAY" | "TOMORROW";
-  /** Ready to print: "today at 11:30 AM" / "tomorrow at 11:30 AM", in the business's own timezone. */
-  readonly opensAtLabel: string;
-}
+export type { ShopClosedRefusal };
 
 export type PlaceOrderResult =
   | { ok: true; orderId: string; orderNumber: string; payment: "COD" | "ONLINE" }
@@ -206,6 +192,12 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     return {
       ok: false,
       error:
+        // No "call the shop to order": no number is published anywhere on the
+        // site (launch audit), and this branch returns before the org row is
+        // read, so there is nothing here to name even if one were. Saying what
+        // happened and that nothing was charged is the whole honest answer —
+        // "try again shortly" would be a guess, since an unconfigured
+        // Supabase is a deployment fault and not a passing one.
         "Ordering isn't connected yet, so this order has not been placed. Nothing has been charged.",
     };
   }
@@ -278,33 +270,30 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       };
     }
     scheduledFor = candidate;
-  } else if (!isOpenAt(now, org.openingTime, org.closingTime)) {
+  } else {
     /*
      * ASAP means "start cooking it now", so it needs someone in the kitchen.
      * Until this check existed, only the SCHEDULED branch above consulted the
      * hours at all: a 2am ASAP order was accepted, and paid for, with nobody
      * to see it until morning (launch audit C1 / P0-3a). Same hours, same
-     * window function, same server clock as the branch above — refused before
-     * the Razorpay Order is minted and before anything is written, so nothing
-     * is charged and there is nothing to clean up.
+     * window, same server clock as the branch above — refused before the
+     * Razorpay Order is minted and before anything is written, so nothing is
+     * charged and there is nothing to clean up.
      *
      * Scheduling is still open while the shop is shut, which is the point:
      * "we're closed, order for 11:30" is the answer, not a dead end.
+     *
+     * The decision itself is `asapRefusal`, pure and unit-tested including the
+     * wall-clock label. What is left here is the call and the sentence.
      */
-    const opens = nextOpening(now, org.openingTime, org.closingTime);
-    const label = `${opens.day === "TODAY" ? "today" : "tomorrow"} at ${opens.at.toLocaleTimeString("en-IN", { timeZone: BUSINESS_TIMEZONE, hour: "numeric", minute: "2-digit" })}`;
-    return {
-      ok: false,
-      error: `The kitchen is closed right now. We open ${label} — nothing has been ordered or charged. You can still choose a time instead.`,
-      closed: {
-        code: "CLOSED",
-        openingTime: org.openingTime,
-        closingTime: org.closingTime,
-        opensAt: opens.at.toISOString(),
-        opensDay: opens.day,
-        opensAtLabel: label,
-      },
-    };
+    const closed = asapRefusal(now, org);
+    if (closed) {
+      return {
+        ok: false,
+        error: `The kitchen is closed right now. We open ${closed.opensAtLabel} — nothing has been ordered or charged. You can still choose a time instead.`,
+        closed,
+      };
+    }
   }
 
   /*

@@ -8,7 +8,8 @@
  * shop that is shut.
  */
 
-import { isOpenAt, nextOpening } from "@/lib/orders/opening-hours";
+import { timeOnBusinessDate } from "@/lib/dates";
+import { formatBusinessClock, isOpenAt, nextOpening } from "@/lib/orders/opening-hours";
 
 export type ShopHoursState =
   | { readonly open: true; readonly closesAt: string }
@@ -20,12 +21,12 @@ export function shopHoursState(now: Date, openingTime: string, closingTime: stri
   return { open: false, opensAt: openingTime, opensToday: opens.day === "TODAY" };
 }
 
-/** "11:30" → "11:30 AM", matching the hours line elsewhere on the site. */
+/** "11:30" → the shared business-clock label, so this notice and the refusal spell a time identically. */
 export function clockLabel(time: string): string {
   const [hours = 0, minutes = 0] = time.split(":").map(Number);
-  const suffix = hours >= 12 ? "PM" : "AM";
-  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
-  return `${hour12}:${String(minutes).padStart(2, "0")} ${suffix}`;
+  // A wall-clock time has no date of its own; any IST day pins it, and the
+  // shared formatter (explicit hour12, normalised spacing/case) does the wording.
+  return formatBusinessClock(timeOnBusinessDate("2026-01-01", `${hours}:${minutes}`));
 }
 
 /** The sentence a closed shop shows. Says when it opens, never promises an order will be taken. */
