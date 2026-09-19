@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseContactPhone, readStoredPhone } from "./phone";
 
 describe("parseContactPhone", () => {
-  it.each(["9876543210", "+91 98765 43210", "0171-2345678", "(0171) 234 5678", "  98765   43210  "])("accepts %s", (raw) => {
+  it.each(["9876543210", "+91 98765 43210", "0171-2345678", "(0171) 234 5678", "0172 255 0123", "9198765432", "  98765   43210  "])("accepts %s", (raw) => {
     expect(parseContactPhone(raw).ok).toBe(true);
   });
 
@@ -31,6 +31,16 @@ describe("parseContactPhone", () => {
     "0 0172 255 0123",
     "1800 123 45",
     "+1800 123 4567",
+    "1860 500 1234",
+    "1800 123 456",
+    "1234567890",
+    "+91 1860 500 1234",
+    "91 1860 500 1234",
+    "91 1860 500 123",
+    "91 1900 123 456",
+    "0 1860 500 1234",
+    "01860 500 1234",
+    "01860 500 123",
   ])("rejects %j", (raw) => {
     expect(parseContactPhone(raw).ok).toBe(false);
   });
