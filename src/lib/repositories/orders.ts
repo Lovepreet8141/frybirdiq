@@ -206,7 +206,13 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     return {
       ok: false,
       error:
-        "Ordering isn't connected yet, so this order has not been placed. Nothing has been charged. Please call the shop to order.",
+        // No "call the shop to order": no number is published anywhere on the
+        // site (launch audit), and this branch returns before the org row is
+        // read, so there is nothing here to name even if one were. Saying what
+        // happened and that nothing was charged is the whole honest answer —
+        // "try again shortly" would be a guess, since an unconfigured
+        // Supabase is a deployment fault and not a passing one.
+        "Ordering isn't connected yet, so this order has not been placed. Nothing has been charged.",
     };
   }
 
