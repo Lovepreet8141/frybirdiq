@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { StaffOrderingStatus } from "@/lib/repositories/shop-status";
-import { CLOSED_TITLE, OPEN_TITLE, morningPrompt, pauseConfirmLines, pauseNotAppliedLine, reasonProblem, shopSwitchView, sinceLabel } from "./shop-switch-view";
+import { CLOSED_TITLE, OPEN_TITLE, morningPrompt, pauseConfirmLines, pauseNotAppliedLine, pauseResultView, shopSwitchView, sinceLabel } from "./shop-switch-view";
 
 const NOW = new Date("2026-09-19T14:30:00.000Z"); // 2026-09-19 20:00 IST
 const PAUSED_AT = new Date("2026-09-19T14:12:00.000Z"); // 19:42 IST today
@@ -77,17 +77,6 @@ describe("pauseConfirmLines — what confirming would do, said before it happens
   });
 });
 
-describe("reasonProblem — the same 3-200 rule the action enforces", () => {
-  it.each([
-    ["", "Say why, in a few words."],
-    ["  ok ", "Say why, in a few words."],
-    ["x".repeat(201), "Keep it under 200 characters."],
-    ["fryer down", null],
-  ])("%j -> %j", (reason, problem) => {
-    expect(reasonProblem(reason)).toBe(problem);
-  });
-});
-
 describe("morningPrompt — the forgot-to-reopen question, once a day", () => {
   const carried = { ...pausedManual, pausedAt: YESTERDAY, carriedOver: true };
   const setUp = new Date("2026-09-19T04:30:00.000Z"); // 10:00 IST, before opening
@@ -138,5 +127,23 @@ describe("pauseNotAppliedLine — a Pause that changed nothing says so, visibly 
 
   it("nothing to say when the shop is not paused", () => {
     expect(pauseNotAppliedLine(open)).toBeNull();
+  });
+});
+
+describe("pauseResultView — the dialog's decision, from the server's status (S4a refusal fix, fail-first)", () => {
+  it("a pause that took: close the dialog", () => {
+    expect(pauseResultView({ changed: true, status: pausedTimed })).toEqual({ kind: "closed" });
+  });
+
+  it("a stricter pause already in force: the dialog STAYS OPEN and says the choice was not applied", () => {
+    expect(pauseResultView({ changed: false, status: pausedManual })).toEqual({
+      kind: "not-applied",
+      message: "Already closed by Aman until someone switches it back on. Your choice was not applied.",
+    });
+  });
+
+  it("the server says the shop is still open: say the pause did not take", () => {
+    expect(pauseResultView({ changed: true, status: open })).toMatchObject({ kind: "not-taken" });
+    expect(pauseResultView({ changed: false, status: closedByHours })).toMatchObject({ kind: "not-taken" });
   });
 });

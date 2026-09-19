@@ -19,6 +19,8 @@ import { revalidatePath } from "next/cache";
 import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
+import { PAUSE_NOTE_MAX, PAUSE_REASON_PRESETS, composePauseReason } from "@/lib/orders/pause-reasons";
+import { clearMenuCache } from "@/lib/repositories/menu-cache";
 import {
   type PauseOrderingResult,
   type PausePreview,
@@ -38,8 +40,10 @@ export type PreviewPauseActionResult = { readonly ok: true; readonly preview: Pa
 export type ResumeOrderingActionResult = ResumeOrderingResult | ActionFailure;
 
 const pauseSchema = z.object({
-  /** Staff's own words, for the audit trail and the other till. Never shown to a customer. */
-  reason: z.string().trim().min(3, "Say why, in a few words.").max(200, "Keep it under 200 characters."),
+  /** One tap, from the owner's five. Never shown to a customer. */
+  preset: z.enum(PAUSE_REASON_PRESETS, { error: "Pick a reason." }),
+  /** Optional free text, staff only, stored after the preset ("Too busy: two riders off"). */
+  note: z.string().trim().max(PAUSE_NOTE_MAX, `Keep the note under ${PAUSE_NOTE_MAX} characters.`).optional(),
   /** The owner's default is "until we next open". */
   mode: z.enum(["UNTIL_NEXT_OPENING", "UNTIL_RESUMED"]).default("UNTIL_NEXT_OPENING"),
 });
@@ -55,7 +59,7 @@ export async function pauseOrderingAction(input: unknown): Promise<PauseOrdering
 
   try {
     const staff = await requirePermission("orders.update");
-    const result = await pauseOrdering({ orgId: staff.orgId, actorUserId: staff.userId, reason: parsed.data.reason, mode: parsed.data.mode });
+    const result = await pauseOrdering({ orgId: staff.orgId, actorUserId: staff.userId, reason: composePauseReason(parsed.data.preset, parsed.data.note), mode: parsed.data.mode });
     if (result.ok) revalidateEverywhere();
     return result;
   } catch (error) {
@@ -115,6 +119,9 @@ export async function previewPauseAction(): Promise<PreviewPauseActionResult> {
  * stale is refused at submit regardless.
  */
 function revalidateEverywhere() {
+  // The 45 s in-process copy of the public menu feeds home, menu, item and the
+  // sitemap; clear it with the pages so nothing customers see outlives the switch.
+  clearMenuCache();
   revalidatePath("/", "layout");
 }
 

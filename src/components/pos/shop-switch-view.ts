@@ -80,12 +80,24 @@ export function pauseNotAppliedLine(status: StaffOrderingStatus): string | null 
   return `Already closed by ${who} ${until}. Your choice was not applied.`;
 }
 
-/** The reason rule the action enforces, checked before sending so the cashier sees it at once. */
-export function reasonProblem(reason: string): string | null {
-  const trimmed = reason.trim();
-  if (trimmed.length < 3) return "Say why, in a few words.";
-  if (trimmed.length > 200) return "Keep it under 200 characters.";
-  return null;
+export type PauseResultView =
+  /** The pause is in force and is the one asked for: close the dialog. */
+  | { readonly kind: "closed" }
+  /** The server's read says the shop is not paused: the click changed nothing. Stay open, say so. */
+  | { readonly kind: "not-taken"; readonly message: string }
+  /** A pause at least as strict was already in force: this choice was not applied. Stay open, say so. */
+  | { readonly kind: "not-applied"; readonly message: string };
+
+/**
+ * What the dialog does with a Pause answer that came back ok. Decided from the
+ * status the server returned, never from the tap (RULE 1).
+ */
+export function pauseResultView(result: { readonly changed: boolean; readonly status: StaffOrderingStatus }): PauseResultView {
+  if (result.status.state !== "paused") {
+    return { kind: "not-taken", message: "That didn't take. The shop is still open for orders. Try again, and tell the owner if it keeps happening." };
+  }
+  if (!result.changed) return { kind: "not-applied", message: pauseNotAppliedLine(result.status) ?? "Your choice was not applied." };
+  return { kind: "closed" };
 }
 
 /**

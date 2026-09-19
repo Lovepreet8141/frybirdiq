@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { pauseOrderingAction, previewPauseAction, resumeOrderingAction } from "@/lib/orders/shop-status-actions";
 import type { PauseMode } from "@/lib/orders/opening-hours";
+import { PAUSE_NOTE_MAX, PAUSE_REASON_PRESETS, type PauseReasonPreset, composePauseReason, noteProblem } from "@/lib/orders/pause-reasons";
 import type { StaffOrderingStatus } from "@/lib/repositories/shop-status";
 import { PAUSE_MODE_LABELS, SHOP_CLOSED_HEADLINE, SHOP_OPEN_HEADLINE, pauseOutcome, restartLine, stillDueLine } from "@/lib/settings/close-shop-copy";
 
@@ -32,7 +33,7 @@ export interface CloseShopPanelProps {
 export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
   const [choosing, setChoosing] = useState(false);
   const [mode, setMode] = useState<PauseMode>("UNTIL_NEXT_OPENING");
-  const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
   const [message, setMessage] = useState<{ tone: "error" | "note"; text: string } | null>(null);
   // Read from the server when the chooser opens, not at page render (a phone left open across opening time).
   const [preview, setPreview] = useState<{ nextOpeningLabel: string; ordersStillDue: number } | null>(null);
@@ -61,7 +62,7 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
   function openChooser() {
     setMessage(null);
     setMode("UNTIL_NEXT_OPENING");
-    setReason("");
+    setNote("");
     setPreview(null);
     setChoosing(true);
     run(
@@ -72,17 +73,23 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
     );
   }
 
-  function confirmPause() {
-    const chosen = { mode, reason };
+  /** The second tap: choosing a reason closes the shop. The note is optional. */
+  function confirmPause(preset: PauseReasonPreset) {
+    const problem = noteProblem(note);
+    if (problem) {
+      setMessage({ tone: "error", text: problem });
+      return;
+    }
+    const chosen = { mode, reason: composePauseReason(preset, note) };
     run(
-      () => pauseOrderingAction(chosen),
+      () => pauseOrderingAction({ preset, note, mode }),
       (result) => {
         if (!("status" in result)) return;
         const outcome = pauseOutcome(result, chosen);
         setMessage(outcome.message);
         if (outcome.close) {
           setChoosing(false);
-          setReason("");
+          setNote("");
         }
       },
     );
@@ -98,7 +105,6 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
     }, () => undefined);
   }
 
-  const reasonOk = reason.trim().length >= 3;
   const stillDue = preview?.ordersStillDue ?? status.ordersStillDue;
   const restart = restartLine(mode, preview?.nextOpeningLabel ?? null);
 
@@ -159,13 +165,7 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
           </button>
         </div>
       ) : (
-        <form
-          className="mt-4 grid gap-4 rounded-lg border border-border bg-panel p-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (reasonOk) confirmPause();
-          }}
-        >
+        <div className="mt-4 grid gap-4 rounded-lg border border-border bg-panel p-4">
           <fieldset className="grid gap-2">
             <legend className="text-[13px] font-semibold">For how long?</legend>
             {(Object.keys(PAUSE_MODE_LABELS) as PauseMode[]).map((value) => (
@@ -177,37 +177,49 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
           </fieldset>
 
           <div className="grid gap-1.5">
-            <label htmlFor="close-shop-reason" className="text-[13px] font-semibold">
-              Why? <span className="font-normal text-muted-foreground">(required — staff only, customers don&apos;t see it)</span>
+            <label htmlFor="close-shop-note" className="text-[13px] font-semibold">
+              Note <span className="font-normal text-muted-foreground">(optional, staff only — add before you tap a reason)</span>
             </label>
             <input
-              id="close-shop-reason"
-              name="reason"
+              id="close-shop-note"
+              name="note"
               type="text"
-              required
-              minLength={3}
-              maxLength={200}
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="e.g. Fryer broken"
+              maxLength={PAUSE_NOTE_MAX}
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="e.g. Fryer 2 is down"
               className="h-11 w-full rounded-md border border-border bg-panel px-3 text-sm outline-none focus-visible:border-primary focus-visible:ring-[3px] focus-visible:ring-primary/20"
             />
           </div>
 
           <div className="grid gap-1 text-sm" role="note">
-            <p className="font-semibold">{restart ?? (pending ? "Checking opening hours…" : "Couldn't check the opening hours — choose \"until I switch it back on\" or close this and try again.")}</p>
+            <p className="font-semibold">{restart ?? (pending ? "Checking opening hours…" : "Couldn't check the opening hours. You can still close: choose a reason below.")}</p>
             {stillDueLine(stillDue) && <p className="text-muted-foreground">{stillDueLine(stillDue)}</p>}
+          </div>
+
+          <div className="grid gap-2" role="group" aria-labelledby="close-shop-why">
+            <span id="close-shop-why" className="text-[13px] font-semibold">Why? Tap one to switch orders off</span>
+            <div className="grid grid-cols-2 gap-2">
+              {PAUSE_REASON_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => confirmPause(preset)}
+                  disabled={pending}
+                  className="inline-flex min-h-12 items-center justify-center rounded-md border border-loss bg-loss-soft/60 px-3 text-sm font-semibold transition-colors duration-[120ms] hover:bg-loss-soft disabled:opacity-60"
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
             <button type="button" onClick={() => { setChoosing(false); setMessage(null); }} disabled={pending} className={secondary}>
               Keep taking orders
             </button>
-            <button type="submit" disabled={pending || !reasonOk || restart === null} className={primary}>
-              {pending ? "Switching off…" : "Switch orders off"}
-            </button>
           </div>
-        </form>
+        </div>
       )}
     </section>
   );

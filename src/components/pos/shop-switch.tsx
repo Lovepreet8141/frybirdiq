@@ -16,8 +16,9 @@ import {
   resumeOrderingAction,
 } from "@/lib/orders/shop-status-actions";
 import type { PausePreview, StaffOrderingStatus } from "@/lib/repositories/shop-status";
+import { PAUSE_NOTE_MAX, PAUSE_REASON_PRESETS, type PauseReasonPreset, noteProblem } from "@/lib/orders/pause-reasons";
 import { useOnline } from "./use-online";
-import { PAUSE_MODES, morningPrompt, morningPromptKey, pauseConfirmLines, pauseNotAppliedLine, reasonProblem, shopSwitchView } from "./shop-switch-view";
+import { PAUSE_MODES, morningPrompt, morningPromptKey, pauseConfirmLines, pauseResultView, shopSwitchView } from "./shop-switch-view";
 
 /** How often an idle POS re-reads the switch: another till or Admin may have moved it, or a timed pause ended. */
 const STATUS_POLL_MS = 60_000;
@@ -62,7 +63,7 @@ export function ShopSwitch({
   const [now, setNow] = useState(() => new Date(renderedAt));
   const [dialog, setDialog] = useState<DialogKind>(null);
   const [mode, setMode] = useState<PauseMode>("UNTIL_NEXT_OPENING");
-  const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
   const [preview, setPreview] = useState<PausePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Set when a Pause changed nothing: the pause in force is at least as strict. Shown in the dialog, which stays open. */
@@ -116,7 +117,7 @@ export function ShopSwitch({
   function openPause() {
     setError(null);
     setNotApplied(null);
-    setReason("");
+    setNote("");
     setMode("UNTIL_NEXT_OPENING");
     setPreview(null);
     setDialog("pause");
@@ -127,15 +128,17 @@ export function ShopSwitch({
     });
   }
 
-  function confirmPause() {
-    const problem = reasonProblem(reason);
+  /** The second tap: choosing a reason closes the shop. The note is optional. */
+  function confirmPause(preset: PauseReasonPreset) {
+    const problem = noteProblem(note);
     if (problem) {
       setError(problem);
       return;
     }
     setError(null);
+    setNotApplied(null);
     startTransition(async () => {
-      const result = await recoverFromStaleDeployment(() => pauseOrderingAction({ reason, mode }));
+      const result = await recoverFromStaleDeployment(() => pauseOrderingAction({ preset, note, mode }));
       if (!result.ok) {
         setError(result.error ?? "That didn't save. Try again.");
         return;
@@ -143,21 +146,16 @@ export function ShopSwitch({
       if (!("status" in result)) return;
       setStatus(result.status);
       setNow(new Date());
-      // The server's read decides, never this click: if the pause did not take,
-      // say so plainly rather than show a switch that isn't true.
-      if (result.status.state !== "paused") {
-        setError("That didn't take. The shop is still open for orders. Try again, and tell the owner if it keeps happening.");
-        return;
+      // The server's read decides, never this tap: if the pause did not take,
+      // or a pause at least as strict was already in force, say so and keep the
+      // dialog open — closing it would read as "done".
+      const outcome = pauseResultView(result);
+      if (outcome.kind === "not-taken") setError(outcome.message);
+      else if (outcome.kind === "not-applied") setNotApplied(outcome.message);
+      else {
+        setDialog(null);
+        setAnnouncement("Online orders are now closed.");
       }
-      if (!result.changed) {
-        // A pause at least as strict was already in force, so this choice was
-        // NOT applied. Say so on screen, with whose pause holds and until when,
-        // and keep the dialog open — closing it would read as "done".
-        setNotApplied(pauseNotAppliedLine(result.status));
-        return;
-      }
-      setDialog(null);
-      setAnnouncement("Online orders are now closed.");
     });
   }
 
@@ -239,7 +237,7 @@ export function ShopSwitch({
       <Dialog open={dialog === "pause"} onOpenChange={(next) => !isPending && setDialog(next ? "pause" : null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Close the shop for online orders?</DialogTitle>
+            <DialogTitle>Close the shop for online orders</DialogTitle>
             <DialogDescription>Customers won&apos;t be able to order online, now or for later, until the shop opens again.</DialogDescription>
           </DialogHeader>
 
@@ -272,19 +270,36 @@ export function ShopSwitch({
               </div>
             </div>
 
+            <div className="flex flex-col gap-2">
+              <span id="shop-switch-why" className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                Why? Tap one to close the shop
+              </span>
+              <div className="grid grid-cols-2 gap-2" role="group" aria-labelledby="shop-switch-why">
+                {PAUSE_REASON_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => confirmPause(preset)}
+                    disabled={isPending || !online || notApplied !== null}
+                    className="flex min-h-[56px] touch-manipulation select-none items-center justify-center rounded-lg border border-destructive/50 bg-destructive/10 px-3 text-sm font-semibold text-foreground transition-colors duration-[var(--duration-micro)] hover:border-destructive active:bg-destructive/20 disabled:opacity-60"
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <label className="flex flex-col gap-1.5 text-sm font-semibold">
-              Why
+              Note <span className="font-normal text-muted-foreground">(optional, staff only — add before you tap a reason)</span>
               <Textarea
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                maxLength={200}
-                rows={2}
-                placeholder="Power cut, fryer down…"
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                maxLength={PAUSE_NOTE_MAX}
+                rows={1}
+                placeholder="Fryer 2 is down…"
                 disabled={isPending}
-                aria-invalid={error !== null && reasonProblem(reason) !== null}
-                className="min-h-[56px] font-normal"
+                className="min-h-[48px] font-normal"
               />
-              <span className="text-xs font-normal text-muted-foreground">Staff only. Customers never see this.</span>
             </label>
 
             <div className="flex flex-col gap-1 rounded-md border border-border bg-surface px-3 py-2 text-sm" aria-live="polite">
@@ -314,20 +329,9 @@ export function ShopSwitch({
                 OK
               </Button>
             ) : (
-              <>
-                <Button type="button" variant="outline" className="min-h-[56px]" onClick={() => setDialog(null)} disabled={isPending}>
-                  Keep it open
-                </Button>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  className="min-h-[56px]"
-                  onClick={confirmPause}
-                  disabled={isPending || !online || preview === null}
-                >
-                  {isPending && preview ? "Closing…" : "Close for orders"}
-                </Button>
-              </>
+              <Button type="button" variant="outline" className="min-h-[56px]" onClick={() => setDialog(null)} disabled={isPending}>
+                {isPending ? "Closing…" : "Keep it open"}
+              </Button>
             )}
           </DialogFooter>
         </DialogContent>

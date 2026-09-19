@@ -8,9 +8,11 @@ const mocks = vi.hoisted(() => ({
   getOrderingStatusForStaff: vi.fn(),
   previewPause: vi.fn(),
   revalidatePath: vi.fn(),
+  clearMenuCache: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
+vi.mock("@/lib/repositories/menu-cache", () => ({ clearMenuCache: mocks.clearMenuCache }));
 vi.mock("next/navigation", () => ({ unstable_rethrow: () => undefined }));
 vi.mock("@/lib/auth", () => ({
   NotSignedIn: class NotSignedIn extends Error {},
@@ -34,6 +36,7 @@ beforeEach(() => {
   mocks.pauseOrdering.mockReset().mockResolvedValue({ ok: true, changed: true, status: { state: "paused" } });
   mocks.resumeOrdering.mockReset().mockResolvedValue({ ok: true, changed: true, status: { state: "open" } });
   mocks.revalidatePath.mockReset();
+  mocks.clearMenuCache.mockReset();
 });
 
 describe("who may switch online orders off and on (god's ruling D2: orders.update, both ways)", () => {
@@ -53,18 +56,43 @@ describe("who may switch online orders off and on (god's ruling D2: orders.updat
 
 describe("pauseOrderingAction", () => {
   it("asks for orders.update and pauses the signed-in staff member's own org — never one from the request", async () => {
-    await pauseOrderingAction({ reason: "power cut", mode: "UNTIL_RESUMED", orgId: "33333333-3333-4333-8333-333333333333" });
+    await pauseOrderingAction({ preset: "Equipment problem", note: "fryer down", mode: "UNTIL_RESUMED", orgId: "33333333-3333-4333-8333-333333333333" });
     expect(mocks.requirePermission).toHaveBeenCalledWith("orders.update");
-    expect(mocks.pauseOrdering).toHaveBeenCalledWith({ orgId: staff.orgId, actorUserId: staff.userId, reason: "power cut", mode: "UNTIL_RESUMED" });
+    expect(mocks.pauseOrdering).toHaveBeenCalledWith({ orgId: staff.orgId, actorUserId: staff.userId, reason: "Equipment problem: fryer down", mode: "UNTIL_RESUMED" });
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 
+  it("a preset alone is enough: the free-text note is optional", async () => {
+    await pauseOrderingAction({ preset: "Staff shortage" });
+    expect(mocks.pauseOrdering).toHaveBeenCalledWith(expect.objectContaining({ reason: "Staff shortage" }));
+  });
+
+  it("switching OFF clears the 45 s public-menu copy as well as the pages, so home and menu refresh at once", async () => {
+    await pauseOrderingAction({ preset: "Too busy" });
+    expect(mocks.clearMenuCache).toHaveBeenCalledTimes(1);
+    expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
+  });
+
+  it("switching ON clears it too, including when the screen was stale (PAUSE_CHANGED)", async () => {
+    await resumeOrderingAction({ shownPausedAt: "2026-06-10T13:30:00.000Z" });
+    expect(mocks.clearMenuCache).toHaveBeenCalledTimes(1);
+    mocks.resumeOrdering.mockResolvedValue({ ok: false, code: "PAUSE_CHANGED", error: "changed", status: { state: "paused" } });
+    await resumeOrderingAction({ shownPausedAt: "2026-06-10T13:30:00.000Z" });
+    expect(mocks.clearMenuCache).toHaveBeenCalledTimes(2);
+  });
+
+  it("a refused request clears nothing", async () => {
+    mocks.requirePermission.mockRejectedValue(new NotPermitted("orders.update"));
+    await pauseOrderingAction({ preset: "Too busy" });
+    expect(mocks.clearMenuCache).not.toHaveBeenCalled();
+  });
+
   it("defaults to 'until we next open', the owner's default", async () => {
-    await pauseOrderingAction({ reason: "power cut" });
+    await pauseOrderingAction({ preset: "Too busy" });
     expect(mocks.pauseOrdering).toHaveBeenCalledWith(expect.objectContaining({ mode: "UNTIL_NEXT_OPENING" }));
   });
 
-  it.each([{}, { reason: "no" }, { reason: "x".repeat(201) }, { reason: "power cut", mode: "FOREVER" }])(
+  it.each([{}, { preset: "Because" }, { reason: "power cut" }, { preset: "Other", note: "x".repeat(151) }, { preset: "Too busy", mode: "FOREVER" }])(
     "refuses %j before any permission check or write",
     async (input) => {
       const result = await pauseOrderingAction(input);
@@ -76,20 +104,20 @@ describe("pauseOrderingAction", () => {
 
   it("a role without orders.update is refused and nothing is written", async () => {
     mocks.requirePermission.mockRejectedValue(new NotPermitted("orders.update"));
-    expect(await pauseOrderingAction({ reason: "power cut" })).toMatchObject({ ok: false, code: "NOT_PERMITTED" });
+    expect(await pauseOrderingAction({ preset: "Too busy" })).toMatchObject({ ok: false, code: "NOT_PERMITTED" });
     expect(mocks.pauseOrdering).not.toHaveBeenCalled();
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 
   it("a signed-out session is told so", async () => {
     mocks.requirePermission.mockRejectedValue(new NotSignedIn());
-    expect(await pauseOrderingAction({ reason: "power cut" })).toMatchObject({ ok: false, code: "SIGNED_OUT" });
+    expect(await pauseOrderingAction({ preset: "Too busy" })).toMatchObject({ ok: false, code: "SIGNED_OUT" });
   });
 
   it("an unexpected failure is a plain message, not a stack trace", async () => {
     mocks.pauseOrdering.mockRejectedValue(new Error("connection reset"));
     vi.spyOn(console, "error").mockImplementation(() => undefined);
-    expect(await pauseOrderingAction({ reason: "power cut" })).toMatchObject({ ok: false, code: "SERVER_ERROR" });
+    expect(await pauseOrderingAction({ preset: "Too busy" })).toMatchObject({ ok: false, code: "SERVER_ERROR" });
   });
 });
 
