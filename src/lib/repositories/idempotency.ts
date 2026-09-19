@@ -137,6 +137,30 @@ export async function withIdempotency<T>(
 }
 
 /**
+ * Read-only: has this exact request already been completed?
+ *
+ * Returns the stored result iff a row exists for this org, operation and key,
+ * carries one of this request's fingerprints (the same computation
+ * `withIdempotency` uses) and has a stored result. Anything else, including a
+ * same-key row with a different fingerprint, another org's row, or an
+ * unfinished (in-flight) claim, is null, so the caller's normal flow, and
+ * `withIdempotency`'s own conflict handling, are unchanged.
+ *
+ * Exists so a caller can answer a lost-response retry with the order that
+ * already exists before it evaluates rules that only apply to NEW work (opening
+ * hours). It inserts, updates and locks nothing.
+ */
+export async function findIdempotentResult<T>({ key, operation, orgId, request }: Pick<Options, "key" | "operation" | "orgId" | "request">): Promise<T | null> {
+  const { accepted } = fingerprintsFor(orgId, request);
+  const [row] = await db()
+    .select({ responseSnapshot: idempotencyKeys.responseSnapshot })
+    .from(idempotencyKeys)
+    .where(and(eq(idempotencyKeys.key, key), eq(idempotencyKeys.operation, operation), ownRow(orgId, accepted)))
+    .limit(1);
+  return row?.responseSnapshot ? (row.responseSnapshot as T) : null;
+}
+
+/**
  * Waits for the caller that holds the claim to store its result.
  *
  * Resolves `undefined` when there is nothing to wait for — the claim was
