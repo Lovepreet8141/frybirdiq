@@ -1,0 +1,23 @@
+# Starts frybird-job@iq-service-pulse.service every 15 minutes, at :05, :20,
+# :35 and :50 — five minutes behind iq-facts-intraday, which fills the bucket
+# this job reads (RELIABILITY C8/U3). OnCalendar must stay byte-for-byte the
+# JOB_REGISTRY["iq-service-pulse"].onCalendarUtc string in
+# src/lib/jobs/registry.ts — src/lib/jobs/registry.test.ts reads this file
+# and fails the build the moment the two drift.
+#
+#   cp deploy/frybird-job-iq-service-pulse.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now frybird-job-iq-service-pulse.timer
+#   systemctl list-timers frybird-job-iq-service-pulse.timer
+
+[Unit]
+Description=Evaluate the FRYBIRD service pulse every 15 minutes
+
+[Timer]
+# The target is the templated instance, not this timer's own base name.
+Unit=frybird-job@iq-service-pulse.service
+OnCalendar=*-*-* *:05/15:00 UTC
+Persistent=false
+
+[Install]
+WantedBy=timers.target

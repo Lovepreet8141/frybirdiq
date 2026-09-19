@@ -26,6 +26,10 @@ function fakeContext(options: { factsReady: boolean }) {
     },
     readDetectDays: unused,
     readFoodCostTarget: unused,
+    readOpeningHours: unused,
+    intradayFreshAt: unused,
+    readPulseDays: unused,
+    countPaidOrders: unused,
     readBriefFigures: unused,
     readRecon: async (date, now) => {
       calls.push(`readRecon ${date} at ${now.toISOString()}`);

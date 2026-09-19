@@ -27,6 +27,10 @@ function fakeContext(options: { factsReady: boolean }) {
     },
     readDetectDays: unused,
     readFoodCostTarget: unused,
+    readOpeningHours: unused,
+    intradayFreshAt: unused,
+    readPulseDays: unused,
+    countPaidOrders: unused,
     readRecon: unused,
     readBriefFigures: async (asked) => {
       periods = asked;

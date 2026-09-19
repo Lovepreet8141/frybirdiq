@@ -38,20 +38,24 @@ import { iqDailyTrust, iqJobRuns, orders, organizations } from "@/db/schema";
 import { addDays } from "@/lib/dates";
 import type { BriefFiguresRead, BriefPeriods } from "@/lib/iq/brief/brief-job";
 import { detectDayFrom, type DayFacts, type DayTrustRow } from "@/lib/iq/detect/day";
+import { pulseDayFrom, type OpeningHours, type PulseDay } from "@/lib/iq/detect/pulse";
 import type { DetectDay } from "@/lib/iq/detect/rules";
+import type { Observed } from "@/lib/iq/engine";
 import { observed } from "@/lib/iq/engine/observed-factory";
 import { TRUST_SIGNAL_IDS, businessDateSql, endOfBusinessDay, netCollected, startOfBusinessDay, type TrustSignalId } from "@/lib/iq/metrics";
 import { TRUST_GRADES, type TrustGrade } from "@/lib/iq/trust";
 import { paise } from "@/lib/money";
 import { briefFiguresFrom, type BriefSpanRead } from "@/lib/jobs/brief-figures";
 import { FACTS_NIGHTLY_JOB, nightlyDates } from "@/lib/jobs/facts-plan";
+import { INTRADAY_WRITER_JOB } from "@/lib/jobs/jobs/pulse";
 import { JOB_RUN_STATUSES, type ClaimRead, type ExpectedRow, type JobRunRow, type JobRunStatus, type JobTrigger } from "@/lib/jobs/claim-decision";
 import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
 import type { ClaimRequest, FinishOutcome, JobRunStore } from "@/lib/jobs/handle";
 import { DayLockBusy, DayTimeout, type FactsParity, type JobReadRepos, type JobWriteRepos } from "@/lib/jobs/repos";
+import { saleSetWhere } from "./analytics";
 import { getProfitAndLoss } from "./expenses";
 import { countStuckRefundFollowUps, healLostRefundFollowUps } from "./payments";
-import { DayLockBusyError, DayTimeoutError, purgeIntradayFacts, readDailyFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
+import { DayLockBusyError, DayTimeoutError, purgeIntradayFacts, readDailyFacts, readIntradayFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
 import { expireInsights, getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
 import { readRecon } from "./iq-recon";
 import { TRUST_DEFINITION_VERSION, computeTrustDay } from "./iq-trust";
@@ -228,6 +232,80 @@ async function readBriefFigures(orgId: string, periods: BriefPeriods): Promise<B
   return briefFiguresFrom(day, monthToDate, sameDaysLastMonth, observed);
 }
 
+/**
+ * The org's opening hours, as the service pulse reads them (IQ-2 S9). Stored
+ * "HH:MM" strings; the pure rules decide what an unusable pair means.
+ */
+async function readOpeningHours(orgId: string): Promise<OpeningHours> {
+  const [org] = await db()
+    .select({ opening: organizations.openingTime, closing: organizations.closingTime })
+    .from(organizations)
+    .where(eq(organizations.id, orgId))
+    .limit(1);
+  if (org === undefined) throw new Error(`iq-job-runs: org ${orgId} not found`);
+  return { opening: org.opening, closing: org.closing };
+}
+
+/**
+ * Whether an intraday writer run has finished covering the bucket that ended
+ * at `bucketEnd` (RELIABILITY C8/U3): a SUCCEEDED iq-facts-intraday run of this
+ * org that STARTED at or after that instant, so its read of today included the
+ * whole bucket. Without one the pulse refuses to evaluate rather than read a
+ * bucket the writer has not filled yet.
+ */
+async function intradayFreshAt(orgId: string, bucketEnd: string): Promise<boolean> {
+  const [run] = await db()
+    .select({ id: iqJobRuns.id })
+    .from(iqJobRuns)
+    .where(
+      and(
+        eq(iqJobRuns.orgId, orgId),
+        eq(iqJobRuns.job, INTRADAY_WRITER_JOB),
+        eq(iqJobRuns.status, "SUCCEEDED"),
+        gte(iqJobRuns.startedAt, new Date(bucketEnd)),
+      ),
+    )
+    .limit(1);
+  return run !== undefined;
+}
+
+/**
+ * The pulse's view of each IST date: this org's current-version intraday
+ * buckets, handed to IQ-ENGINE's pure `pulseDayFrom` (same division as
+ * readDetectDays).
+ *
+ * `computed` is rows.length > 0, because an intraday rebuild writes no row for
+ * a bucket with nothing in it and none at all for an empty day: a day that was
+ * never built and a day with no orders are indistinguishable in the table. It
+ * fails safe — an unbuilt day is left out of the baseline and never fires —
+ * and today's run has already proved a writer ran (`intradayFreshAt`).
+ * TODO(IQ-2, ANALYTICS-DATA): a per-day "intraday built" marker would let a
+ * genuinely empty day count as computed.
+ */
+async function readPulseDays(orgId: string, dates: readonly string[]): Promise<PulseDay[]> {
+  const days: PulseDay[] = [];
+  for (const date of [...new Set(dates)]) {
+    const buckets = await readIntradayFacts(orgId, date);
+    const midnight = startOfBusinessDay(date).getTime();
+    const rows = buckets.map((bucket) => ({
+      startMinute: Math.round((bucket.bucketStart.getTime() - midnight) / 60_000),
+      metricId: bucket.metricId,
+      value: bucket.value,
+    }));
+    days.push(pulseDayFrom(date, rows.length > 0, rows, observed));
+  }
+  return days;
+}
+
+/** Paid orders created in [from, to) (IST timestamps), the same sale set the facts use (R2.8). */
+async function countPaidOrders(orgId: string, from: string, to: string): Promise<Observed> {
+  const [row] = await db()
+    .select({ count: sql<number>`count(*)::int` })
+    .from(orders)
+    .where(saleSetWhere(orgId, { from: new Date(from), to: new Date(to) }));
+  return observed({ unit: "count", value: row?.count ?? 0 });
+}
+
 /** The iq-* reads a job may make, with `orgId` closed over. */
 export function iqRepos(orgId: string): JobReadRepos {
   return {
@@ -242,6 +320,10 @@ export function iqRepos(orgId: string): JobReadRepos {
     readFoodCostTarget: async () => null,
     readRecon: (...args) => readRecon(orgId, ...args),
     readBriefFigures: (periods) => readBriefFigures(orgId, periods),
+    readOpeningHours: () => readOpeningHours(orgId),
+    intradayFreshAt: (bucketEnd) => intradayFreshAt(orgId, bucketEnd),
+    readPulseDays: (dates) => readPulseDays(orgId, dates),
+    countPaidOrders: (from, to) => countPaidOrders(orgId, from, to),
     listInsights: (...args) => listInsights(orgId, ...args),
     getInsight: (...args) => getInsight(orgId, ...args),
     readFactFigures: (...args) => readFactFigures(orgId, ...args),

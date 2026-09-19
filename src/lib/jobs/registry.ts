@@ -30,6 +30,7 @@ import { BRIEF_JOB_NAME, runBrief } from "./jobs/brief";
 import { runDetect } from "./jobs/detect";
 import { runFactsBackfill, runFactsIntraday, runFactsNightly } from "./jobs/facts";
 import { runIntradayBackfillJob } from "./jobs/intraday";
+import { PULSE_JOB_NAME, runPulse } from "./jobs/pulse";
 import { RECONCILE_JOB_NAME, runReconcile } from "./jobs/reconcile";
 import { runHeartbeat } from "./jobs/heartbeat";
 import { REFUND_HEAL_JOB, runRefundFollowUpHeal } from "./jobs/refund-heal";
@@ -175,11 +176,27 @@ export const JOB_REGISTRY = {
     concurrency: "light",
     run: runBrief,
   },
+  /**
+   * IQ-2 service pulse, every quarter at :05/:20/:35/:50 — five minutes after
+   * the intraday writer's own quarter, so the bucket it evaluates is usually
+   * already filled. When it is not, the run ends COMPLETE with `stale_input`
+   * and the next quarter re-reads the same bucket, so there is no catch-up and
+   * nothing to retry. Deadline 60 s: reads for 9 days and one order count.
+   */
+  [PULSE_JOB_NAME]: {
+    name: PULSE_JOB_NAME,
+    periodKind: "quarter_hour",
+    target: "current",
+    onCalendarUtc: "*-*-* *:05/15:00 UTC",
+    ...DEFAULT_TIMING,
+    deadlineSeconds: 60,
+    catchUpPeriods: 0,
+    concurrency: "light",
+    run: runPulse,
+  },
   // TODO(IQ-2 S7, AUTOMATION-ARCHITECT): register these when their bodies land (R2.1, R2.8):
   // - iq-money-signatures   (PAYMENT-SAFETY src/lib/iq/signatures/signatures-job.ts): hour/current, :10 hourly,
   //   light, catch-up 0, <= 15 s per org.
-  // - iq-service-pulse      (IQ-ENGINE src/lib/iq/detect/pulse-job.ts, S9): quarter_hour, :05/:20/:35/:50,
-  //   light, catch-up 0; fresh-input rule C8/U3 needs an intraday-writer-run port.
   /**
    * ref-b7: lost refund follow-ups, every 15 minutes at :07 (clear of the :00
    * quarter jobs), light, no catch-up — the next quarter picks up anything

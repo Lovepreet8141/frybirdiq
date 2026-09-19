@@ -25,6 +25,10 @@ function fakeContext(options: { factsReady: boolean }) {
       calls.push(`readDays ${dates.length} from ${dates[0]}`);
       return history();
     },
+    readOpeningHours: unused,
+    intradayFreshAt: unused,
+    readPulseDays: unused,
+    countPaidOrders: unused,
     readFoodCostTarget: async (date) => {
       calls.push(`target ${date}`);
       return null;

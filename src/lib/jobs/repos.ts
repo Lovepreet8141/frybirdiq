@@ -15,6 +15,7 @@
  * two cannot drift apart. Nothing here reaches a database.
  */
 import type { BriefFiguresRead, BriefPeriods } from "@/lib/iq/brief/brief-job";
+import type { OpeningHours, PulseDay } from "@/lib/iq/detect/pulse";
 import type { DetectDay } from "@/lib/iq/detect/rules";
 import type { Observed } from "@/lib/iq/engine";
 import type * as Facts from "@/lib/repositories/iq-facts";
@@ -92,6 +93,18 @@ export type JobReadRepos = {
    * absent — the brief drops that line rather than printing a zero.
    */
   readonly readBriefFigures: (periods: BriefPeriods) => Promise<BriefFiguresRead>;
+  /** The org's opening and closing time as stored, "HH:MM" (IQ-2 S9 service pulse). */
+  readonly readOpeningHours: () => Promise<OpeningHours>;
+  /**
+   * Whether an intraday writer run has already covered the bucket ending at
+   * `bucketEnd` (an IST timestamp): a SUCCEEDED run that started at or after
+   * it. The pulse refuses to evaluate a bucket without one (RELIABILITY C8/U3).
+   */
+  readonly intradayFreshAt: (bucketEnd: string) => Promise<boolean>;
+  /** The pulse's view of each IST date: its stored intraday buckets (IQ-2 S9 `PulseDay`). */
+  readonly readPulseDays: (dates: readonly string[]) => Promise<readonly PulseDay[]>;
+  /** Paid orders created in [from, to) (IST timestamps), counted from orders over the facts' own sale set. */
+  readonly countPaidOrders: (from: string, to: string) => Promise<Observed>;
   readonly listInsights: WithoutOrg<typeof Insights.listInsights>;
   readonly getInsight: WithoutOrg<typeof Insights.getInsight>;
   readonly readFactFigures: WithoutOrg<typeof Insights.readFactFigures>;
