@@ -12,6 +12,7 @@ import { getCustomer } from "@/lib/customer";
 import { getStampConfig } from "@/lib/loyalty/config";
 import { isRewardEligibleItem, isStampProgramEnabled } from "@/lib/loyalty/stamps";
 import { getAvailableStampReward } from "@/lib/repositories/loyalty";
+import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
 import { getOrg } from "@/lib/repositories/org";
 
 export const metadata: Metadata = { title: "Your order" };
@@ -19,7 +20,7 @@ export const metadata: Metadata = { title: "Your order" };
 export default async function CartPage() {
   const [cart, customer, stampConfig] = await Promise.all([getPricedCart(), getCustomer(), getStampConfig()]);
 
-  const org = customer ? await getOrg() : null;
+  const org = await getOrg();
   // Withheld until the email is confirmed — same reasoning as everywhere else
   // a rewards balance is shown or spent.
   const availableReward =
@@ -30,6 +31,7 @@ export default async function CartPage() {
   return (
     <div className="mx-auto w-full max-w-4xl px-[var(--gutter)] py-10 sm:py-14">
       <h1 className="font-heading text-4xl font-bold tracking-tight sm:text-5xl">Your order</h1>
+      {org && <ShopClosedNotice openingTime={org.openingTime} closingTime={org.closingTime} className="mt-4" />}
 
       {/*
         Lines that could not be honoured are shown, not silently dropped. A cart

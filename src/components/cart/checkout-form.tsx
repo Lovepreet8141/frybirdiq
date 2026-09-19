@@ -63,6 +63,7 @@ export function CheckoutForm({
   extras,
   methods,
   scheduleOptions,
+  asapAvailable = true,
 }: {
   idempotencyKey: string;
   /** Where the outlet is. Null when it has not been placed on the map. */
@@ -86,12 +87,18 @@ export function CheckoutForm({
    * same window itself at submit time regardless of what this list said.
    */
   scheduleOptions: readonly ScheduleDayOption[];
+  /**
+   * False while the shop is closed (`shopHoursState`). "As soon as possible"
+   * is then disabled and "Choose a time" is preselected, so the customer is
+   * never handed a default the server would refuse.
+   */
+  asapAvailable?: boolean;
 }) {
   const [payment, setPayment] = useState<"COD" | "ONLINE">(methods[0]?.choice ?? "COD");
   const [fulfilment, setFulfilment] = useState<"TAKEAWAY" | "DELIVERY">("TAKEAWAY");
 
   // ASAP (unchanged default) or a chosen time.
-  const [when, setWhen] = useState<"ASAP" | "SCHEDULED">("ASAP");
+  const [when, setWhen] = useState<"ASAP" | "SCHEDULED">(asapAvailable ? "ASAP" : "SCHEDULED");
   // Defaults to the first day that actually has a slot left — "today" can be
   // empty this close to closing, and defaulting to an empty day would make
   // "Choose a time" look broken the moment it opens.
@@ -170,7 +177,7 @@ export function CheckoutForm({
         <div className="grid gap-2 sm:grid-cols-2">
           {(
             [
-              { value: "ASAP" as const, icon: Clock, label: "As soon as possible", detail: "The usual" },
+              { value: "ASAP" as const, icon: Clock, label: "As soon as possible", detail: asapAvailable ? "The usual" : "Not while we are closed" },
               { value: "SCHEDULED" as const, icon: Clock, label: "Choose a time", detail: "Pick today or tomorrow" },
             ] satisfies { value: "ASAP" | "SCHEDULED"; icon: typeof Clock; label: string; detail: string }[]
           ).map((option) => (
@@ -179,6 +186,7 @@ export function CheckoutForm({
               className={cn(
                 "flex min-h-[56px] cursor-pointer items-center gap-3 rounded-md border px-4 py-3 transition-colors duration-[var(--duration-micro)]",
                 when === option.value ? "border-primary bg-primary/10" : "border-border bg-surface hover:border-border-strong",
+                option.value === "ASAP" && !asapAvailable && "cursor-not-allowed opacity-50",
               )}
             >
               <input
@@ -186,6 +194,7 @@ export function CheckoutForm({
                 name="whenChoice"
                 value={option.value}
                 checked={when === option.value}
+                disabled={option.value === "ASAP" && !asapAvailable}
                 onChange={() => setWhen(option.value)}
                 className="size-4 accent-[var(--primary)]"
               />
