@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { isUuid } from "@/lib/uuid";
 import { ArrowLeft } from "lucide-react";
 import { FrybirdReceipt } from "@/components/receipt/frybird-receipt";
 import { ReceiptPrintButton } from "@/components/receipt/receipt-print-button";
@@ -27,6 +28,8 @@ export const dynamic = "force-dynamic";
  */
 export default async function InvoicePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // A mangled link is not a uuid; querying a uuid column with it throws (a 500), so it is a 404 here.
+  if (!isUuid(id)) notFound();
   const [receipt, customer, remembered] = await Promise.all([getCustomerReceipt(id), getCustomer(), readRememberedContact()]);
   if (!receipt) notFound();
 
