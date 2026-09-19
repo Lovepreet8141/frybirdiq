@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { type PlaceOrderResult, type ShopClosedRefusal, placeOrder } from "@/lib/repositories/orders";
+import { type PlaceOrderResult, type ShopClosedRefusal, type ShopPausedRefusal, placeOrder } from "@/lib/repositories/orders";
 import { writeCart } from "./index";
 import { rememberAddress } from "./remembered-address";
 import { rememberContact } from "./remembered-contact";
@@ -15,7 +15,14 @@ export type CheckoutState =
    * rather than re-derived so the form renders the server's answer instead of
    * asking the browser's clock, which is the customer's to set.
    */
-  | { status: "error"; message: string; fieldErrors?: Record<string, string>; closed?: ShopClosedRefusal };
+  | {
+      status: "error";
+      message: string;
+      fieldErrors?: Record<string, string>;
+      closed?: ShopClosedRefusal;
+      /** The Close Shop switch is on: no ASAP and no pre-orders. Forwarded as-is, like `closed`. */
+      paused?: ShopPausedRefusal;
+    };
 
 /**
  * Places the order, then clears the cart and redirects.
@@ -54,7 +61,7 @@ export async function submitCheckout(_previous: CheckoutState, formData: FormDat
     // cart is deliberately left untouched here (unlike the success path
     // below): nothing new was placed, so there is nothing to clear.
     if (result.resumeOrderId) redirect(`/order/${result.resumeOrderId}?pay=1`);
-    return { status: "error", message: result.error, fieldErrors: result.fieldErrors, closed: result.closed };
+    return { status: "error", message: result.error, fieldErrors: result.fieldErrors, closed: result.closed, paused: result.paused };
   }
 
   // Remembered only once the order actually went through, so a failed attempt

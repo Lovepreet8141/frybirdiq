@@ -26,7 +26,9 @@ import { isSupabaseConfigured } from "@/lib/env";
 import { type Paise, ZERO, formatINR, paise, subtract } from "@/lib/money";
 import { type PricedOrder, priceOrder } from "@/lib/pricing";
 import { fromMicro, toPoint } from "@/lib/delivery";
-import { type ShopClosedRefusal, asapRefusal } from "@/lib/orders/opening-hours";
+import { type ShopClosedRefusal, type ShopPausedRefusal, orderingRefusal } from "@/lib/orders/opening-hours";
+import { shopOrderingState } from "@/lib/cart/shop-hours";
+import { shopStatusFromOrg } from "./shop-status";
 import { type SnapshotLineInput, snapshotLines } from "@/lib/orders/snapshot";
 import type { CartLine } from "@/lib/cart/schema";
 import { priceDraft } from "@/lib/pos/pricing";
@@ -109,11 +111,20 @@ export type CheckoutInput = z.infer<typeof checkoutSchema>;
  * `export type { ... } from` would re-export it without binding the name
  * locally, and `PlaceOrderResult` below needs both.
  */
-export type { ShopClosedRefusal };
+export type { ShopClosedRefusal, ShopPausedRefusal };
 
 export type PlaceOrderResult =
   | { ok: true; orderId: string; orderNumber: string; payment: "COD" | "ONLINE" }
-  | { ok: false; error: string; fieldErrors?: Record<string, string>; resumeOrderId?: string; closed?: ShopClosedRefusal };
+  | {
+      ok: false;
+      error: string;
+      fieldErrors?: Record<string, string>;
+      resumeOrderId?: string;
+      /** The hours say no. The form moves the customer onto Choose a time. */
+      closed?: ShopClosedRefusal;
+      /** The Close Shop switch is on. Never set together with `closed`: pre-orders are refused too. */
+      paused?: ShopPausedRefusal;
+    };
 
 /**
  * The next order number, as the counter would call it out.
@@ -290,6 +301,31 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
    */
   let scheduledFor: Date | null = null;
   const now = new Date();
+
+  /*
+   * The whole online-ordering gate, in one call (ops-1). The org row goes
+   * through `shopStatusFromOrg`, the one mapping the POS, Admin and the
+   * website banner also use, so none of them can call the shop open while
+   * this refuses. Placed after the early idempotency replay above — a retry
+   * of an order that already exists still gets its order back — and before
+   * the resumable-order lookup, the Razorpay Order and the first write, so a
+   * refused attempt charges nothing and leaves nothing behind.
+   */
+  const shop = shopStatusFromOrg(org);
+  const refusal = orderingRefusal(now, shop, details.when);
+  if (refusal?.kind === "PAUSED") {
+    // The switch outranks the hours and refuses pre-orders too, so this never
+    // says "choose a time" and never carries `closed` (the form would move the
+    // customer onto Choose a time). The owner's own words; nothing staff typed.
+    const state = shopOrderingState(now, shop);
+    const reopens = state.state === "paused" && state.reopensAtLabel ? `We open again ${state.reopensAtLabel}.` : "Please check back soon.";
+    return {
+      ok: false,
+      error: `We're not taking orders right now. ${reopens} Nothing has been ordered or charged.`,
+      paused: refusal.paused,
+    };
+  }
+
   if (details.when === "SCHEDULED") {
     const candidate = details.scheduledFor ? new Date(details.scheduledFor) : null;
     if (!candidate || !isValidScheduledTime(candidate, now, org.openingTime, org.closingTime)) {
@@ -313,11 +349,12 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
      * Scheduling is still open while the shop is shut, which is the point:
      * "we're closed, order for 11:30" is the answer, not a dead end.
      *
-     * The decision itself is `asapRefusal`, pure and unit-tested including the
-     * wall-clock label. What is left here is the call and the sentence.
+     * The decision is the gate call above (`asapRefusal` underneath it), pure
+     * and unit-tested including the wall-clock label. What is left here is the
+     * sentence.
      */
-    const closed = asapRefusal(now, org);
-    if (closed) {
+    if (refusal?.kind === "CLOSED") {
+      const { closed } = refusal;
       return {
         ok: false,
         error: `The kitchen is closed right now. We open ${closed.opensAtLabel} — nothing has been ordered or charged. You can still choose a time instead.`,
