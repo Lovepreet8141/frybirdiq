@@ -38,9 +38,12 @@ fi
 case "$ALERT_URL" in
   *[\"\\]* | *$'\n'*) echo "ALERT_URL contains a quote, backslash or newline" >&2; exit 1 ;;
 esac
+# --proto: https only, and no redirect to anything else. The URL is the
+# credential, so a mistyped http:// would put it on the wire in cleartext.
 # -f: a 4xx/5xx from the channel is a failure, not a delivered alert.
 # ntfy headers are ignored by other endpoints; the body is what carries the news.
 printf 'url = "%s"\n' "$ALERT_URL" | curl -fsS -m 15 --retry 2 --retry-delay 3 \
+  --proto '=https' --proto-redir '=https' \
   -H "Title: FRYBIRD ${what} failed" -H "Priority: high" -H "Tags: rotating_light" \
   --data-binary "$msg" --config - >/dev/null
 echo "alert sent for ${what}"

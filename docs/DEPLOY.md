@@ -627,8 +627,10 @@ channel.** `deploy/notify.sh` POSTs one plain-text line (unit, host, UTC time;
 never journal contents) to `ALERT_URL` from `/etc/frybird/alert.env`.
 `frybird-alert@.service` (hardened; the only unit that reads `alert.env`) runs it; `frybird-backup.service` gets
 `OnFailure=frybird-alert@%n.service`; `frybird-job-failed@.service` (already
-fired by `frybird-job@.service`'s `OnFailure=`) gets its own
-`OnFailure=frybird-alert@job-%i.service`, so both paths share one unit. The
+fired by `frybird-job@.service`'s `OnFailure=`) is unchanged (logs only); the alert is a second entry in
+`frybird-job@.service`'s `OnFailure=` list, `frybird-alert@job-%i.service`, because
+`OnFailure=` fires only on a unit that ends *failed* and the logger succeeds.
+Both paths share one alert unit. The
 URL is passed to curl on stdin (`--config -`), never on the command line, so
 it is not readable from `ps` or `/proc/<pid>/cmdline`.
 Install, in this order, as root, after the owner has given the URL:
@@ -637,10 +639,12 @@ Install, in this order, as root, after the owner has given the URL:
 install -m 750 deploy/notify.sh /usr/local/bin/frybird-notify
 install -m 600 -o root -g root /dev/null /etc/frybird/alert.env
 # history-safe: read -s does not echo or record the value; printf is a builtin, so it is not in ps
-read -rsp 'ALERT_URL: ' u && printf 'ALERT_URL=%s\n' "$u" >> /etc/frybird/alert.env; unset u; echo
+read -rsp 'ALERT_URL: ' u && printf 'ALERT_URL=%s\n' "$u" > /etc/frybird/alert.env; unset u; echo
 cp deploy/frybird-alert@.service deploy/frybird-backup.service deploy/frybird-job-failed@.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl start frybird-alert@test.service     # one test alert; owner confirms it arrived
+systemctl start frybird-job@nosuchjob          # MUST also produce an alert (proves the OnFailure chain fires;
+                                               # a clean systemd-analyze verify does not). Then: systemctl reset-failed 'frybird-job@*'
 ```
 
 Without `alert.env` the units still log and `frybird-notify` exits non-zero,
