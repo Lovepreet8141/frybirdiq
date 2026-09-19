@@ -20,12 +20,13 @@ import { assertChannelFulfilment, fulfilmentsFor, type OrderChannel } from "@/do
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition, foodWasCooking } from "@/domain/order-status";
 import type { Role } from "@/domain/permissions";
 import { REJECTION_LABELS, type RejectionReason } from "@/domain/rejection";
-import { businessDate } from "@/lib/dates";
+import { BUSINESS_TIMEZONE, businessDate } from "@/lib/dates";
 import { isValidScheduledTime } from "@/lib/cart/scheduled-time";
 import { isSupabaseConfigured } from "@/lib/env";
 import { type Paise, ZERO, formatINR, paise, subtract } from "@/lib/money";
 import { type PricedOrder, priceOrder } from "@/lib/pricing";
 import { fromMicro, toPoint } from "@/lib/delivery";
+import { isOpenAt, nextOpening } from "@/lib/orders/opening-hours";
 import { type SnapshotLineInput, snapshotLines } from "@/lib/orders/snapshot";
 import type { CartLine } from "@/lib/cart/schema";
 import { priceDraft } from "@/lib/pos/pricing";
@@ -101,9 +102,32 @@ export const checkoutSchema = z.object({
 
 export type CheckoutInput = z.infer<typeof checkoutSchema>;
 
+/**
+ * Why an order was refused, when the reason is a state of the shop rather than
+ * a mistake in the form.
+ *
+ * `error` alone is a sentence; this is the same refusal as data, so the
+ * customer-facing layer can render an open/closed state (a chip, a "we open at
+ * 11:30" line, a disabled button) instead of parsing prose. Optional on
+ * purpose: every existing refusal keeps working untouched and only says
+ * `closed` when that is genuinely what happened.
+ */
+export interface ShopClosedRefusal {
+  readonly code: "CLOSED";
+  /** The org's configured hours, "HH:MM" in Asia/Kolkata. Read, never decided here. */
+  readonly openingTime: string;
+  readonly closingTime: string;
+  /** The next instant the shop opens, as an ISO string — a Date does not survive the Server Action boundary. */
+  readonly opensAt: string;
+  /** Whether `opensAt` is later today or the next day. */
+  readonly opensDay: "TODAY" | "TOMORROW";
+  /** Ready to print: "today at 11:30 AM" / "tomorrow at 11:30 AM", in the business's own timezone. */
+  readonly opensAtLabel: string;
+}
+
 export type PlaceOrderResult =
   | { ok: true; orderId: string; orderNumber: string; payment: "COD" | "ONLINE" }
-  | { ok: false; error: string; fieldErrors?: Record<string, string>; resumeOrderId?: string };
+  | { ok: false; error: string; fieldErrors?: Record<string, string>; resumeOrderId?: string; closed?: ShopClosedRefusal };
 
 /**
  * The next order number, as the counter would call it out.
@@ -243,9 +267,10 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
    * exactly the existing behaviour, unchanged.
    */
   let scheduledFor: Date | null = null;
+  const now = new Date();
   if (details.when === "SCHEDULED") {
     const candidate = details.scheduledFor ? new Date(details.scheduledFor) : null;
-    if (!candidate || !isValidScheduledTime(candidate, new Date(), org.openingTime, org.closingTime)) {
+    if (!candidate || !isValidScheduledTime(candidate, now, org.openingTime, org.closingTime)) {
       return {
         ok: false,
         error: "That time isn't available anymore. Pick another.",
@@ -253,6 +278,33 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       };
     }
     scheduledFor = candidate;
+  } else if (!isOpenAt(now, org.openingTime, org.closingTime)) {
+    /*
+     * ASAP means "start cooking it now", so it needs someone in the kitchen.
+     * Until this check existed, only the SCHEDULED branch above consulted the
+     * hours at all: a 2am ASAP order was accepted, and paid for, with nobody
+     * to see it until morning (launch audit C1 / P0-3a). Same hours, same
+     * window function, same server clock as the branch above — refused before
+     * the Razorpay Order is minted and before anything is written, so nothing
+     * is charged and there is nothing to clean up.
+     *
+     * Scheduling is still open while the shop is shut, which is the point:
+     * "we're closed, order for 11:30" is the answer, not a dead end.
+     */
+    const opens = nextOpening(now, org.openingTime, org.closingTime);
+    const label = `${opens.day === "TODAY" ? "today" : "tomorrow"} at ${opens.at.toLocaleTimeString("en-IN", { timeZone: BUSINESS_TIMEZONE, hour: "numeric", minute: "2-digit" })}`;
+    return {
+      ok: false,
+      error: `The kitchen is closed right now. We open ${label} — nothing has been ordered or charged. You can still choose a time instead.`,
+      closed: {
+        code: "CLOSED",
+        openingTime: org.openingTime,
+        closingTime: org.closingTime,
+        opensAt: opens.at.toISOString(),
+        opensDay: opens.day,
+        opensAtLabel: label,
+      },
+    };
   }
 
   /*
