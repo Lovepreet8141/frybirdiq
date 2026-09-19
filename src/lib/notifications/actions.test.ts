@@ -48,11 +48,7 @@ beforeEach(() => {
 });
 
 function expectDenied(result: Awaited<ReturnType<typeof whatsappOrderLink>>) {
-  expect(result.ok).toBe(false);
-  const body = JSON.stringify(result);
-  expect(body).not.toContain(PHONE);
-  expect(body).not.toContain(`91${PHONE}`);
-  expect(body).not.toContain("wa.me");
+  expect(result).toEqual({ ok: false, error: "You can only share your own order." });
 }
 
 describe("whatsappOrderLink authorization", () => {

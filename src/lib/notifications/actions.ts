@@ -13,7 +13,7 @@ import { whatsappLinkProvider } from "./whatsapp-link";
 
 export type ShareResult = { ok: true; url: string } | { ok: false; error: string };
 
-const DENIED: ShareResult = { ok: false, error: "You can only share your own order." };
+const DENIED: ShareResult = Object.freeze({ ok: false, error: "You can only share your own order." });
 
 /**
  * Builds the WhatsApp link for an order.
@@ -32,6 +32,13 @@ export async function whatsappOrderLink(input: { orderId: string }): Promise<Sha
   const org = await getOrg();
   if (!org) return DENIED;
 
+  /*
+   * Read before the order so a missing order and someone else's order do
+   * identical work. A throw here must stay a throw: the client gets an error
+   * and never a URL. Do not catch it into a default ShareResult.
+   */
+  const [customer, remembered] = await Promise.all([getCustomer(), readRememberedContact()]);
+
   const database = db();
   const [order] = await database
     .select()
@@ -40,11 +47,12 @@ export async function whatsappOrderLink(input: { orderId: string }): Promise<Sha
     .limit(1);
   if (!order) return DENIED;
 
-  const [customer, remembered] = await Promise.all([getCustomer(), readRememberedContact()]);
   // Phone only, exactly as the invoice page decides it: orders carry no email.
   if (!viewerOwnsOrder({ customerPhone: order.customerPhone, customerEmail: null }, customer, remembered)) return DENIED;
 
-  if (!order.customerPhone) return { ok: false, error: "There is no phone number on this order." };
+  // Unreachable while email is null above, kept as a guard for when it is not.
+  // Same DENIED as every refusal, so "no phone" never tells apart from "not yours".
+  if (!order.customerPhone) return DENIED;
 
   const items = await database.select().from(orderItems).where(eq(orderItems.orderId, order.id));
 
