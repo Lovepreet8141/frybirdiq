@@ -20,8 +20,10 @@ import "server-only";
  */
 
 import { revalidatePath } from "next/cache";
+import { clearMenuCache } from "@/lib/repositories/menu-cache";
 
 export function revalidateMenuSurfaces(input?: { productSlug?: string }): void {
+  clearMenuCache(); // the 45 s public-menu copy, so an edit shows at once
   revalidatePath("/", "page"); // homepage signature/featured products
   revalidatePath("/menu", "page"); // full customer menu
   revalidatePath("/app/pos", "page"); // POS shell (belt-and-braces alongside its own polling)

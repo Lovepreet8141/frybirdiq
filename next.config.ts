@@ -29,6 +29,31 @@ const nextConfig: NextConfig = {
    */
   images: {
     remotePatterns: [{ protocol: "https", hostname: "*.supabase.co", pathname: "/storage/v1/object/public/**" }],
+    /**
+     * Sized for what the site actually shows. The product photos are 640 px
+     * wide at source and drawn at most ~350 px (cards) or 640 px (item page),
+     * so the default ladder up to 3840 px only ever produced upscaled, heavier
+     * files (the menu's <img src> was the 3840w one). AVIF first, WebP after.
+     */
+    deviceSizes: [384, 640, 750, 828, 1080],
+    imageSizes: [96, 160, 256, 340],
+    formats: ["image/avif", "image/webp"],
+    // Optimised copies are reused for 30 days instead of the 60 s default.
+    minimumCacheTTL: 60 * 60 * 24 * 30,
+  },
+
+  /**
+   * Cache headers for the site's own static media. These files are not
+   * content-hashed, so a year-long `immutable` would pin a replaced photo;
+   * a day fresh plus a week of stale-while-revalidate keeps repeat visits off
+   * the network and still picks up a new file within a day.
+   */
+  async headers() {
+    const media = "public, max-age=86400, stale-while-revalidate=604800";
+    return ["/home/:path*", "/hero/:path*", "/products/:path*"].map((source) => ({
+      source,
+      headers: [{ key: "Cache-Control", value: media }],
+    }));
   },
 };
 
