@@ -67,6 +67,19 @@ export function pauseConfirmLines(mode: PauseMode, preview: { readonly nextOpeni
   return [restart, due];
 }
 
+/**
+ * The visible answer when a Pause changed nothing because a pause at least as
+ * strict was already in force (god's S4a ruling). Not a screen-reader-only
+ * note and not a closed dialog: a cashier who chose "until I switch it back
+ * on" must SEE that it was not applied, and whose pause is in force instead.
+ */
+export function pauseNotAppliedLine(status: StaffOrderingStatus): string | null {
+  if (status.state !== "paused") return null;
+  const who = status.pausedBy?.name ?? "a staff member";
+  const until = status.reopensAtLabel ? `until ${status.reopensAtLabel}` : "until someone switches it back on";
+  return `Already closed by ${who} ${until}. Your choice was not applied.`;
+}
+
 /** The reason rule the action enforces, checked before sending so the cashier sees it at once. */
 export function reasonProblem(reason: string): string | null {
   const trimmed = reason.trim();

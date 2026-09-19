@@ -17,7 +17,7 @@ import {
 } from "@/lib/orders/shop-status-actions";
 import type { PausePreview, StaffOrderingStatus } from "@/lib/repositories/shop-status";
 import { useOnline } from "./use-online";
-import { PAUSE_MODES, morningPrompt, morningPromptKey, pauseConfirmLines, reasonProblem, shopSwitchView } from "./shop-switch-view";
+import { PAUSE_MODES, morningPrompt, morningPromptKey, pauseConfirmLines, pauseNotAppliedLine, reasonProblem, shopSwitchView } from "./shop-switch-view";
 
 /** How often an idle POS re-reads the switch: another till or Admin may have moved it, or a timed pause ended. */
 const STATUS_POLL_MS = 60_000;
@@ -65,6 +65,8 @@ export function ShopSwitch({
   const [reason, setReason] = useState("");
   const [preview, setPreview] = useState<PausePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Set when a Pause changed nothing: the pause in force is at least as strict. Shown in the dialog, which stays open. */
+  const [notApplied, setNotApplied] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [isPending, startTransition] = useTransition();
 
@@ -113,6 +115,7 @@ export function ShopSwitch({
 
   function openPause() {
     setError(null);
+    setNotApplied(null);
     setReason("");
     setMode("UNTIL_NEXT_OPENING");
     setPreview(null);
@@ -146,8 +149,15 @@ export function ShopSwitch({
         setError("That didn't take. The shop is still open for orders. Try again, and tell the owner if it keeps happening.");
         return;
       }
+      if (!result.changed) {
+        // A pause at least as strict was already in force, so this choice was
+        // NOT applied. Say so on screen, with whose pause holds and until when,
+        // and keep the dialog open — closing it would read as "done".
+        setNotApplied(pauseNotAppliedLine(result.status));
+        return;
+      }
       setDialog(null);
-      setAnnouncement(result.changed ? "Online orders are now closed." : "Online orders were already closed.");
+      setAnnouncement("Online orders are now closed.");
     });
   }
 
@@ -291,21 +301,34 @@ export function ShopSwitch({
                 {error === STALE_DEPLOYMENT_MESSAGE && <ReloadAppButton />}
               </div>
             )}
+            {notApplied && (
+              <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm font-semibold text-foreground">
+                {notApplied}
+              </p>
+            )}
           </div>
 
           <DialogFooter className="gap-2">
-            <Button type="button" variant="outline" className="min-h-[56px]" onClick={() => setDialog(null)} disabled={isPending}>
-              Keep it open
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              className="min-h-[56px]"
-              onClick={confirmPause}
-              disabled={isPending || !online || preview === null}
-            >
-              {isPending && preview ? "Closing…" : "Close for orders"}
-            </Button>
+            {notApplied ? (
+              <Button type="button" className="min-h-[56px]" onClick={() => setDialog(null)}>
+                OK
+              </Button>
+            ) : (
+              <>
+                <Button type="button" variant="outline" className="min-h-[56px]" onClick={() => setDialog(null)} disabled={isPending}>
+                  Keep it open
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="min-h-[56px]"
+                  onClick={confirmPause}
+                  disabled={isPending || !online || preview === null}
+                >
+                  {isPending && preview ? "Closing…" : "Close for orders"}
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

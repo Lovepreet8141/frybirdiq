@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { StaffOrderingStatus } from "@/lib/repositories/shop-status";
-import { CLOSED_TITLE, OPEN_TITLE, morningPrompt, pauseConfirmLines, reasonProblem, shopSwitchView, sinceLabel } from "./shop-switch-view";
+import { CLOSED_TITLE, OPEN_TITLE, morningPrompt, pauseConfirmLines, pauseNotAppliedLine, reasonProblem, shopSwitchView, sinceLabel } from "./shop-switch-view";
 
 const NOW = new Date("2026-09-19T14:30:00.000Z"); // 2026-09-19 20:00 IST
 const PAUSED_AT = new Date("2026-09-19T14:12:00.000Z"); // 19:42 IST today
@@ -124,5 +124,19 @@ describe("sinceLabel", () => {
 
   it("uses the business day, so 00:30 IST reads 'yesterday' for 7:42 PM the evening before", () => {
     expect(sinceLabel(PAUSED_AT, new Date("2026-09-19T19:00:00.000Z"))).toBe("yesterday at 7:42 PM"); // now 2026-09-20 00:30 IST
+  });
+});
+
+describe("pauseNotAppliedLine — a Pause that changed nothing says so, visibly (god's S4a ruling)", () => {
+  it("names who holds the pause in force and until when", () => {
+    expect(pauseNotAppliedLine(pausedTimed)).toBe("Already closed by Aman until tomorrow at 11:30 AM. Your choice was not applied.");
+  });
+
+  it("an indefinite pause in force says so rather than inventing a time", () => {
+    expect(pauseNotAppliedLine(pausedManual)).toBe("Already closed by Aman until someone switches it back on. Your choice was not applied.");
+  });
+
+  it("nothing to say when the shop is not paused", () => {
+    expect(pauseNotAppliedLine(open)).toBeNull();
   });
 });
