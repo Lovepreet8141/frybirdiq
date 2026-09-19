@@ -28,9 +28,19 @@ if [ -z "${ALERT_URL:-}" ]; then
   exit 1
 fi
 
+# The URL is a credential (an ntfy topic URL can read and post), so it must
+# never be on curl's command line: /proc/<pid>/cmdline is world-readable on
+# Ubuntu. printf is a shell builtin (no exec, no argv), and curl reads the
+# `url = "..."` line from stdin via --config -, so the URL exists only in this
+# process's environment (owner-only /proc/<pid>/environ) and on a pipe.
+# --data-binary takes the message as a literal, so it does not contend for stdin.
+# A quote, backslash or newline in the URL would break the config line; refuse it.
+case "$ALERT_URL" in
+  *[\"\\]* | *$'\n'*) echo "ALERT_URL contains a quote, backslash or newline" >&2; exit 1 ;;
+esac
 # -f: a 4xx/5xx from the channel is a failure, not a delivered alert.
 # ntfy headers are ignored by other endpoints; the body is what carries the news.
-curl -fsS -m 15 --retry 2 --retry-delay 3 \
+printf 'url = "%s"\n' "$ALERT_URL" | curl -fsS -m 15 --retry 2 --retry-delay 3 \
   -H "Title: FRYBIRD ${what} failed" -H "Priority: high" -H "Tags: rotating_light" \
-  --data-binary "$msg" -- "$ALERT_URL" >/dev/null
+  --data-binary "$msg" --config - >/dev/null
 echo "alert sent for ${what}"

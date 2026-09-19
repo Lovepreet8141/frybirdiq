@@ -5,8 +5,9 @@
 #
 # journalctl already has the real failure; this exists so a failed job shows
 # up as its own `user.err` line, greppable without knowing systemd unit
-# names, and and the second ExecStart pushes it to the owner via frybird-notify
-# (deploy/notify.sh), the paging hook this comment used to anticipate.
+# names. Reaching a person is OnFailure= below, which starts the one hardened
+# alert unit (frybird-alert@.service) that holds the secret handling; this
+# unit itself never touches the network or alert.env.
 #
 #   cp deploy/frybird-job-failed@.service /etc/systemd/system/
 #   systemctl daemon-reload
@@ -16,12 +17,9 @@
 
 [Unit]
 Description=Log FRYBIRD job failure (%i)
+# Alert once, and only from here (not per retry): see frybird-alert@.service.
+OnFailure=frybird-alert@job-%i.service
 
 [Service]
 Type=oneshot
-# Missing alert.env is tolerated (dash) so the logger line below always runs;
-# frybird-notify then fails loudly on its own if no ALERT_URL is configured.
-EnvironmentFile=-/etc/frybird/alert.env
 ExecStart=/usr/bin/logger -p user.err -t frybird-job "job %i failed: see journalctl -u frybird-job@%i"
-# Reaches a person (p0-1). Needs frybird-notify + alert.env installed (DEPLOY.md s11).
-ExecStart=/usr/local/bin/frybird-notify "job %i"

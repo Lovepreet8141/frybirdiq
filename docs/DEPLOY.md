@@ -625,15 +625,19 @@ that scheduled jobs are running (see 11.4).
 **11.2 On-box failure alerts — files in `deploy/`, VPS change, needs an owner
 channel.** `deploy/notify.sh` POSTs one plain-text line (unit, host, UTC time;
 never journal contents) to `ALERT_URL` from `/etc/frybird/alert.env`.
-`frybird-alert@.service` runs it; `frybird-backup.service` gets
+`frybird-alert@.service` (hardened; the only unit that reads `alert.env`) runs it; `frybird-backup.service` gets
 `OnFailure=frybird-alert@%n.service`; `frybird-job-failed@.service` (already
-fired by `frybird-job@.service`'s `OnFailure=`) gets a second `ExecStart`.
+fired by `frybird-job@.service`'s `OnFailure=`) gets its own
+`OnFailure=frybird-alert@job-%i.service`, so both paths share one unit. The
+URL is passed to curl on stdin (`--config -`), never on the command line, so
+it is not readable from `ps` or `/proc/<pid>/cmdline`.
 Install, in this order, as root, after the owner has given the URL:
 
 ```bash
 install -m 750 deploy/notify.sh /usr/local/bin/frybird-notify
 install -m 600 -o root -g root /dev/null /etc/frybird/alert.env
-# put ALERT_URL=<owner's channel URL> in it, never printed, never committed
+# history-safe: read -s does not echo or record the value; printf is a builtin, so it is not in ps
+read -rsp 'ALERT_URL: ' u && printf 'ALERT_URL=%s\n' "$u" >> /etc/frybird/alert.env; unset u; echo
 cp deploy/frybird-alert@.service deploy/frybird-backup.service deploy/frybird-job-failed@.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl start frybird-alert@test.service     # one test alert; owner confirms it arrived
