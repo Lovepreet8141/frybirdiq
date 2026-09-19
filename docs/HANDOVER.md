@@ -67,6 +67,8 @@ Legend: "Reviewed" = what the office recorded. "Open findings" = refusals or non
 
 ### 3.1 ops-1 — Close Shop switch (queue 3)
 
+> **SUPERSEDED 2026-09-20: ops-1 is integrated and live (Release 2, `9a826ee`, RELEASES row 6). The text below is the pre-integration record; see §8 for the current state.**
+
 - **Branches / heads.** ops-1 is **five branches that have never been integrated**; there is no single ops-1 branch.
   All are based on `1fe080b`.
 
@@ -336,3 +338,24 @@ Legend: "Reviewed" = what the office recorded. "Open findings" = refusals or non
 - **Queued right after Release 2 (owner card): stale staff screens.** After a deploy, POS, KDS, the orders board and Admin keep running the old client until someone reloads them (seen live after row 4: a pre-deploy tab logged `Failed to find Server Action` about every 30 s). Add a version check on those screens; when the BUILD_ID changes show "New version — tap to reload"; reload automatically when the screen is idle with no order in progress.
 - **Order now:** Release 2 (ops-1 Close Shop) -> stale-screen version check -> day-off card (ops-3) -> the rest of the §2 queue.
 - **Owner rule (2026-09-19, after the nginx slip): scripts run against the server are fail-fast.** A script stops at its first failed step. Never continue to a test, reload, restart or migration after an earlier step in the same script failed (`set -euo pipefail`, explicit checks, hard exit on a failed assertion; do not chain steps with `;`).
+
+## 9. Update, 2026-09-20 (Release 2, Close Shop)
+
+- **Release 2 is live:** `9a826ee` on `release/rc-15-close-shop`, BUILD_ID `dNGopFZJ3CH4nlRg2eCI-`, migration head `0039_ordering_pause`, RELEASES row 6. Rule 2 (live pause/resume check) is done by the owner from Admin -> Restaurant; the result is recorded in the row after it.
+- **Owner rule (2026-09-20): server scripts are fail-fast** (see §8).
+- **Owner decisions:** an already-placed pending-payment order may still be paid while paused (comment fixed, display-only hide); no copy changes now; the low findings below stay as they are.
+- **Next card (queued by the owner, order-placement change, reviewed as such):** re-check pause AND hours inside the order write transaction (today the gate runs once at the start; a pause pressed during pricing and the Razorpay intent can still let one order in, milliseconds to seconds), plus a read timeout on the customer-page status read (`getCustomerOrderingStatus`: a hung read hangs the page; the page must fail open, the server still refuses).
+- **Low findings left as they are (RELIABILITY / SECURITY, 2026-09-20):**
+  1. Equal-mode second pause: the second person's reason is not recorded; they are told "your choice was not applied", not that the reason was dropped.
+  2. A pause can only get stricter; shortening "until I switch it back on" to "until we next open" means Resume then Pause (brief open window).
+  3. `pauseOrdering` locks with `FOR UPDATE`; `FOR NO KEY UPDATE` would not stall order inserts for milliseconds.
+  4. If a pause succeeds but the follow-up read throws, the action says "didn't save"; a retry shows "not applied".
+  5. Reason buttons are tappable before the "orders restart" preview loads (deliberate, emergency).
+  6. Admin Resume is one tap; the POS asks for two.
+  7. Banner while switched off "until I switch it back on" outside opening hours says "Please check back soon" (`withinHours` exists but is unused).
+  8. `getOrg` on customer pages is unguarded: a database outage still takes the pages down (the status read alone fails open).
+  9. Customer order page hides the pay button while paused, display only; the payment action has no pause check (owner: keep).
+  10. POS page loads the staff status (name, reason) for anyone with `orders.create`; only staff, only OWNER accounts exist today.
+  11. Admin panel's `pauseOutcome` parity with the POS logic was not reviewed line by line (it has its own tests).
+  12. 0039's header comment says the staff form requires 3-200 characters; the form is now preset + optional note (max 169 stored). Cosmetic.
+- **Order now:** stale-screen version check card -> the write-time re-check + status timeout card -> day-off card (ops-3) -> the rest of §2. (Owner set the first; the second sits right after Release 2 by owner decision 4.)
