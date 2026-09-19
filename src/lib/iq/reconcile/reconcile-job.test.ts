@@ -77,6 +77,22 @@ describe("runReconcileNightly", () => {
     ]);
     expect(p.expired.map((r) => r.dedupeKey)).toEqual([...reconKeys("recon.order_totals", D)]);
     expect(p.expired.every((r) => r.asOf === "2026-09-11T00:00:00+05:30" && r.reason === "CLEARED")).toBe(true);
-    expect(result).toMatchObject({ status: "COMPLETE", rowsWritten: 6, summary: expect.objectContaining({ fired: 1, clear: 1, not_evaluated: 1, rule_timeout: 1, unexplained: 1, explained: 2 }) });
+    // A rule that did not finish freezes its findings as ACTIVE with no clear
+    // ever landing, across every retry: the run reports it rather than looking
+    // complete (RELIABILITY #2). The findings it did write are still committed.
+    expect(result).toMatchObject({ status: "PARTIAL", reason: "RULE_TIMEOUT", rowsWritten: 6, summary: expect.objectContaining({ fired: 1, clear: 1, not_evaluated: 1, rule_timeout: 1, unexplained: 1, explained: 2 }) });
+  });
+
+  it("is COMPLETE when every rule was evaluated, including days parity did not check", async () => {
+    const p = ports(
+      read([
+        { outcome: { ruleId: "recon.order_totals", date: D, status: "CLEAR" }, counts: null },
+        { outcome: { ruleId: "recon.facts_parity", date: D, status: "NOT_EVALUATED", reason: "rows_recently_changed" }, counts: null },
+      ]),
+    );
+    const result = await runReconcileNightly(p.ports as never);
+    expect(result).toMatchObject({ status: "COMPLETE", summary: expect.objectContaining({ rule_timeout: 0, rows_recently_changed: 1 }) });
+    // Never expired: a day nobody checked must not clear yesterday's finding.
+    expect(p.expired.map((r) => r.dedupeKey)).toEqual([...reconKeys("recon.order_totals", D)]);
   });
 });

@@ -175,7 +175,7 @@ export async function runReconcileNightly(ports: ReconcileJobPorts): Promise<Job
 
   const insights: { insight: InsightOf<"DETECTION">; asOf: string }[] = [];
   const clears: ReconExpireRequest[] = [];
-  const summary: Record<string, number> = { days: 0, fired: 0, clear: 0, not_evaluated: 0, rule_timeout: 0, facts_not_computed: 0, unexplained: 0, explained: 0 };
+  const summary: Record<string, number> = { days: 0, fired: 0, clear: 0, not_evaluated: 0, rule_timeout: 0, facts_not_computed: 0, rows_recently_changed: 0, unexplained: 0, explained: 0 };
   const days = new Set<string>();
 
   for (const { outcome, counts } of read.outcomes) {
@@ -212,5 +212,14 @@ export async function runReconcileNightly(ports: ReconcileJobPorts): Promise<Job
 
   for (const outcome of writes) summary[`insight_${outcome.toLowerCase()}`] = (summary[`insight_${outcome.toLowerCase()}`] ?? 0) + 1;
   summary.insights_expired = expired;
-  return { status: "COMPLETE", rowsWritten: writes.filter((o) => o !== "NOOP").length + expired, summary };
+  const rowsWritten = writes.filter((o) => o !== "NOOP").length + expired;
+
+  // A rule whose read does not finish is never evaluated and its keys are
+  // never expired, so its findings freeze as ACTIVE and no clear ever lands.
+  // Nothing above the summary would notice, and the state survives every
+  // retry, so the run must report PARTIAL: RULE_TIMEOUT always counts as a
+  // failure, the run exhausts and systemd's OnFailure fires (RELIABILITY #2,
+  // iq2-adapt part 1). The findings this run did write are already committed.
+  if (summary.rule_timeout! > 0) return { status: "PARTIAL", reason: "RULE_TIMEOUT", rowsWritten, summary };
+  return { status: "COMPLETE", rowsWritten, summary };
 }

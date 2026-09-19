@@ -10,14 +10,16 @@
  * arithmetic goes through `src/lib/money`, nothing here formats money or
  * touches a float. A rule never corrects anything; it reports.
  *
- * Refunds: the schema this ships on has no refund status yet, so every refund
- * row counts (R2.6 "today"). The refund release switches the repository's
- * refund read to SUCCEEDED on finalized_at; these checks do not change.
+ * Refunds: only a refund that landed counts as money back — SUCCEEDED on
+ * finalized_at (migration 0038). The repository decides that once,
+ * `COUNTED_REFUND` in `iq-recon.ts`, and every rule here reads the result; a
+ * RESERVED or FAILED attempt is not a refund and must not move a figure.
  */
 import { financialYear, parseInvoiceNumber } from "@/lib/invoice";
 import { addDays } from "@/lib/dates";
-import { type Paise, ZERO, add, negate, subtract } from "@/lib/money";
+import { type Bps, type Paise, ZERO, add, negate, subtract } from "@/lib/money";
 import type { PriceBasis } from "@/lib/pricing";
+import { gst } from "@/lib/tax/gst";
 
 import { explainCaptureMismatch } from "./explanations";
 
@@ -74,6 +76,8 @@ export type OrderTotalsRow = {
   readonly pointsRedeemed: number;
   readonly lineSubtotalSum: Paise;
   readonly lineDiscountSum: Paise;
+  /** How many lines the order has — the number of separate CGST/SGST allocations behind its totals. */
+  readonly lineCount: number;
   /** Lines where line_taxable + line_tax ≠ line_subtotal − line_discount. */
   readonly linesOffInclusive: number;
   /** Lines where line_taxable ≠ line_subtotal − line_discount. */
@@ -87,9 +91,31 @@ export type OrderTotalsBreak =
   | "ORDER_IDENTITY"
   | "UNUSED_FEES"
   | "TAX_SPLIT"
+  | "IGST_PRESENT"
+  | "CGST_SGST_UNEVEN"
   | "STAMP_DISCOUNT"
   | "GRAND_TOTAL"
   | "POINTS_RANGE";
+
+/**
+ * The intra-state shape of the split, not just its sum. FRYBIRD is one
+ * location in Haryana and every supply is intra-state, so `splitTax` puts the
+ * whole tax in CGST and SGST — half each, with the odd paise allocated — and
+ * nothing in IGST. An order with its tax all in CGST, or any of it in IGST,
+ * still satisfies cgst + sgst + igst = tax_total and would reconcile
+ * perfectly against the order total while filing GSTR-1 wrong.
+ *
+ * The tolerance is one paise per allocation, and there is one per line plus
+ * one for the delivery fee (`priceOrder` prices fees alongside lines).
+ */
+function taxSplitShapeBreaks(row: OrderTotalsRow): OrderTotalsBreak[] {
+  const breaks: OrderTotalsBreak[] = [];
+  if (row.igstTotal !== ZERO) breaks.push("IGST_PRESENT");
+  const gap = subtract(row.cgstTotal, row.sgstTotal);
+  const spread = gap < ZERO ? negate(gap) : gap;
+  if (spread > BigInt(row.lineCount + 1)) breaks.push("CGST_SGST_UNEVEN");
+  return breaks;
+}
 
 /**
  * Which pricing identities an order's stored figures break. Empty means the
@@ -111,6 +137,7 @@ export function orderTotalsBreaks(row: OrderTotalsRow, basis: PriceBasis): Order
 
   if (row.packagingFee !== ZERO || row.tipAmount !== ZERO) breaks.push("UNUSED_FEES");
   if (add(row.cgstTotal, row.sgstTotal, row.igstTotal) !== row.taxTotal) breaks.push("TAX_SPLIT");
+  breaks.push(...taxSplitShapeBreaks(row));
   if (row.stampRewardDiscount < ZERO || row.stampRewardDiscount > row.discountTotal) breaks.push("STAMP_DISCOUNT");
 
   if (row.pointsRedeemed === 0) {
@@ -237,6 +264,13 @@ export function invoiceBreak(row: InvoiceRow): InvoiceBreak | null {
  * legitimate gap: since 4ec0274 a number is max + 1 in the same transaction
  * that sets PAID, and a rolled-back attempt uses none (F2). Duplicates are
  * blocked by UNIQUE (org_id, invoice_number); the check guards the constraint.
+ *
+ * `gaps` is max − unique, which assumes the year's series starts at 1. That
+ * holds for a series only ever minted by max + 1. If an org's financial year
+ * is ever started above 1 — a backfill, a migration, a series carried in from
+ * a previous book — every night would report start − 1 unexplained gaps, and
+ * the fix is to compare against that org's first issued number rather than to
+ * loosen the rule. Rule 46 numbering is the first thing a CA looks at.
  */
 export function invoiceSequenceBreaks(numbers: readonly string[], year: string): { readonly gaps: number; readonly duplicates: number } {
   const sequences = numbers
@@ -252,6 +286,15 @@ export function invoiceSequenceBreaks(numbers: readonly string[], year: string):
 /* recon.gst_lines                                                      */
 /* ------------------------------------------------------------------ */
 
+/** One stored sale line, as `priceLine` wrote it: its taxed amount, its own rate, and the tax it booked. */
+export type GstLine = {
+  /** line_subtotal − line_discount: the amount GST was computed on. */
+  readonly net: Paise;
+  readonly rateBps: Bps;
+  readonly taxable: Paise;
+  readonly tax: Paise;
+};
+
 export type GstLinesRow = {
   readonly orderId: string;
   readonly deliveryFee: Paise;
@@ -259,22 +302,62 @@ export type GstLinesRow = {
   readonly taxTotal: Paise;
   readonly lineTaxableSum: Paise;
   readonly lineTaxSum: Paise;
-  /** Order REFUNDED or any refund booked: excluded and counted until dec-9. */
+  /** A refund that actually landed (SUCCEEDED), or the order itself REFUNDED. */
   readonly refunded: boolean;
+  readonly lines: readonly GstLine[];
 };
+
+export type GstLinesBreak = "LINE_TAX_MISMATCH" | "FEE_GST_MISMATCH" | "NOT_CHECKED_REFUNDED";
+
+/**
+ * Every line's tax against its own stored rate. `priceLine` books
+ * `gst(line_subtotal − line_discount, tax_rate_bps, basis)`, and the rate and
+ * the amounts are all snapshot columns, so the check is exact rather than a
+ * tolerance.
+ *
+ * This is the only rule that would notice paise moved from line_tax into
+ * line_taxable: that tamper keeps every sum in this file intact — taxable +
+ * tax per line, the totals identity, the fee residual, cgst + sgst + igst —
+ * while the output GST actually filed is short.
+ */
+export function lineTaxBroken(row: GstLinesRow, basis: PriceBasis): boolean {
+  return row.lines.some((line) => {
+    const expected = gst(line.net, line.rateBps, { basis });
+    return line.taxable !== expected.taxable || line.tax !== expected.total;
+  });
+}
 
 /**
  * The delivery fee's GST lives in the order totals, not on a line, so the
- * part of the totals no line explains must be exactly the fee: non-negative
- * taxable and tax that add up to delivery_fee, and nothing when there is no
- * fee. Stored data, so D9 (the export's omission) never explains a break.
+ * part of the totals no line explains must be exactly the fee. Under
+ * `inclusive` the fee contains its tax, so taxable + tax = delivery_fee;
+ * under `exclusive` the tax is added on top, so taxable = delivery_fee. The
+ * basis comes from the organization (`src/lib/pricing`) and is never decided
+ * here. Stored data, so D9 (the export's omission) never explains a break.
  */
-export function gstLinesBroken(row: GstLinesRow): boolean {
+export function feeGstBroken(row: GstLinesRow, basis: PriceBasis): boolean {
   const feeTaxable = subtract(row.taxableTotal, row.lineTaxableSum);
   const feeTax = subtract(row.taxTotal, row.lineTaxSum);
   if (feeTaxable < ZERO || feeTax < ZERO) return true;
   if (row.deliveryFee === ZERO) return feeTaxable !== ZERO || feeTax !== ZERO;
-  return add(feeTaxable, feeTax) !== row.deliveryFee;
+  return basis === "inclusive" ? add(feeTaxable, feeTax) !== row.deliveryFee : feeTaxable !== row.deliveryFee;
+}
+
+/**
+ * What the GST-line rule says about one order.
+ *
+ * A refund does not rewrite lines, so the per-line rate check runs on every
+ * order — leaving it off for refunded orders is exactly the hole a plant
+ * would use. Only the fee residual is held back, because how a credit note
+ * restates the order's own GST is dec-9, still open with the CA; that
+ * exclusion is reported as NOT_CHECKED_REFUNDED rather than being silent, and
+ * carries dec-9 as its explanation so it is shown and counted without
+ * alarming.
+ */
+export function gstLinesBreak(row: GstLinesRow, basis: PriceBasis): GstLinesBreak | null {
+  if (lineTaxBroken(row, basis)) return "LINE_TAX_MISMATCH";
+  if (row.refunded) return "NOT_CHECKED_REFUNDED";
+  return feeGstBroken(row, basis) ? "FEE_GST_MISMATCH" : null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -301,17 +384,22 @@ export function loyaltyStillHeld(row: LoyaltyRefundRow): boolean {
 /* recon.facts_parity                                                   */
 /* ------------------------------------------------------------------ */
 
+/** Why a day's parity was not checked: no computed facts, or rows that are still moving. */
+export type ParityNotChecked = "facts_not_computed" | "rows_recently_changed";
+
 export type FactsParityDay = {
   readonly date: string;
-  /** False when the day has no computed facts: "not checked", never zero mismatches. */
-  readonly computed: boolean;
+  /** False when the day was not compared at all: "not checked", never zero mismatches. */
+  readonly checked: boolean;
+  /** Why it was not checked; null when it was. */
+  readonly notCheckedReason: ParityNotChecked | null;
   /** Metric ids whose facts differ from the live P&L and food-cost figures for the day. */
   readonly mismatchedMetrics: readonly string[];
 };
 
-/** The per-day flag the detectors read (god's ruling on iq2-s7): computed facts that disagree with live figures. */
+/** The per-day flag the detectors read (god's ruling on iq2-s7): checked facts that disagree with live figures. */
 export function parityFlagged(day: FactsParityDay): boolean {
-  return day.computed && day.mismatchedMetrics.length > 0;
+  return day.checked && day.mismatchedMetrics.length > 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -353,7 +441,7 @@ export type ReconWindowRead = {
 };
 
 export type ReconOutcome =
-  | { readonly ruleId: ReconRuleId; readonly date: string; readonly status: "NOT_EVALUATED"; readonly reason: "rule_timeout" | "facts_not_computed" }
+  | { readonly ruleId: ReconRuleId; readonly date: string; readonly status: "NOT_EVALUATED"; readonly reason: "rule_timeout" | ParityNotChecked }
   | { readonly ruleId: ReconRuleId; readonly date: string; readonly status: "CLEAR" }
   | {
       readonly ruleId: ReconRuleId;
@@ -431,7 +519,12 @@ export function evaluateReconWindow(read: ReconWindowRead, now: Date): ReconOutc
       const code = refundPaymentBreak(row);
       return code ? { day: row.day, code, amount: overRefund(row) } : null;
     }, true),
-    ...outcomesFor("recon.gst_lines", dates, read.gstLines, (row) => (!row.refunded && gstLinesBroken(row) ? { day: row.day, code: "FEE_GST_MISMATCH" } : null), false),
+    ...outcomesFor("recon.gst_lines", dates, read.gstLines, (row) => {
+      const code = gstLinesBreak(row, read.basis);
+      // dec-9 (how a credit note restates the order's GST) is the open decision
+      // behind the one exclusion, so it explains it: shown and counted, not an alarm.
+      return code ? { day: row.day, code, explainedBy: code === "NOT_CHECKED_REFUNDED" ? "dec-9" : null } : null;
+    }, false),
     ...outcomesFor("recon.loyalty_refund", dates, read.loyaltyRefunds, (row) =>
       loyaltyStillHeld(row) ? { day: row.day, code: row.stampHeld ? "STAMP_HELD" : "POINTS_HELD" } : null,
     false),
@@ -466,7 +559,7 @@ export function evaluateReconWindow(read: ReconWindowRead, now: Date): ReconOutc
     const byDate = new Map(read.parity.rows.map((p) => [p.date, p]));
     for (const d of dates) {
       const day = byDate.get(d);
-      if (!day || !day.computed) outcomes.push({ ruleId: "recon.facts_parity", date: d, status: "NOT_EVALUATED", reason: "facts_not_computed" });
+      if (!day || !day.checked) outcomes.push({ ruleId: "recon.facts_parity", date: d, status: "NOT_EVALUATED", reason: day?.notCheckedReason ?? "facts_not_computed" });
       else if (day.mismatchedMetrics.length === 0) outcomes.push({ ruleId: "recon.facts_parity", date: d, status: "CLEAR" });
       else {
         const breaks: Record<string, number> = {};

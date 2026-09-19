@@ -22,8 +22,12 @@ import { paise } from "@/lib/money";
 
 import { createTestCustomer, createTestProduct, type TestOrg } from "./__test-support__/fixtures";
 import { createTwoTestOrgs, istInstant, type SeededSale, seedOrder, seedRefund, seedSale, type TwoOrgs } from "./__test-support__/iq-fixtures";
-import { recomputeDay } from "./iq-facts";
-import { readFactsParityDays, readRecon, runReconReadOnly } from "./iq-recon";
+import { endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
+
+import { getProfitAndLoss } from "./expenses";
+import { readDailyFacts, recomputeDay } from "./iq-facts";
+import { getFoodCostComparison } from "./stock";
+import { readFactsParity, readRecon, runReconReadOnly } from "./iq-recon";
 
 const D = "2026-08-31";
 /** Well after every fixture row, so the 5-minute age guard lets them all in. */
@@ -171,18 +175,52 @@ describe("reconciliation on real rows (IQ-2 S4)", () => {
     const all = fired(outcomes.map((o) => o.outcome));
     expect(all.filter((o) => o.unexplained > 0).map((o) => [o.ruleId, o.date])).toEqual([["recon.status_vs_payment", "2026-08-20"]]);
     const explained = all.filter((o) => o.explained > 0);
-    expect(explained).toHaveLength(1);
-    expect(explained[0]).toMatchObject({ ruleId: "recon.capture_vs_total", date: CLEAN_DAYS[2], explained: 1, unexplained: 0, explainedBy: "pay-4" });
-    expect(explained[0]!.amount).toBeGreaterThan(0n);
+    const capture = explained.find((o) => o.ruleId === "recon.capture_vs_total");
+    expect(capture).toMatchObject({ date: CLEAN_DAYS[2], explained: 1, unexplained: 0, explainedBy: "pay-4" });
+    expect(capture!.amount).toBeGreaterThan(0n);
+    // The refunded orders' fee residual is not checked (dec-9) — shown and
+    // counted as NOT_CHECKED_REFUNDED, never a silent exclusion.
+    const notChecked = explained.filter((o) => o.ruleId === "recon.gst_lines");
+    expect(notChecked.every((o) => o.unexplained === 0 && o.explainedBy === "dec-9" && (o.breaks.NOT_CHECKED_REFUNDED ?? 0) > 0)).toBe(true);
+    expect(notChecked.map((o) => o.date)).toEqual([CLEAN_DAYS[1], CLEAN_DAYS[2]]);
   });
 
   it("parity is checked per day: computed days pass or fail exactly, days without facts are not checked", async () => {
-    const days = await readFactsParityDays(orgs.a.orgId, [...CLEAN_DAYS, PLANT.facts_parity, "2026-08-25"]);
-    expect(days).toEqual([
-      ...CLEAN_DAYS.map((date) => ({ date, computed: true, mismatchedMetrics: [] })),
-      { date: PLANT.facts_parity, computed: true, mismatchedMetrics: ["revenue_net"] },
-      { date: "2026-08-25", computed: false, mismatchedMetrics: [] },
+    const read = await readFactsParity(orgs.a.orgId, [...CLEAN_DAYS, PLANT.facts_parity, "2026-08-25"], NOW);
+    expect(read.status).toBe("evaluated");
+    expect(read.status === "evaluated" && read.rows).toEqual([
+      ...CLEAN_DAYS.map((date) => ({ date, checked: true, notCheckedReason: null, mismatchedMetrics: [] })),
+      { date: PLANT.facts_parity, checked: true, notCheckedReason: null, mismatchedMetrics: ["revenue_net"] },
+      { date: "2026-08-25", checked: false, notCheckedReason: "facts_not_computed", mismatchedMetrics: [] },
     ]);
+  });
+
+  it("parity agrees with the live P&L and food-cost figures it inlines, on the same data", async () => {
+    // The parity SQL is a copy of getProfitAndLoss / getFoodCostComparison so
+    // both sides can be read in one snapshot. This is what keeps the copy honest.
+    const date = CLEAN_DAYS[1]!;
+    const range = { from: startOfBusinessDay(date), to: endOfBusinessDay(date), label: date };
+    const [pnl, food] = await Promise.all([getProfitAndLoss(orgs.a.orgId, range), getFoodCostComparison(orgs.a.orgId, range)]);
+    const facts = await readDailyFacts(orgs.a.orgId, date, date);
+    expect(facts.totals.revenue_net).toBe(pnl.revenue);
+    expect(facts.totals.orders_paid).toBe(BigInt(pnl.orderCount));
+    expect(facts.totals.food_cost_theoretical ?? 0n).toBe(food.theoreticalCost);
+    expect(facts.totals.sale_lines_total ?? 0n).toBe(BigInt(food.saleMovementCount));
+    const read = await readFactsParity(orgs.a.orgId, [date], NOW);
+    expect(read.status === "evaluated" && read.rows[0]).toMatchObject({ date, checked: true, mismatchedMetrics: [] });
+  });
+
+  it("a day whose money moved inside the age guard is not checked, rather than mismatching", async () => {
+    const day = CLEAN_DAYS[0]!;
+    const product = await createTestProduct(orgs.a.orgId, { name: "Guarded" });
+    // Unpaid, so it is in no figure parity compares — only its timestamp matters.
+    const fresh = await seedOrder(orgs.a, { at: istInstant(day, "11:00"), status: "PENDING_PAYMENT", lines: [{ productId: product.id, unitPricePaise: 9_900n }] });
+    await db().update(orders).set({ updatedAt: new Date(NOW.getTime() - 60_000) }).where(eq(orders.id, fresh.id));
+    const read = await readFactsParity(orgs.a.orgId, [day], NOW);
+    expect(read.status === "evaluated" && read.rows[0]).toEqual({ date: day, checked: false, notCheckedReason: "rows_recently_changed", mismatchedMetrics: [] });
+    const later = await readFactsParity(orgs.a.orgId, [day], new Date(NOW.getTime() + 10 * 60_000));
+    expect(later.status === "evaluated" && later.rows[0]).toMatchObject({ checked: true, mismatchedMetrics: [] });
+    await db().delete(orders).where(eq(orders.id, fresh.id));
   });
 
   it("reads inside READ ONLY: a planted write fails with 25006", async () => {
@@ -243,11 +281,14 @@ describe("reconciliation on real rows (IQ-2 S4)", () => {
         `recon:recon.refund_vs_payment.paise:${PLANT.refund_vs_payment}`,
         `recon:recon.capture_vs_total.explained:${CLEAN_DAYS[2]}`,
         `recon:recon.capture_vs_total.paise:${CLEAN_DAYS[2]}`,
+        // Every day holding an order whose refund landed: its fee residual is
+        // not checked pending dec-9, and says so rather than vanishing.
+        ...[CLEAN_DAYS[1], CLEAN_DAYS[2], PLANT.refund_vs_payment, PLANT.loyalty_refund].map((day) => `recon:recon.gst_lines.explained:${day}`),
       ].sort(),
     );
     // Parity on a day without facts is not evaluated, so its key is never expired.
     expect(expired).not.toContain("recon:recon.facts_parity:2026-08-25");
     expect(expired).toContain("recon:recon.order_totals:2026-08-25");
-    expect(result).toMatchObject({ status: "COMPLETE", summary: expect.objectContaining({ unexplained: 8, explained: 1, days: 36 }) });
+    expect(result).toMatchObject({ status: "COMPLETE", summary: expect.objectContaining({ unexplained: 8, explained: 5, days: 36 }) });
   });
 });

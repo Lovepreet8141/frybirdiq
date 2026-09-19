@@ -15,23 +15,26 @@ import "server-only";
  * (`src/lib/iq/reconcile/rules.ts`). Days are the IST business day of the
  * order's created_at, the same anchor as the sale set and the daily facts.
  *
- * Refunds: this schema has no refund status yet, so every refunds row counts
- * (R2.6 "today"); the refund release switches `COUNTED_REFUND` to
- * SUCCEEDED rows only.
+ * Refunds: only a refund that landed is money back — `COUNTED_REFUND`,
+ * SUCCEEDED (migration 0038, where SUCCEEDED ⇔ finalized_at is a check
+ * constraint). One definition, used by every rule that reads a refund: a
+ * RESERVED attempt in flight and a FAILED one are not refunds, and counting
+ * them fires OVER_REFUNDED on a correct credit note.
  */
 import { sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { organizations } from "@/db/schema";
-import { type DateRange, endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
+import { endOfBusinessDay, startOfBusinessDay } from "@/lib/dates";
 import type { FigureTrust, Observed } from "@/lib/iq/engine";
 import { observed, observedPaise } from "@/lib/iq/engine/observed-factory";
-import { businessDateSql } from "@/lib/iq/metrics";
+import { DEFINITION_VERSION as FACTS_DEFINITION_VERSION, businessDateSql } from "@/lib/iq/metrics";
 import type { ReconCounts, ReconRunRead } from "@/lib/iq/reconcile/reconcile-job";
 import {
   type CaptureRow,
   type Dated,
   type FactsParityDay,
+  type GstLine,
   type GstLinesRow,
   type InvoiceRow,
   type LoyaltyRefundRow,
@@ -46,13 +49,10 @@ import {
   reconWindow,
 } from "@/lib/iq/reconcile/rules";
 import { financialYear } from "@/lib/invoice";
-import { paise } from "@/lib/money";
+import { type Bps, paise } from "@/lib/money";
 import type { PriceBasis } from "@/lib/pricing";
 
-import { getProfitAndLoss } from "./expenses";
-import { readDailyFacts } from "./iq-facts";
 import { TRUST_DEFINITION_VERSION } from "./iq-trust";
-import { getFoodCostComparison } from "./stock";
 
 /** Per-statement limit inside a rule's read (R2.5). */
 export const RECON_STATEMENT_TIMEOUT_MS = 10_000;
@@ -87,8 +87,15 @@ const text = (value: unknown) => String(value);
 
 /** Statuses of a payment that took money at some point (F8). */
 const EVER_CAPTURED = sql.raw(`('CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED')`);
-/** Refund rows that count as money back. Today every row; SUCCEEDED only once refunds carry a status. */
-const COUNTED_REFUND = sql.raw(`TRUE`);
+/** What "paid" means for the sale set — analytics.ts PAID_PAYMENT_STATUSES, in SQL for the parity read. */
+const PAID_PAYMENT = sql.raw(`('CAPTURED', 'PARTIALLY_REFUNDED')`);
+/**
+ * Refund rows that count as money back: the ones that landed. Every refund
+ * read in this file goes through it — the refund-vs-payment sums, and the
+ * gst_lines "this order was refunded" flag — so there is one answer to what a
+ * refund is, not one per query. `r` is the refunds row's alias.
+ */
+const COUNTED_REFUND = sql.raw(`r.status = 'SUCCEEDED'`);
 /** Orders that were never priced for a sale are not reconciled here (half orders are PAYMENT-SAFETY's signature). */
 const PRICED_ORDER = sql.raw(`o.status NOT IN ('DRAFT', 'PENDING_PAYMENT', 'FAILED')`);
 
@@ -116,6 +123,7 @@ async function readOrderTotals(w: Window): Promise<RuleRead<Dated<OrderTotalsRow
         o.grand_total::text AS grand_total, o.stamp_reward_discount::text AS stamp_reward_discount, o.points_redeemed,
         coalesce(sum(oi.line_subtotal), 0)::text AS line_subtotal_sum,
         coalesce(sum(oi.line_discount), 0)::text AS line_discount_sum,
+        count(oi.id)::int AS line_count,
         (count(oi.id) FILTER (WHERE oi.line_taxable + oi.line_tax <> oi.line_subtotal - oi.line_discount))::int AS off_inclusive,
         (count(oi.id) FILTER (WHERE oi.line_taxable <> oi.line_subtotal - oi.line_discount))::int AS off_exclusive
       FROM orders o
@@ -140,6 +148,7 @@ async function readOrderTotals(w: Window): Promise<RuleRead<Dated<OrderTotalsRow
       pointsRedeemed: int(r.points_redeemed),
       lineSubtotalSum: money(r.line_subtotal_sum),
       lineDiscountSum: money(r.line_discount_sum),
+      lineCount: int(r.line_count),
       linesOffInclusive: int(r.off_inclusive),
       linesOffExclusive: int(r.off_exclusive),
     }));
@@ -220,12 +229,32 @@ async function readInvoiceNumbers(orgId: string, date: string): Promise<RuleRead
   });
 }
 
+/**
+ * The per-line tuples the GST rule re-prices: [net, rate_bps, taxable, tax].
+ * Amounts arrive as text and become bigint — a JSON number would be a float,
+ * which money never is. The rate is a small integer (bps), not money.
+ */
+function gstLinesOf(value: unknown): GstLine[] {
+  const rows = Array.isArray(value) ? value : JSON.parse(String(value ?? "[]"));
+  return (rows as [string, number, string, string][]).map(([net, rateBps, taxable, tax]) => ({
+    net: money(net),
+    rateBps: int(rateBps) as Bps,
+    taxable: money(taxable),
+    tax: money(tax),
+  }));
+}
+
 async function readGstLines(w: Window): Promise<RuleRead<Dated<GstLinesRow>>> {
   return runReconReadOnly(async (tx) => {
     const rows = await tx.execute<Record<string, unknown>>(sql`
       SELECT o.id, ${DAY} AS day, o.delivery_fee::text AS delivery_fee, o.taxable_total::text AS taxable_total, o.tax_total::text AS tax_total,
         coalesce(sum(oi.line_taxable), 0)::text AS line_taxable_sum, coalesce(sum(oi.line_tax), 0)::text AS line_tax_sum,
-        (o.status = 'REFUNDED' OR EXISTS (SELECT 1 FROM refunds r WHERE r.order_id = o.id AND r.org_id = ${w.orgId})) AS refunded
+        (o.status = 'REFUNDED' OR EXISTS (SELECT 1 FROM refunds r WHERE r.order_id = o.id AND r.org_id = ${w.orgId} AND ${COUNTED_REFUND})) AS refunded,
+        coalesce(
+          jsonb_agg(jsonb_build_array((oi.line_subtotal - oi.line_discount)::text, oi.tax_rate_bps, oi.line_taxable::text, oi.line_tax::text))
+            FILTER (WHERE oi.id IS NOT NULL),
+          '[]'::jsonb
+        ) AS lines
       FROM orders o
       LEFT JOIN order_items oi ON oi.order_id = o.id AND oi.org_id = ${w.orgId}
       WHERE ${orderWindow(w)} AND ${settledMoney(w)} AND ${PRICED_ORDER}
@@ -239,6 +268,7 @@ async function readGstLines(w: Window): Promise<RuleRead<Dated<GstLinesRow>>> {
       lineTaxableSum: money(r.line_taxable_sum),
       lineTaxSum: money(r.line_tax_sum),
       refunded: r.refunded === true,
+      lines: gstLinesOf(r.lines),
     }));
   });
 }
@@ -264,37 +294,128 @@ async function readLoyaltyRefunds(w: Window): Promise<RuleRead<Dated<LoyaltyRefu
 
 /** Totals compared between one day's facts and the live P&L and food-cost figures. */
 const PARITY_METRICS = ["revenue_net", "orders_paid", "expense_direct", "expense_operating", "expense_nonoperating", "food_cost_theoretical", "food_cost_actual", "sale_lines_total"] as const;
+type ParityMetric = (typeof PARITY_METRICS)[number];
+
+type ParityFigures = Partial<Record<ParityMetric, bigint>>;
+
+function figure(figures: ParityFigures, metric: ParityMetric): bigint {
+  return figures[metric] ?? 0n;
+}
+
+/** The instants the parity read scans, and the age guard it applies, for the days asked for. */
+function parityWindow(orgId: string, dates: readonly string[], now: Date): Window {
+  return { orgId, from: startOfBusinessDay(dates[0]!), to: endOfBusinessDay(dates.at(-1)!), settled: new Date(now.getTime() - RECON_MIN_ROW_AGE_MS) };
+}
 
 /**
- * Per-day facts parity: each day's computed facts against the live P&L and
- * food-cost figures for that day, exactly (bigint). A day without computed
- * facts is `computed: false` — "not checked", never a pass. This is also the
- * per-day flag the detectors read (`parityFlagged`, god's ruling on iq2-s7).
+ * Per-day facts parity: each day's stored facts against the same figures
+ * computed live, exactly (bigint).
+ *
+ * Both sides are read inside one `runReconReadOnly` transaction, so they come
+ * from one REPEATABLE READ snapshot: a refund, expense or stock movement that
+ * commits mid-run can no longer make a day that agrees look like a mismatch.
+ * That was RELIABILITY's condition for parity gating the detectors
+ * (`parityFlagged`), and it is why the live figures are SQL here rather than
+ * calls to `getProfitAndLoss` / `getFoodCostComparison`, which take no
+ * transaction (card iq1-par, another owner). The definitions below must stay
+ * in step with those two functions and with `saleSetWhere`; the integration
+ * test compares this path against them on the same data.
+ *
+ * Not checked, never a pass:
+ * - a day with no computed facts (`facts_not_computed`);
+ * - a day whose orders, payments, refunds, expenses or stock movements moved
+ *   inside the 5-minute age guard (`rows_recently_changed`) — the same guard
+ *   the row rules use, applied to the whole day because parity compares sums.
  */
-export async function readFactsParityDays(orgId: string, dates: readonly string[]): Promise<FactsParityDay[]> {
-  const out: FactsParityDay[] = [];
-  for (const date of dates) {
-    const facts = await readDailyFacts(orgId, date, date);
-    if (facts.missingDates.length > 0) {
-      out.push({ date, computed: false, mismatchedMetrics: [] });
-      continue;
+export async function readFactsParity(orgId: string, dates: readonly string[], now: Date): Promise<RuleRead<FactsParityDay>> {
+  const first = dates[0]!;
+  const last = dates.at(-1)!;
+  const w = parityWindow(orgId, dates, now);
+  return runReconReadOnly(async (tx) => {
+    // One snapshot for every statement below: REPEATABLE READ takes it at the
+    // first query and holds it for the transaction.
+    const factRows = await tx.execute<{ day: string; metric_id: string; value: string }>(sql`
+      SELECT business_date::text AS day, metric_id, sum(value)::text AS value
+      FROM iq_daily_facts
+      WHERE org_id = ${w.orgId} AND definition_version = ${FACTS_DEFINITION_VERSION} AND dimension_key = ''
+        AND business_date >= ${first} AND business_date <= ${last}
+      GROUP BY 1, 2`);
+
+    // Revenue is net of GST (taxable_total, never grand_total) over the sale
+    // set: paid, not cancelled/failed/refunded (analytics.ts saleSetWhere).
+    const saleRows = await tx.execute<{ day: string; revenue_net: string; orders_paid: number }>(sql`
+      SELECT ${DAY} AS day, coalesce(sum(o.taxable_total), 0)::text AS revenue_net, count(*)::int AS orders_paid
+      FROM orders o
+      WHERE o.org_id = ${w.orgId} AND o.created_at >= ${w.from.toISOString()} AND o.created_at < ${w.to.toISOString()}
+        AND o.status NOT IN ('CANCELLED', 'FAILED', 'REFUNDED')
+        AND EXISTS (SELECT 1 FROM payments pp WHERE pp.order_id = o.id AND pp.org_id = ${w.orgId} AND pp.status IN ${PAID_PAYMENT})
+      GROUP BY 1`);
+
+    // Expenses are dated by paid_on, which is already an IST business date
+    // (expenses.ts businessDateBounds). Operating direct / operating fixed /
+    // non-operating, the three lines shapeProfitAndLoss sums.
+    const expenseRows = await tx.execute<{ day: string; direct: string; operating: string; non_operating: string }>(sql`
+      SELECT e.paid_on::text AS day,
+        coalesce(sum(e.amount) FILTER (WHERE c.behaviour = 'DIRECT' AND NOT c.is_non_operating), 0)::text AS direct,
+        coalesce(sum(e.amount) FILTER (WHERE c.behaviour = 'FIXED' AND NOT c.is_non_operating), 0)::text AS operating,
+        coalesce(sum(e.amount) FILTER (WHERE c.is_non_operating), 0)::text AS non_operating
+      FROM expenses e
+      JOIN expense_categories c ON c.id = e.category_id AND c.org_id = ${w.orgId}
+      WHERE e.org_id = ${w.orgId} AND e.paid_on >= ${first} AND e.paid_on <= ${last}
+      GROUP BY 1`);
+
+    const movementRows = await tx.execute<{ day: string; theoretical: string; actual: string; sale_lines: number }>(sql`
+      SELECT ${sql.raw(`${businessDateSql("im.occurred_at")}::text`)} AS day,
+        coalesce(sum(im.total_cost) FILTER (WHERE im.type = 'SALE'), 0)::text AS theoretical,
+        coalesce(sum(im.total_cost) FILTER (WHERE im.type IN ('SALE', 'WASTE') OR (im.type = 'ADJUSTMENT' AND im.quantity < 0)), 0)::text AS actual,
+        (count(*) FILTER (WHERE im.type = 'SALE'))::int AS sale_lines
+      FROM inventory_movements im
+      WHERE im.org_id = ${w.orgId} AND im.occurred_at >= ${w.from.toISOString()} AND im.occurred_at < ${w.to.toISOString()}
+      GROUP BY 1`);
+
+    // The age guard, per day: anything a figure above depends on that moved
+    // inside the last 5 minutes leaves the whole day unchecked.
+    const movingRows = await tx.execute<{ day: string }>(sql`
+      SELECT ${DAY} AS day FROM orders o
+        WHERE o.org_id = ${w.orgId} AND o.created_at >= ${w.from.toISOString()} AND o.created_at < ${w.to.toISOString()}
+          AND (o.updated_at >= ${w.settled.toISOString()} OR NOT (${settledMoney(w)}))
+      UNION
+      SELECT e.paid_on::text AS day FROM expenses e
+        WHERE e.org_id = ${w.orgId} AND e.paid_on >= ${first} AND e.paid_on <= ${last} AND e.updated_at >= ${w.settled.toISOString()}
+      UNION
+      SELECT ${sql.raw(`${businessDateSql("im.occurred_at")}::text`)} AS day FROM inventory_movements im
+        WHERE im.org_id = ${w.orgId} AND im.occurred_at >= ${w.from.toISOString()} AND im.occurred_at < ${w.to.toISOString()}
+          AND im.created_at >= ${w.settled.toISOString()}`);
+
+    const facts = new Map<string, ParityFigures>();
+    const computedDays = new Set<string>();
+    for (const row of factRows) {
+      const day = facts.get(row.day) ?? {};
+      if (PARITY_METRICS.includes(row.metric_id as ParityMetric)) day[row.metric_id as ParityMetric] = BigInt(row.value);
+      facts.set(row.day, day);
+      // The same definition of "this day has facts" as readDailyFacts.
+      if (row.metric_id === "orders_paid") computedDays.add(row.day);
     }
-    const range: DateRange = { from: startOfBusinessDay(date), to: endOfBusinessDay(date), label: date };
-    const [pnl, food] = await Promise.all([getProfitAndLoss(orgId, range), getFoodCostComparison(orgId, range)]);
-    const sum = (rows: readonly { amount: bigint }[]) => rows.reduce((total, row) => total + row.amount, 0n);
-    const live: Record<(typeof PARITY_METRICS)[number], bigint> = {
-      revenue_net: pnl.revenue,
-      orders_paid: BigInt(pnl.orderCount),
-      expense_direct: sum(pnl.direct),
-      expense_operating: sum(pnl.fixed),
-      expense_nonoperating: sum(pnl.nonOperating),
-      food_cost_theoretical: food.theoreticalCost,
-      food_cost_actual: food.actualCost,
-      sale_lines_total: BigInt(food.saleMovementCount),
-    };
-    out.push({ date, computed: true, mismatchedMetrics: PARITY_METRICS.filter((metric) => (facts.totals[metric] ?? 0n) !== live[metric]) });
-  }
-  return out;
+
+    const live = new Map<string, ParityFigures>();
+    const put = (day: string, figures: ParityFigures) => live.set(day, { ...live.get(day), ...figures });
+    for (const row of saleRows) put(text(row.day), { revenue_net: BigInt(row.revenue_net), orders_paid: BigInt(int(row.orders_paid)) });
+    for (const row of expenseRows) {
+      put(text(row.day), { expense_direct: BigInt(row.direct), expense_operating: BigInt(row.operating), expense_nonoperating: BigInt(row.non_operating) });
+    }
+    for (const row of movementRows) {
+      put(text(row.day), { food_cost_theoretical: BigInt(row.theoretical), food_cost_actual: BigInt(row.actual), sale_lines_total: BigInt(int(row.sale_lines)) });
+    }
+    const moving = new Set(movingRows.map((row) => text(row.day)));
+
+    return dates.map((date): FactsParityDay => {
+      if (moving.has(date)) return { date, checked: false, notCheckedReason: "rows_recently_changed", mismatchedMetrics: [] };
+      if (!computedDays.has(date)) return { date, checked: false, notCheckedReason: "facts_not_computed", mismatchedMetrics: [] };
+      const stored = facts.get(date) ?? {};
+      const actual = live.get(date) ?? {};
+      return { date, checked: true, notCheckedReason: null, mismatchedMetrics: PARITY_METRICS.filter((metric) => figure(stored, metric) !== figure(actual, metric)) };
+    });
+  });
 }
 
 /** The day's t6_payment_integrity trust row, as the engine's FigureTrust; null when the day was not scored. */
@@ -336,14 +457,7 @@ export async function readReconWindow(orgId: string, date: string, now: Date): P
   const invoiceNumbers = await readInvoiceNumbers(orgId, date);
   const gstLines = await readGstLines(w);
   const loyaltyRefunds = await readLoyaltyRefunds(w);
-  let parity: RuleRead<FactsParityDay>;
-  try {
-    parity = { status: "evaluated", rows: await readFactsParityDays(orgId, dates) };
-  } catch (error) {
-    const e = error as { code?: string; cause?: { code?: string } };
-    if ((e.cause?.code ?? e.code) !== "57014") throw error;
-    parity = { status: "timeout" };
-  }
+  const parity = await readFactsParity(orgId, dates, now);
 
   return { date, dates, basis: org.price_basis, closingTime: org.closing_time, orderTotals, captures, statusPayments, refundPayments, invoices, invoiceNumbers, gstLines, loyaltyRefunds, parity };
 }
