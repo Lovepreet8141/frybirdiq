@@ -7,8 +7,10 @@ import { CheckoutForm } from "@/components/cart/checkout-form";
 import { CheckoutExtras } from "@/components/cart/extras";
 import { OrderSummary } from "@/components/cart/summary";
 import type { SavedAddressOption } from "@/components/delivery/delivery-fields";
+import { CallShop } from "@/components/site/call-shop";
 import { ShopClosedNotice } from "@/components/site/shop-closed-notice";
 import { getPricedCart } from "@/lib/cart";
+import { shopPhone } from "@/lib/contact/phone";
 import { shopHoursState } from "@/lib/cart/shop-hours";
 import { readRememberedAddress } from "@/lib/cart/remembered-address";
 import { readRememberedContact } from "@/lib/cart/remembered-contact";
@@ -21,7 +23,7 @@ import { formatINR } from "@/lib/money";
 import { availableMethods } from "@/lib/payments";
 import { listSavedAddresses } from "@/lib/repositories/addresses";
 import { getDeliverySettings } from "@/lib/repositories/delivery";
-import { requireOrg } from "@/lib/repositories/org";
+import { getStoreContact, requireOrg } from "@/lib/repositories/org";
 
 export const metadata: Metadata = { title: "Checkout" };
 
@@ -59,6 +61,7 @@ export default async function CheckoutPage() {
   const asapAvailable = shopHoursState(now, org.openingTime, org.closingTime).open;
   const methods = availableMethods({ cash: org.cashEnabled, online: org.onlineEnabled });
   const delivery = await getDeliverySettings();
+  const phone = shopPhone((await getStoreContact())?.phone);
   const shop = delivery?.shop ? toLatLng(delivery.shop) : null;
 
   const customer = await getCustomer();
@@ -117,6 +120,7 @@ export default async function CheckoutPage() {
           methods={methods}
           scheduleOptions={scheduleOptions}
           asapAvailable={asapAvailable}
+          shopPhone={phone}
           extras={
             <CheckoutExtras
               promotion={cart.promotion ? { code: cart.promotion.code, name: cart.promotion.name } : null}
@@ -146,6 +150,11 @@ export default async function CheckoutPage() {
               ? "Paying now opens a secure Razorpay window after you continue. Paying on collection charges nothing now."
               : `${methods[0]?.label ?? "Pay on collection"} — ${methods[0]?.detail ?? "at the counter."} Nothing is charged now.`}
           </p>
+          {phone && (
+            <p className="px-1 text-sm text-muted-foreground">
+              <CallShop phone={phone} lead="Questions about your order? Call" />
+            </p>
+          )}
         </div>
       </div>
     </div>

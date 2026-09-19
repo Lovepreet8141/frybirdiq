@@ -8,6 +8,8 @@ import { DeliveryFields, type SavedAddressOption } from "@/components/delivery/d
 import type { Point } from "@/components/delivery/map";
 import type { CheckoutMethod } from "@/lib/payments";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { CallShop } from "@/components/site/call-shop";
+import type { ShopPhone } from "@/lib/contact/phone";
 import { cn } from "@/lib/utils";
 
 export interface ScheduleSlotOption {
@@ -64,6 +66,7 @@ export function CheckoutForm({
   methods,
   scheduleOptions,
   asapAvailable = true,
+  shopPhone = null,
 }: {
   idempotencyKey: string;
   /** Where the outlet is. Null when it has not been placed on the map. */
@@ -93,6 +96,8 @@ export function CheckoutForm({
    * never handed a default the server would refuse.
    */
   asapAvailable?: boolean;
+  /** From the outlet record; null when unset, and then no call line shows. */
+  shopPhone?: ShopPhone | null;
 }) {
   const [payment, setPayment] = useState<"COD" | "ONLINE">(methods[0]?.choice ?? "COD");
   const [fulfilment, setFulfilment] = useState<"TAKEAWAY" | "DELIVERY">("TAKEAWAY");
@@ -278,6 +283,11 @@ export function CheckoutForm({
       {state.status === "error" && !state.fieldErrors && (
         <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm leading-relaxed">
           {state.message}
+          {shopPhone && (
+            <span className="mt-1 block">
+              <CallShop phone={shopPhone} lead="Still stuck? Call" />
+            </span>
+          )}
         </p>
       )}
 

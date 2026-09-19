@@ -182,7 +182,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     return {
       ok: false,
       error:
-        "Ordering isn't connected yet, so this order has not been placed. Nothing has been charged. Please call the shop to order.",
+        "Ordering isn't connected yet, so this order has not been placed. Nothing has been charged.",
     };
   }
 
