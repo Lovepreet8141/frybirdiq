@@ -26,6 +26,7 @@
  */
 import type { JobContext, JobRunResult } from "./context";
 import { FACTS_NIGHTLY_JOB } from "./facts-plan";
+import { BRIEF_JOB_NAME, runBrief } from "./jobs/brief";
 import { runDetect } from "./jobs/detect";
 import { runFactsBackfill, runFactsIntraday, runFactsNightly } from "./jobs/facts";
 import { runIntradayBackfillJob } from "./jobs/intraday";
@@ -155,13 +156,30 @@ export const JOB_REGISTRY = {
     concurrency: "light",
     run: runReconcile,
   },
+  /**
+   * IQ-2 daily brief FACTs for yesterday, 02:00 UTC (07:30 IST) — before the
+   * owner reads the brief, and hours after the night's facts, reconcile and
+   * detect runs, so a night that needed its retries has finished. Facts gate,
+   * no catch-up: the brief is about yesterday, and a day whose facts never
+   * became final has nothing to cite. Deadline 30 s (S10): a handful of
+   * summed reads and at most 7 FACT writes.
+   */
+  [BRIEF_JOB_NAME]: {
+    name: BRIEF_JOB_NAME,
+    periodKind: "day",
+    target: "previous",
+    onCalendarUtc: "*-*-* 02:00:00 UTC",
+    ...DEFAULT_TIMING,
+    deadlineSeconds: 30,
+    catchUpPeriods: 0,
+    concurrency: "light",
+    run: runBrief,
+  },
   // TODO(IQ-2 S7, AUTOMATION-ARCHITECT): register these when their bodies land (R2.1, R2.8):
   // - iq-money-signatures   (PAYMENT-SAFETY src/lib/iq/signatures/signatures-job.ts): hour/current, :10 hourly,
   //   light, catch-up 0, <= 15 s per org.
   // - iq-service-pulse      (IQ-ENGINE src/lib/iq/detect/pulse-job.ts, S9): quarter_hour, :05/:20/:35/:50,
   //   light, catch-up 0; fresh-input rule C8/U3 needs an intraday-writer-run port.
-  // - iq-brief-daily        (BUSINESS-INTELLIGENCE src/lib/iq/brief/brief-job.ts, S10): day/previous, 02:00 UTC,
-  //   facts-ready gate, catch-up 0, <= 30 s.
   /**
    * ref-b7: lost refund follow-ups, every 15 minutes at :07 (clear of the :00
    * quarter jobs), light, no catch-up — the next quarter picks up anything

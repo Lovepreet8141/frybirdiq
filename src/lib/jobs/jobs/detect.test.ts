@@ -30,6 +30,7 @@ function fakeContext(options: { factsReady: boolean }) {
       return null;
     },
     readRecon: unused,
+    readBriefFigures: unused,
     listInsights: unused,
     getInsight: unused,
     readFactFigures: unused,

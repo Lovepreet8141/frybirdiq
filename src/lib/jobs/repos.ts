@@ -14,6 +14,7 @@
  * iq-* repositories they wrap (minus the org, transaction and lease), so the
  * two cannot drift apart. Nothing here reaches a database.
  */
+import type { BriefFiguresRead, BriefPeriods } from "@/lib/iq/brief/brief-job";
 import type { DetectDay } from "@/lib/iq/detect/rules";
 import type { Observed } from "@/lib/iq/engine";
 import type * as Facts from "@/lib/repositories/iq-facts";
@@ -84,6 +85,13 @@ export type JobReadRepos = {
    * clear, so the job never expires a finding it failed to look at.
    */
   readonly readRecon: WithoutOrg<typeof Recon.readRecon>;
+  /**
+   * The figures the daily brief cites for its day and its two month spans
+   * (IQ-2 S10 `BriefFiguresRead`): each with the trust of the metrics it rests
+   * on. A figure with no value, and a span no day of which has facts, is
+   * absent — the brief drops that line rather than printing a zero.
+   */
+  readonly readBriefFigures: (periods: BriefPeriods) => Promise<BriefFiguresRead>;
   readonly listInsights: WithoutOrg<typeof Insights.listInsights>;
   readonly getInsight: WithoutOrg<typeof Insights.getInsight>;
   readonly readFactFigures: WithoutOrg<typeof Insights.readFactFigures>;

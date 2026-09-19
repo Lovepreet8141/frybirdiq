@@ -214,6 +214,7 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
       readDetectDays: unavailable,
       readFoodCostTarget: unavailable,
       readRecon: unavailable,
+      readBriefFigures: unavailable,
       checkFactsParity: unavailable,
       listInsights: unavailable,
       getInsight: unavailable,

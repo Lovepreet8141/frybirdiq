@@ -13,7 +13,7 @@ const JOBS_DIR = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = join(JOBS_DIR, "..", "..", "..");
 
 describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
-  it("ships heartbeat (IQ-0), the three IQ-1 facts jobs, the IQ-2 detect, reconcile and intraday backfill jobs and the ref-b7 refund healer", () => {
+  it("ships heartbeat (IQ-0), the three IQ-1 facts jobs, the IQ-2 detect, reconcile, brief and intraday backfill jobs and the ref-b7 refund healer", () => {
     expect(JOB_NAMES).toEqual([
       "heartbeat",
       "iq-facts-nightly",
@@ -22,6 +22,7 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
       "iq-detect-daily",
       "iq-intraday-backfill",
       "iq-reconcile-nightly",
+      "iq-brief-daily",
       "refund-followup-heal",
     ]);
     expect(isJobName("heartbeat")).toBe(true);
@@ -88,6 +89,17 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
     const hour = (name: keyof typeof JOB_REGISTRY) => /(\d{2}):(\d{2})/.exec(JOB_REGISTRY[name].onCalendarUtc ?? "")!.slice(1).join("");
     expect(hour("iq-facts-nightly") < hour("iq-reconcile-nightly")).toBe(true);
     expect(hour("iq-reconcile-nightly") < hour("iq-detect-daily")).toBe(true);
+  });
+
+  it("writes the brief's facts after the night's runs have had their retries, with the facts gate and no catch-up (IQ-2 S10)", () => {
+    expect(JOB_REGISTRY["iq-brief-daily"]).toMatchObject({
+      periodKind: "day",
+      target: "previous",
+      onCalendarUtc: "*-*-* 02:00:00 UTC",
+      deadlineSeconds: 30,
+      catchUpPeriods: 0,
+      concurrency: "light",
+    });
   });
 
   it("starts the intraday backfill inside the 63-day retention it is purged by (RELIABILITY C7)", () => {

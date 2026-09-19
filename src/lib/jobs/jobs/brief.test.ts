@@ -1,20 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import type { ReconRunRead } from "@/lib/iq/reconcile/reconcile-job";
+import type { BriefFiguresRead, BriefPeriods } from "@/lib/iq/brief/brief-job";
 
 import type { JobContext } from "../context";
 import type { JobReadRepos, JobWriteRepos } from "../repos";
-import { runReconcile } from "./reconcile";
+import { runBrief } from "./brief";
 
 const unused = async (): Promise<never> => {
   throw new Error("not used");
 };
 
-/** Nothing fired, so no Observed figure is read: the rules' own tests cover the body. */
-const emptyRead = { from: "2026-08-07", to: "2026-09-11", outcomes: [] } as unknown as ReconRunRead;
+/** Every figure absent: the body's own tests cover what it writes when they are not. */
+const nothingRead: BriefFiguresRead = { day: {}, monthToDate: null, sameDaysLastMonth: null };
 
 function fakeContext(options: { factsReady: boolean }) {
   const calls: string[] = [];
+  let periods: BriefPeriods | null = null;
   const readers: JobReadRepos = {
     factsHistoryStart: unused,
     checkFactsParity: unused,
@@ -26,20 +27,18 @@ function fakeContext(options: { factsReady: boolean }) {
     },
     readDetectDays: unused,
     readFoodCostTarget: unused,
-    readBriefFigures: unused,
-    readRecon: async (date, now) => {
-      calls.push(`readRecon ${date} at ${now.toISOString()}`);
-      return emptyRead;
+    readRecon: unused,
+    readBriefFigures: async (asked) => {
+      periods = asked;
+      calls.push(`readFigures ${asked.day.to}`);
+      return nothingRead;
     },
     listInsights: unused,
     getInsight: unused,
     readFactFigures: unused,
     listOpenRecommendations: unused,
   };
-  const writers = {
-    writeInsight: async () => ({ outcome: "INSERTED" }),
-    expireInsights: async (requests: readonly unknown[]) => ({ expired: 0, expiredIds: [], staleWrites: 0, absent: requests.length, supersededRecommendationIds: [] }),
-  } as unknown as JobWriteRepos;
+  const writers = { writeInsight: async () => ({ outcome: "INSERTED" }) } as unknown as JobWriteRepos;
   let commits = 0;
   const ctx: JobContext = {
     orgId: "11111111-1111-4111-8111-111111111111",
@@ -56,30 +55,34 @@ function fakeContext(options: { factsReady: boolean }) {
       return write(writers);
     },
     shouldStop: () => false,
-    remainingMs: () => 180_000,
+    remainingMs: () => 30_000,
   };
-  return { ctx, calls, commits: () => commits };
+  return { ctx, calls, commits: () => commits, periods: () => periods };
 }
 
-describe("iq-reconcile-nightly adapter (IQ-2 R2.1, R2.8)", () => {
-  it("reconciles the period's day through ctx.repos and writes in one fenced chunk", async () => {
+describe("iq-brief-daily adapter (IQ-2 R2.1, R2.10)", () => {
+  it("reads the period's day and its two month spans, then writes in one fenced chunk", async () => {
     const f = fakeContext({ factsReady: true });
-    const result = await runReconcile(f.ctx);
+    const result = await runBrief(f.ctx);
     expect(result.status).toBe("COMPLETE");
-    expect(f.calls[0]).toBe("factsReady 2026-09-11");
-    expect(f.calls[1]).toMatch(/^readRecon 2026-09-11 at /);
+    expect(f.calls).toEqual(["factsReady 2026-09-11", "readFigures 2026-09-11"]);
+    expect(f.periods()).toMatchObject({
+      day: { from: "2026-09-11", to: "2026-09-11" },
+      monthToDate: { from: "2026-09-01", to: "2026-09-11" },
+      sameDaysLastMonth: { from: "2026-08-01", to: "2026-08-11" },
+    });
     expect(f.commits()).toBe(1);
   });
 
   it("fails with CODE_VERSION_UNKNOWN before reading anything when the deployed commit is unknown", async () => {
     const f = fakeContext({ factsReady: true });
-    await expect(runReconcile({ ...f.ctx, codeVersion: "unversioned" })).rejects.toMatchObject({ code: "CODE_VERSION_UNKNOWN" });
+    await expect(runBrief({ ...f.ctx, codeVersion: "unversioned" })).rejects.toMatchObject({ code: "CODE_VERSION_UNKNOWN" });
     expect(f.calls).toEqual([]);
   });
 
-  it("stops PARTIAL UPSTREAM_NOT_READY before reading or writing anything when facts are not final (C4, iq2-s7 blocker)", async () => {
+  it("stops PARTIAL UPSTREAM_NOT_READY before reading or writing anything when facts are not final", async () => {
     const f = fakeContext({ factsReady: false });
-    expect(await runReconcile(f.ctx)).toEqual({ status: "PARTIAL", reason: "UPSTREAM_NOT_READY", rowsWritten: 0, summary: { upstream_not_ready: 1 } });
+    expect(await runBrief(f.ctx)).toEqual({ status: "PARTIAL", reason: "UPSTREAM_NOT_READY", rowsWritten: 0, summary: { upstream_not_ready: 1 } });
     expect(f.calls).toEqual(["factsReady 2026-09-11"]);
     expect(f.commits()).toBe(0);
   });
