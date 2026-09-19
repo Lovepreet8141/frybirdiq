@@ -16,6 +16,16 @@ import { siteUrl } from "./site";
 const SITE = siteUrl();
 
 /** The default hours this shipped with, before Restaurant settings (roadmap 5.5) could change them. */
+const WEEK_ORDER = [
+  { index: 1, name: "Monday" },
+  { index: 2, name: "Tuesday" },
+  { index: 3, name: "Wednesday" },
+  { index: 4, name: "Thursday" },
+  { index: 5, name: "Friday" },
+  { index: 6, name: "Saturday" },
+  { index: 0, name: "Sunday" },
+] as const;
+
 const DEFAULT_HOURS = { opens: "11:30", closes: "23:00" } as const;
 
 /**
@@ -49,8 +59,11 @@ export interface RestaurantPin {
  */
 export function restaurantSchema(
   hours: { readonly opens: string; readonly closes: string } = DEFAULT_HOURS,
-  details: { readonly pin?: RestaurantPin | null; readonly telephone?: string | null } = {},
+  details: { readonly pin?: RestaurantPin | null; readonly telephone?: string | null; readonly closedWeekdays?: readonly number[] } = {},
 ) {
+  // Search engines show "open now" from this: a weekly day off (0 = Sunday … 6 = Saturday) must not be listed as open.
+  const closed = new Set(details.closedWeekdays ?? []);
+  const openDays = WEEK_ORDER.filter((day) => !closed.has(day.index)).map((day) => day.name);
   return {
     "@context": "https://schema.org",
     "@type": "Restaurant",
@@ -76,15 +89,7 @@ export function restaurantSchema(
     openingHoursSpecification: [
       {
         "@type": "OpeningHoursSpecification",
-        dayOfWeek: [
-          "Monday",
-          "Tuesday",
-          "Wednesday",
-          "Thursday",
-          "Friday",
-          "Saturday",
-          "Sunday",
-        ],
+        dayOfWeek: openDays,
         opens: hours.opens,
         closes: hours.closes,
       },

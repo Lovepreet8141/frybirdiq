@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { customers, idempotencyKeys, inventoryMovements, loyaltyStampEvents, loyaltyTransactions, orders, organizations, payments, promotions } from "@/db/schema";
+import { closedDates, customers, idempotencyKeys, inventoryMovements, loyaltyStampEvents, loyaltyTransactions, orders, organizations, payments, promotions } from "@/db/schema";
 import { createTestOrg, createTestProduct, createTestTaxRate, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 import { ORG_SLUG } from "./org";
 
@@ -79,6 +79,7 @@ vi.mock("./org", async (importOriginal) => {
   };
 });
 
+import { addClosedDate, removeClosedDate } from "./closed-dates";
 import { placeCounterOrder, placeOrder } from "./orders";
 import { fromRupees } from "@/lib/money";
 
@@ -107,6 +108,7 @@ beforeEach(async () => {
   intents.count = 0;
   promoCode = null;
   await clearPause();
+  await clearClosures();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -381,5 +383,176 @@ describe("the counter stays ungated (owner ruling: the till keeps working while 
     });
     expect(result.ok).toBe(true);
     expect(await orderCount()).toBe(before + 1);
+  });
+});
+
+
+/* ------------------------------------------------------------------ ops-3 */
+
+// 2026-06-10 is a Wednesday; 2026-06-09 a Tuesday.
+const TUESDAY_NOON = new Date("2026-06-09T06:30:00.000Z"); // 12:00 IST
+const WEDNESDAY_SLOT = new Date("2026-06-10T07:30:00.000Z"); // 13:00 IST Wednesday
+const actor = randomUUID();
+
+async function clearClosures(): Promise<void> {
+  await db().delete(closedDates).where(eq(closedDates.orgId, org.orgId));
+  await db().update(organizations).set({ weeklyClosedDays: [] }).where(eq(organizations.id, org.orgId));
+}
+async function closeWednesdayByDate(note: string | null = "Closed for Diwali"): Promise<void> {
+  const result = await addClosedDate({ orgId: org.orgId, actorUserId: actor, startDate: "2026-06-10", endDate: "2026-06-10", note });
+  if (!result.ok) throw new Error(result.error);
+}
+
+describe("a closed day (ops-3): the server refuses whatever the page showed", () => {
+  it("ASAP on the weekly day off: refused, the day-off message, and NOTHING left behind", async () => {
+    at(NOON); // Wednesday 12:00, inside the hours
+    await db().update(organizations).set({ weeklyClosedDays: [3] }).where(eq(organizations.id, org.orgId));
+    const code = `OFF-${randomUUID().slice(0, 6).toUpperCase()}`;
+    await createPromo(code, 5);
+    promoCode = code;
+    const key = randomUUID();
+    const before = await orderCount();
+    const sideBefore = await sideEffectRows();
+
+    const result = await placeOrder({ ...base, phone: "9000000010", idempotencyKey: key });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.error).toBe("We're closed today. We open again tomorrow at 11:30 AM — nothing has been ordered or charged.");
+    expect("closed" in result && result.closed).toMatchObject({ code: "CLOSED", dayOff: { source: "WEEKLY" } });
+    expect(await orderCount()).toBe(before);
+    expect(await customerRows("9000000010")).toBe(0);
+    expect(await keyRows(key)).toBe(0);
+    expect(intents.count).toBe(0);
+    expect(await promoUses(code)).toBe(0);
+    expect(await sideEffectRows()).toEqual(sideBefore);
+  });
+
+  it("ASAP on a planned closed date: the owner's public note is in the customer's message", async () => {
+    at(NOON);
+    await closeWednesdayByDate("Closed for Diwali");
+    const result = await placeOrder({ ...base, phone: "9000000011", idempotencyKey: randomUUID() });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.error).toBe("We're closed today. We open again tomorrow at 11:30 AM — nothing has been ordered or charged. Closed for Diwali");
+    // Refused at the gate, before any write: not even a customer record is created for it.
+    expect(await customerRows("9000000011")).toBe(0);
+  });
+
+  it("a closure that lands after the top gate is caught by the early re-check, before a customer record or a payment intent exists", async () => {
+    at(NOON);
+    const before = await orderCount();
+    hooks.beforePricing = () => closeWednesdayByDate(); // after the top gate, before pricing
+    const result = await placeOrder({ ...base, phone: "9000000018", payment: "ONLINE" as never, idempotencyKey: randomUUID() });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect("closed" in result && result.closed).toMatchObject({ dayOff: { source: "DATE" } });
+    expect(await customerRows("9000000018")).toBe(0);
+    expect(intents.count).toBe(0);
+    expect(await orderCount()).toBe(before);
+  });
+
+  it("a pre-order for a closed day is refused, from the day before, when the shop is open", async () => {
+    at(TUESDAY_NOON);
+    await closeWednesdayByDate();
+    const before = await orderCount();
+    const result = await placeOrder({ ...base, phone: "9000000012", when: "SCHEDULED", scheduledFor: WEDNESDAY_SLOT.toISOString(), idempotencyKey: randomUUID() });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.error).toBe("That time isn't available anymore. Pick another.");
+    expect(await orderCount()).toBe(before);
+  });
+
+  it("the same pre-order is accepted when the day is open", async () => {
+    at(TUESDAY_NOON);
+    const before = await orderCount();
+    const result = await placeOrder({ ...base, phone: "9000000013", when: "SCHEDULED", scheduledFor: WEDNESDAY_SLOT.toISOString(), idempotencyKey: randomUUID() });
+    expect(result.ok).toBe(true);
+    expect(await orderCount()).toBe(before + 1);
+  });
+
+  it("a closure that lands after the top gate is caught in the order's own locked transaction: no order, no promo use, no intent", async () => {
+    at(NOON);
+    const code = `LATE-${randomUUID().slice(0, 6).toUpperCase()}`;
+    await createPromo(code, 5);
+    promoCode = code;
+    const key = randomUUID();
+    const before = await orderCount();
+    const sideBefore = await sideEffectRows();
+    hooks.afterEarlyCheck = () => closeWednesdayByDate(); // committed after the early re-check, before persistOrder
+
+    const result = await placeOrder({ ...base, phone: "9000000014", idempotencyKey: key });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect("closed" in result && result.closed).toMatchObject({ dayOff: { source: "DATE", note: "Closed for Diwali" } });
+    expect(await orderCount()).toBe(before);
+    expect(await promoUses(code)).toBe(0);
+    expect(await sideEffectRows()).toEqual(sideBefore);
+    expect(await keyRows(key)).toBe(0); // released, so the refusal is never replayed
+  });
+
+  it("the same key, retried after the closure is removed, is a fresh attempt and is accepted", async () => {
+    at(NOON);
+    const key = randomUUID();
+    await closeWednesdayByDate();
+    expect((await placeOrder({ ...base, phone: "9000000015", idempotencyKey: key })).ok).toBe(false);
+
+    const [row] = await db().select({ id: closedDates.id }).from(closedDates).where(eq(closedDates.orgId, org.orgId));
+    expect((await removeClosedDate({ orgId: org.orgId, actorUserId: actor, id: row!.id })).ok).toBe(true);
+    const before = await orderCount();
+    expect((await placeOrder({ ...base, phone: "9000000015", idempotencyKey: key })).ok).toBe(true);
+    expect(await orderCount()).toBe(before + 1);
+  });
+
+  it("a closure COMMITTING while the order row is being inserted cannot be passed (the row lock)", async () => {
+    at(NOON);
+    const before = await orderCount();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((resolve) => (locked = resolve));
+    // What addClosedDate does, held open: the org row locked FOR UPDATE, the closed date inserted, not yet committed.
+    const closing = db().transaction(async (tx) => {
+      await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, org.orgId)).for("update");
+      await tx.insert(closedDates).values({ orgId: org.orgId, startDate: "2026-06-10", endDate: "2026-06-10", publicNote: null });
+      locked();
+      await held;
+    });
+    await lockTaken;
+
+    const placing = placeOrder({ ...base, phone: "9000000016", idempotencyKey: randomUUID() });
+    let settled = false;
+    void placing.then(() => (settled = true));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(settled).toBe(false); // waiting on the lock, not already inserted
+
+    release();
+    await closing;
+    const result = await placing;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect("closed" in result && result.closed).toMatchObject({ code: "CLOSED", dayOff: { source: "DATE" } });
+    expect(await orderCount()).toBe(before);
+  });
+
+  it("a pre-order booked before the closure is LISTED when the closure is added, and is not cancelled or changed", async () => {
+    at(TUESDAY_NOON);
+    const placed = await placeOrder({ ...base, phone: "9000000017", when: "SCHEDULED", scheduledFor: WEDNESDAY_SLOT.toISOString(), idempotencyKey: randomUUID() });
+    expect(placed.ok).toBe(true);
+    const [order] = await db().select().from(orders).where(eq(orders.customerPhone, "9000000017"));
+    expect(order).toBeDefined();
+
+    const result = await addClosedDate({ orgId: org.orgId, actorUserId: actor, startDate: "2026-06-10", endDate: "2026-06-10", note: null });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    // Every pre-order booked for that day is listed — this one, and the one an earlier test placed for the same Wednesday.
+    expect(result.preOrders.map((row) => row.orderId)).toContain(order!.id);
+    expect(result.preOrders.every((row) => row.date === "2026-06-10")).toBe(true);
+    expect(result.preOrders.find((row) => row.orderId === order!.id)).toMatchObject({ orderNumber: order!.orderNumber, status: order!.status });
+    const [after] = await db().select().from(orders).where(eq(orders.id, order!.id));
+    expect(after!.status).toBe(order!.status); // nothing cancelled
+    expect(after!.scheduledFor?.toISOString()).toBe(order!.scheduledFor?.toISOString()); // nothing moved
   });
 });

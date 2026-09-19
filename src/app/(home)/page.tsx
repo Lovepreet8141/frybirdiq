@@ -103,7 +103,7 @@ export default async function HomePage() {
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema({ opens, closes }, { pin, telephone: phone?.display ?? null })) }}
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema({ opens, closes }, { pin, telephone: phone?.display ?? null, closedWeekdays: org?.weeklyClosedDays })) }}
       />
       <div className="fb">
         <HomeNav signedIn={signedIn} />

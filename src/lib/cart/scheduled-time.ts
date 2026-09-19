@@ -11,6 +11,7 @@
  */
 
 import { addDays, businessDate } from "@/lib/dates";
+import { type Closures, NO_CLOSURES, closedDay } from "@/lib/orders/closures";
 import { businessHoursWindow, formatBusinessClock, sessionStartDate } from "@/lib/orders/opening-hours";
 
 /** Shortest notice a scheduled order gets, same idea as a kitchen needing warning before an ASAP ticket lands. */
@@ -32,6 +33,8 @@ export interface ScheduleDay {
   readonly date: string;
   readonly label: string;
   readonly slots: readonly TimeSlot[];
+  /** The weekly off day or a planned closure: no slots, and the picker says "closed", not "no times left". */
+  readonly closed: boolean;
 }
 
 function dayLabel(date: string, today: string, tomorrow: string): string {
@@ -53,7 +56,9 @@ function roundUpToSlot(at: Date): Date {
  * "today" after closing minus the lead time has already passed) — the
  * rollover to tomorrow the roadmap asks for is just this array being empty.
  */
-function slotsForDay(date: string, now: Date, openingTime: string, closingTime: string): readonly TimeSlot[] {
+function slotsForDay(date: string, now: Date, openingTime: string, closingTime: string, closures: Closures): readonly TimeSlot[] {
+  // A closed day offers nothing, whatever the hours say.
+  if (closedDay(date, closures)) return [];
   const { opening, closing } = businessHoursWindow(date, openingTime, closingTime);
   const earliest = new Date(Math.max(opening.getTime(), now.getTime() + MIN_LEAD_MINUTES * 60_000));
   const first = roundUpToSlot(earliest);
@@ -72,7 +77,7 @@ function slotsForDay(date: string, now: Date, openingTime: string, closingTime: 
  * silently vanishing — but the caller should skip straight to the next day
  * when today is empty, which is the actual rollover behaviour.
  */
-export function scheduleDays(now: Date, openingTime: string, closingTime: string): readonly ScheduleDay[] {
+export function scheduleDays(now: Date, openingTime: string, closingTime: string, closures: Closures = NO_CLOSURES): readonly ScheduleDay[] {
   const today = businessDate(now);
   const tomorrow = addDays(today, 1);
   const dates = Array.from({ length: SCHEDULE_DAYS_AHEAD + 1 }, (_, i) => addDays(today, i));
@@ -80,7 +85,8 @@ export function scheduleDays(now: Date, openingTime: string, closingTime: string
   return dates.map((date) => ({
     date,
     label: dayLabel(date, today, tomorrow),
-    slots: slotsForDay(date, now, openingTime, closingTime),
+    slots: slotsForDay(date, now, openingTime, closingTime, closures),
+    closed: closedDay(date, closures) !== null,
   }));
 }
 
@@ -94,7 +100,7 @@ export function scheduleDays(now: Date, openingTime: string, closingTime: string
  * alignment to `SLOT_INTERVAL_MINUTES` would reject a legitimate time for a
  * reason that has nothing to do with whether the kitchen can honour it.
  */
-export function isValidScheduledTime(candidate: Date, now: Date, openingTime: string, closingTime: string): boolean {
+export function isValidScheduledTime(candidate: Date, now: Date, openingTime: string, closingTime: string, closures: Closures = NO_CLOSURES): boolean {
   if (Number.isNaN(candidate.getTime())) return false;
   if (candidate.getTime() < now.getTime() + MIN_LEAD_MINUTES * 60_000) return false;
 
@@ -102,7 +108,7 @@ export function isValidScheduledTime(candidate: Date, now: Date, openingTime: st
   // shut then, which refuses it. One question instead of two, and the same
   // answer `scheduleDays` keys its days by, so the picker and this check cannot
   // offer and refuse the same slot.
-  const session = sessionStartDate(candidate, openingTime, closingTime);
+  const session = sessionStartDate(candidate, openingTime, closingTime, closures);
   if (session === null) return false;
 
   /*

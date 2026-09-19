@@ -29,6 +29,7 @@ import { fromMicro, toPoint } from "@/lib/delivery";
 import { type ShopClosedRefusal, type ShopPausedRefusal, type ShopStatus, orderingRefusal } from "@/lib/orders/opening-hours";
 import { OrderingRefusedAtWrite, PromoLimitReached, type WriteRefusal, writeGate } from "@/lib/orders/write-gate";
 import { shopOrderingState } from "@/lib/cart/shop-hours";
+import { readClosedDates } from "./closed-dates";
 import { shopStatusFromOrg } from "./shop-status";
 import { type SnapshotLineInput, snapshotLines } from "@/lib/orders/snapshot";
 import type { CartLine } from "@/lib/cart/schema";
@@ -204,11 +205,11 @@ function pausedResult(now: Date, shop: ShopStatus, paused: ShopPausedRefusal): P
 }
 
 function closedResult(closed: ShopClosedRefusal): PlaceOrderResult {
-  return {
-    ok: false,
-    error: `The kitchen is closed right now. We open ${closed.opensAtLabel} — nothing has been ordered or charged. You can still choose a time instead.`,
-    closed,
-  };
+  // A whole closed day says so; "choose a time" is only offered when a later slot could exist (the picker never lists a closed day).
+  const error = closed.dayOff
+    ? `We're closed today. We open again ${closed.opensAtLabel} — nothing has been ordered or charged.${closed.dayOff.note ? ` ${closed.dayOff.note}` : ""}`
+    : `The kitchen is closed right now. We open ${closed.opensAtLabel} — nothing has been ordered or charged. You can still choose a time instead.`;
+  return { ok: false, error, closed };
 }
 
 const SCHEDULE_SLIPPED_RESULT: PlaceOrderResult = {
@@ -225,12 +226,13 @@ async function readShopStatus(orgId: string): Promise<ShopStatus> {
       closingTime: organizations.closingTime,
       orderingPausedAt: organizations.orderingPausedAt,
       orderingPausedUntil: organizations.orderingPausedUntil,
+      weeklyClosedDays: organizations.weeklyClosedDays,
     })
     .from(organizations)
     .where(eq(organizations.id, orgId))
     .limit(1);
   if (!row) throw new Error("placeOrder: the shop row could not be read for the ordering gate");
-  return shopStatusFromOrg(row);
+  return shopStatusFromOrg(row, await readClosedDates(orgId, new Date()));
 }
 
 function writeRefusalResult(refusal: WriteRefusal, now: Date, shop: ShopStatus): PlaceOrderResult {
@@ -360,7 +362,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
    * the resumable-order lookup, the Razorpay Order and the first write, so a
    * refused attempt charges nothing and leaves nothing behind.
    */
-  const shop = shopStatusFromOrg(org);
+  const shop = await readShopStatus(org.id);
   const refusal = orderingRefusal(now, shop, details.when);
   if (refusal?.kind === "PAUSED") {
     // The switch outranks the hours and refuses pre-orders too, so this never
@@ -371,7 +373,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
 
   if (details.when === "SCHEDULED") {
     const candidate = details.scheduledFor ? new Date(details.scheduledFor) : null;
-    if (!candidate || !isValidScheduledTime(candidate, now, org.openingTime, org.closingTime)) {
+    if (!candidate || !isValidScheduledTime(candidate, now, shop.openingTime, shop.closingTime, shop.closures)) {
       return {
         ok: false,
         error: "That time isn't available anymore. Pick another.",
@@ -830,14 +832,17 @@ export async function persistOrder(input: PersistOrderInput): Promise<PersistOrd
           closingTime: organizations.closingTime,
           orderingPausedAt: organizations.orderingPausedAt,
           orderingPausedUntil: organizations.orderingPausedUntil,
+          weeklyClosedDays: organizations.weeklyClosedDays,
         })
         .from(organizations)
         .where(eq(organizations.id, input.orgId))
         .for("share")
         .limit(1);
       if (!row) throw new Error("persistOrder: the shop row could not be read for the ordering gate");
-      const shop = shopStatusFromOrg(row);
       const at = new Date();
+      // Read AFTER the lock, in this transaction: a closure is added under the same row's FOR UPDATE, so one that has
+      // committed is visible here and one still in flight waits for this order to finish (and then lists it).
+      const shop = shopStatusFromOrg(row, await readClosedDates(input.orgId, at, tx));
       const refused = writeGate({ now: at, shop, when: gate.when, scheduledFor: gate.scheduledFor });
       if (refused) throw new OrderingRefusedAtWrite(refused, at, shop);
       // Claimed in THIS transaction, after the gate passed: a refusal above never consumes a slot, and if the insert

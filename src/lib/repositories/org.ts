@@ -23,6 +23,7 @@ import { locations, organizations } from "@/db/schema";
 import { type Paise, paise } from "@/lib/money";
 import { DEFAULT_PRICE_BASIS, type PriceBasis, type PricingContext, pricingContext } from "@/lib/pricing";
 import { isSupabaseConfigured } from "@/lib/env";
+import { normaliseWeekdays } from "@/lib/orders/closures";
 import { readStoredPhone } from "@/lib/settings/phone";
 
 export const ORG_SLUG = "frybird";
@@ -41,6 +42,8 @@ export interface Org {
   /** 24-hour "HH:MM". What the website's opening hours read. */
   readonly openingTime: string;
   readonly closingTime: string;
+  /** Weekdays closed all day, 0 = Sunday … 6 = Saturday. For display (the site's structured data); the ordering gate reads its own fresh copy. */
+  readonly weeklyClosedDays: readonly number[];
 }
 
 /**
@@ -64,6 +67,7 @@ export const getOrg = cache(async (): Promise<Org | null> => {
     onlineEnabled: org.onlineEnabled,
     openingTime: org.openingTime,
     closingTime: org.closingTime,
+    weeklyClosedDays: normaliseWeekdays(org.weeklyClosedDays),
   };
 });
 

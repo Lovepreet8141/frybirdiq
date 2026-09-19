@@ -58,6 +58,7 @@ describe("isOpenAt", () => {
     // 2026-09-20 11:30 IST, i.e. the 20th's opening, not the 19th's.
     expect(nextOpening(justAfterMidnight, OPEN, CLOSE)).toEqual({
       at: new Date("2026-09-20T06:00:00.000Z"),
+      date: "2026-09-20",
       day: "TODAY",
     });
   });
@@ -68,6 +69,7 @@ describe("nextOpening", () => {
     // 2026-09-19 02:00 IST → 2026-09-19 11:30 IST
     expect(nextOpening(new Date("2026-09-18T20:30:00.000Z"), OPEN, CLOSE)).toEqual({
       at: new Date("2026-09-19T06:00:00.000Z"),
+      date: "2026-09-19",
       day: "TODAY",
     });
   });
@@ -76,6 +78,7 @@ describe("nextOpening", () => {
     // 2026-09-19 23:30 IST → 2026-09-20 11:30 IST
     expect(nextOpening(new Date("2026-09-19T18:00:00.000Z"), OPEN, CLOSE)).toEqual({
       at: new Date("2026-09-20T06:00:00.000Z"),
+      date: "2026-09-20",
       day: "TOMORROW",
     });
   });
@@ -84,6 +87,7 @@ describe("nextOpening", () => {
     // 2026-09-19 23:00:00.000 IST → 2026-09-20 11:30 IST
     expect(nextOpening(new Date("2026-09-19T17:30:00.000Z"), OPEN, CLOSE)).toEqual({
       at: new Date("2026-09-20T06:00:00.000Z"),
+      date: "2026-09-20",
       day: "TOMORROW",
     });
   });
@@ -92,6 +96,7 @@ describe("nextOpening", () => {
     // 2026-09-30 23:30 IST → 2026-10-01 11:30 IST
     expect(nextOpening(new Date("2026-09-30T18:00:00.000Z"), OPEN, CLOSE)).toEqual({
       at: new Date("2026-10-01T06:00:00.000Z"),
+      date: "2026-10-01",
       day: "TOMORROW",
     });
   });
@@ -190,6 +195,7 @@ describe("hours that cross midnight", () => {
       opensAt: "2026-09-20T12:30:00.000Z", // 2026-09-20 18:00 IST
       opensDay: "TODAY",
       opensAtLabel: "today at 6:00 PM",
+      dayOff: null,
     });
   });
 });
@@ -215,6 +221,7 @@ describe("asapRefusal", () => {
       opensAt: "2026-09-19T06:00:00.000Z",
       opensDay: "TODAY",
       opensAtLabel: "today at 11:30 AM",
+      dayOff: null,
     });
   });
 

@@ -28,20 +28,28 @@ import { and, eq, notInArray, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, memberships, orders, organizations } from "@/db/schema";
 import { TERMINAL_STATUSES } from "@/domain/order-status";
+import { type ClosedDateRange, normaliseWeekdays } from "@/lib/orders/closures";
 import { type PauseMode, type ShopStatus, isPaused, pauseCarriedOver, pausedUntilFor } from "@/lib/orders/opening-hours";
 import { type ShopOrderingState, dayAndClock, shopOrderingState } from "@/lib/cart/shop-hours";
+import { findPreOrdersOnClosedDays, readClosedDates } from "./closed-dates";
 
 type OrgRow = typeof organizations.$inferSelect;
+/** The org row plus the closed dates that can still matter: everything the ordering gate needs. */
+type OrgWithClosures = OrgRow & { readonly closedDates: readonly ClosedDateRange[] };
 
 /**
  * The org row as the ordering gate sees it. The ONLY place that maps it:
  * a field forgotten here is forgotten everywhere at once, and the tests that
  * go through `placeOrder` catch it.
  */
-export function shopStatusFromOrg(org: Pick<OrgRow, "openingTime" | "closingTime" | "orderingPausedAt" | "orderingPausedUntil">): ShopStatus {
+export function shopStatusFromOrg(
+  org: Pick<OrgRow, "openingTime" | "closingTime" | "orderingPausedAt" | "orderingPausedUntil" | "weeklyClosedDays">,
+  closedDates: readonly ClosedDateRange[],
+): ShopStatus {
   return {
     openingTime: org.openingTime,
     closingTime: org.closingTime,
+    closures: { weeklyClosedDays: normaliseWeekdays(org.weeklyClosedDays), closedDates },
     orderingPausedAt: org.orderingPausedAt,
     orderingPausedUntil: org.orderingPausedUntil,
   };
@@ -85,8 +93,17 @@ function instant(at: Date): SQL {
  * reopens. Nothing about who paused or why. For the website banner (S5).
  */
 export async function getOrderingStatus(orgId: string, now: Date = new Date()): Promise<ShopOrderingState | null> {
-  const org = await readOrg(orgId);
-  return org ? shopOrderingState(now, shopStatusFromOrg(org)) : null;
+  const org = await readOrg(orgId, now);
+  return org ? shopOrderingState(now, shopStatusFromOrg(org, org.closedDates)) : null;
+}
+
+/**
+ * The shop's hours, pause and closures as the ordering gate reads them: the same
+ * mapping `placeOrder` uses, for a page that builds the schedule picker.
+ */
+export async function getShopStatus(orgId: string, now: Date = new Date()): Promise<ShopStatus | null> {
+  const org = await readOrg(orgId, now);
+  return org ? shopStatusFromOrg(org, org.closedDates) : null;
 }
 
 /** What staff see on the POS and in Admin: the same state, plus who paused, why, and the orders still to be made. */
@@ -108,32 +125,42 @@ export type StaffOrderingStatus = ShopOrderingState & {
    * as everything else, so the screen never works it out from columns itself.
    */
   readonly carriedOver: boolean;
+  /**
+   * Pre-orders already booked for a day the shop is closed (weekly off day or a
+   * planned closure), not finished. Nothing refuses or cancels them; the count
+   * is here so staff on any screen can see they exist (ops-3 req 6).
+   */
+  readonly preOrdersOnClosedDays: number;
 };
 
 export async function getOrderingStatusForStaff(orgId: string, now: Date = new Date()): Promise<StaffOrderingStatus | null> {
-  const org = await readOrg(orgId);
+  const org = await readOrg(orgId, now);
   if (!org) return null;
   return staffStatus(orgId, org, now);
 }
 
-async function readOrg(orgId: string): Promise<OrgRow | null> {
+async function readOrg(orgId: string, now: Date): Promise<OrgWithClosures | null> {
   const [org] = await db().select().from(organizations).where(eq(organizations.id, orgId)).limit(1);
-  return org ?? null;
+  if (!org) return null;
+  return { ...org, closedDates: await readClosedDates(orgId, now) };
 }
 
-async function staffStatus(orgId: string, org: OrgRow, now: Date): Promise<StaffOrderingStatus> {
-  const state = shopOrderingState(now, shopStatusFromOrg(org));
+async function staffStatus(orgId: string, org: OrgWithClosures, now: Date): Promise<StaffOrderingStatus> {
+  const shop = shopStatusFromOrg(org, org.closedDates);
+  const state = shopOrderingState(now, shop);
   const paused = state.state === "paused";
-  const [name, ordersStillDue] = await Promise.all([
+  const [name, ordersStillDue, closedDayPreOrders] = await Promise.all([
     paused && org.orderingPausedBy ? displayName(orgId, org.orderingPausedBy) : Promise.resolve(null),
     countOrdersStillDue(orgId),
+    findPreOrdersOnClosedDays(orgId, shop.closures, now),
   ]);
   return {
     ...state,
     pausedBy: paused && org.orderingPausedBy ? { userId: org.orderingPausedBy, name } : null,
     reason: paused ? org.orderingPausedReason : null,
     ordersStillDue,
-    carriedOver: pauseCarriedOver(shopStatusFromOrg(org), now),
+    carriedOver: pauseCarriedOver(shop, now),
+    preOrdersOnClosedDays: closedDayPreOrders.length,
   };
 }
 
@@ -143,6 +170,11 @@ export interface PausePreview {
   readonly nextOpeningAt: Date;
   /** "today at 11:30 AM" — so a 9 am pause says plainly that the default ends at 11:30 today. */
   readonly nextOpeningLabel: string;
+  /** When "closed for the rest of today" ends: the opening of the next open day. */
+  readonly restOfTodayAt: Date;
+  readonly restOfTodayLabel: string;
+  /** When "closed until [the chosen date]" ends, or null when no date was asked about. */
+  readonly untilDate: { readonly date: string; readonly at: Date; readonly label: string } | null;
   /** Orders already placed and not finished — the customers who may need a call. */
   readonly ordersStillDue: number;
 }
@@ -153,12 +185,22 @@ export interface PausePreview {
  * otherwise promise "today at 11:30" for a pause that actually runs to
  * tomorrow. The pause itself still computes its end again when it is taken.
  */
-export async function previewPause(orgId: string, now: Date = new Date()): Promise<PausePreview | null> {
-  const org = await readOrg(orgId);
+export async function previewPause(orgId: string, now: Date = new Date(), untilDate?: string): Promise<PausePreview | null> {
+  const org = await readOrg(orgId, now);
   if (!org) return null;
-  const nextOpeningAt = pausedUntilFor("UNTIL_NEXT_OPENING", now, org.openingTime, org.closingTime);
-  if (!nextOpeningAt) return null;
-  return { nextOpeningAt, nextOpeningLabel: dayAndClock(nextOpeningAt, now), ordersStillDue: await countOrdersStillDue(orgId) };
+  const { closures } = shopStatusFromOrg(org, org.closedDates);
+  const nextOpeningAt = pausedUntilFor("UNTIL_NEXT_OPENING", now, org.openingTime, org.closingTime, closures);
+  const restOfTodayAt = pausedUntilFor("REST_OF_TODAY", now, org.openingTime, org.closingTime, closures);
+  if (!nextOpeningAt || !restOfTodayAt) return null;
+  const chosen = untilDate ? pausedUntilFor("UNTIL_DATE", now, org.openingTime, org.closingTime, closures, untilDate) : null;
+  return {
+    nextOpeningAt,
+    nextOpeningLabel: dayAndClock(nextOpeningAt, now),
+    restOfTodayAt,
+    restOfTodayLabel: dayAndClock(restOfTodayAt, now),
+    untilDate: untilDate && chosen ? { date: untilDate, at: chosen, label: dayAndClock(chosen, now) } : null,
+    ordersStillDue: await countOrdersStillDue(orgId),
+  };
 }
 
 async function displayName(orgId: string, userId: string): Promise<string | null> {
@@ -226,6 +268,8 @@ export async function pauseOrdering(input: {
   readonly actorUserId: string;
   readonly reason: string;
   readonly mode: PauseMode;
+  /** "YYYY-MM-DD" — required with UNTIL_DATE, ignored otherwise. */
+  readonly untilDate?: string;
   readonly now?: Date;
 }): Promise<PauseOrderingResult> {
   const now = input.now ?? new Date();
@@ -242,6 +286,7 @@ export async function pauseOrdering(input: {
           orderingPausedBy: organizations.orderingPausedBy,
           orderingPausedReason: organizations.orderingPausedReason,
           orderingPausedUntil: organizations.orderingPausedUntil,
+          weeklyClosedDays: organizations.weeklyClosedDays,
         })
         .from(organizations)
         .where(eq(organizations.id, input.orgId))
@@ -249,7 +294,10 @@ export async function pauseOrdering(input: {
         .limit(1);
       if (!org) return "missing" as const;
 
-      const pausedUntil = pausedUntilFor(input.mode, now, org.openingTime, org.closingTime);
+      // The end is worked out on the locked row and fresh closed dates, so it skips a day off added a moment ago.
+      const closedNow = await readClosedDates(input.orgId, now, tx);
+      const shopNow = shopStatusFromOrg(org, closedNow);
+      const pausedUntil = pausedUntilFor(input.mode, now, org.openingTime, org.closingTime, shopNow.closures, input.untilDate);
       const [paused] = await tx
         .update(organizations)
         .set({
@@ -265,7 +313,7 @@ export async function pauseOrdering(input: {
 
       // What this pause replaced, if one was still in force — "out of chicken
       // until we next open", superseded by "kitchen fire until switched back on".
-      const replaced = isPaused(shopStatusFromOrg(org), now) && org.orderingPausedAt
+      const replaced = isPaused(shopNow, now) && org.orderingPausedAt
         ? {
             pausedAt: org.orderingPausedAt.toISOString(),
             pausedBy: org.orderingPausedBy,
@@ -284,6 +332,7 @@ export async function pauseOrdering(input: {
         before: replaced,
         after: {
           mode: input.mode,
+          untilDate: input.mode === "UNTIL_DATE" ? (input.untilDate ?? null) : null,
           pausedAt: now.toISOString(),
           reopensAt: pausedUntil?.toISOString() ?? null,
           reason: input.reason,
@@ -294,7 +343,7 @@ export async function pauseOrdering(input: {
 
     if (outcome === "missing") return { ok: false, code: "SHOP_NOT_FOUND", error: "That shop could not be found." };
 
-    const org = await readOrg(input.orgId);
+    const org = await readOrg(input.orgId, now);
     if (!org) return { ok: false, code: "SHOP_NOT_FOUND", error: "That shop could not be found." };
     const status = await staffStatus(input.orgId, org, now);
     if (outcome === "changed") return { ok: true, changed: true, status };
@@ -381,7 +430,7 @@ export async function resumeOrdering(input: {
     return true;
   });
 
-  const org = await readOrg(input.orgId);
+  const org = await readOrg(input.orgId, now);
   if (!org) return { ok: false, code: "SHOP_NOT_FOUND", error: "That shop could not be found." };
   const status = await staffStatus(input.orgId, org, now);
   if (resumed) return { ok: true, changed: true, status };

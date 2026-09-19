@@ -5,12 +5,12 @@ import { CONFIRM_ARM_MS, clockFromHHMM, confirmArmed, pillAnnouncement, pillDeta
 const NOW = new Date("2026-09-19T14:30:00.000Z"); // 20:00 IST
 const NEXT_OPEN_TOMORROW = new Date("2026-09-20T06:00:00.000Z"); // 11:30 IST tomorrow
 const NEXT_OPEN_TODAY = new Date("2026-09-19T17:00:00.000Z"); // 22:30 IST today (a timed pause ending later tonight)
-const staffBits = { pausedBy: null, reason: null, ordersStillDue: 0, carriedOver: false } as const;
+const staffBits = { pausedBy: null, reason: null, ordersStillDue: 0, carriedOver: false, preOrdersOnClosedDays: 0 } as const;
 const open: StaffOrderingStatus = { state: "open", closesAt: "23:00", ...staffBits, ordersStillDue: 1 };
-const closed: StaffOrderingStatus = { state: "closedByHours", reopensAt: NEXT_OPEN_TOMORROW, reopensAtLabel: "tomorrow at 11:30 AM", ...staffBits };
+const closed: StaffOrderingStatus = { state: "closedByHours", dayOff: null, reopensAt: NEXT_OPEN_TOMORROW, reopensAtLabel: "tomorrow at 11:30 AM", ...staffBits };
 const offTimed: StaffOrderingStatus = {
   state: "paused", mode: "UNTIL_NEXT_OPENING", pausedAt: new Date("2026-09-19T14:12:00Z"), reopensAt: NEXT_OPEN_TOMORROW, reopensAtLabel: "tomorrow at 11:30 AM", withinHours: true,
-  pausedBy: { userId: "u", name: "Aman" }, reason: "Equipment problem: fryer 2", ordersStillDue: 3, carriedOver: false,
+  pausedBy: { userId: "u", name: "Aman" }, reason: "Equipment problem: fryer 2", ordersStillDue: 3, carriedOver: false, preOrdersOnClosedDays: 0,
 };
 const offManual: StaffOrderingStatus = { ...offTimed, mode: "UNTIL_RESUMED", reopensAt: null, reopensAtLabel: null };
 const hours = { opens: "11:30", closes: "23:00" };
@@ -45,7 +45,7 @@ describe("pillDetail", () => {
   it("open: status, hours, orders not finished", () => {
     expect(pillDetail(open, NOW, hours, since)).toEqual({
       statusLine: "Taking online orders until 11:00 PM.", byLine: null, reasonLine: null,
-      hoursLine: "Today's hours: 11:30 AM – 11:00 PM", notFinishedLine: "Orders not finished: 1",
+      hoursLine: "Today's hours: 11:30 AM – 11:00 PM", notFinishedLine: "Orders not finished: 1", closedDayLine: null,
     });
   });
   it("off: also who, when and why", () => {

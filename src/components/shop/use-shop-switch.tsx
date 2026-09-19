@@ -10,6 +10,7 @@ import { PAUSE_MODES, pauseConfirmLines, pauseResultView, shopSwitchView } from 
 import { cn } from "@/lib/utils";
 import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 import type { PauseMode } from "@/lib/orders/opening-hours";
+import { untilDateBounds } from "@/lib/orders/pause-duration";
 import { PAUSE_NOTE_MAX, PAUSE_REASON_PRESETS, type PauseReasonPreset, noteProblem, pauseRequest } from "@/lib/orders/pause-reasons";
 import { CONFIRM_ARM_MS, confirmArmed, statusSignature } from "@/lib/orders/shop-pill";
 import { pauseOrderingAction, previewPauseAction, readOrderingStatusAction, resumeOrderingAction } from "@/lib/orders/shop-status-actions";
@@ -51,6 +52,8 @@ export function useShopSwitch({
   const [mode, setMode] = useState<PauseMode>("UNTIL_NEXT_OPENING");
   const [note, setNote] = useState("");
   const [preview, setPreview] = useState<PausePreview | null>(null);
+  /** "Closed until a date I pick": the business date chosen ("YYYY-MM-DD"), or "" until one is. */
+  const [untilDate, setUntilDate] = useState("");
   const [error, setError] = useState<string | null>(null);
   /** Set when a Pause changed nothing: the pause in force is at least as strict. Shown in the dialog, which stays open. */
   const [notApplied, setNotApplied] = useState<string | null>(null);
@@ -110,13 +113,14 @@ export function useShopSwitch({
 
   // Tell the person when the state changed under them (another till, Admin, a timed pause ending).
   const lastState = useRef(status.state);
+  const closedForTheDay = status.state === "closedByHours" && status.dayOff !== null;
   useEffect(() => {
     if (lastState.current === status.state) return;
     lastState.current = status.state;
     setAnnouncement(
-      status.state === "paused" ? "Online orders are now closed." : status.state === "closedByHours" ? "The shop is now closed by opening hours." : "Online orders are open.",
+      status.state === "paused" ? "Online orders are now closed." : status.state === "closedByHours" ? (closedForTheDay ? "The shop is now closed for the day." : "The shop is now closed by opening hours.") : "Online orders are open.",
     );
-  }, [status.state]);
+  }, [status.state, closedForTheDay]);
 
   /* ----------------------------------------------------------------- actions */
 
@@ -125,12 +129,25 @@ export function useShopSwitch({
     setNotApplied(null);
     setNote("");
     setMode("UNTIL_NEXT_OPENING");
+    setUntilDate("");
     setPreview(null);
     setDialog("pause");
     startTransition(async () => {
       const result = await recoverFromStaleDeployment(() => previewPauseAction());
       if (result.ok && "preview" in result) setPreview(result.preview);
       else setError(result.error ?? "Couldn't check the opening hours. Try again.");
+    });
+  }
+
+  /** A date was picked: ask the server when orders would restart (it skips days off), so the label is never worked out here. */
+  function chooseUntilDate(date: string) {
+    setUntilDate(date);
+    setError(null);
+    if (!date) return;
+    startTransition(async () => {
+      const result = await recoverFromStaleDeployment(() => previewPauseAction({ untilDate: date }));
+      if (result.ok && "preview" in result) setPreview(result.preview);
+      else setError(result.error ?? "Couldn't check that date. Try another.");
     });
   }
 
@@ -141,10 +158,14 @@ export function useShopSwitch({
       setError(problem);
       return;
     }
+    if (mode === "UNTIL_DATE" && !untilDate) {
+      setError("Pick the date orders should restart.");
+      return;
+    }
     setError(null);
     setNotApplied(null);
     startTransition(async () => {
-      const result = await recoverFromStaleDeployment(() => pauseOrderingAction(pauseRequest(preset, note, mode)));
+      const result = await recoverFromStaleDeployment(() => pauseOrderingAction(pauseRequest(preset, note, mode, untilDate || undefined)));
       if (!result.ok) {
         setError(result.error ?? "That didn't save. Try again.");
         return;
@@ -254,6 +275,20 @@ export function useShopSwitch({
                   );
                 })}
               </div>
+              {mode === "UNTIL_DATE" && (
+                <label className="flex flex-col gap-1.5 text-sm font-semibold">
+                  Orders restart on
+                  <input
+                    type="date"
+                    value={untilDate}
+                    min={untilDateBounds(now).min}
+                    max={untilDateBounds(now).max}
+                    onChange={(event) => chooseUntilDate(event.target.value)}
+                    disabled={isPending}
+                    className="min-h-[48px] rounded-md border border-border bg-panel px-3 text-base font-normal"
+                  />
+                </label>
+              )}
             </div>
 
             <div className="flex flex-col gap-2">
@@ -266,7 +301,7 @@ export function useShopSwitch({
                     key={preset}
                     type="button"
                     onClick={() => confirmPause(preset)}
-                    disabled={isPending || !online || notApplied !== null}
+                    disabled={isPending || !online || notApplied !== null || (mode === "UNTIL_DATE" && !preview?.untilDate)}
                     className="flex min-h-[56px] touch-manipulation select-none items-center justify-center rounded-lg border border-destructive/50 bg-destructive/10 px-3 text-sm font-semibold text-foreground transition-colors duration-[var(--duration-micro)] hover:border-destructive active:bg-destructive/20 disabled:opacity-60"
                   >
                     {preset}
@@ -290,7 +325,7 @@ export function useShopSwitch({
 
             <div className="flex flex-col gap-1 rounded-md border border-border bg-surface px-3 py-2 text-sm" aria-live="polite">
               {preview ? (
-                pauseConfirmLines(mode, preview).map((line) => <p key={line}>{line}</p>)
+                pauseConfirmLines(mode, { ...preview, untilDateLabel: preview.untilDate?.label ?? null }).map((line) => <p key={line}>{line}</p>)
               ) : (
                 <p className="text-muted-foreground">{error ? "Couldn't load this." : "Checking the opening hours…"}</p>
               )}

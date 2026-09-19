@@ -62,6 +62,7 @@ export function PillPanel({
         {detail.reasonLine && <p className="break-words">{detail.reasonLine}</p>}
         <p>{detail.hoursLine}</p>
         <p>{detail.notFinishedLine}</p>
+        {detail.closedDayLine && <p>{detail.closedDayLine}</p>}
       </div>
 
       {canSwitch ? (

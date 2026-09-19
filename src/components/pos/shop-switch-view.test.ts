@@ -12,10 +12,10 @@ const PAUSED_AT = new Date("2026-09-19T14:12:00.000Z"); // 19:42 IST today
 const YESTERDAY = new Date("2026-09-18T14:12:00.000Z"); // 19:42 IST yesterday
 const NEXT_OPENING = new Date("2026-09-20T06:00:00.000Z"); // 11:30 IST tomorrow
 
-const staffBits = { pausedBy: null, reason: null, ordersStillDue: 0, carriedOver: false } as const;
+const staffBits = { pausedBy: null, reason: null, ordersStillDue: 0, carriedOver: false, preOrdersOnClosedDays: 0 } as const;
 
 const open: StaffOrderingStatus = { state: "open", closesAt: "23:00", ...staffBits };
-const closedByHours: StaffOrderingStatus = { state: "closedByHours", reopensAt: NEXT_OPENING, reopensAtLabel: "tomorrow at 11:30 AM", ...staffBits };
+const closedByHours: StaffOrderingStatus = { state: "closedByHours", dayOff: null, reopensAt: NEXT_OPENING, reopensAtLabel: "tomorrow at 11:30 AM", ...staffBits };
 const pausedTimed: StaffOrderingStatus = {
   state: "paused",
   mode: "UNTIL_NEXT_OPENING",
@@ -26,7 +26,7 @@ const pausedTimed: StaffOrderingStatus = {
   pausedBy: { userId: "u1", name: "Aman" },
   reason: "fryer down",
   ordersStillDue: 3,
-  carriedOver: false,
+  carriedOver: false, preOrdersOnClosedDays: 0,
 };
 const pausedManual: StaffOrderingStatus = { ...pausedTimed, mode: "UNTIL_RESUMED", reopensAt: null, reopensAtLabel: null };
 
@@ -59,21 +59,21 @@ describe("shopSwitchView — always shows who, when and when it reopens", () => 
 
 describe("pauseConfirmLines — what confirming would do, said before it happens", () => {
   it("the 9 am case says 'today' in words", () => {
-    expect(pauseConfirmLines("UNTIL_NEXT_OPENING", { nextOpeningLabel: "today at 11:30 AM", ordersStillDue: 0 })[0]).toBe("Orders restart today at 11:30 AM.");
+    expect(pauseConfirmLines("UNTIL_NEXT_OPENING", { nextOpeningLabel: "today at 11:30 AM", restOfTodayLabel: "tomorrow at 11:30 AM", untilDateLabel: null, ordersStillDue: 0 })[0]).toBe("Orders restart today at 11:30 AM.");
   });
 
   it("until switched back on says so", () => {
-    expect(pauseConfirmLines("UNTIL_RESUMED", { nextOpeningLabel: "today at 11:30 AM", ordersStillDue: 0 })[0]).toBe("Orders stay off until someone switches them back on.");
+    expect(pauseConfirmLines("UNTIL_RESUMED", { nextOpeningLabel: "today at 11:30 AM", restOfTodayLabel: "tomorrow at 11:30 AM", untilDateLabel: null, ordersStillDue: 0 })[0]).toBe("Orders stay off until someone switches them back on.");
   });
 
   it("counts the orders still due and says closing does not cancel them", () => {
-    expect(pauseConfirmLines("UNTIL_RESUMED", { nextOpeningLabel: "x", ordersStillDue: 3 })[1]).toBe(
+    expect(pauseConfirmLines("UNTIL_RESUMED", { nextOpeningLabel: "x", restOfTodayLabel: "y", untilDateLabel: null, ordersStillDue: 3 })[1]).toBe(
       "3 orders are still due. Closing does not cancel them; call the customer if you can't make them.",
     );
-    expect(pauseConfirmLines("UNTIL_RESUMED", { nextOpeningLabel: "x", ordersStillDue: 1 })[1]).toBe(
+    expect(pauseConfirmLines("UNTIL_RESUMED", { nextOpeningLabel: "x", restOfTodayLabel: "y", untilDateLabel: null, ordersStillDue: 1 })[1]).toBe(
       "1 order is still due. Closing does not cancel it; call the customer if you can't make it.",
     );
-    expect(pauseConfirmLines("UNTIL_RESUMED", { nextOpeningLabel: "x", ordersStillDue: 0 })[1]).toBe("No orders are waiting.");
+    expect(pauseConfirmLines("UNTIL_RESUMED", { nextOpeningLabel: "x", restOfTodayLabel: "y", untilDateLabel: null, ordersStillDue: 0 })[1]).toBe("No orders are waiting.");
   });
 });
 

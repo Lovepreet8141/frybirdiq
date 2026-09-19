@@ -4,12 +4,13 @@ import { pauseOutcome, restartLine, sinceLabel, stillDueLine } from "./close-sho
 
 // 2026-09-20 in Ambala (IST = UTC+5:30)
 const at = (hhmm: string, day = "2026-09-20") => new Date(`${day}T${hhmm}:00+05:30`);
-const base = { pausedBy: null, reason: null, ordersStillDue: 0, carriedOver: false } as const;
+const base = { pausedBy: null, reason: null, ordersStillDue: 0, carriedOver: false, preOrdersOnClosedDays: 0 } as const;
 
 describe("restartLine — from the label the server gave when the chooser opened", () => {
   it("names the server's opening label, whatever it is (the 9 am fryer case reads 'today')", () => {
-    expect(restartLine("UNTIL_NEXT_OPENING", "today at 11:30 AM")).toBe("Orders restart today at 11:30 AM.");
-    expect(restartLine("UNTIL_NEXT_OPENING", "tomorrow at 11:30 AM")).toBe("Orders restart tomorrow at 11:30 AM.");
+    const labels = (nextOpeningLabel: string) => ({ nextOpeningLabel, restOfTodayLabel: "tomorrow at 11:30 AM", untilDateLabel: null });
+    expect(restartLine("UNTIL_NEXT_OPENING", labels("today at 11:30 AM"))).toBe("Orders restart today at 11:30 AM.");
+    expect(restartLine("UNTIL_NEXT_OPENING", labels("tomorrow at 11:30 AM"))).toBe("Orders restart tomorrow at 11:30 AM.");
   });
   it("is null until the preview has arrived, so the confirm cannot show a guess", () => {
     expect(restartLine("UNTIL_NEXT_OPENING", null)).toBeNull();
@@ -44,7 +45,7 @@ describe("pauseOutcome", () => {
   });
 
   it("(3) does not say 'open' when the shop is closed by hours", () => {
-    const out = pauseOutcome({ changed: true, status: { ...base, state: "closedByHours", reopensAt: at("11:30"), reopensAtLabel: "today at 11:30 AM" } }, { mode: "UNTIL_RESUMED", reason: "x y z" });
+    const out = pauseOutcome({ changed: true, status: { ...base, state: "closedByHours", dayOff: null, reopensAt: at("11:30"), reopensAtLabel: "today at 11:30 AM" } }, { mode: "UNTIL_RESUMED", reason: "x y z" });
     expect(out.message?.text).toMatch(/^That didn't take\. Online orders are not switched off\./);
   });
 

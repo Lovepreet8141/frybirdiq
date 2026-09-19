@@ -77,3 +77,17 @@ describe("formatHoursRange", () => {
     expect(formatHoursRange("00:00", "12:00")).toBe("12:00 AM – 12:00 PM");
   });
 });
+
+describe("weekly days off in the structured data", () => {
+  const days = (closedWeekdays?: readonly number[]) =>
+    ((restaurantSchema({ opens: "11:30", closes: "23:00" }, { closedWeekdays }) as unknown as { openingHoursSpecification: { dayOfWeek: string[] }[] }).openingHoursSpecification[0]!.dayOfWeek);
+
+  it("lists all seven days when nothing is closed", () => {
+    expect(days()).toEqual(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]);
+  });
+
+  it("leaves Tuesday out when it is the day off, so a search engine never says 'open' on it", () => {
+    expect(days([2])).toEqual(["Monday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]);
+    expect(days([2])).not.toContain("Tuesday");
+  });
+});

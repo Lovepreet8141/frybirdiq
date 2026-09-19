@@ -28,7 +28,7 @@ export function writeGate(input: {
   const refusal = orderingRefusal(input.now, input.shop, input.when);
   if (refusal) return refusal;
   if (input.when === "SCHEDULED") {
-    const stillValid = input.scheduledFor !== null && isValidScheduledTime(input.scheduledFor, input.now, input.shop.openingTime, input.shop.closingTime);
+    const stillValid = input.scheduledFor !== null && isValidScheduledTime(input.scheduledFor, input.now, input.shop.openingTime, input.shop.closingTime, input.shop.closures);
     if (!stillValid) return { kind: "SCHEDULE_SLIPPED" };
   }
   return null;

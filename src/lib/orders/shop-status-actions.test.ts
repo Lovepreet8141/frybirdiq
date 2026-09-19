@@ -54,6 +54,51 @@ describe("who may switch online orders off and on (god's ruling D2: orders.updat
   });
 });
 
+describe("pauseOrderingAction — the ops-3 durations", () => {
+  const future = (days: number) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date(Date.now() + days * 86_400_000));
+
+  it("'Closed for the rest of today' goes through as its own mode", async () => {
+    await pauseOrderingAction({ preset: "Too busy", mode: "REST_OF_TODAY" });
+    expect(mocks.pauseOrdering).toHaveBeenCalledWith(expect.objectContaining({ mode: "REST_OF_TODAY" }));
+  });
+
+  it("'Closed until a date I pick' passes the date to the repository", async () => {
+    await pauseOrderingAction({ preset: "Other", mode: "UNTIL_DATE", untilDate: future(3) });
+    expect(mocks.pauseOrdering).toHaveBeenCalledWith(expect.objectContaining({ mode: "UNTIL_DATE", untilDate: future(3) }));
+  });
+
+  it.each([
+    ["no date", undefined],
+    ["today", 0],
+    ["the past", -2],
+    ["more than 60 days out", 61],
+  ])("UNTIL_DATE with %s is refused before anything is written", async (_label, days) => {
+    const untilDate = days === undefined ? undefined : future(days);
+    const result = await pauseOrderingAction({ preset: "Other", mode: "UNTIL_DATE", untilDate });
+    expect(result).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+    expect(mocks.pauseOrdering).not.toHaveBeenCalled();
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("a date is ignored for the other modes, so a stale field cannot change a plain pause", async () => {
+    await pauseOrderingAction({ preset: "Too busy", mode: "UNTIL_NEXT_OPENING", untilDate: "not-a-date" });
+    expect(mocks.pauseOrdering).toHaveBeenCalledWith(expect.objectContaining({ mode: "UNTIL_NEXT_OPENING" }));
+  });
+
+  it("an unknown mode is refused", async () => {
+    expect(await pauseOrderingAction({ preset: "Too busy", mode: "FOR_A_YEAR" })).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+  });
+
+  it("the preview takes an optional date, and a bad one is refused before the database is asked", async () => {
+    mocks.previewPause.mockResolvedValue({});
+    await previewPauseAction({ untilDate: future(2) });
+    expect(mocks.previewPause).toHaveBeenCalledWith(staff.orgId, expect.any(Date), future(2));
+    mocks.previewPause.mockClear();
+    expect(await previewPauseAction({ untilDate: future(-1) })).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+    expect(mocks.previewPause).not.toHaveBeenCalled();
+  });
+});
+
 describe("pauseOrderingAction", () => {
   it("asks for orders.update and pauses the signed-in staff member's own org — never one from the request", async () => {
     await pauseOrderingAction({ preset: "Equipment problem", note: "fryer down", mode: "UNTIL_RESUMED", orgId: "33333333-3333-4333-8333-333333333333" });
@@ -165,7 +210,7 @@ describe("previewPauseAction — the confirm line, before anything changes", () 
     mocks.previewPause.mockResolvedValue({ nextOpeningAt: new Date(), nextOpeningLabel: "today at 11:30 AM", ordersStillDue: 2 });
     expect(await previewPauseAction()).toMatchObject({ ok: true, preview: { nextOpeningLabel: "today at 11:30 AM" } });
     expect(mocks.requirePermission).toHaveBeenCalledWith("orders.update");
-    expect(mocks.previewPause).toHaveBeenCalledWith(staff.orgId);
+    expect(mocks.previewPause).toHaveBeenCalledWith(staff.orgId, expect.any(Date), undefined);
     expect(mocks.pauseOrdering).not.toHaveBeenCalled();
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });

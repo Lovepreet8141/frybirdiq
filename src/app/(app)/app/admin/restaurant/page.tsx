@@ -16,10 +16,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { requireStaff, staffCan } from "@/lib/auth";
 import { adminNavAccess } from "@/lib/auth/admin-access";
 import { formatBps, formatINR } from "@/lib/money";
+import { getClosuresOverview } from "@/lib/repositories/closed-dates";
 import { getRestaurantSettings } from "@/lib/repositories/settings";
 import { getOrderingStatusForStaff } from "@/lib/repositories/shop-status";
+import { businessDate } from "@/lib/dates";
 import { sinceLabel } from "@/lib/settings/close-shop-copy";
+import { preOrderRows, rangeLabel } from "@/lib/settings/closures-copy";
 import { CloseShopPanel } from "./close-shop-panel";
+import { ClosuresPanel } from "./closures-panel";
 
 export const metadata: Metadata = { title: "Restaurant", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -40,7 +44,7 @@ export default async function RestaurantSettingsPage() {
     );
   }
 
-  const [settings, access, ordering] = await Promise.all([getRestaurantSettings(staff.orgId), adminNavAccess(), getOrderingStatusForStaff(staff.orgId)]);
+  const [settings, access, ordering, closures] = await Promise.all([getRestaurantSettings(staff.orgId), adminNavAccess(), getOrderingStatusForStaff(staff.orgId), getClosuresOverview(staff.orgId)]);
   if (!settings) {
     return (
       <div className="mx-auto w-full max-w-lg px-[var(--gutter)] py-16">
@@ -60,6 +64,21 @@ export default async function RestaurantSettingsPage() {
         <CloseShopPanel
           status={ordering}
           pausedSince={ordering.state === "paused" ? sinceLabel(ordering.pausedAt, now) : null}
+        />
+      )}
+      {closures && (
+        <ClosuresPanel
+          weeklyClosedDays={closures.weeklyClosedDays}
+          closedDates={closures.closedDates
+            // Ended days stay in the table for a day (a session can run past midnight); the list shows only what is still ahead or now.
+            .filter((range) => range.endDate >= businessDate(now))
+            .map((range) => ({
+              id: range.id,
+              label: rangeLabel(range.startDate, range.endDate),
+              note: range.note,
+              current: range.startDate <= businessDate(now) && range.endDate >= businessDate(now),
+            }))}
+          preOrders={preOrderRows(closures.preOrdersOnClosedDays)}
         />
       )}
       <PageHeader title="Restaurant" description="What FRYBIRD is configured as. These values already drive every invoice, price, reward and delivery quote; changing one is a business decision, so this page shows them and edits only the operations settings the Overview reads." />

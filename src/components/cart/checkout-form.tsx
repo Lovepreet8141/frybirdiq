@@ -24,6 +24,8 @@ export interface ScheduleDayOption {
   readonly date: string;
   readonly label: string;
   readonly slots: readonly ScheduleSlotOption[];
+  /** A whole closed day (weekly off day or planned closure): listed but not selectable. */
+  readonly closed?: boolean;
 }
 
 function SubmitButton({ label, blockedReason }: { label: string; blockedReason: string | null }) {
@@ -265,7 +267,7 @@ export function CheckoutForm({
                   {scheduleOptions.map((day) => (
                     <SelectItem key={day.date} value={day.date} disabled={day.slots.length === 0}>
                       {day.label}
-                      {day.slots.length === 0 ? " — no times left" : ""}
+                      {day.closed ? " — we're closed" : day.slots.length === 0 ? " — no times left" : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>

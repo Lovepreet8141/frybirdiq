@@ -1,7 +1,7 @@
 /** Organizations, locations, staff and roles. BUILD-PLAN.md §41, §42. */
 
 import { sql } from "drizzle-orm";
-import { boolean, check, date, index, integer, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, date, index, integer, pgEnum, pgTable, smallint, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { ROLES } from "@/domain/permissions";
 import { ZERO_MONEY, money, primaryId, priceBasisEnum, timestamps } from "./_shared";
 
@@ -111,6 +111,15 @@ export const organizations = pgTable("organizations", {
   openingTime: text("opening_time").notNull().default("11:30"),
   /** Closing time, 24-hour "HH:MM". */
   closingTime: text("closing_time").notNull().default("23:00"),
+  /**
+   * Weekdays the shop is closed all day (ops-3): 0 = Sunday … 6 = Saturday, the
+   * calendar weekday of a business date. Empty means open every day, which is
+   * what every row read as before this column existed. At most six of the
+   * seven (a shop that is never open has no "next opening"); the CHECK below
+   * holds it even against a hand edit. Planned one-off closures live in
+   * `closed_dates`.
+   */
+  weeklyClosedDays: smallint("weekly_closed_days").array().notNull().default(sql`'{}'::smallint[]`),
 
   /*
    * The Close Shop switch (ops-1). Staff pause online ordering for a while —
@@ -138,6 +147,10 @@ export const organizations = pgTable("organizations", {
   orderingPausedUntil: timestamp("ordering_paused_until", { withTimezone: true }),
   ...timestamps,
 }, (table) => [
+  check(
+    "organizations_weekly_closed_days_check",
+    sql`${table.weeklyClosedDays} <@ ARRAY[0,1,2,3,4,5,6]::smallint[] AND cardinality(${table.weeklyClosedDays}) <= 6`,
+  ),
   /*
    * A pause is all-or-nothing. When and who are set together: every pause has
    * a person behind it, and a pause with no human actor (an automatic one)

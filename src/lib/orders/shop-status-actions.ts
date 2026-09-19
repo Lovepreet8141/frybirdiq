@@ -19,6 +19,7 @@ import { revalidatePath } from "next/cache";
 import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
+import { untilDateProblem } from "@/lib/orders/pause-duration";
 import { PAUSE_NOTE_MAX, PAUSE_REASON_PRESETS, composePauseReason } from "@/lib/orders/pause-reasons";
 import { clearMenuCache } from "@/lib/repositories/menu-cache";
 import {
@@ -39,14 +40,24 @@ export type ReadOrderingStatusActionResult = { readonly ok: true; readonly statu
 export type PreviewPauseActionResult = { readonly ok: true; readonly preview: PausePreview } | ActionFailure;
 export type ResumeOrderingActionResult = ResumeOrderingResult | ActionFailure;
 
-const pauseSchema = z.object({
+const pauseSchema = z
+  .object({
   /** One tap, from the owner's five. Never shown to a customer. */
   preset: z.enum(PAUSE_REASON_PRESETS, { error: "Pick a reason." }),
   /** Optional free text, staff only, stored after the preset ("Too busy: two riders off"). */
   note: z.string().trim().max(PAUSE_NOTE_MAX, `Keep the note under ${PAUSE_NOTE_MAX} characters.`).optional(),
   /** The owner's default is "until we next open". */
-  mode: z.enum(["UNTIL_NEXT_OPENING", "UNTIL_RESUMED"]).default("UNTIL_NEXT_OPENING"),
-});
+  mode: z.enum(["UNTIL_NEXT_OPENING", "UNTIL_RESUMED", "REST_OF_TODAY", "UNTIL_DATE"]).default("UNTIL_NEXT_OPENING"),
+  /** Only for UNTIL_DATE: the business date orders restart on. Checked against the server's clock below. */
+  untilDate: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.mode !== "UNTIL_DATE") return;
+    const message = untilDateProblem(value.untilDate, new Date());
+    if (message) ctx.addIssue({ code: "custom", message, path: ["untilDate"] });
+  });
+
+const previewSchema = z.object({ untilDate: z.string().optional() }).optional();
 
 const resumeSchema = z.object({
   /** The pausedAt the screen showed, as an ISO string — so a stale screen cannot lift a newer pause. */
@@ -59,7 +70,7 @@ export async function pauseOrderingAction(input: unknown): Promise<PauseOrdering
 
   try {
     const staff = await requirePermission("orders.update");
-    const result = await pauseOrdering({ orgId: staff.orgId, actorUserId: staff.userId, reason: composePauseReason(parsed.data.preset, parsed.data.note), mode: parsed.data.mode });
+    const result = await pauseOrdering({ orgId: staff.orgId, actorUserId: staff.userId, reason: composePauseReason(parsed.data.preset, parsed.data.note), mode: parsed.data.mode, untilDate: parsed.data.untilDate });
     if (result.ok) revalidateEverywhere();
     return result;
   } catch (error) {
@@ -101,10 +112,17 @@ export async function readOrderingStatusAction(): Promise<ReadOrderingStatusActi
 }
 
 /** The confirm dialog's "Orders restart …" line and still-due count, on the server's clock at the moment it opens. */
-export async function previewPauseAction(): Promise<PreviewPauseActionResult> {
+export async function previewPauseAction(input?: unknown): Promise<PreviewPauseActionResult> {
+  const parsed = previewSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, code: "INVALID_INPUT", error: "That could not be checked." };
+  const untilDate = parsed.data?.untilDate;
+  if (untilDate) {
+    const problem = untilDateProblem(untilDate, new Date());
+    if (problem) return { ok: false, code: "INVALID_INPUT", error: problem };
+  }
   try {
     const staff = await requirePermission("orders.update");
-    const preview = await previewPause(staff.orgId);
+    const preview = await previewPause(staff.orgId, new Date(), untilDate);
     if (!preview) return { ok: false, code: "SERVER_ERROR", error: "That shop could not be found." };
     return { ok: true, preview };
   } catch (error) {

@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { OrderingRefusedAtWrite, writeGate } from "./write-gate";
+import { NO_CLOSURES } from "./closures";
 import type { ShopStatus } from "./opening-hours";
 
 // Hours 11:30-23:00 IST. 2026-09-19 14:30Z = 20:00 IST (open); 17:31Z = 23:01 IST (just closed).
 const OPEN_NOW = new Date("2026-09-19T14:30:00.000Z");
 const JUST_CLOSED = new Date("2026-09-19T17:31:00.000Z");
-const hours = { openingTime: "11:30", closingTime: "23:00" };
+const hours = { openingTime: "11:30", closingTime: "23:00", closures: NO_CLOSURES };
 const shop = (over: Partial<ShopStatus> = {}): ShopStatus => ({ ...hours, orderingPausedAt: null, orderingPausedUntil: null, ...over });
 const paused = shop({ orderingPausedAt: new Date("2026-09-19T14:29:00.000Z"), orderingPausedUntil: null });
 

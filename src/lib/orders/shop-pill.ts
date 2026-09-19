@@ -7,7 +7,8 @@
  * shows the dot plus one word (`short`).
  */
 
-import { businessDate } from "@/lib/dates";
+import { addDays, businessDate } from "@/lib/dates";
+import { weekdayOf } from "@/lib/orders/closures";
 import { formatBusinessClock } from "@/lib/orders/opening-hours";
 import type { StaffOrderingStatus } from "@/lib/repositories/shop-status";
 
@@ -31,10 +32,24 @@ export function clockFromHHMM(hhmm: string): string {
   return `${hour % 12 === 0 ? 12 : hour % 12}:${m.padStart(2, "0")} ${suffix}`;
 }
 
-/** "11:30 AM" on the same business day as `now`, otherwise "tomorrow 11:30 AM". */
+const SHORT_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+
+/**
+ * "11:30 AM" on the same business day as `now`, "tomorrow 11:30 AM" the next
+ * day, "Wed 11:30 AM" within the week (a day off in between), and
+ * "Sat 4 Oct 11:30 AM" beyond it.
+ */
 export function clockOrTomorrow(at: Date, now: Date): string {
   const clock = formatBusinessClock(at);
-  return businessDate(at) === businessDate(now) ? clock : `tomorrow ${clock}`;
+  const day = businessDate(at);
+  const today = businessDate(now);
+  if (day === today) return clock;
+  if (day === addDays(today, 1)) return `tomorrow ${clock}`;
+  const weekday = SHORT_WEEKDAYS[weekdayOf(day)];
+  for (let ahead = 2; ahead <= 6; ahead += 1) if (day === addDays(today, ahead)) return `${weekday} ${clock}`;
+  const [, month, dayOfMonth] = day.split("-").map(Number);
+  return `${weekday} ${dayOfMonth} ${SHORT_MONTHS[(month ?? 1) - 1]} ${clock}`;
 }
 
 export function pillView(status: StaffOrderingStatus, now: Date): PillView {
@@ -43,7 +58,9 @@ export function pillView(status: StaffOrderingStatus, now: Date): PillView {
     return { state: "off", dot: "red", icon: "pause", long: `Orders OFF · ${until}`, short: "Off" };
   }
   if (status.state === "closedByHours") {
-    return { state: "closed", dot: "grey", icon: "clock", long: `Closed · opens ${clockOrTomorrow(status.reopensAt, now)}`, short: "Closed" };
+    // A whole closed day reads "Closed today · opens Wed 11:30 AM"; closed by the clock stays "Closed · opens …".
+    const lead = status.dayOff ? "Closed today" : "Closed";
+    return { state: "closed", dot: "grey", icon: "clock", long: `${lead} · opens ${clockOrTomorrow(status.reopensAt, now)}`, short: "Closed" };
   }
   return { state: "open", dot: "green", icon: "check", long: `Open · until ${clockFromHHMM(status.closesAt)}`, short: "Open" };
 }
@@ -57,6 +74,8 @@ export interface PillDetail {
   readonly reasonLine: string | null;
   readonly hoursLine: string;
   readonly notFinishedLine: string;
+  /** Pre-orders booked for a closed day, when there are any. Nothing refuses or cancels them; this makes sure staff see them. */
+  readonly closedDayLine: string | null;
 }
 
 export function pillDetail(
@@ -67,6 +86,7 @@ export function pillDetail(
 ): PillDetail {
   const notFinished = status.ordersStillDue;
   const notFinishedLine = notFinished === 0 ? "Orders not finished: none" : `Orders not finished: ${notFinished}`;
+  const closedDayLine = status.preOrdersOnClosedDays > 0 ? `Pre-orders booked for a closed day: ${status.preOrdersOnClosedDays}. See Admin → Restaurant.` : null;
   const hoursLine = `Today's hours: ${clockFromHHMM(hours.opens)} – ${clockFromHHMM(hours.closes)}`;
 
   if (status.state === "paused") {
@@ -77,21 +97,27 @@ export function pillDetail(
       reasonLine: status.reason ? `Reason: ${status.reason}` : null,
       hoursLine,
       notFinishedLine,
+      closedDayLine,
     };
   }
   if (status.state === "closedByHours") {
-    return { statusLine: `Outside opening hours. Online orders start ${clockOrTomorrow(status.reopensAt, now)}.`, byLine: null, reasonLine: null, hoursLine, notFinishedLine };
+    const statusLine = status.dayOff
+      ? `Closed all day today${status.dayOff.note ? ` (${status.dayOff.note})` : ""}. Online orders start ${clockOrTomorrow(status.reopensAt, now)}.`
+      : `Outside opening hours. Online orders start ${clockOrTomorrow(status.reopensAt, now)}.`;
+    return { statusLine, byLine: null, reasonLine: null, hoursLine: status.dayOff ? "Today's hours: closed all day" : hoursLine, notFinishedLine, closedDayLine };
   }
-  return { statusLine: `Taking online orders until ${clockFromHHMM(status.closesAt)}.`, byLine: null, reasonLine: null, hoursLine, notFinishedLine };
+  return { statusLine: `Taking online orders until ${clockFromHHMM(status.closesAt)}.`, byLine: null, reasonLine: null, hoursLine, notFinishedLine, closedDayLine };
 }
 
 /** A stable string that changes exactly when the state on screen should: used to re-sync from a fresh server render. */
 export function statusSignature(status: StaffOrderingStatus): string {
   if (status.state === "paused") {
-    return `paused|${status.pausedAt.getTime()}|${status.reopensAt?.getTime() ?? "-"}|${status.ordersStillDue}|${status.pausedBy?.name ?? "-"}|${status.reason ?? "-"}`;
+    return `paused|${status.pausedAt.getTime()}|${status.reopensAt?.getTime() ?? "-"}|${status.ordersStillDue}|${status.pausedBy?.name ?? "-"}|${status.reason ?? "-"}|${status.preOrdersOnClosedDays}`;
   }
-  if (status.state === "closedByHours") return `closed|${status.reopensAt.getTime()}|${status.ordersStillDue}`;
-  return `open|${status.closesAt}|${status.ordersStillDue}`;
+  if (status.state === "closedByHours") {
+    return `closed|${status.reopensAt.getTime()}|${status.ordersStillDue}|${status.dayOff ? `off:${status.dayOff.note ?? ""}` : "-"}|${status.preOrdersOnClosedDays}`;
+  }
+  return `open|${status.closesAt}|${status.ordersStillDue}|${status.preOrdersOnClosedDays}`;
 }
 
 /** Announced (polite) when the state changes under the person. */

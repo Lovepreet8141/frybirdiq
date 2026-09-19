@@ -6,9 +6,10 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { NO_CLOSURES } from "./closures";
 import { orderingRefusal, pauseCarriedOver, pausedUntilFor, type ShopStatus } from "./opening-hours";
 
-const HOURS = { openingTime: "11:30", closingTime: "23:00" };
+const HOURS = { openingTime: "11:30", closingTime: "23:00", closures: NO_CLOSURES };
 const OPEN_SHOP: ShopStatus = { ...HOURS, orderingPausedAt: null, orderingPausedUntil: null };
 // Manual pause ("until I switch it back on"): no end.
 const PAUSED_SHOP: ShopStatus = { ...HOURS, orderingPausedAt: new Date("2026-09-19T12:00:00.000Z"), orderingPausedUntil: null }; // paused 17:30 IST
@@ -70,6 +71,7 @@ describe("orderingRefusal — not paused, behaves exactly as the P0-3a gate did"
         opensAt: "2026-09-19T06:00:00.000Z",
         opensDay: "TODAY",
         opensAtLabel: "today at 11:30 AM",
+        dayOff: null,
       },
     });
   });

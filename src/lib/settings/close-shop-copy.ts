@@ -8,15 +8,13 @@
 
 import { businessDate } from "@/lib/dates";
 import { formatBusinessClock, type PauseMode } from "@/lib/orders/opening-hours";
+import { PAUSE_MODE_OPTIONS, type RestartLabels, restartSentence } from "@/lib/orders/pause-duration";
 import type { StaffOrderingStatus } from "@/lib/repositories/shop-status";
 
 export const SHOP_OPEN_HEADLINE = "Shop is OPEN for orders";
 export const SHOP_CLOSED_HEADLINE = "Shop is CLOSED for orders";
 
-export const PAUSE_MODE_LABELS: Record<PauseMode, string> = {
-  UNTIL_NEXT_OPENING: "Until we next open",
-  UNTIL_RESUMED: "Until I switch it back on",
-};
+export const PAUSE_MODE_LABELS: Record<PauseMode, string> = Object.fromEntries(PAUSE_MODE_OPTIONS.map((option) => [option.mode, option.label])) as Record<PauseMode, string>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -36,9 +34,9 @@ export function sinceLabel(at: Date, now: Date): string {
  * would restart at 11:30: the confirm spells that out so the person can pick
  * "until I switch it back on".
  */
-export function restartLine(mode: PauseMode, nextOpeningLabel: string | null): string | null {
+export function restartLine(mode: PauseMode, labels: RestartLabels | null): string | null {
   if (mode === "UNTIL_RESUMED") return "Orders stay off until you switch them back on.";
-  return nextOpeningLabel ? `Orders restart ${nextOpeningLabel}.` : null;
+  return labels ? restartSentence(mode, labels) : null;
 }
 
 export interface PauseChoice {

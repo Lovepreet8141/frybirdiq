@@ -6,10 +6,11 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { NO_CLOSURES } from "@/lib/orders/closures";
 import { orderingRefusal, type ShopStatus } from "@/lib/orders/opening-hours";
 import { shopOrderingState } from "./shop-hours";
 
-const HOURS = { openingTime: "11:30", closingTime: "23:00" };
+const HOURS = { openingTime: "11:30", closingTime: "23:00", closures: NO_CLOSURES };
 const MIDDAY = new Date("2026-09-19T12:30:00.000Z"); // 18:00 IST
 const TWO_AM = new Date("2026-09-18T20:30:00.000Z"); // 02:00 IST
 const PAUSED_AT = new Date("2026-09-19T12:00:00.000Z"); // 17:30 IST
@@ -27,6 +28,7 @@ describe("shopOrderingState", () => {
       state: "closedByHours",
       reopensAt: new Date("2026-09-19T06:00:00.000Z"),
       reopensAtLabel: "today at 11:30 AM",
+      dayOff: null,
     });
   });
 

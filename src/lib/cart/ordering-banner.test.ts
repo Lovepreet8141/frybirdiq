@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { NO_CLOSURES } from "@/lib/orders/closures";
 import { orderingBanner, orderingControls } from "./ordering-banner";
 import { type ShopOrderingState, shopOrderingState } from "./shop-hours";
 
 const open: ShopOrderingState = { state: "open", closesAt: "23:00" };
-const closed: ShopOrderingState = { state: "closedByHours", reopensAt: new Date("2026-09-21T06:00:00Z"), reopensAtLabel: "tomorrow at 11:30 AM" };
+const closed: ShopOrderingState = { state: "closedByHours", dayOff: null, reopensAt: new Date("2026-09-21T06:00:00Z"), reopensAtLabel: "tomorrow at 11:30 AM" };
 const pausedTimed: ShopOrderingState = { state: "paused", mode: "UNTIL_NEXT_OPENING", pausedAt: new Date(), reopensAt: new Date(), reopensAtLabel: "today at 11:30 AM", withinHours: false };
 const pausedManual: ShopOrderingState = { state: "paused", mode: "UNTIL_RESUMED", pausedAt: new Date(), reopensAt: null, reopensAtLabel: null, withinHours: true };
 
@@ -11,15 +12,15 @@ describe("banner text per state (the owner's words)", () => {
   it("open: nothing", () => expect(orderingBanner(open)).toBeNull());
 
   it("closed by hours", () => {
-    expect(orderingBanner(closed)).toEqual({ kind: "closed", headline: "We're closed right now.", detail: "We open tomorrow at 11:30 AM." });
+    expect(orderingBanner(closed)).toEqual({ kind: "closed", headline: "We're closed right now.", detail: "We open tomorrow at 11:30 AM.", note: null });
   });
 
   it("paused until the next opening", () => {
-    expect(orderingBanner(pausedTimed)).toEqual({ kind: "paused", headline: "We're not taking orders right now.", detail: "We open again today at 11:30 AM." });
+    expect(orderingBanner(pausedTimed)).toEqual({ kind: "paused", headline: "We're not taking orders right now.", detail: "We open again today at 11:30 AM.", note: null });
   });
 
   it("paused until switched back on", () => {
-    expect(orderingBanner(pausedManual)).toEqual({ kind: "paused", headline: "We're not taking orders right now.", detail: "Please check back soon." });
+    expect(orderingBanner(pausedManual)).toEqual({ kind: "paused", headline: "We're not taking orders right now.", detail: "Please check back soon.", note: null });
   });
 
   it("uses the status's finished label and never rebuilds a time", () => {
@@ -49,17 +50,17 @@ describe("controls", () => {
 
 describe("closed by the hours AND switched off: the switch's banner wins", () => {
   const NIGHT = new Date("2026-09-19T22:00:00.000Z"); // 03:30 IST, well outside 11:30-23:00
-  const base = { openingTime: "11:30", closingTime: "23:00" };
+  const base = { openingTime: "11:30", closingTime: "23:00", closures: NO_CLOSURES };
 
   it("switched off until we next open, in the small hours: the paused banner, with the opening time", () => {
     const state = shopOrderingState(NIGHT, { ...base, orderingPausedAt: new Date("2026-09-19T17:00:00Z"), orderingPausedUntil: new Date("2026-09-20T06:00:00Z") });
     expect(state.state).toBe("paused");
-    expect(orderingBanner(state)).toEqual({ kind: "paused", headline: "We're not taking orders right now.", detail: "We open again today at 11:30 AM." });
+    expect(orderingBanner(state)).toEqual({ kind: "paused", headline: "We're not taking orders right now.", detail: "We open again today at 11:30 AM.", note: null });
   });
 
   it("switched off until switched back on, in the small hours: the paused banner, never 'we open at 11:30'", () => {
     const state = shopOrderingState(NIGHT, { ...base, orderingPausedAt: new Date("2026-09-19T17:00:00Z"), orderingPausedUntil: null });
-    expect(orderingBanner(state)).toEqual({ kind: "paused", headline: "We're not taking orders right now.", detail: "Please check back soon." });
+    expect(orderingBanner(state)).toEqual({ kind: "paused", headline: "We're not taking orders right now.", detail: "Please check back soon.", note: null });
     // and the controls are the paused ones: no pre-orders either.
     expect(orderingControls(state).preorderAllowed).toBe(false);
   });

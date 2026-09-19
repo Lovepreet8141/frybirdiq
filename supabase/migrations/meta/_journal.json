@@ -281,6 +281,13 @@
       "when": 1790400000000,
       "tag": "0039_ordering_pause",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1790500000000,
+      "tag": "0040_day_off",
+      "breakpoints": true
     }
   ]
 }

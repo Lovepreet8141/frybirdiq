@@ -11,7 +11,7 @@ const render = (props: Partial<CloseShopPanelProps> & Pick<CloseShopPanelProps, 
 
 describe("CloseShopPanel", () => {
   it("open: says OPEN, offers to switch off, and shows the orders still due", () => {
-    const html = render({ status: { state: "open", closesAt: "23:00", pausedBy: null, reason: null, ordersStillDue: 2, carriedOver: false } });
+    const html = render({ status: { state: "open", closesAt: "23:00", pausedBy: null, reason: null, ordersStillDue: 2, carriedOver: false, preOrdersOnClosedDays: 0 } });
     expect(html).toContain("Shop is OPEN for orders");
     expect(html).toContain("Switch online orders off");
     expect(html).not.toContain("Switch orders back on");
@@ -21,7 +21,7 @@ describe("CloseShopPanel", () => {
 
   it("paused: says CLOSED with who, when, reopens, reason, and offers only to switch back on", () => {
     const html = render({
-      status: { state: "paused", mode: "UNTIL_RESUMED", pausedAt: new Date("2026-09-19T14:12:00Z"), reopensAt: null, reopensAtLabel: null, withinHours: true, pausedBy: { userId: "u", name: "Aman" }, reason: "Fryer broken", ordersStillDue: 0, carriedOver: false },
+      status: { state: "paused", mode: "UNTIL_RESUMED", pausedAt: new Date("2026-09-19T14:12:00Z"), reopensAt: null, reopensAtLabel: null, withinHours: true, pausedBy: { userId: "u", name: "Aman" }, reason: "Fryer broken", ordersStillDue: 0, carriedOver: false, preOrdersOnClosedDays: 0 },
       pausedSince: "today at 7:42 PM",
     });
     expect(html).toContain("Shop is CLOSED for orders");
@@ -35,7 +35,7 @@ describe("CloseShopPanel", () => {
 
   it("paused until next opening: shows the reopen time", () => {
     const html = render({
-      status: { state: "paused", mode: "UNTIL_NEXT_OPENING", pausedAt: new Date(), reopensAt: new Date(), reopensAtLabel: "tomorrow at 11:30 AM", withinHours: true, pausedBy: { userId: "u", name: null }, reason: "Power cut", ordersStillDue: 1, carriedOver: false },
+      status: { state: "paused", mode: "UNTIL_NEXT_OPENING", pausedAt: new Date(), reopensAt: new Date(), reopensAtLabel: "tomorrow at 11:30 AM", withinHours: true, pausedBy: { userId: "u", name: null }, reason: "Power cut", ordersStillDue: 1, carriedOver: false, preOrdersOnClosedDays: 0 },
       pausedSince: "today at 7:42 PM",
     });
     expect(html).toContain("tomorrow at 11:30 AM");
@@ -43,14 +43,14 @@ describe("CloseShopPanel", () => {
   });
 
   it("closed by hours: says CLOSED and when it reopens", () => {
-    const html = render({ status: { state: "closedByHours", reopensAt: new Date(), reopensAtLabel: "today at 11:30 AM", pausedBy: null, reason: null, ordersStillDue: 0, carriedOver: false } });
+    const html = render({ status: { state: "closedByHours", dayOff: null, reopensAt: new Date(), reopensAtLabel: "today at 11:30 AM", pausedBy: null, reason: null, ordersStillDue: 0, carriedOver: false, preOrdersOnClosedDays: 0 } });
     expect(html).toContain("Shop is CLOSED for orders");
     expect(html).toContain("today at 11:30 AM");
   });
 
   it("paused: switching back on is a first step, not the action itself (no confirm shown, nothing is sent by the first tap)", () => {
     const html = render({
-      status: { state: "paused", mode: "UNTIL_RESUMED", pausedAt: new Date("2026-09-19T14:12:00Z"), reopensAt: null, reopensAtLabel: null, withinHours: true, pausedBy: { userId: "u", name: "Aman" }, reason: "Too busy", ordersStillDue: 0, carriedOver: false },
+      status: { state: "paused", mode: "UNTIL_RESUMED", pausedAt: new Date("2026-09-19T14:12:00Z"), reopensAt: null, reopensAtLabel: null, withinHours: true, pausedBy: { userId: "u", name: "Aman" }, reason: "Too busy", ordersStillDue: 0, carriedOver: false, preOrdersOnClosedDays: 0 },
       pausedSince: "today at 7:42 PM",
     });
     expect(html).toContain("Switch orders back on…");

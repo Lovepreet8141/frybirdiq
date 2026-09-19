@@ -1,5 +1,6 @@
 import { businessDate } from "@/lib/dates";
-import { type PauseMode, type ShopStatus, formatBusinessClock, isOpenAt, orderingRefusal } from "@/lib/orders/opening-hours";
+import type { ClosedDay } from "@/lib/orders/closures";
+import { type PauseMode, type ShopStatus, dayPhrase, formatBusinessClock, isOpenAt, orderingRefusal } from "@/lib/orders/opening-hours";
 
 /**
  * Open, closed by the hours, or paused by hand — the one answer every screen
@@ -27,7 +28,13 @@ import { type PauseMode, type ShopStatus, formatBusinessClock, isOpenAt, orderin
  */
 export type ShopOrderingState =
   | { readonly state: "open"; readonly closesAt: string }
-  | { readonly state: "closedByHours"; readonly reopensAt: Date; readonly reopensAtLabel: string }
+  | {
+      readonly state: "closedByHours";
+      readonly reopensAt: Date;
+      readonly reopensAtLabel: string;
+      /** Set when TODAY is a whole closed day (weekly off day or planned closure), carrying the public note if any. Null for closed-by-the-clock. */
+      readonly dayOff: ClosedDay | null;
+    }
   | {
       readonly state: "paused";
       readonly mode: PauseMode;
@@ -47,17 +54,17 @@ export function shopOrderingState(now: Date, shop: ShopStatus): ShopOrderingStat
       pausedAt: shop.orderingPausedAt,
       reopensAt: until,
       reopensAtLabel: until ? dayAndClock(until, now) : null,
-      withinHours: isOpenAt(now, shop.openingTime, shop.closingTime),
+      withinHours: isOpenAt(now, shop.openingTime, shop.closingTime, shop.closures),
     };
   }
   if (refusal?.kind === "CLOSED") {
     const reopensAt = new Date(refusal.closed.opensAt);
-    return { state: "closedByHours", reopensAt, reopensAtLabel: refusal.closed.opensAtLabel };
+    return { state: "closedByHours", reopensAt, reopensAtLabel: refusal.closed.opensAtLabel, dayOff: refusal.closed.dayOff };
   }
   return { state: "open", closesAt: shop.closingTime };
 }
 
-/** "today at 11:30 AM" / "tomorrow at 11:30 AM" — the same phrasing the hours refusal uses. */
+/** "today at 11:30 AM" / "tomorrow at 11:30 AM" / "Wednesday at 11:30 AM" — the same phrasing the hours refusal uses. */
 export function dayAndClock(at: Date, now: Date): string {
-  return `${businessDate(at) === businessDate(now) ? "today" : "tomorrow"} at ${formatBusinessClock(at)}`;
+  return `${dayPhrase(businessDate(at), businessDate(now))} at ${formatBusinessClock(at)}`;
 }

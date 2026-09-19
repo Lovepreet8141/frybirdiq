@@ -12,12 +12,12 @@ import { sinceLabel } from "@/components/pos/shop-switch-view";
 import type { StaffOrderingStatus } from "@/lib/repositories/shop-status";
 
 const NOW = new Date("2026-09-19T14:30:00.000Z");
-const bits = { pausedBy: null, reason: null, ordersStillDue: 2, carriedOver: false } as const;
+const bits = { pausedBy: null, reason: null, ordersStillDue: 2, carriedOver: false, preOrdersOnClosedDays: 0 } as const;
 const open: StaffOrderingStatus = { state: "open", closesAt: "23:00", ...bits };
-const closed: StaffOrderingStatus = { state: "closedByHours", reopensAt: new Date("2026-09-20T06:00:00Z"), reopensAtLabel: "tomorrow at 11:30 AM", ...bits };
+const closed: StaffOrderingStatus = { state: "closedByHours", dayOff: null, reopensAt: new Date("2026-09-20T06:00:00Z"), reopensAtLabel: "tomorrow at 11:30 AM", ...bits };
 const off: StaffOrderingStatus = {
   state: "paused", mode: "UNTIL_RESUMED", pausedAt: new Date("2026-09-19T14:12:00Z"), reopensAt: null, reopensAtLabel: null, withinHours: true,
-  pausedBy: { userId: "u", name: "Aman" }, reason: "Too busy", ordersStillDue: 2, carriedOver: false,
+  pausedBy: { userId: "u", name: "Aman" }, reason: "Too busy", ordersStillDue: 2, carriedOver: false, preOrdersOnClosedDays: 0,
 };
 const hours = { opens: "11:30", closes: "23:00" };
 

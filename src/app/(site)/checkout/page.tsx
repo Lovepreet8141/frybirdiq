@@ -17,6 +17,7 @@ import { scheduleDays } from "@/lib/cart/scheduled-time";
 import { getCustomer } from "@/lib/customer";
 import { toLatLng } from "@/lib/delivery";
 import { getCustomerOrderingStatus } from "@/lib/cart/ordering-status";
+import { getShopStatus } from "@/lib/repositories/shop-status";
 import { orderingControls } from "@/lib/cart/ordering-banner";
 import { isLoyaltyEnabled, maxRedeemable } from "@/lib/loyalty";
 import { getLoyaltyConfig } from "@/lib/loyalty/config";
@@ -54,9 +55,12 @@ export default async function CheckoutPage() {
   // there is nothing for the browser to compute (or mis-hydrate) itself —
   // the picker just renders what it is given, and `placeOrder` re-derives
   // the same window server-side from its own clock at submit time regardless.
-  const scheduleOptions = scheduleDays(now, org.openingTime, org.closingTime).map((day) => ({
+  // The same read the order gate uses, so a closed day is never offered a slot (the server refuses one regardless).
+  const shopStatus = await getShopStatus(org.id, now);
+  const scheduleOptions = scheduleDays(now, org.openingTime, org.closingTime, shopStatus?.closures).map((day) => ({
     date: day.date,
     label: day.label,
+    closed: day.closed,
     slots: day.slots.map((slot) => ({ iso: slot.at.toISOString(), label: slot.label })),
   }));
   // Read through getOrderingStatus only (ops-1 RULE 1): hours and the Close Shop switch in one answer.

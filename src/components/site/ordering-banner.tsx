@@ -33,6 +33,8 @@ export async function OrderingBanner({ className }: { className?: string }) {
       <div className="min-w-0 text-sm leading-relaxed">
         <p className="text-base font-bold">{copy.headline}</p>
         {copy.detail && <p>{copy.detail}</p>}
+        {/* Owner-written, plain text: React escapes it, and it is never rendered as markup. */}
+        {copy.note && <p>{copy.note}</p>}
         {phone && (
           <p className="mt-1">
             <CallShop phone={phone} lead="Questions? Call" />

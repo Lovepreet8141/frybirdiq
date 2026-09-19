@@ -31,6 +31,7 @@
  */
 
 import { BUSINESS_TIMEZONE, addDays, businessDate, timeOnBusinessDate } from "@/lib/dates";
+import { type ClosedDay, type Closures, NO_CLOSURES, WEEKDAY_NAMES, closedDay, isClosedDay, weekdayOf } from "./closures";
 
 /**
  * Just the two fields, so `asapRefusal` can take an org row whole.
@@ -43,6 +44,12 @@ import { BUSINESS_TIMEZONE, addDays, businessDate, timeOnBusinessDate } from "@/
 export interface OpeningHours {
   readonly openingTime: string;
   readonly closingTime: string;
+  /**
+   * The weekly off day and the planned closed dates (ops-3). Optional here only
+   * so a caller with just the two times still compiles; `ShopStatus`, which
+   * every ordering gate reads, requires it.
+   */
+  readonly closures?: Closures;
 }
 
 export interface BusinessHoursWindow {
@@ -86,8 +93,8 @@ function contains(window: BusinessHoursWindow, at: Date): boolean {
  * Open is inclusive, closing is exclusive. Used for a requested time as well
  * as for `now`, so ASAP and "choose a time" cannot refuse each other's edge.
  */
-export function isOpenAt(at: Date, openingTime: string, closingTime: string): boolean {
-  return sessionStartDate(at, openingTime, closingTime) !== null;
+export function isOpenAt(at: Date, openingTime: string, closingTime: string, closures: Closures = NO_CLOSURES): boolean {
+  return sessionStartDate(at, openingTime, closingTime, closures) !== null;
 }
 
 /**
@@ -107,37 +114,81 @@ export function isOpenAt(at: Date, openingTime: string, closingTime: string): bo
  * candidate's own date are the same string, so this changes nothing for
  * 11:30–23:00.
  */
-export function sessionStartDate(at: Date, openingTime: string, closingTime: string): string | null {
+export function sessionStartDate(at: Date, openingTime: string, closingTime: string, closures: Closures = NO_CLOSURES): string | null {
   const date = businessDate(at);
-  if (contains(businessHoursWindow(date, openingTime, closingTime), at)) return date;
+  // A session on a closed day (the weekly off day, a planned closure) does not count: the shop is shut for all of it.
+  if (contains(businessHoursWindow(date, openingTime, closingTime), at) && !isClosedDay(date, closures)) return date;
   const previous = addDays(date, -1);
-  if (contains(businessHoursWindow(previous, openingTime, closingTime), at)) return previous;
+  if (contains(businessHoursWindow(previous, openingTime, closingTime), at) && !isClosedDay(previous, closures)) return previous;
   return null;
 }
 
 export interface NextOpening {
   readonly at: Date;
-  /** Whether `at` is later today or the next business day — what a customer-facing message needs to say. */
-  readonly day: "TODAY" | "TOMORROW";
+  /** The business date the shop opens on. */
+  readonly date: string;
+  /** Later today, the next business day, or further out (a day off or a planned closure in between). */
+  readonly day: "TODAY" | "TOMORROW" | "LATER";
+}
+
+/**
+ * How far ahead `nextOpening` looks for an open day. Closed dates can only be
+ * added a year ahead and run at most 31 days, and at most six weekdays can be
+ * closed, so an open day always turns up well inside this; running out means
+ * the closures were edited around those rules, and throwing is better than
+ * promising a customer a time nobody set.
+ */
+const OPENING_SCAN_DAYS = 800;
+
+/**
+ * The first instant the shop opens on or after `fromDate`, skipping every
+ * closed day. `fromDate` itself counts when it is open.
+ */
+export function openingOnOrAfter(fromDate: string, openingTime: string, closingTime: string, closures: Closures = NO_CLOSURES): { readonly at: Date; readonly date: string } {
+  for (let offset = 0; offset < OPENING_SCAN_DAYS; offset += 1) {
+    const date = addDays(fromDate, offset);
+    if (!isClosedDay(date, closures)) return { at: businessHoursWindow(date, openingTime, closingTime).opening, date };
+  }
+  throw new Error("nextOpening: no open day found; the closures leave the shop never opening");
 }
 
 /**
  * The next instant the shop opens, for telling a customer when to come back.
  *
- * Called only when closed, so there are two cases: before this business date's
- * opening (come back later today) or after it (tomorrow). Under overnight
- * hours every closed instant falls before that date's opening — 02:00 to 18:00
- * on the same business date — so this answers TODAY throughout, which is the
- * true answer and the reason the refusal message stops saying "tomorrow" for
- * ever. Tomorrow's window is computed from the same hours: this build has one
- * schedule for every day, so a per-weekday one would change this function and
- * nothing else.
+ * Called only when closed. Before this date's opening, on a day that is open,
+ * the answer is later today. Otherwise it is the first open day after today, so
+ * Monday night with Tuesday off answers Wednesday, and a planned closure over
+ * Diwali answers the day after it ends. Under overnight hours every closed
+ * instant falls before that date's opening, so this answers TODAY throughout,
+ * which is the true answer.
  */
-export function nextOpening(now: Date, openingTime: string, closingTime: string): NextOpening {
+export function nextOpening(now: Date, openingTime: string, closingTime: string, closures: Closures = NO_CLOSURES): NextOpening {
   const today = businessDate(now);
   const { opening } = businessHoursWindow(today, openingTime, closingTime);
-  if (now.getTime() < opening.getTime()) return { at: opening, day: "TODAY" };
-  return { at: businessHoursWindow(addDays(today, 1), openingTime, closingTime).opening, day: "TOMORROW" };
+  if (now.getTime() < opening.getTime() && !isClosedDay(today, closures)) return { at: opening, date: today, day: "TODAY" };
+  const next = openingOnOrAfter(addDays(today, 1), openingTime, closingTime, closures);
+  return { ...next, day: next.date === addDays(today, 1) ? "TOMORROW" : "LATER" };
+}
+
+/**
+ * A day, the way a customer says it: "today", "tomorrow", "Wednesday" within the
+ * week, and "Saturday 4 October" beyond it (a bare weekday name a week or more
+ * out would read as the nearer one).
+ */
+export function dayPhrase(date: string, todayDate: string): string {
+  if (date === todayDate) return "today";
+  if (date === addDays(todayDate, 1)) return "tomorrow";
+  const name = WEEKDAY_NAMES[weekdayOf(date)];
+  for (let ahead = 2; ahead <= 6; ahead += 1) if (date === addDays(todayDate, ahead)) return name;
+  const [, month, day] = date.split("-").map(Number);
+  return `${name} ${day} ${MONTH_NAMES[(month ?? 1) - 1]}`;
+}
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"] as const;
+
+/** "tomorrow at 11:30 AM" / "Wednesday at 11:30 AM": when a customer may come back. */
+export function opensAtPhrase(opening: NextOpening, now: Date): string {
+  return `${dayPhrase(opening.date, businessDate(now))} at ${formatBusinessClock(opening.at)}`;
 }
 
 /**
@@ -156,10 +207,12 @@ export interface ShopClosedRefusal {
   readonly closingTime: string;
   /** The next instant the shop opens, as an ISO string — a Date does not survive the Server Action boundary. */
   readonly opensAt: string;
-  /** Whether `opensAt` is later today or the next day. */
-  readonly opensDay: "TODAY" | "TOMORROW";
-  /** Ready to print: "today at 11:30 AM" / "tomorrow at 11:30 AM", in the business's own timezone. */
+  /** Whether `opensAt` is later today, the next day, or further out. */
+  readonly opensDay: "TODAY" | "TOMORROW" | "LATER";
+  /** Ready to print: "today at 11:30 AM" / "tomorrow at 11:30 AM" / "Wednesday at 11:30 AM", in the business's own timezone. */
   readonly opensAtLabel: string;
+  /** Set when TODAY is a whole closed day (weekly off day or planned closure), with the owner's public note if there is one. */
+  readonly dayOff: ClosedDay | null;
 }
 
 /**
@@ -173,18 +226,18 @@ export interface ShopClosedRefusal {
  * What is left at the call site is one line, which is as small as the untested
  * surface can honestly get while `placeOrder` needs cookie-scoped cart state.
  */
-export function asapRefusal(now: Date, { openingTime, closingTime }: OpeningHours): ShopClosedRefusal | null {
-  if (isOpenAt(now, openingTime, closingTime)) return null;
+export function asapRefusal(now: Date, { openingTime, closingTime, closures }: OpeningHours): ShopClosedRefusal | null {
+  if (isOpenAt(now, openingTime, closingTime, closures)) return null;
 
-  const opens = nextOpening(now, openingTime, closingTime);
-  const label = `${opens.day === "TODAY" ? "today" : "tomorrow"} at ${formatBusinessClock(opens.at)}`;
+  const opens = nextOpening(now, openingTime, closingTime, closures);
   return {
     code: "CLOSED",
     openingTime,
     closingTime,
     opensAt: opens.at.toISOString(),
     opensDay: opens.day,
-    opensAtLabel: label,
+    opensAtLabel: opensAtPhrase(opens, now),
+    dayOff: closedDay(businessDate(now), closures),
   };
 }
 
@@ -245,6 +298,8 @@ export interface ShopPausedRefusal {
 
 /** Everything the ordering gate needs to know about the shop: its hours, and whether someone has paused it. */
 export interface ShopStatus extends OpeningHours {
+  /** The weekly off day and planned closures, from the org row and `closed_dates`. Required: a gate that forgets them opens on a day off. */
+  readonly closures: Closures;
   /** When ordering was paused, or null when it is not. From the org row; never from the client. */
   readonly orderingPausedAt: Date | null;
   /**
@@ -256,8 +311,17 @@ export interface ShopStatus extends OpeningHours {
   readonly orderingPausedUntil: Date | null;
 }
 
-/** How long a pause lasts. The owner's two choices; UNTIL_NEXT_OPENING is the default. */
-export type PauseMode = "UNTIL_NEXT_OPENING" | "UNTIL_RESUMED";
+/**
+ * How long a pause lasts; UNTIL_NEXT_OPENING is the default.
+ *
+ * - UNTIL_NEXT_OPENING: the next opening from the hours, the very next 11:30.
+ * - REST_OF_TODAY: through today, back at the opening of the next open day. The
+ *   difference from the one above shows before opening: at 9 am "until next
+ *   opening" is 11:30 today, "rest of today" is tomorrow.
+ * - UNTIL_DATE: back at the opening of the chosen date (or the next open day after it).
+ * - UNTIL_RESUMED: holds until someone switches ordering back on.
+ */
+export type PauseMode = "UNTIL_NEXT_OPENING" | "UNTIL_RESUMED" | "REST_OF_TODAY" | "UNTIL_DATE";
 
 export type OrderingRefusal =
   | { readonly kind: "PAUSED"; readonly paused: ShopPausedRefusal }
@@ -372,6 +436,19 @@ export function pauseCarriedOver(shop: ShopStatus, now: Date): boolean {
  * person pausing sees it and chooses UNTIL_RESUMED if that is not what they
  * mean.
  */
-export function pausedUntilFor(mode: PauseMode, now: Date, openingTime: string, closingTime: string): Date | null {
-  return mode === "UNTIL_NEXT_OPENING" ? nextOpening(now, openingTime, closingTime).at : null;
+export function pausedUntilFor(mode: PauseMode, now: Date, openingTime: string, closingTime: string, closures: Closures = NO_CLOSURES, untilDate?: string): Date | null {
+  switch (mode) {
+    case "UNTIL_RESUMED":
+      return null;
+    case "UNTIL_NEXT_OPENING":
+      return nextOpening(now, openingTime, closingTime, closures).at;
+    case "REST_OF_TODAY":
+      return openingOnOrAfter(addDays(businessDate(now), 1), openingTime, closingTime, closures).at;
+    case "UNTIL_DATE": {
+      if (!untilDate) throw new Error("pausedUntilFor: UNTIL_DATE needs a date");
+      // Never earlier than tomorrow: "until today" is not a reopening.
+      const from = untilDate > businessDate(now) ? untilDate : addDays(businessDate(now), 1);
+      return openingOnOrAfter(from, openingTime, closingTime, closures).at;
+    }
+  }
 }

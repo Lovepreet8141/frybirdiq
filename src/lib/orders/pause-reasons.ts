@@ -8,6 +8,8 @@
  * string. Pure: shared by the POS switch, Admin → Restaurant and the action.
  */
 
+import type { PauseMode } from "./opening-hours";
+
 export const PAUSE_REASON_PRESETS = ["Too busy", "Out of stock", "Equipment problem", "Staff shortage", "Other"] as const;
 export type PauseReasonPreset = (typeof PAUSE_REASON_PRESETS)[number];
 
@@ -29,6 +31,6 @@ export function noteProblem(note: string): string | null {
  * switch, the top-bar pill (same dialog) and Admin → Restaurant. One builder, so
  * a switch from any of them writes the same audit record.
  */
-export function pauseRequest(preset: PauseReasonPreset, note: string, mode: "UNTIL_NEXT_OPENING" | "UNTIL_RESUMED") {
-  return { preset, note, mode } as const;
+export function pauseRequest(preset: PauseReasonPreset, note: string, mode: PauseMode, untilDate?: string) {
+  return untilDate && mode === "UNTIL_DATE" ? ({ preset, note, mode, untilDate } as const) : ({ preset, note, mode } as const);
 }

@@ -15,6 +15,8 @@ export interface OrderingBannerCopy {
   readonly headline: string;
   /** The "when" line; null never happens for closed/paused today, but the type does not promise it. */
   readonly detail: string | null;
+  /** The owner's public note for a planned closure ("Closed for Diwali"), shown as plain text under the detail. Null when there is none. */
+  readonly note: string | null;
 }
 
 /** Null while open: nothing is rendered at all. */
@@ -23,12 +25,16 @@ export function orderingBanner(state: ShopOrderingState): OrderingBannerCopy | n
     case "open":
       return null;
     case "closedByHours":
-      return { kind: "closed", headline: "We're closed right now.", detail: `We open ${state.reopensAtLabel}.` };
+      // A whole closed day (weekly off day or planned closure) says so; the clock closing does not.
+      return state.dayOff
+        ? { kind: "closed", headline: "We're closed today.", detail: `We open again ${state.reopensAtLabel}.`, note: state.dayOff.note }
+        : { kind: "closed", headline: "We're closed right now.", detail: `We open ${state.reopensAtLabel}.`, note: null };
     case "paused":
       return {
         kind: "paused",
         headline: "We're not taking orders right now.",
         detail: state.reopensAtLabel ? `We open again ${state.reopensAtLabel}.` : "Please check back soon.",
+        note: null,
       };
   }
 }

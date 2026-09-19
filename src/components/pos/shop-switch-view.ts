@@ -15,6 +15,7 @@
 import { businessDate } from "@/lib/dates";
 import type { PauseMode } from "@/lib/orders/opening-hours";
 import { formatBusinessClock } from "@/lib/orders/opening-hours";
+import { PAUSE_MODE_OPTIONS, type RestartLabels, restartSentence } from "@/lib/orders/pause-duration";
 import type { StaffOrderingStatus } from "@/lib/repositories/shop-status";
 
 export const OPEN_TITLE = "Shop is OPEN for orders";
@@ -39,16 +40,16 @@ export function shopSwitchView(status: StaffOrderingStatus, now: Date): ShopSwit
   }
   if (status.state === "closedByHours") {
     // The switch is on; the hours are what is stopping orders right now.
-    return { open: true, title: OPEN_TITLE, detail: `Outside opening hours. Orders start ${status.reopensAtLabel}.`, reason: null };
+    const detail = status.dayOff
+      ? `Closed all day today${status.dayOff.note ? ` (${status.dayOff.note})` : ""}. Orders start ${status.reopensAtLabel}.`
+      : `Outside opening hours. Orders start ${status.reopensAtLabel}.`;
+    return { open: true, title: OPEN_TITLE, detail, reason: null };
   }
   return { open: true, title: OPEN_TITLE, detail: "Taking online orders.", reason: null };
 }
 
-/** The two choices when switching off, in the owner's words. The default comes first. */
-export const PAUSE_MODES: readonly { readonly mode: PauseMode; readonly label: string }[] = [
-  { mode: "UNTIL_NEXT_OPENING", label: "Until we next open" },
-  { mode: "UNTIL_RESUMED", label: "Until I switch it back on" },
-];
+/** The choices when switching off, in the owner's words. The default comes first. */
+export const PAUSE_MODES = PAUSE_MODE_OPTIONS;
 
 /**
  * What confirming would do, said before anyone presses it.
@@ -57,9 +58,8 @@ export const PAUSE_MODES: readonly { readonly mode: PauseMode; readonly label: s
  * opening, "until we next open" ends at 11:30 TODAY, so it says "today" in
  * words rather than leaving the cashier to assume "tomorrow".
  */
-export function pauseConfirmLines(mode: PauseMode, preview: { readonly nextOpeningLabel: string; readonly ordersStillDue: number }): readonly string[] {
-  const restart =
-    mode === "UNTIL_NEXT_OPENING" ? `Orders restart ${preview.nextOpeningLabel}.` : "Orders stay off until someone switches them back on.";
+export function pauseConfirmLines(mode: PauseMode, preview: RestartLabels & { readonly ordersStillDue: number }): readonly string[] {
+  const restart = restartSentence(mode, preview) ?? "Pick the date orders should restart.";
   const due =
     preview.ordersStillDue === 0
       ? "No orders are waiting."
