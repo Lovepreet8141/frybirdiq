@@ -171,11 +171,29 @@ export function useShopSwitch({
     setDialog("resume");
   }
 
+  // Armed CONFIRM_ARM_MS after the dialog opens, and again after any change to the pause underneath it
+  // (a failed resume that now shows a newer pause must not be one tap from lifting that one too).
+  const [armEpoch, setArmEpoch] = useState(0);
   useEffect(() => {
     if (dialog !== "resume") return;
     const timer = setTimeout(() => setResumeArmed(true), CONFIRM_ARM_MS);
     return () => clearTimeout(timer);
-  }, [dialog]);
+  }, [dialog, armEpoch]);
+  const openedSignature = useRef<string | null>(null);
+  useEffect(() => {
+    if (dialog !== "resume") {
+      openedSignature.current = null;
+      return;
+    }
+    const current = statusSignature(status);
+    if (openedSignature.current === null) openedSignature.current = current;
+    else if (openedSignature.current !== current) {
+      openedSignature.current = current;
+      resumeShownAt.current = Date.now();
+      setResumeArmed(false);
+      setArmEpoch((n) => n + 1);
+    }
+  }, [dialog, status]);
 
   function confirmResume() {
     if (status.state !== "paused") return;

@@ -87,7 +87,9 @@ export function pillDetail(
 
 /** A stable string that changes exactly when the state on screen should: used to re-sync from a fresh server render. */
 export function statusSignature(status: StaffOrderingStatus): string {
-  if (status.state === "paused") return `paused|${status.pausedAt.getTime()}|${status.reopensAt?.getTime() ?? "-"}|${status.ordersStillDue}`;
+  if (status.state === "paused") {
+    return `paused|${status.pausedAt.getTime()}|${status.reopensAt?.getTime() ?? "-"}|${status.ordersStillDue}|${status.pausedBy?.name ?? "-"}|${status.reason ?? "-"}`;
+  }
   if (status.state === "closedByHours") return `closed|${status.reopensAt.getTime()}|${status.ordersStillDue}`;
   return `open|${status.closesAt}|${status.ordersStillDue}`;
 }

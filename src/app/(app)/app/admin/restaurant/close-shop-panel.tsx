@@ -37,6 +37,7 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
   const [confirmingResume, setConfirmingResume] = useState(false);
   const [resumeArmed, setResumeArmed] = useState(false);
   const resumeShownAt = useRef<number | null>(null);
+  const [armEpoch, setArmEpoch] = useState(0);
   const [mode, setMode] = useState<PauseMode>("UNTIL_NEXT_OPENING");
   const [note, setNote] = useState("");
   const [message, setMessage] = useState<{ tone: "error" | "note"; text: string } | null>(null);
@@ -111,7 +112,7 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
     if (!confirmingResume) return;
     const timer = setTimeout(() => setResumeArmed(true), CONFIRM_ARM_MS);
     return () => clearTimeout(timer);
-  }, [confirmingResume]);
+  }, [confirmingResume, armEpoch]);
 
   function resume() {
     if (!(status.state === "paused")) return;
@@ -119,6 +120,13 @@ export function CloseShopPanel({ status, pausedSince }: CloseShopPanelProps) {
     const shownPausedAt = status.pausedAt.toISOString();
     run(async () => {
       const result = await resumeOrderingAction({ shownPausedAt });
+      if (!result.ok) {
+        // The screen now shows a different pause than the one it asked to lift: arm the confirm afresh, so a tap
+        // that was meant for the old one cannot lift the new one.
+        resumeShownAt.current = Date.now();
+        setResumeArmed(false);
+        setArmEpoch((n) => n + 1);
+      }
       if (!result.ok && result.code === "PAUSE_CHANGED") return { ...result, error: `${result.error} The pause now in force is shown above.` };
       return result;
     }, () => setConfirmingResume(false));

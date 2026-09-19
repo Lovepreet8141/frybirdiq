@@ -80,6 +80,9 @@ describe("statusSignature", () => {
     expect(statusSignature(open)).toBe(statusSignature({ ...open }));
     expect(statusSignature(open)).not.toBe(statusSignature(offManual));
     expect(statusSignature(offTimed)).not.toBe(statusSignature({ ...offTimed, pausedAt: new Date("2026-09-19T14:13:00Z") }));
+    // who and why count too: a re-render that changes only the reason must re-sync the screen
+    expect(statusSignature(offTimed)).not.toBe(statusSignature({ ...offTimed, reason: "Other" }));
+    expect(statusSignature(offTimed)).not.toBe(statusSignature({ ...offTimed, pausedBy: { userId: "u", name: "Ravi" } }));
   });
 });
 

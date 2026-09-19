@@ -15,7 +15,10 @@ import type { NextConfig } from "next";
 function buildId(): string {
   let source = "dev";
   try {
-    source = execSync("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim() || source;
+    const git = (args: string) => execSync(`git ${args}`, { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 }).toString();
+    // The commit AND anything uncommitted: deploy.sh ships the working tree, so a
+    // rebuild of the same commit with edits must not look like the same build.
+    source = `${git("rev-parse HEAD").trim()}|${createHash("sha256").update(git("diff HEAD")).update(git("status --porcelain")).digest("hex")}`;
   } catch {
     // No git (an unpacked tarball): every build then shares "dev" and the check stays quiet.
   }

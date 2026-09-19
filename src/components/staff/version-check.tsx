@@ -17,8 +17,12 @@ const RELOADED_KEY = "frybird:version-check:auto-reloaded-at";
 function busyNow(): boolean {
   if (typeof document === "undefined") return false;
   if (document.querySelector(BUSY_SELECTOR)) return true;
-  const active = document.activeElement;
-  if ((active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) && active.value !== "") return true;
+  // Any filled-in text field, focused or not: an Admin form left half-edited must not be reloaded away.
+  // Conservative on purpose: a search box with text also blocks the automatic reload (the tap still works).
+  for (const field of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("textarea, input")) {
+    if (field instanceof HTMLInputElement && ["hidden", "checkbox", "radio", "button", "submit", "reset", "file", "range", "color"].includes(field.type)) continue;
+    if (field.value !== "") return true;
+  }
   return false;
 }
 
