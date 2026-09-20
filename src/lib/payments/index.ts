@@ -9,17 +9,20 @@
 
 import { CASH_PROVIDER, cashProvider } from "./cash";
 import type { PaymentMethod, PaymentProvider } from "./provider";
+import { PAYTM_PROVIDER, isPaytmConfigured, paytmProvider } from "./paytm";
 import { RAZORPAY_PROVIDER, isRazorpayConfigured, razorpayProvider } from "./razorpay";
 
 const PROVIDERS: Readonly<Record<string, PaymentProvider>> = {
   [CASH_PROVIDER]: cashProvider,
   [RAZORPAY_PROVIDER]: razorpayProvider,
+  [PAYTM_PROVIDER]: paytmProvider,
 };
 
 export function getProvider(name: string): PaymentProvider {
   const provider = PROVIDERS[name];
   if (!provider) throw new Error(`payments: no provider named "${name}"`);
   if (name === RAZORPAY_PROVIDER && !isRazorpayConfigured()) throw new Error("payments: razorpay is not configured");
+  if (name === PAYTM_PROVIDER && !isPaytmConfigured()) throw new Error("payments: paytm is not configured");
   return provider;
 }
 
