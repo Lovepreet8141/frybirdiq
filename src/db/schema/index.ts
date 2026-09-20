@@ -23,3 +23,4 @@ export * from "./closures";
 export * from "./cash";
 export * from "./kitchen";
 export * from "./shifts";
+export * from "./notifications";
