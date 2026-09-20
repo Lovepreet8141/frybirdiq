@@ -32,12 +32,15 @@ import "server-only";
  * machine, whatever org they run for).
  */
 
-import { and, eq, gt, gte, inArray, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, like, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { iqDailyTrust, iqJobRuns, orders, organizations } from "@/db/schema";
 import { addDays } from "@/lib/dates";
 import type { BriefFiguresRead, BriefPeriods } from "@/lib/iq/brief/brief-job";
+import type { CheckRun } from "@/lib/iq/brief/compose";
+import type { CheckName } from "@/lib/iq/brief/templates";
 import { detectDayFrom, type DayFacts, type DayTrustRow } from "@/lib/iq/detect/day";
+import { DETECT_JOB_NAME } from "@/lib/iq/detect/detect-job";
 import { pulseDayFrom, type OpeningHours, type PulseDay } from "@/lib/iq/detect/pulse";
 import type { DetectDay } from "@/lib/iq/detect/rules";
 import type { Observed } from "@/lib/iq/engine";
@@ -55,7 +58,7 @@ import { DayLockBusy, DayTimeout, type FactsParity, type JobReadRepos, type JobW
 import { saleSetWhere } from "./analytics";
 import { getProfitAndLoss } from "./expenses";
 import { countStuckRefundFollowUps, healLostRefundFollowUps } from "./payments";
-import { DayLockBusyError, DayTimeoutError, purgeIntradayFacts, readDailyFacts, readIntradayFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
+import { DayLockBusyError, DayTimeoutError, assertBusinessDate, purgeIntradayFacts, readDailyFacts, readIntradayFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
 import { expireInsights, getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
 import { readRecon } from "./iq-recon";
 import { TRUST_DEFINITION_VERSION, computeTrustDay } from "./iq-trust";
@@ -607,4 +610,76 @@ class PostgresJobRunStore implements JobRunStore<JobWriteRepos> {
       eq(iqJobRuns.leaseOwner, expected.leaseOwner),
     )!;
   }
+}
+
+/* ── The daily brief's D-1 run state (IQ-2 R2.10, S10a) ─────────────────── */
+
+/**
+ * The job that runs each check the brief names. Reconcile and signatures are
+ * not in the registry yet (their bodies are FINANCE-LEDGER's S4 and
+ * PAYMENT-SAFETY's S5): until they are, no run row exists for them and the
+ * brief reads NOT_RUN, which is what actually happened — it never all-clears
+ * a check that did not run.
+ */
+export const BRIEF_CHECK_JOBS: Readonly<Record<CheckName, string>> = {
+  detect: DETECT_JOB_NAME,
+  reconcile: "iq-reconcile-nightly",
+  signatures: "iq-money-signatures",
+};
+
+export type BriefRunState = {
+  /** How each check ended for the date. */
+  readonly checks: Readonly<Record<CheckName, CheckRun>>;
+  /** iq-facts-nightly's summary for the date, for `parityFromSummary`; null unless a run SUCCEEDED. */
+  readonly factsSummary: Readonly<Record<string, number>> | null;
+  /** iq-detect-daily's summary for the date (its `not_evaluated:<rule>:<reason>` counts); null unless a run SUCCEEDED. */
+  readonly detectSummary: Readonly<Record<string, number>> | null;
+};
+
+/**
+ * How the day's checks ran, for one org and one IST business day.
+ *
+ * A day job's period key is the date; an hourly job's is `<date>T<hour>`, so
+ * both are matched and an hourly check folds over its rows. It fails closed:
+ * any FAILED row makes the check FAILED, any row that is neither SUCCEEDED
+ * nor FAILED (RUNNING, SKIPPED) reads NOT_RUN, and no row at all is NOT_RUN.
+ * Missing hours are not counted as runs — an hourly check that ran only part
+ * of the day still reads SUCCEEDED, so the brief's "no risks found" rests on
+ * the rows that exist. Tightening that needs a per-hour expectation the
+ * registry does not state yet.
+ *
+ * A summary comes only from a SUCCEEDED run: a failed run's counts are
+ * partial, and the brief must read a missing parity summary as "not checked"
+ * rather than as zero mismatches (R2.6).
+ */
+export async function readBriefRunState(orgId: string, date: string): Promise<BriefRunState> {
+  // `_` is a single-character wildcard in LIKE: an unchecked date would match
+  // another day's hourly period keys and report that day's checks as this day's.
+  assertBusinessDate(date);
+  const jobs = [...Object.values(BRIEF_CHECK_JOBS), FACTS_NIGHTLY_JOB];
+  const rows = await db()
+    .select({ job: iqJobRuns.job, status: iqJobRuns.status, periodKey: iqJobRuns.periodKey, summary: iqJobRuns.summary })
+    .from(iqJobRuns)
+    .where(
+      and(
+        eq(iqJobRuns.orgId, orgId),
+        inArray(iqJobRuns.job, jobs),
+        or(eq(iqJobRuns.periodKey, date), like(iqJobRuns.periodKey, `${date}T%`)),
+      ),
+    );
+
+  const stateOf = (job: string): CheckRun => {
+    const mine = rows.filter((row) => row.job === job);
+    if (mine.length === 0) return "NOT_RUN";
+    if (mine.some((row) => row.status === "FAILED")) return "FAILED";
+    return mine.every((row) => row.status === "SUCCEEDED") ? "SUCCEEDED" : "NOT_RUN";
+  };
+  const summaryOf = (job: string): Readonly<Record<string, number>> | null =>
+    rows.find((row) => row.job === job && row.periodKey === date && row.status === "SUCCEEDED")?.summary ?? null;
+
+  return {
+    checks: { detect: stateOf(BRIEF_CHECK_JOBS.detect), reconcile: stateOf(BRIEF_CHECK_JOBS.reconcile), signatures: stateOf(BRIEF_CHECK_JOBS.signatures) },
+    factsSummary: summaryOf(FACTS_NIGHTLY_JOB),
+    detectSummary: summaryOf(BRIEF_CHECK_JOBS.detect),
+  };
 }
