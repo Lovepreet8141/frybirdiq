@@ -10,7 +10,7 @@ import { db } from "@/db";
 import { auditLogs, memberships, orderEvents, orders, payments } from "@/db/schema";
 import { fromRupees } from "@/lib/money";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
-import { completeDelivery, listDeliveries } from "./orders";
+import { advanceOrder, completeDelivery, listDeliveries } from "./orders";
 import { assignRider, failDelivery, listAssignableRiders } from "./rider-assignment";
 
 let org: TestOrg;
@@ -220,5 +220,37 @@ describe("a delivery that cannot be made", () => {
     await fail(id, riderA, ["RIDER"], "Customer not answering");
     expect(await fail(id, riderA, ["RIDER"], "Customer not answering")).toMatchObject({ ok: false });
     expect(await audit("delivery_failed")).toHaveLength(1);
+  });
+
+  it("advanceOrder itself refuses FAILED once money is taken (captured, partially refunded or refunded), whoever asks", async () => {
+    for (const status of ["CAPTURED", "PARTIALLY_REFUNDED", "REFUNDED"] as const) {
+      const id = await delivery(org, "OUT_FOR_DELIVERY", riderA);
+      await db().insert(payments).values({ orgId: org.orgId, orderId: id, status, method: "UPI", amount: fromRupees("300"), provider: "razorpay" });
+      expect(await advanceOrder({ orderId: id, to: "FAILED", actorUserId: manager, orgId: org.orgId, reason: "test" }), status).toMatchObject({ ok: false });
+      expect((await row(id)).status, status).toBe("OUT_FOR_DELIVERY");
+    }
+  });
+
+  it("a payment that lands while the failure waits on the order lock is seen: the order does not end FAILED with money on it", async () => {
+    const id = await delivery(org, "OUT_FOR_DELIVERY", riderA);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const holding = new Promise<void>((resolve) => (locked = resolve));
+    // The counter, mid-settlement: holds the order lock, records the cash, commits.
+    const settling = db().transaction(async (tx) => {
+      await tx.select().from(orders).where(eq(orders.id, id)).for("update");
+      locked();
+      await held;
+      await tx.insert(payments).values({ orgId: org.orgId, orderId: id, status: "CAPTURED", method: "CASH", amount: fromRupees("300"), provider: "cash", collectedBy: cashier });
+    });
+    await holding;
+    const failing = fail(id, riderA, ["RIDER"], "Customer not answering the phone");
+    await new Promise((resolve) => setTimeout(resolve, 400)); // the fail has passed its unlocked read and is waiting on the lock
+    release();
+    await settling;
+    expect(await failing).toMatchObject({ ok: false });
+    expect((await row(id)).status).toBe("OUT_FOR_DELIVERY");
+    expect(await audit("delivery_failed")).toHaveLength(0);
   });
 });

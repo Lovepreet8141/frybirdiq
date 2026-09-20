@@ -1479,6 +1479,25 @@ export async function advanceOrder(input: {
       }
     }
 
+    /*
+     * Nor is an order that has taken money ever failed (rider assignment 6.3).
+     *
+     * A delivery that could not be made is FAILED and terminal. If cash or an
+     * online payment landed while the failure waited on this lock, failing the
+     * order would drop it out of revenue while the money stays captured (the same
+     * problem the cancellation guard above closes). Read under the row lock, so a
+     * payment recorded meanwhile is seen. Money that came back is refunded, not failed.
+     */
+    if (input.to === "FAILED") {
+      const moneyTaken = await tx
+        .select({ status: payments.status })
+        .from(payments)
+        .where(and(eq(payments.orderId, order.id), eq(payments.orgId, input.orgId), inArray(payments.status, ["CAPTURED", "PARTIALLY_REFUNDED", "REFUNDED"])));
+      if (moneyTaken.length > 0) {
+        return { ok: false, error: "This order has taken payment. It needs a refund rather than a failed delivery." };
+      }
+    }
+
     try {
       assertTransition(order.status, input.to, order.fulfilment);
     } catch {

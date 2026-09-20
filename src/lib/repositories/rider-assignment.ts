@@ -11,7 +11,7 @@ import "server-only";
  * is not authorization. Every query is scoped by org_id; every write is audited.
  */
 
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, memberships, orders, payments } from "@/db/schema";
 import { isTerminal, type OrderStatus } from "@/domain/order-status";
@@ -92,7 +92,8 @@ export type FailDeliveryResult = { readonly ok: true } | { readonly ok: false; r
  *
  * An order that has already taken money is refused: a paid order that failed
  * needs a refund, which is a manager's decision with its own trail, not a side
- * effect of a rider's tap. The food is already consumed from stock at ACCEPTED
+ * effect of a rider's tap. The read here is only for a friendly message; the
+ * guard that cannot be raced is inside `advanceOrder`, under the order's lock. The food is already consumed from stock at ACCEPTED
  * and stays consumed (it was cooked): nothing to reverse here.
  */
 export async function failDelivery(input: {
@@ -122,7 +123,7 @@ export async function failDelivery(input: {
   const [captured] = await db()
     .select({ id: payments.id })
     .from(payments)
-    .where(and(eq(payments.orderId, order.id), eq(payments.orgId, input.orgId), eq(payments.status, "CAPTURED")))
+    .where(and(eq(payments.orderId, order.id), eq(payments.orgId, input.orgId), inArray(payments.status, ["CAPTURED", "PARTIALLY_REFUNDED", "REFUNDED"])))
     .limit(1);
   if (captured) return { ok: false, code: "ALREADY_PAID", error: "This order is already paid. Ask a manager to refund it." };
 

@@ -3,6 +3,8 @@ import type { StaffOrder } from "@/components/staff/order-card";
 import { LiveRefresh } from "@/components/staff/live-refresh";
 import { listAssignableRiders } from "@/lib/repositories/rider-assignment";
 import { OrdersBoard } from "@/components/staff/orders-board";
+import { PermissionDenied } from "@/components/states";
+import { mayOpenOrdersBoard } from "@/domain/permissions";
 import { requireStaff, staffCan } from "@/lib/auth";
 import { listActiveOrders } from "@/lib/repositories/orders";
 
@@ -19,6 +21,15 @@ async function snapshot(orgId: string) {
 
 export default async function StaffOrdersPage({ searchParams }: { searchParams: Promise<{ open?: string }> }) {
   const staff = await requireStaff();
+  // The board lists every open order with customer phones and delivery addresses: the counter and the kitchen only.
+  // A rider has their own scoped Deliveries page. Checked BEFORE any order is read.
+  if (!mayOpenOrdersBoard(staff.roles)) {
+    return (
+      <div className="mx-auto w-full max-w-lg px-[var(--gutter)] py-16">
+        <PermissionDenied action="view the orders board" />
+      </div>
+    );
+  }
   const [{ open }, { orders, nowMs }, canSettle, canAdvance, canPrintKot, canSeeCustomers, canAssign] = await Promise.all([
     searchParams,
     snapshot(staff.orgId),

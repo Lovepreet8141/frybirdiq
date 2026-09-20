@@ -269,6 +269,18 @@ export function seesOnlyOwnDeliveries(roles: readonly Role[]): boolean {
   return !can(roles, "orders.update");
 }
 
+/**
+ * Who may open the orders board (/app/orders). It lists every open order with
+ * customer names, phones and delivery addresses, so it is for the counter and the
+ * kitchen (`orders.view` or `kitchen.view`), not for a rider, who has their own
+ * scoped Deliveries page. The page used to require only a signed-in staff member,
+ * so a rider who typed the address saw every delivery in the shop (found in the
+ * rider-assignment review).
+ */
+export function mayOpenOrdersBoard(roles: readonly Role[]): boolean {
+  return can(roles, "orders.view") || can(roles, "kitchen.view");
+}
+
 export class Forbidden extends Error {
   constructor(readonly permission: Permission) {
     super(`forbidden: this account cannot ${permission}`);

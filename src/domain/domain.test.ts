@@ -1,4 +1,4 @@
-import { seesOnlyOwnDeliveries } from "./permissions";
+import { mayOpenOrdersBoard, seesOnlyOwnDeliveries } from "./permissions";
 import { describe, expect, it } from "vitest";
 import {
   InvalidOrderTransition,
@@ -440,5 +440,11 @@ describe("rider assignment (roadmap 6.3)", () => {
     for (const role of ["OWNER", "ADMIN", "MANAGER", "CASHIER"] as const) expect(seesOnlyOwnDeliveries([role]), role).toBe(false);
     // holding a rider role does not narrow someone who also works the counter
     expect(seesOnlyOwnDeliveries(["RIDER", "CASHIER"])).toBe(false);
+  });
+
+  it("the orders board is for the counter and the kitchen: a rider (and inventory) cannot open it", () => {
+    for (const role of ["OWNER", "ADMIN", "MANAGER", "CASHIER", "KITCHEN", "ANALYST"] as const) expect(mayOpenOrdersBoard([role]), role).toBe(true);
+    for (const role of ["RIDER", "INVENTORY"] as const) expect(mayOpenOrdersBoard([role]), role).toBe(false);
+    expect(mayOpenOrdersBoard(["RIDER", "CASHIER"])).toBe(true);
   });
 });
