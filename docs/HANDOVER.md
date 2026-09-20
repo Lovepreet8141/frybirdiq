@@ -476,3 +476,13 @@ State now: Release 5 live (`eddba18`, migration 0040, Tuesday marked). Working t
 - **Owner decisions needed (in the go/no-go):** install the four timers now or after alerting; accept silent failures until then; run the one-time history fill by hand.
 - **Order now:** go/no-go for card 1b (waiting on the owner), then card 2 (pay-ready, gated), then section 17.
 
+
+## 24. Owner rule change (2026-09-20, evening): deploys no longer wait for closing time, they wait for a quiet shop
+The shop is not using the POS at the counter right now. **Before any deploy, do a read-only check on production** (ssh, `PGOPTIONS='-c default_transaction_read_only=on'`, `orders` table):
+1. **No order in progress:** nothing created in the last 3 hours whose status is not COMPLETED, CANCELLED, FAILED or REFUNDED.
+2. **No website order in the last 60 minutes:** `channel = 'ONLINE'`, `created_at` within 60 minutes.
+If both are clear, deploy now. If not, wait (re-check; at the latest the shop closes at 23:00 IST, closed all day Tuesday). This replaces "deploy only while the shop is closed"; every other gate (go/no-go, fresh dump, fail-fast, smoke, zero journal errors) is unchanged.
+- **IQ-2 approved by the owner** under this check: fresh dump first, every step fail-fast, install all four timers plus the alerting unit files (no `ALERT_URL` exists: the owner has not given one, so alerts stay unconfigured and show in `systemctl --failed`), run the one-time history fill, report parity of the brief against the P&L page.
+- **Release order (owner):** one gated release at a time; each starts only after a clean report of the one before and at least 30 minutes of clean journal in between. After a clean IQ-2 report: Razorpay readiness go/no-go, then the till.
+- **Payments direction:** Paytm Business API later. Ship Razorpay readiness anyway (tests, webhook hardening, permission-gate test, order-page fixes protect any provider). No Razorpay keys. **New card after the till: "Paytm provider"** behind `PaymentProvider` (create payment, verify callback/webhook signature, refund, status check), recorded fixtures and mocks only, no account/keys/real calls; read Paytm's official API docs first and list what the owner must obtain (merchant ID, keys, webhook URL, settlement details); gated like all payment code.
+- **Pre-deploy check at 21:25 IST on 2026-09-20:** 1 order in progress, 2 website orders in the last hour: not clear, waiting.
