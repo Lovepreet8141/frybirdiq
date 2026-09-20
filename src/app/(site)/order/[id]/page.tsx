@@ -6,13 +6,14 @@ import { Check, Circle, Clock, FileText, Flame, Gift } from "lucide-react";
 import { formatINR } from "@/lib/money";
 import { type Paise, paise } from "@/lib/money";
 import { getOrder } from "@/lib/repositories/orders";
-import { getStoreContact } from "@/lib/repositories/org";
+import { getOrg, getStoreContact } from "@/lib/repositories/org";
 import { shopPhone } from "@/lib/contact/phone";
 import { CallShop } from "@/components/site/call-shop";
 import { getRating } from "@/lib/ratings";
 import { getCustomer } from "@/lib/customer";
 import { getCustomerOrderingStatus } from "@/lib/cart/ordering-status";
 import { orderingControls } from "@/lib/cart/ordering-banner";
+import { pendingPaymentNotice } from "@/lib/cart/pending-payment-copy";
 import { readRememberedContact } from "@/lib/cart/remembered-contact";
 import { OrderRating } from "@/components/order/rating";
 import { PayOnline } from "@/components/order/pay-online";
@@ -86,6 +87,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   // NEW orders are refused while paused, by the gate in placeOrder.
   // Tracking itself works as normal. Read through getOrderingStatus only (ops-1 RULE 1).
   const paused = !orderingControls(await getCustomerOrderingStatus()).canOrder;
+  const org = await getOrg();
   const isOwner = viewerOwnsOrder(order, customer, remembered);
   const greetedName = greetingName(order.customerName, isOwner);
 
@@ -170,10 +172,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
       )}
       {awaitingOnline && !paused && !canPayOnline && (
         <p role="alert" className="mt-6 rounded-lg border border-border bg-surface px-4 py-3 text-sm">
-          Online payment isn&rsquo;t available right now.{" "}
-          {isDelivery
-            ? "The shop can take payment when your order is delivered."
-            : "The shop can take payment when you collect your order."}
+          {pendingPaymentNotice({ cashEnabled: org?.cashEnabled ?? false, isDelivery })}
           {phone && (
             <span className="mt-1 block">
               <CallShop phone={phone} lead="Questions? Call" />
