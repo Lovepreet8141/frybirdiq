@@ -486,3 +486,10 @@ If both are clear, deploy now. If not, wait (re-check; at the latest the shop cl
 - **Release order (owner):** one gated release at a time; each starts only after a clean report of the one before and at least 30 minutes of clean journal in between. After a clean IQ-2 report: Razorpay readiness go/no-go, then the till.
 - **Payments direction:** Paytm Business API later. Ship Razorpay readiness anyway (tests, webhook hardening, permission-gate test, order-page fixes protect any provider). No Razorpay keys. **New card after the till: "Paytm provider"** behind `PaymentProvider` (create payment, verify callback/webhook signature, refund, status check), recorded fixtures and mocks only, no account/keys/real calls; read Paytm's official API docs first and list what the owner must obtain (merchant ID, keys, webhook URL, settlement details); gated like all payment code.
 - **Pre-deploy check at 21:25 IST on 2026-09-20:** 1 order in progress, 2 website orders in the last hour: not clear, waiting.
+
+## 22. Queue state (2026-09-20, before card 3)
+
+- **Live:** Release 5 (`eddba18`, day off, migration 0040) and Release 6 (`e4d791b`, IQ readiness). `kit-radix-nova` `089e776` (+ this note).
+- **Waiting on the owner (go/no-go):** card 1b (`release/rc-20-iq2` `3de03a0`: IQ-2 daily brief page + four nightly timers; needs the decisions in section 20) and card 2 (`release/rc-21-pay-ready` `5d4ca97`: Razorpay readiness, no keys; see section 21). Neither is deployed.
+- **Starting now:** card 3, cash sessions 5.1 -> rider cash handover 5.2 -> reconciliation view 5.3 (GATED: money + migration expected).
+
