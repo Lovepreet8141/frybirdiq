@@ -37,3 +37,26 @@ export const kitchenLineStatus = pgTable(
     check("kitchen_line_status_station_check", sql`${table.station} IN ('FRY', 'ASSEMBLY', 'DRINKS', 'PACK', 'UNASSIGNED')`),
   ],
 );
+
+/**
+ * The PACK step (roadmap 4.2). Migration: PENDING_pack.
+ *
+ * One row per TAKEAWAY or DELIVERY order once it has been packed. Presence
+ * means packed; deleting the row is "undo".
+ */
+export const kitchenOrderPack = pgTable(
+  "kitchen_order_pack",
+  {
+    id: primaryId(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    /** Auth user id. Loose, like `done_by`. */
+    packedBy: uuid("packed_by"),
+    packedAt: timestamp("packed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("kitchen_order_pack_order_idx").on(table.orderId), index("kitchen_order_pack_org_idx").on(table.orgId)],
+);

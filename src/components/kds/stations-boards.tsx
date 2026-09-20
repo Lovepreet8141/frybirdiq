@@ -4,8 +4,8 @@ import { useState, useTransition } from "react";
 import { AlarmClock, Check, Loader2, Undo2 } from "lucide-react";
 import { ReloadAppButton } from "@/components/reload-app-button";
 import { EmptyState, ErrorState, OfflineState } from "@/components/states";
-import { markOrderReadyAction, setLineDoneAction } from "@/lib/kitchen/stations-action";
-import { type ExpoOrder, STATION_LABEL, type Station, type StationLine, type StationOrder, UNASSIGNED, expoView, stationBoard } from "@/lib/kitchen/stations";
+import { markOrderReadyAction, setLineDoneAction, setOrderPackedAction } from "@/lib/kitchen/stations-action";
+import { type ExpoOrder, type LineStation, type PackState, STATION_LABEL, type StationLine, type StationOrder, expoView, packBoard, stationBoard } from "@/lib/kitchen/stations";
 import { prepHealth, waitingMinutes } from "@/lib/kitchen/tickets";
 import { cn } from "@/lib/utils";
 import { useStationOrders } from "./use-station-orders";
@@ -72,7 +72,7 @@ function OrderHeader({ order, now }: { order: StationOrder; now: number }) {
 
 const cardBorder = (health: string) => (health === "RED" ? "border-loss" : health === "AMBER" ? "border-flag" : "border-border");
 
-function LineRow({ line, station, canUpdate, onChanged, onError }: { line: StationLine; station?: Station; canUpdate: boolean; onChanged: () => Promise<void>; onError: (message: string | null) => void }) {
+function LineRow({ line, station, canUpdate, onChanged, onError }: { line: StationLine; station?: LineStation; canUpdate: boolean; onChanged: () => Promise<void>; onError: (message: string | null) => void }) {
   const [pending, startTransition] = useTransition();
   const toggle = () => {
     onError(null);
@@ -107,7 +107,7 @@ function LineRow({ line, station, canUpdate, onChanged, onError }: { line: Stati
 }
 
 /** One station's screen: only its own lines, marked done one at a time. */
-export function StationBoard({ station, initial, canUpdate, orgId }: { station: Station; initial: readonly StationOrder[]; canUpdate: boolean; orgId: string }) {
+export function StationBoard({ station, initial, canUpdate, orgId }: { station: LineStation; initial: readonly StationOrder[]; canUpdate: boolean; orgId: string }) {
   const state = useStationOrders(initial, orgId);
   const [lineError, setLineError] = useState<string | null>(null);
   const board = stationBoard(state.orders, station);
@@ -144,6 +144,18 @@ export function StationBoard({ station, initial, canUpdate, orgId }: { station: 
   );
 }
 
+const PACK_TEXT: Record<PackState, string> = { WAITING: "Pack: waiting", READY_TO_PACK: "Pack: ready to pack", PACKED: "Pack: packed" };
+
+function PackChip({ state }: { state: PackState }) {
+  const packed = state === "PACKED";
+  return (
+    <li className={cn("flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm font-semibold", packed ? "border-gain/40 bg-gain-soft text-gain" : state === "READY_TO_PACK" ? "border-flag/40 bg-flag-soft text-flag" : "border-border")}>
+      {packed && <Check className="size-3.5" aria-hidden="true" />}
+      {PACK_TEXT[state]}
+    </li>
+  );
+}
+
 function ExpoCard({ order, now, canUpdate, onChanged }: { order: ExpoOrder; now: number; canUpdate: boolean; onChanged: () => Promise<void> }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -158,7 +170,6 @@ function ExpoCard({ order, now, canUpdate, onChanged }: { order: ExpoOrder; now:
       await onChanged();
     });
   };
-  const unassigned = order.lines.filter((line) => line.station === UNASSIGNED);
 
   return (
     <article aria-label={`Order ${order.orderNumber}`} className={cn("flex flex-col gap-3 rounded-xl border-2 bg-panel p-4", cardBorder(prepHealth(order, now)))}>
@@ -177,20 +188,8 @@ function ExpoCard({ order, now, canUpdate, onChanged }: { order: ExpoOrder; now:
             </li>
           );
         })}
+        {order.pack !== null && <PackChip state={order.pack} />}
       </ul>
-
-      {unassigned.length > 0 && (
-        <div className="flex flex-col gap-2 rounded-md border border-flag/40 bg-flag-soft p-3">
-          <p className="text-sm font-semibold text-flag">
-            {unassigned.length} {unassigned.length === 1 ? "line has" : "lines have"} no station. Set one on the product; mark {unassigned.length === 1 ? "it" : "them"} here meanwhile.
-          </p>
-          <ul className="flex flex-col gap-2">
-            {unassigned.map((line) => (
-              <LineRow key={line.id} line={line} canUpdate={canUpdate} onChanged={onChanged} onError={setError} />
-            ))}
-          </ul>
-        </div>
-      )}
 
       {order.notes && <p className="rounded-md bg-warning/15 px-3 py-2 text-base font-semibold">{order.notes}</p>}
       {error && (
@@ -205,10 +204,10 @@ function ExpoCard({ order, now, canUpdate, onChanged }: { order: ExpoOrder; now:
           disabled={pending || !order.readyToBump}
           className="flex min-h-[64px] w-full items-center justify-center gap-2 rounded-md bg-primary px-5 text-lg font-bold text-primary-foreground disabled:opacity-50"
         >
-          {pending ? <Loader2 className="size-5 animate-spin" aria-hidden="true" /> : order.readyToBump ? "Mark ready" : "Waiting for stations"}
+          {pending ? <Loader2 className="size-5 animate-spin" aria-hidden="true" /> : order.readyToBump ? "Mark ready" : order.pack === "READY_TO_PACK" ? "Waiting for pack" : "Waiting for stations"}
         </button>
       ) : (
-        <p className="text-center text-sm font-semibold text-muted-foreground">{order.readyToBump ? "Every station is done" : "Waiting for stations"}</p>
+        <p className="text-center text-sm font-semibold text-muted-foreground">{order.readyToBump ? "Every station is done" : order.pack === "READY_TO_PACK" ? "Waiting for pack" : "Waiting for stations"}</p>
       )}
     </article>
   );
@@ -231,6 +230,69 @@ export function ExpoBoard({ initial, canUpdate, orgId }: { initial: readonly Sta
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {board.map((order) => (
             <ExpoCard key={order.id} order={order} now={state.now} canUpdate={canUpdate} onChanged={state.refresh} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PackCard({ order, now, canUpdate, onChanged }: { order: StationOrder; now: number; canUpdate: boolean; onChanged: () => Promise<void> }) {
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const pack = () => {
+    setError(null);
+    startTransition(async () => {
+      const result = await setOrderPackedAction({ orderId: order.id, packed: true });
+      if (!result.ok) {
+        setError(result.error ?? "That didn't work.");
+        return;
+      }
+      await onChanged();
+    });
+  };
+  return (
+    <article aria-label={`Order ${order.orderNumber}`} className={cn("flex flex-col gap-3 rounded-xl border-2 bg-panel p-4", cardBorder(prepHealth(order, now)))}>
+      <OrderHeader order={order} now={now} />
+      <ul className="flex flex-col gap-1.5 border-t border-border pt-3">
+        {order.lines.map((line) => (
+          <li key={line.id} className="text-lg leading-snug">
+            <span className="tabular font-bold">{line.quantity}×</span> <span className="font-semibold">{line.name}</span>
+            {line.modifiers.length > 0 && <span className="block pl-7 text-base text-muted-foreground">{line.modifiers.join(", ")}</span>}
+          </li>
+        ))}
+      </ul>
+      {order.notes && <p className="rounded-md bg-warning/15 px-3 py-2 text-base font-semibold">{order.notes}</p>}
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      {canUpdate && (
+        <button type="button" onClick={pack} disabled={pending} className="flex min-h-[64px] w-full items-center justify-center gap-2 rounded-md bg-primary px-5 text-lg font-bold text-primary-foreground disabled:opacity-50">
+          {pending ? <Loader2 className="size-5 animate-spin" aria-hidden="true" /> : "Packed"}
+        </button>
+      )}
+    </article>
+  );
+}
+
+/** PACK: takeaway and delivery orders whose every line is done and that are not yet packed. Dine-in never appears. */
+export function PackBoard({ initial, canUpdate, orgId }: { initial: readonly StationOrder[]; canUpdate: boolean; orgId: string }) {
+  const state = useStationOrders(initial, orgId);
+  const board = packBoard(state.orders);
+  return (
+    <div className="flex flex-col gap-3 p-3">
+      <Banners state={state} />
+      <h1 className="font-heading text-xl font-bold">
+        {STATION_LABEL.PACK} <span className="tabular text-base font-semibold text-muted-foreground">{board.length}</span>
+      </h1>
+      {board.length === 0 ? (
+        <EmptyState title="Nothing to pack right now" detail="Takeaway and delivery orders appear here once every station has finished its lines." />
+      ) : (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {board.map((order) => (
+            <PackCard key={order.id} order={order} now={state.now} canUpdate={canUpdate} onChanged={state.refresh} />
           ))}
         </div>
       )}
