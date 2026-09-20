@@ -5,7 +5,10 @@ import {
   PAYTM_NOT_VERIFIED_MESSAGE,
   PAYTM_PROVIDER,
   PAYTM_SANDBOX_VERIFIED,
-  paytmEnvAllowed,
+  paytmGate,
+  rawBodyOf,
+  REFUND_LOOKUP_LAG_MS,
+  PAYTM_STAGING_REFUSED_MESSAGE,
   paytmUnavailableReason,
   callbackChecksumMessage,
   classifyPaytmRefund,
@@ -119,11 +122,40 @@ describe("sandbox verification gate", () => {
     expect(PAYTM_SANDBOX_VERIFIED).toBe(false);
   });
 
-  it("allows staging always and production only once verified (all four combinations)", () => {
-    expect(paytmEnvAllowed("staging", false)).toBe(true);
-    expect(paytmEnvAllowed("staging", true)).toBe(true);
-    expect(paytmEnvAllowed("production", false)).toBe(false);
-    expect(paytmEnvAllowed("production", true)).toBe(true);
+  it("decides every combination of env x deployment x verified x opt-in", () => {
+    for (const env of ["staging", "production"] as const)
+      for (const productionDeployment of [false, true])
+        for (const sandboxVerified of [false, true])
+          for (const allowStaging of [false, true]) {
+            const r = paytmGate({ env, productionDeployment, sandboxVerified, allowStaging });
+            // Production credentials need the proof, whatever else is set.
+            // Staging credentials are refused on the live deployment unless explicitly opted in.
+            const expected = env === "production" ? sandboxVerified : !productionDeployment || allowStaging;
+            expect(r.allowed, JSON.stringify({ env, productionDeployment, sandboxVerified, allowStaging })).toBe(expected);
+            if (!r.allowed) expect(r.reason).toBe(env === "production" ? PAYTM_NOT_VERIFIED_MESSAGE : PAYTM_STAGING_REFUSED_MESSAGE);
+          }
+  });
+
+  it("says why staging is refused on the production deployment", () => {
+    const r = paytmGate({ env: "staging", productionDeployment: true, sandboxVerified: false, allowStaging: false });
+    expect(r).toEqual({ allowed: false, reason: PAYTM_STAGING_REFUSED_MESSAGE });
+    expect(PAYTM_STAGING_REFUSED_MESSAGE).toMatch(/staging/);
+    expect(PAYTM_STAGING_REFUSED_MESSAGE).toMatch(/PAYTM_ALLOW_STAGING/);
+  });
+
+  it("reads the live deployment from NODE_ENV: staging is refused there without the opt-in and allowed with it", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    expect(isPaytmConfigured()).toBe(false);
+    expect(paytmUnavailableReason()).toBe(PAYTM_STAGING_REFUSED_MESSAGE);
+    expect(() => getProvider(PAYTM_PROVIDER)).toThrow(/PAYTM_ALLOW_STAGING/);
+    vi.stubEnv("PAYTM_ALLOW_STAGING", "yes");
+    expect(isPaytmConfigured()).toBe(false); // only the exact string "true" opts in
+    vi.stubEnv("PAYTM_ALLOW_STAGING", "true");
+    expect(isPaytmConfigured()).toBe(true);
+    expect(paytmUnavailableReason()).toBeNull();
+    vi.stubEnv("PAYTM_ENV", "production");
+    expect(isPaytmConfigured()).toBe(false); // the opt-in never overrides the proof
+    expect(paytmUnavailableReason()).toBe(PAYTM_NOT_VERIFIED_MESSAGE);
   });
 
   it("with the real constant: staging is usable, production is refused with the reason", () => {
@@ -219,8 +251,34 @@ describe("capture (Transaction Status is the authority)", () => {
   it("rejects a different order id and a different transaction id", async () => {
     fakeFetch(() => reply({ ...fx.statusSuccess, orderId: "OTHER" }));
     expect(await paytmProvider.capture(input)).toMatchObject({ ok: false, code: "GATEWAY_DECLINED" });
-    fakeFetch(() => reply({ ...fx.statusSuccess, txnId: "different-txn" }));
-    expect(await paytmProvider.capture(input)).toMatchObject({ ok: false, code: "GATEWAY_DECLINED" });
+  });
+
+  it("a different txn id on a matching order and amount is accepted under Paytm's own txn id, never declined", async () => {
+    fakeFetch(() => reply({ ...fx.statusSuccess, txnId: "txn-B" }));
+    expect(await paytmProvider.capture(input)).toMatchObject({ ok: true, providerPaymentId: composePaymentId(fx.ORDER_ID, "txn-B"), capturedAmount: AMOUNT });
+  });
+
+  it("retry scenario: txn A fails, txn B succeeds, then a late A callback finds B and books no decline", async () => {
+    const asA = { ...input, providerPaymentId: "txn-A" };
+    // Paytm's status for the order now says B succeeded.
+    fakeFetch(() => reply({ ...fx.statusSuccess, txnId: "txn-B" }));
+    const late = await paytmProvider.capture(asA);
+    expect(late.ok).toBe(true);
+    expect(late.code).toBeUndefined();
+    expect(late.payload).not.toMatchObject({ gatewayVerified: true, failure: expect.anything() });
+    // A status check on B captures the same payment.
+    const onB = await paytmProvider.capture({ ...input, providerPaymentId: "txn-B" });
+    expect(onB).toMatchObject({ ok: true, providerPaymentId: composePaymentId(fx.ORDER_ID, "txn-B") });
+    expect(late.providerPaymentId).toBe(onB.providerPaymentId);
+  });
+
+  it("a failure for a different txn than the one asked about is not a verified decline (it may belong to an earlier attempt)", async () => {
+    fakeFetch(() => reply({ ...fx.statusFailure, txnId: "txn-A" }));
+    const r = await paytmProvider.capture({ ...input, providerPaymentId: "txn-B" });
+    expect(r).toMatchObject({ ok: false, code: "GATEWAY_UNAVAILABLE" });
+    expect(r.payload).toBeUndefined();
+    // The same failure for the txn asked about is final.
+    expect(await paytmProvider.capture({ ...input, providerPaymentId: "txn-A" })).toMatchObject({ ok: false, code: "GATEWAY_DECLINED", payload: { gatewayVerified: true } });
   });
 
   it("refuses before asking when the order ids disagree or none is given", async () => {
@@ -326,9 +384,9 @@ describe("refund", () => {
 });
 
 describe("findRefund", () => {
-  const find = () => paytmProvider.findRefund?.({ providerPaymentId: PAYMENT_ID, refundId: "refund-row-1" });
+  const find = (requestedAt?: Date) => paytmProvider.findRefund?.({ providerPaymentId: PAYMENT_ID, refundId: "refund-row-1", requestedAt });
 
-  it("finds a succeeded, a pending and a refused refund, and reports no record as not found", async () => {
+  it("finds a succeeded, a pending and a refused refund", async () => {
     const calls = fakeFetch(() => reply(fx.refundSuccess));
     expect(await find()).toMatchObject({ found: true, result: { outcome: "succeeded", refundedAmount: AMOUNT } });
     expect(JSON.parse(calls[0]?.body ?? "{}").body).toEqual({ mid: fx.TEST_MID, orderId: fx.ORDER_ID, refId: "refund-row-1" });
@@ -336,15 +394,90 @@ describe("findRefund", () => {
     expect(await find()).toMatchObject({ found: true, result: { outcome: "pending" } });
     fakeFetch(() => reply(fx.refundRefused));
     expect(await find()).toMatchObject({ found: true, result: { outcome: "refused" } });
+  });
+
+  it("treats no record as UNKNOWN when the request time is not given, or is inside the lag window", async () => {
     fakeFetch(() => reply(fx.refundNoRecord));
-    expect(await find()).toEqual({ found: false });
+    expect(await find()).toMatchObject({ found: "unknown" });
+    expect(await find(new Date())).toMatchObject({ found: "unknown" });
+    expect(await find(new Date(Date.now() - REFUND_LOOKUP_LAG_MS + 60_000))).toMatchObject({ found: "unknown" });
+  });
+
+  it("reports not found only once the lag window has passed", async () => {
+    fakeFetch(() => reply(fx.refundNoRecord));
+    expect(REFUND_LOOKUP_LAG_MS).toBe(30 * 60 * 1000);
+    expect(await find(new Date(Date.now() - REFUND_LOOKUP_LAG_MS - 1000))).toEqual({ found: false });
+    fakeFetch(() => reply({ resultInfo: { resultStatus: "TXN_FAILURE", resultCode: "631", resultMsg: "not found" } }));
+    expect(await find(new Date(Date.now() - REFUND_LOOKUP_LAG_MS - 1000))).toEqual({ found: false });
+    expect(await find(new Date())).toMatchObject({ found: "unknown" });
   });
 
   it("is unknown, never not-found, when it could not be answered", async () => {
     fakeFetch(() => new Response("", { status: 500 }));
-    expect(await find()).toMatchObject({ found: "unknown" });
+    expect(await find(new Date(0))).toMatchObject({ found: "unknown" });
     fakeFetch(() => reply({ ...fx.refundSuccess, refundAmount: undefined }));
     expect(await find()).toMatchObject({ found: "unknown" });
+  });
+
+  it("refuses an answer that echoes another order, refund or transaction", async () => {
+    fakeFetch(() => reply({ ...fx.refundSuccess, orderId: "OTHER-ORDER" }));
+    expect(await find()).toMatchObject({ found: "unknown" });
+    fakeFetch(() => reply({ ...fx.refundSuccess, refId: "someone-elses-refund" }));
+    expect(await find()).toMatchObject({ found: "unknown" });
+    fakeFetch(() => reply({ ...fx.refundSuccess, txnId: "other-txn" }));
+    expect(await find()).toMatchObject({ found: "unknown" });
+    fakeFetch(() => reply({ ...fx.refundSuccess, orderId: fx.ORDER_ID, refId: "refund-row-1" }));
+    expect(await find()).toMatchObject({ found: true });
+  });
+});
+
+describe("refund amount guard", () => {
+  it("returns refused, without asking Paytm and without throwing, for a zero or negative amount", async () => {
+    const calls = fakeFetch(() => reply(fx.refundSuccess));
+    for (const amount of [paise(0n), paise(-500n)]) {
+      const r = await paytmProvider.refund({ providerPaymentId: PAYMENT_ID, amount, reason: "x", refundId: "r" });
+      expect(r).toMatchObject({ outcome: "refused", refundedAmount: 0n, httpStatus: null });
+    }
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("raw response signature", () => {
+  const signedRaw = (rawBody: string, key = fx.TEST_KEY) => `{"head":{"signature":${JSON.stringify(generateChecksum(rawBody, key))}},"body":${rawBody}}`;
+  const input = { orderId: fx.ORDER_ID, amount: AMOUNT, actorUserId: null, providerPaymentId: fx.TXN_ID, providerOrderId: fx.ORDER_ID };
+  // txnAmount is the number 940.00: JSON.parse then JSON.stringify would write 940, and the signature would not match.
+  const rawWithNumber = `{"resultInfo":{"resultStatus":"TXN_SUCCESS","resultCode":"01","resultMsg":"Txn Success"},"txnId":"${fx.TXN_ID}","orderId":"${fx.ORDER_ID}","txnAmount":940.00,"paymentMode":"UPI"}`;
+
+  it("finds the exact top-level body text", () => {
+    expect(rawBodyOf('{"head":{"signature":"s"},"body":{"a":1.50, "b":"}{\\\\"}}')).toBe('{"a":1.50, "b":"}{\\\\"}');
+    expect(rawBodyOf('{"body":{"x":{"body":{"n":1}}},"head":{}}')).toBe('{"x":{"body":{"n":1}}}');
+    expect(rawBodyOf('{"head":{"body":{"n":1}}}')).toBeNull(); // only a nested one
+    expect(rawBodyOf('{"body":{"a":1},"body":{"a":2}}')).toBeNull(); // ambiguous
+    expect(rawBodyOf('{"body":"text"}')).toBeNull(); // not an object
+    expect(rawBodyOf('{"body":{"a":1')).toBeNull(); // truncated
+    expect(rawBodyOf("not json")).toBeNull();
+  });
+
+  it("verifies over the exact text Paytm signed, including a 940.00 that re-serialising would change", async () => {
+    expect(JSON.stringify(JSON.parse(rawWithNumber))).not.toBe(rawWithNumber);
+    fakeFetch(() => new Response(signedRaw(rawWithNumber), { status: 200 }));
+    expect(await paytmProvider.capture(input)).toMatchObject({ ok: true, capturedAmount: AMOUNT });
+  });
+
+  it("fails closed when the signature covers a re-serialised body but the wire text differs", async () => {
+    const compact = JSON.stringify(JSON.parse(rawWithNumber));
+    fakeFetch(() => new Response(`{"head":{"signature":${JSON.stringify(generateChecksum(compact, fx.TEST_KEY))}},"body":${rawWithNumber}}`, { status: 200 }));
+    expect(await paytmProvider.capture(input)).toMatchObject({ ok: false, code: "GATEWAY_UNAVAILABLE" });
+  });
+
+  it("fails closed on whitespace changes, a missing or duplicated body, and a wrong key", async () => {
+    const pretty = JSON.stringify(JSON.parse(rawWithNumber), null, 2);
+    fakeFetch(() => new Response(`{"head":{"signature":${JSON.stringify(generateChecksum(rawWithNumber, fx.TEST_KEY))}},"body":${pretty}}`, { status: 200 }));
+    expect((await paytmProvider.capture(input)).ok).toBe(false);
+    fakeFetch(() => new Response(`{"head":{"signature":"x"}}`, { status: 200 }));
+    expect((await paytmProvider.capture(input)).ok).toBe(false);
+    fakeFetch(() => new Response(signedRaw(rawWithNumber, "OtherKey12345678"), { status: 200 }));
+    expect((await paytmProvider.capture(input)).ok).toBe(false);
   });
 });
 

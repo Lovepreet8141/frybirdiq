@@ -87,6 +87,8 @@ const serverSchema = z.object({
   PAYTM_WEBSITE_NAME: optionalSecret,
   PAYTM_ENV: z.preprocess((value) => (value === "" ? undefined : value), z.enum(["staging", "production"]).optional()),
   PAYTM_CALLBACK_URL: optionalSecret,
+  /** Only the exact string "true" opts in. Lets staging credentials run on the production deployment, for the sandbox proof only. Off by default. */
+  PAYTM_ALLOW_STAGING: optionalSecret,
   /**
    * Bearer secret for `/api/jobs/[job]`. Unset means the job runner is
    * dormant — every job route 404s rather than running unauthenticated.

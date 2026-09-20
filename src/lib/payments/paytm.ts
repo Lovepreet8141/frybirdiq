@@ -39,6 +39,8 @@ import type {
 
 export const PAYTM_PROVIDER = "paytm";
 export const PAYTM_TIMEOUT_MS = 8_000;
+/** How long after a refund was requested "no record" may still mean "not indexed yet". A payments-reviewer decision. */
+export const REFUND_LOOKUP_LAG_MS = 30 * 60 * 1000;
 
 /**
  * Whether the checksum scheme in this file has been proven against a real
@@ -52,16 +54,30 @@ export const PAYTM_TIMEOUT_MS = 8_000;
 export const PAYTM_SANDBOX_VERIFIED = false;
 
 export const PAYTM_NOT_VERIFIED_MESSAGE = "paytm is not verified against Paytm sandbox, so production is refused";
+export const PAYTM_STAGING_REFUSED_MESSAGE =
+  "paytm staging credentials are refused on the production deployment: a test payment could be booked as paid. Set PAYTM_ALLOW_STAGING=true only for the sandbox proof";
 
-/** The one rule: production needs a verified sandbox proof; staging never does. Pure, so all four combinations are testable. */
-export function paytmEnvAllowed(env: "staging" | "production", sandboxVerified: boolean): boolean {
-  return env === "staging" || sandboxVerified;
-}
+export type PaytmGateResult = { readonly allowed: true } | { readonly allowed: false; readonly reason: string };
 
-/** Why the provider cannot be used right now, or null when it can. For error messages only; never decides anything itself. */
-export function paytmUnavailableReason(): string | null {
-  if (process.env.PAYTM_ENV?.trim() === "production" && !PAYTM_SANDBOX_VERIFIED) return PAYTM_NOT_VERIFIED_MESSAGE;
-  return isPaytmConfigured() ? null : "paytm is not configured";
+/**
+ * The one rule, pure so every combination is testable.
+ *
+ * - Production credentials need the sandbox proof (`sandboxVerified`), always.
+ * - Staging credentials are refused on the production deployment (the live
+ *   site), whatever else is set, unless `allowStaging` (PAYTM_ALLOW_STAGING=true,
+ *   only for making the sandbox proof) says otherwise: a staging payment
+ *   "succeeds" without money, and on the live site it would book a real order
+ *   as paid. Anywhere else staging is fine.
+ */
+export function paytmGate(input: {
+  readonly env: "staging" | "production";
+  readonly sandboxVerified: boolean;
+  readonly productionDeployment: boolean;
+  readonly allowStaging: boolean;
+}): PaytmGateResult {
+  if (input.env === "production") return input.sandboxVerified ? { allowed: true } : { allowed: false, reason: PAYTM_NOT_VERIFIED_MESSAGE };
+  if (input.productionDeployment && !input.allowStaging) return { allowed: false, reason: PAYTM_STAGING_REFUSED_MESSAGE };
+  return { allowed: true };
 }
 
 export interface PaytmConfig {
@@ -72,23 +88,46 @@ export interface PaytmConfig {
   readonly callbackUrl: string;
 }
 
-/** The only reader of PAYTM_* (declared in src/lib/env). Null unless every value is present and the key is usable. */
-export function paytmConfig(): PaytmConfig | null {
+type PaytmResolution = { readonly config: PaytmConfig; readonly reason?: undefined } | { readonly config: null; readonly reason: string };
+
+/**
+ * The only reader of PAYTM_* (declared in src/lib/env), and of NODE_ENV for
+ * "is this the production deployment" (the same signal the rest of the app
+ * uses; the live server runs NODE_ENV=production, docs/DEPLOY.md). Everything
+ * else, including `paytmUnavailableReason`, goes through here.
+ */
+function resolvePaytm(): PaytmResolution {
+  const notConfigured = { config: null, reason: "paytm is not configured" } as const;
   const mid = process.env.PAYTM_MID?.trim();
   const merchantKey = process.env.PAYTM_MERCHANT_KEY?.trim();
   const websiteName = process.env.PAYTM_WEBSITE_NAME?.trim();
   const env = process.env.PAYTM_ENV?.trim();
   const callbackUrl = process.env.PAYTM_CALLBACK_URL?.trim();
-  if (!mid || !merchantKey || !websiteName || !callbackUrl) return null;
-  if (env !== "staging" && env !== "production") return null;
-  if (!paytmEnvAllowed(env, PAYTM_SANDBOX_VERIFIED)) return null;
+  if (!mid || !merchantKey || !websiteName || !callbackUrl) return notConfigured;
+  if (env !== "staging" && env !== "production") return notConfigured;
+  const gate = paytmGate({
+    env,
+    sandboxVerified: PAYTM_SANDBOX_VERIFIED,
+    productionDeployment: process.env.NODE_ENV === "production",
+    allowStaging: process.env.PAYTM_ALLOW_STAGING?.trim() === "true",
+  });
+  if (!gate.allowed) return { config: null, reason: gate.reason };
   // AES-128: the merchant key is exactly 16 bytes. Anything else cannot sign.
-  if (Buffer.byteLength(merchantKey, "utf8") !== 16) return null;
-  return { mid, merchantKey, websiteName, env, callbackUrl };
+  if (Buffer.byteLength(merchantKey, "utf8") !== 16) return notConfigured;
+  return { config: { mid, merchantKey, websiteName, env, callbackUrl } };
+}
+
+export function paytmConfig(): PaytmConfig | null {
+  return resolvePaytm().config;
 }
 
 export function isPaytmConfigured(): boolean {
   return paytmConfig() !== null;
+}
+
+/** Why the provider cannot be used right now, or null when it can. Same resolution as `paytmConfig`, for error messages. */
+export function paytmUnavailableReason(): string | null {
+  return resolvePaytm().reason ?? null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -220,6 +259,92 @@ interface PaytmResultInfo {
 type CallResult = { ok: true; envelope: PaytmEnvelope; status: number } | { ok: false; error: string; status: number | null };
 
 /**
+ * The exact text of the top-level `"body"` member of a JSON object, or null
+ * when there is not exactly one such member, it is not an object, or the text
+ * is malformed. A small scanner (strings and escapes, brace depth) rather than
+ * a parse, because the checksum covers these very characters. Ambiguity
+ * (two `body` members, a nested one only) is null: fail closed.
+ */
+export function rawBodyOf(text: string): string | null {
+  let i = 0;
+  const n = text.length;
+  const ws = () => {
+    while (i < n && " \t\r\n".includes(text[i] as string)) i++;
+  };
+  const string = (): string | null => {
+    if (text[i] !== '"') return null;
+    const start = ++i;
+    while (i < n) {
+      const c = text[i];
+      if (c === "\\") i += 2;
+      else if (c === '"') return text.slice(start, i++);
+      else i++;
+    }
+    return null;
+  };
+  /** Skips any JSON value starting at i; returns its end (exclusive) or -1. */
+  const skip = (): number => {
+    ws();
+    const c = text[i];
+    if (c === '"') return string() === null ? -1 : i;
+    if (c === "{" || c === "[") {
+      let depth = 0;
+      while (i < n) {
+        const d = text[i];
+        if (d === '"') {
+          if (string() === null) return -1;
+          continue;
+        }
+        if (d === "{" || d === "[") depth++;
+        else if (d === "}" || d === "]") {
+          depth--;
+          if (depth === 0) return ++i;
+        }
+        i++;
+      }
+      return -1;
+    }
+    const m = /^[^,}\]\s]+/.exec(text.slice(i));
+    if (!m) return -1;
+    i += m[0].length;
+    return i;
+  };
+
+  ws();
+  if (text[i] !== "{") return null;
+  i++;
+  let found: string | null = null;
+  let seen = 0;
+  ws();
+  if (text[i] === "}") return null;
+  while (i < n) {
+    ws();
+    const key = string();
+    if (key === null) return null;
+    ws();
+    if (text[i] !== ":") return null;
+    i++;
+    ws();
+    const start = i;
+    const end = skip();
+    if (end < 0) return null;
+    if (key === "body") {
+      seen++;
+      if (text[start] !== "{") return null;
+      found = text.slice(start, end);
+    }
+    ws();
+    if (text[i] === ",") {
+      i++;
+      continue;
+    }
+    if (text[i] === "}") break;
+    return null;
+  }
+  return seen === 1 ? found : null;
+}
+
+/**
  * POSTs a signed request. The signature is over exactly the JSON string sent
  * as `body`, so a repeat of the same input is a byte-identical request. The
  * response is only returned as ok when its own head.signature verifies over
@@ -250,7 +375,10 @@ async function call(config: PaytmConfig, url: string, body: Record<string, unkno
   }
   if (!response.ok) return { ok: false, error: `Paytm returned ${response.status}.`, status: response.status };
   if (!envelope?.body || typeof envelope.head?.signature !== "string") return { ok: false, error: "Paytm sent an unreadable answer.", status: response.status };
-  if (!verifyChecksum(JSON.stringify(envelope.body), config.merchantKey, envelope.head.signature)) {
+  // Verify over the exact text of `body` as it came off the wire, never over a re-serialisation:
+  // JSON.parse then JSON.stringify turns 940.00 into 940 and reorders nothing but reformats plenty.
+  const rawBody = rawBodyOf(text);
+  if (rawBody === null || !verifyChecksum(rawBody, config.merchantKey, envelope.head.signature)) {
     return { ok: false, error: "Paytm's answer did not verify.", status: response.status };
   }
   return { ok: true, envelope, status: response.status };
@@ -262,7 +390,7 @@ async function call(config: PaytmConfig, url: string, body: Record<string, unkno
 
 type StatusVerdict =
   | { readonly kind: "success"; readonly txnId: string; readonly amount: Paise; readonly mode: string | null }
-  | { readonly kind: "failed"; readonly message: string }
+  | { readonly kind: "failed"; readonly message: string; readonly txnId: string | null }
   | { readonly kind: "not_yet" }
   | { readonly kind: "mismatch"; readonly message: string };
 
@@ -282,7 +410,11 @@ export function classifyPaytmStatus(body: NonNullable<PaytmEnvelope["body"]>, ex
       return { kind: "success", txnId: body.txnId, amount, mode: typeof body.paymentMode === "string" ? body.paymentMode : null };
     }
     case "TXN_FAILURE":
-      return { kind: "failed", message: info.resultMsg ? `Paytm: ${info.resultMsg.slice(0, 120)}` : "The payment failed." };
+      return {
+        kind: "failed",
+        message: info.resultMsg ? `Paytm: ${info.resultMsg.slice(0, 120)}` : "The payment failed.",
+        txnId: typeof body.txnId === "string" && body.txnId !== "" ? body.txnId : null,
+      };
     default:
       return { kind: "not_yet" };
   }
@@ -427,18 +559,23 @@ export const paytmProvider: PaymentProvider = {
 
     const verdict = classifyPaytmStatus(result.envelope.body ?? {}, { orderId: paytmOrderId, amount });
     switch (verdict.kind) {
-      case "success": {
-        const rawTxn = split?.txnId ?? providerPaymentId ?? null;
-        if (rawTxn && rawTxn !== verdict.txnId) return fail(providerPaymentId ?? null, "That transaction is not the one Paytm holds for this order.", "GATEWAY_DECLINED", true);
+      case "success":
+        // Paytm allows a retry on the same order id, so txn A may have failed and txn B paid. The status
+        // answer is verified and matches our order and amount, so the payment is Paytm's own txn id,
+        // whichever transaction the caller happened to ask about. It is never a decline.
         return {
           ok: true,
           providerPaymentId: composePaymentId(paytmOrderId, verdict.txnId),
           capturedAmount: verdict.amount,
           payload: { method: methodFromPaytm(verdict.mode), paytmMode: verdict.mode, orderId: paytmOrderId, verifiedBy: "status-api" },
         };
-      }
-      case "failed":
+      case "failed": {
+        // A failure for a different transaction than the one asked about may belong to an earlier
+        // attempt on the same order; it must not write a failure on an order a later attempt can pay.
+        const asked = split?.txnId ?? providerPaymentId ?? null;
+        if (asked && verdict.txnId && asked !== verdict.txnId) return fail(providerPaymentId ?? null, "Paytm reports a different attempt for this order as failed.", "GATEWAY_UNAVAILABLE");
         return fail(providerPaymentId ?? null, verdict.message, "GATEWAY_DECLINED", true);
+      }
       case "mismatch":
         return fail(providerPaymentId ?? null, verdict.message, "GATEWAY_DECLINED", true);
       case "not_yet":
@@ -453,12 +590,22 @@ export const paytmProvider: PaymentProvider = {
     if (!config) return none("Online payment is not set up.");
     const split = splitPaymentId(providerPaymentId);
     if (!split) return none("No Paytm payment to refund.");
+    if (amount <= ZERO) return none("A refund must be for more than nothing.");
     const result = await call(config, hosts(config).refund, refundRequestBody(config, { ...split, amount, reason, refundId }));
     if (!result.ok) return classifyPaytmRefundFailure(result.error, result.status);
     return classifyPaytmRefund(result.envelope.body ?? {}, amount, result.status);
   },
 
-  async findRefund({ providerPaymentId, refundId }): Promise<RefundLookup> {
+  /**
+   * Looks up a refund by our row id. "No record" is NOT "safe to refund again":
+   * Paytm's refund status can lag its apply call, and a second apply after the
+   * first landed would refund twice (the 10 minute duplicate code is the only
+   * other guard). So no record is `found: false` only when the caller says the
+   * refund was requested at least `REFUND_LOOKUP_LAG_MS` ago (`requestedAt`);
+   * with no time given, or inside the window, it is "unknown" and the row stays
+   * reserved. The window is a decision for the payments reviewer to confirm.
+   */
+  async findRefund({ providerPaymentId, refundId, requestedAt }: { providerPaymentId: string | null; refundId: string; requestedAt?: Date }): Promise<RefundLookup> {
     const config = paytmConfig();
     if (!config) return { found: "unknown", error: "Online payment is not set up." };
     const split = splitPaymentId(providerPaymentId);
@@ -466,9 +613,15 @@ export const paytmProvider: PaymentProvider = {
     const result = await call(config, hosts(config).refundStatus, { mid: config.mid, orderId: split.orderId, refId: refundId });
     if (!result.ok) return { found: "unknown", error: result.error };
     const body = result.envelope.body ?? {};
+    // An answer about another order, refund or transaction is not an answer about this one.
+    if ((body.orderId !== undefined && body.orderId !== split.orderId) || (body.refId !== undefined && body.refId !== refundId) || (body.txnId !== undefined && body.txnId !== split.txnId)) {
+      return { found: "unknown", error: "Paytm's refund status was about a different order or refund." };
+    }
     const info = body.resultInfo ?? {};
-    // Paytm's own "no such refund": a real answer, not a failure to ask.
-    if (info.resultStatus === "NO_RECORD_FOUND" || info.resultCode === "631") return { found: false };
+    if (info.resultStatus === "NO_RECORD_FOUND" || info.resultCode === "631") {
+      const old = requestedAt !== undefined && Date.now() - requestedAt.getTime() >= REFUND_LOOKUP_LAG_MS;
+      return old ? { found: false } : { found: "unknown", error: "Paytm has no record of this refund yet, and it may still be arriving." };
+    }
     const outcome = classifyPaytmRefund(body, null, result.status);
     if (outcome.outcome === "ambiguous") return { found: "unknown", error: outcome.error ?? "Paytm's refund status was not clear." };
     return { found: true, result: outcome };
