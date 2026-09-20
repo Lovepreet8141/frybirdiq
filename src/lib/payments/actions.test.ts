@@ -55,6 +55,21 @@ describe("confirmOnlinePaymentAction", () => {
     expect(await confirmOnlinePaymentAction(VALID)).toEqual({ ok: true, replayed: true });
   });
 
+  it("gives one answer for an unknown order, another gateway order and a bad signature: no existence oracle", async () => {
+    const answers: unknown[] = [];
+    for (const refusal of [
+      { code: "ORDER_NOT_FOUND", error: "That order does not exist." },
+      { code: "NOT_THIS_ORDER", error: "That payment does not belong to this order." },
+      { code: "UNVERIFIED", error: "The payment signature did not verify." },
+    ]) {
+      recordOnlinePayment.mockResolvedValue({ ok: false, ...refusal });
+      answers.push(await confirmOnlinePaymentAction(VALID));
+    }
+    expect(new Set(answers.map((a) => JSON.stringify(a))).size).toBe(1);
+    expect(answers[0]).toMatchObject({ ok: false, code: "UNVERIFIED" });
+    expect(JSON.stringify(answers[0])).not.toMatch(/exist|belong|signature/i);
+  });
+
   it("passes the server's refusal through — including money recorded for a refund", async () => {
     recordOnlinePayment.mockResolvedValue({ ok: false, code: "RECORDED_FOR_REFUND", error: "This order had already been paid or closed, so this payment has been recorded to be refunded.", paymentId: "p-2" });
     expect(await confirmOnlinePaymentAction(VALID)).toEqual({ ok: false, code: "RECORDED_FOR_REFUND", error: "This order had already been paid or closed, so this payment has been recorded to be refunded." });

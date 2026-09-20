@@ -58,6 +58,8 @@ export interface StaffOrder {
   customerId: string | null;
   grandTotal: Paise;
   isPaid: boolean;
+  /** Waiting on an online payment: the kitchen refuses it until money is recorded, so no Accept button. */
+  awaitingOnlinePayment?: boolean;
   fulfilment: "DINE_IN" | "TAKEAWAY" | "DELIVERY";
   channel: "DINE_IN" | "TAKEAWAY" | "ONLINE";
   tableName: string | null;
@@ -79,41 +81,8 @@ export interface StaffOrder {
   } | null;
 }
 
-/**
- * The next step for a ticket, given where it is and how it is going out.
- *
- * Only ever one step forward. The domain state machine is the authority — this
- * decides what to label the button, and the server decides whether the move is
- * legal.
- *
- * An unpaid order can be accepted. Cash on collection and cash on delivery
- * both take the money at the end, so waiting for payment before cooking would
- * mean a collection order is not started until the customer is at the counter,
- * and a delivery order is never started at all.
- */
-export function nextStep(
-  status: OrderStatus,
-  fulfilment: StaffOrder["fulfilment"],
-): { to: OrderStatus; label: string } | null {
-  switch (status) {
-    case "PENDING_PAYMENT":
-    case "PAID":
-      return { to: "ACCEPTED", label: "Accept" };
-    case "ACCEPTED":
-      return { to: "PREPARING", label: "Start cooking" };
-    case "PREPARING":
-      return { to: "READY", label: "Mark ready" };
-    case "READY":
-      // Only a delivery goes out; everything else is handed over and done.
-      return fulfilment === "DELIVERY"
-        ? { to: "OUT_FOR_DELIVERY", label: "Send out" }
-        : { to: "COMPLETED", label: "Complete" };
-    case "OUT_FOR_DELIVERY":
-      return { to: "COMPLETED", label: "Delivered" };
-    default:
-      return null;
-  }
-}
+import { nextStep } from "./next-step";
+export { nextStep };
 
 export function OrderCard({
   order,
@@ -133,7 +102,7 @@ export function OrderCard({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const next = nextStep(order.status, order.fulfilment);
+  const next = nextStep(order.status, order.fulfilment, order.awaitingOnlinePayment);
   const isDelivery = order.fulfilment === "DELIVERY";
   /** Handing over an unpaid order is giving food away. */
   const blockedByPayment = !order.isPaid && next?.to === "COMPLETED";

@@ -162,7 +162,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
       )}
       {awaitingOnline && paused && (
         <p role="status" className="mt-6 rounded-lg border border-border bg-surface px-4 py-3 text-sm">
-          Paying online is on hold while we&rsquo;re not taking orders. Your order is saved, and the pay button comes back when ordering resumes.
+          Paying online is on hold while we&rsquo;re not taking orders. Your order is saved, and the pay button comes back when ordering resumes. The kitchen starts your order once it is paid.
           {phone && (
             <span className="mt-1 block">
               <CallShop phone={phone} lead="Questions? Call" />

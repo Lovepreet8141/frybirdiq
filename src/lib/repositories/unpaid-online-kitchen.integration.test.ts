@@ -55,6 +55,26 @@ describe("advanceOrder — an unpaid online order does not reach the kitchen", (
     expect(await statusOf(orderId)).toBe("PENDING_PAYMENT");
   });
 
+  async function orderWithNoPaymentRow(channel: "ONLINE" | "TAKEAWAY") {
+    const [order] = await db()
+      .insert(orders)
+      .values({ orgId: org.orgId, locationId: org.locationId, orderNumber: `TEST-${randomUUID().slice(0, 8)}`, businessDate: new Date().toISOString().slice(0, 10), status: "PENDING_PAYMENT", channel, fulfilment: "TAKEAWAY", grandTotal: fromRupees("300") })
+      .returning({ id: orders.id });
+    return order!.id;
+  }
+
+  it("fails closed: a website order with NO payment row (a crash between the order and its payment row) cannot be accepted", async () => {
+    const orderId = await orderWithNoPaymentRow("ONLINE");
+    const result = await accept(orderId);
+    expect(result.ok).toBe(false);
+    expect(await statusOf(orderId)).toBe("PENDING_PAYMENT");
+  });
+
+  it("a counter order with no payment row is unchanged (only the website channel fails closed)", async () => {
+    const orderId = await orderWithNoPaymentRow("TAKEAWAY");
+    expect((await accept(orderId)).ok).toBe(true);
+  });
+
   it("accepts a pay-on-collection online order unpaid, as before", async () => {
     const orderId = await pendingOrder("cash");
     expect((await accept(orderId)).ok).toBe(true);

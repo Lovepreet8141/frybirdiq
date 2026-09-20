@@ -128,6 +128,33 @@ describe("razorpay availability", () => {
     fetchSpy.mockRestore();
   });
 
+  it.each([
+    [401, "our key pair was refused"],
+    [403, "our key pair was refused"],
+    [408, "the request timed out"],
+    [429, "throttled"],
+    [500, "the gateway failed"],
+    [503, "the gateway failed"],
+  ])("a %i from Razorpay's payment fetch (%s) stays retryable: GATEWAY_UNAVAILABLE, never a final decline", async (status) => {
+    process.env.RAZORPAY_KEY_ID = "rzp_test_x";
+    process.env.RAZORPAY_KEY_SECRET = FIXTURE.keySecret;
+    const genuine = paymentSignature({ providerOrderId: FIXTURE.orderId, providerPaymentId: FIXTURE.paymentId, keySecret: FIXTURE.keySecret });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ error: { description: "x" } }), { status }));
+    const result = await razorpayProvider.capture({ orderId: "o", amount: fromRupees("299"), actorUserId: null, providerPaymentId: FIXTURE.paymentId, providerOrderId: FIXTURE.orderId, signature: genuine });
+    expect(result).toMatchObject({ ok: false, code: "GATEWAY_UNAVAILABLE" });
+    fetchSpy.mockRestore();
+  });
+
+  it("a 404 for THIS payment is Razorpay's own answer and stays a final decline", async () => {
+    process.env.RAZORPAY_KEY_ID = "rzp_test_x";
+    process.env.RAZORPAY_KEY_SECRET = FIXTURE.keySecret;
+    const genuine = paymentSignature({ providerOrderId: FIXTURE.orderId, providerPaymentId: FIXTURE.paymentId, keySecret: FIXTURE.keySecret });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ error: { description: "not found" } }), { status: 404 }));
+    const result = await razorpayProvider.capture({ orderId: "o", amount: fromRupees("299"), actorUserId: null, providerPaymentId: FIXTURE.paymentId, providerOrderId: FIXTURE.orderId, signature: genuine });
+    expect(result).toMatchObject({ ok: false, code: "GATEWAY_DECLINED" });
+    fetchSpy.mockRestore();
+  });
+
   it("capture checks the amount Razorpay holds against the order", async () => {
     process.env.RAZORPAY_KEY_ID = "rzp_test_x";
     process.env.RAZORPAY_KEY_SECRET = FIXTURE.keySecret;

@@ -24,6 +24,9 @@ import { type RecordPaymentCode, markOnlinePaymentFailed, recordOnlinePayment } 
  */
 export type OnlinePaymentResult = { ok: true; replayed: boolean } | { ok: false; error: string; code?: RecordPaymentCode };
 
+/** The single answer for "could not be confirmed" that gives an unauthenticated caller nothing to probe. */
+const UNCONFIRMED = { ok: false, error: "That payment could not be confirmed. If money left your account, it will be refunded automatically.", code: "UNVERIFIED" } as const;
+
 const confirmSchema = z.object({
   orderId: z.uuid(),
   razorpayOrderId: z.string().trim().min(1).max(64),
@@ -44,7 +47,11 @@ export async function confirmOnlinePaymentAction(input: unknown): Promise<Online
 
   revalidatePath(`/order/${parsed.data.orderId}`);
   revalidatePath("/app/orders");
-  return result.ok ? { ok: true, replayed: result.replayed } : { ok: false, error: result.error, code: result.code };
+  if (result.ok) return { ok: true, replayed: result.replayed };
+  // No existence oracle: an unauthenticated caller must not be able to tell an unknown (or another shop's) order,
+  // an order that opened a different gateway order, and a bad signature apart. One answer for all three.
+  if (result.code === "ORDER_NOT_FOUND" || result.code === "NOT_THIS_ORDER" || result.code === "UNVERIFIED") return UNCONFIRMED;
+  return { ok: false, error: result.error, code: result.code };
 }
 
 const failureSchema = z.object({

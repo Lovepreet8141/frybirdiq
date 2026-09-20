@@ -126,13 +126,37 @@ export async function createPendingPayment(input: {
  * delivery are not this: cooking those unpaid is the design (order-status.ts).
  * Read with the caller's transaction, under its order-row lock.
  */
+export interface PaymentRowForWait {
+  readonly provider: string;
+  readonly status: string;
+  /** Money recorded for a refund, not applied to the order (pay-7). */
+  readonly unapplied: boolean;
+}
+
+/**
+ * The one rule for "this order is waiting on an online payment", pure so the
+ * kitchen guard and the staff board cannot disagree about it.
+ *
+ * Fails closed: a website order with NO payment row at all is incomplete (the
+ * pending payment row is written just after the order row commits, so a crash
+ * between the two would leave an order the kitchen could cook unpaid), and it
+ * waits. Counter and cash-on-collection orders always carry their own pending
+ * CASH row, so they are unaffected.
+ */
+export function orderAwaitsOnline(rows: readonly PaymentRowForWait[], channel: string): boolean {
+  const moneyApplied = rows.some((row) => (MONEY_TAKEN_STATUSES as readonly string[]).includes(row.status) && !row.unapplied);
+  if (moneyApplied) return false;
+  if (rows.some((row) => row.provider === RAZORPAY_PROVIDER && row.status === "PENDING")) return true;
+  return rows.length === 0 && channel === "ONLINE";
+}
+
 export async function awaitsOnlinePayment(tx: Tx, input: { orderId: string; orgId: string }): Promise<boolean> {
   const rows = await tx
     .select({ provider: payments.provider, status: payments.status, unapplied: UNAPPLIED })
     .from(payments)
     .where(and(eq(payments.orderId, input.orderId), eq(payments.orgId, input.orgId)));
-  const moneyApplied = rows.some((row) => (MONEY_TAKEN_STATUSES as readonly string[]).includes(row.status) && !row.unapplied);
-  return !moneyApplied && rows.some((row) => row.provider === RAZORPAY_PROVIDER && row.status === "PENDING");
+  const [order] = await tx.select({ channel: orders.channel }).from(orders).where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId))).limit(1);
+  return orderAwaitsOnline(rows, order?.channel ?? "");
 }
 
 /** Whether money has actually been captured against an order — answered by the payments table, never by the status. */
@@ -472,7 +496,7 @@ const MONEY_TAKEN_STATUSES = ["CAPTURED", "PARTIALLY_REFUNDED", "REFUNDED"] as c
 type PriorPayment = { id: string; status: (typeof payments.$inferSelect)["status"]; providerPaymentId: string | null; unapplied: boolean };
 
 /** A captured payment recorded for refund only (pay-7): money held, never applied to the order. Stored on the row's provider payload. */
-const UNAPPLIED = sql<boolean>`coalesce((${payments.providerPayload}->>'unapplied')::boolean, false)`;
+export const UNAPPLIED = sql<boolean>`coalesce((${payments.providerPayload}->>'unapplied')::boolean, false)`;
 const priorColumns = { id: payments.id, status: payments.status, providerPaymentId: payments.providerPaymentId, unapplied: UNAPPLIED };
 
 type SettlementGate =

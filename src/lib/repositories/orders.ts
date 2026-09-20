@@ -31,18 +31,19 @@ import { type ShopClosedRefusal, type ShopPausedRefusal, type ShopStatus, orderi
 import { OrderingRefusedAtWrite, PromoLimitReached, type WriteRefusal, writeGate } from "@/lib/orders/write-gate";
 import { shopOrderingState } from "@/lib/cart/shop-hours";
 import { readClosedDates } from "./closed-dates";
+import { mayResumePendingOrder } from "@/lib/cart/resume-order";
 import { shopStatusFromOrg } from "./shop-status";
 import { type SnapshotLineInput, snapshotLines } from "@/lib/orders/snapshot";
 import type { CartLine } from "@/lib/cart/schema";
 import { priceDraft } from "@/lib/pos/pricing";
 import { quoteForPin } from "./delivery";
 import { claimPromotionUse } from "./promotions";
-import { requireOrg, resolvePricingContext } from "./org";
+import { getOrg, requireOrg, resolvePricingContext } from "./org";
 import { ensureCustomerByPhone } from "./customers";
 import { COUNTER_PLACED_STATUS } from "@/lib/pos/counter-placement";
 import { getPricedCart } from "@/lib/cart";
 import { getCustomer } from "@/lib/customer";
-import { awaitsOnlinePayment, createPendingPayment, recordCashPayment } from "./payments";
+import { awaitsOnlinePayment, createPendingPayment, orderAwaitsOnline, recordCashPayment, UNAPPLIED as UNAPPLIED_PAYMENT } from "./payments";
 import { CASH_PROVIDER, RAZORPAY_PROVIDER, availableMethods, codAllowed, getProvider, type PaymentMethod } from "@/lib/payments";
 import { reversePointsForOrder, reverseStampForOrder, spendPointsForOrder } from "./loyalty";
 import { recordConsumption, reverseConsumption } from "./stock";
@@ -500,10 +501,18 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
      */
     const resumeOrderId = await findResumableOnlineOrder(org.id, details.phone);
     if (resumeOrderId) {
+      /*
+       * The link is handed back only to the customer who owns that order (a signed-in session whose customer id
+       * is the order's). A phone number alone must never return an order id: anyone who knows a stranger's phone
+       * could otherwise ask for the id of their unpaid order and, holding it, read the page behind it. Everyone
+       * else gets the same words and no link.
+       */
+      const [pendingOrder] = await db().select({ customerId: orders.customerId }).from(orders).where(and(eq(orders.id, resumeOrderId), eq(orders.orgId, org.id))).limit(1);
+      const viewer = await getCustomer();
       return {
         ok: false,
         error: "You already have an unpaid order from the last few minutes. Pay that one, or wait a while before starting a new one.",
-        resumeOrderId,
+        ...(mayResumePendingOrder(pendingOrder?.customerId ?? null, viewer?.id ?? null) ? { resumeOrderId } : {}),
       };
     }
 
@@ -1091,31 +1100,37 @@ export interface OrderView {
 export async function getOrder(id: string): Promise<OrderView | null> {
   if (!isSupabaseConfigured()) return null;
 
+  // Public (a link the customer holds), so every read is bound to this app's own organization: an order id from any
+  // other org answers exactly like an unknown one.
+  const org = await getOrg();
+  if (!org) return null;
+
   const database = db();
-  const [order] = await database.select().from(orders).where(eq(orders.id, id)).limit(1);
+  const [order] = await database.select().from(orders).where(and(eq(orders.id, id), eq(orders.orgId, org.id))).limit(1);
   if (!order) return null;
 
-  const items = await database.select().from(orderItems).where(eq(orderItems.orderId, id));
+  const items = await database.select().from(orderItems).where(and(eq(orderItems.orderId, id), eq(orderItems.orgId, org.id)));
   const itemIds = items.map((item) => item.id);
 
+  // Only THIS order's modifiers, never every modifier row the org has ever written.
   const allModifiers =
     itemIds.length > 0
-      ? await database.select().from(orderItemModifiers).where(eq(orderItemModifiers.orgId, order.orgId))
+      ? await database.select().from(orderItemModifiers).where(and(eq(orderItemModifiers.orgId, org.id), inArray(orderItemModifiers.orderItemId, itemIds)))
       : [];
 
   const [stampEvent] = await database
     .select({ id: loyaltyStampEvents.id })
     .from(loyaltyStampEvents)
-    .where(and(eq(loyaltyStampEvents.orderId, id), isNull(loyaltyStampEvents.reversedAt)))
+    .where(and(eq(loyaltyStampEvents.orderId, id), eq(loyaltyStampEvents.orgId, org.id), isNull(loyaltyStampEvents.reversedAt)))
     .limit(1);
 
   // Captured beats pending: once money has arrived that is the payment,
   // whatever other attempts were opened along the way.
-  const paymentRows = await database.select().from(payments).where(eq(payments.orderId, id)).orderBy(desc(payments.createdAt));
+  const paymentRows = await database.select().from(payments).where(and(eq(payments.orderId, id), eq(payments.orgId, org.id))).orderBy(desc(payments.createdAt));
   const paymentRow = paymentRows.find((row) => row.status === "CAPTURED") ?? paymentRows[0] ?? null;
 
   const [customerRow] = order.customerId
-    ? await database.select({ email: customers.email }).from(customers).where(eq(customers.id, order.customerId)).limit(1)
+    ? await database.select({ email: customers.email }).from(customers).where(and(eq(customers.id, order.customerId), eq(customers.orgId, org.id))).limit(1)
     : [];
 
   return {
@@ -1171,6 +1186,8 @@ export interface StaffOrderView {
   readonly customerId: string | null;
   readonly grandTotal: Paise;
   readonly isPaid: boolean;
+  /** Waiting on an online payment: the kitchen will refuse to accept it until money is recorded. */
+  readonly awaitingOnlinePayment: boolean;
   readonly invoiceNumber: string | null;
   readonly estimatedReadyAt: Date | null;
   /** The customer's own requested time, when they chose one instead of ASAP — distinct from `estimatedReadyAt` (the kitchen's promise). */
@@ -1221,12 +1238,11 @@ export async function listActiveOrders(orgId: string): Promise<readonly StaffOrd
     itemIds.length > 0
       ? await database.select().from(orderItemModifiers).where(inArray(orderItemModifiers.orderItemId, itemIds))
       : [];
-  const paid = await database
-    .select()
+  const paymentRows = await database
+    .select({ orderId: payments.orderId, provider: payments.provider, status: payments.status, unapplied: UNAPPLIED_PAYMENT })
     .from(payments)
-    .where(and(inArray(payments.orderId, ids), eq(payments.status, "CAPTURED")));
-
-  const paidOrderIds = new Set(paid.map((payment) => payment.orderId));
+    .where(and(inArray(payments.orderId, ids), eq(payments.orgId, orgId)));
+  const paidOrderIds = new Set(paymentRows.filter((payment) => payment.status === "CAPTURED").map((payment) => payment.orderId));
 
   const tableIds = rows.map((row) => row.tableId).filter((id): id is string => id !== null);
   const tableRows = tableIds.length > 0 ? await database.select({ id: tables.id, name: tables.name }).from(tables).where(inArray(tables.id, tableIds)) : [];
@@ -1258,6 +1274,7 @@ export async function listActiveOrders(orgId: string): Promise<readonly StaffOrd
     customerId: row.customerId,
     grandTotal: paise(row.grandTotal),
     isPaid: paidOrderIds.has(row.id),
+    awaitingOnlinePayment: row.status === "PENDING_PAYMENT" && orderAwaitsOnline(paymentRows.filter((payment) => payment.orderId === row.id), row.channel),
     invoiceNumber: row.invoiceNumber,
     estimatedReadyAt: row.estimatedReadyAt,
     scheduledFor: row.scheduledFor,

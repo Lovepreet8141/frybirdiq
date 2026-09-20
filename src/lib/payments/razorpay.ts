@@ -253,9 +253,18 @@ export async function fetchRazorpayPayment(
   return result.ok ? { ok: true, payment: result.data } : result;
 }
 
-/** A failed fetch is worth asking again only when nobody answered, or the gateway itself failed or throttled. */
+/**
+ * A failed fetch is worth asking again when nobody answered, or the gateway
+ * itself failed or throttled, or OUR credentials were refused. A 401 or 403 is
+ * a wrong, rotated or test/live-mismatched key pair: the money may well have
+ * been taken and nothing here has judged the payment at all, so it must stay
+ * retryable. Answering it as a final decline made the webhook mark the event
+ * processed and the money was never recorded, not even as a refundable row.
+ * Only a payment Razorpay itself answered about (a 4xx for THIS payment, such
+ * as 404 not found) is a final answer.
+ */
 function fetchFailureCode(status: number | null): CaptureFailureCode {
-  return status === null || status >= 500 || status === 429 ? "GATEWAY_UNAVAILABLE" : "GATEWAY_DECLINED";
+  return status === null || status >= 500 || status === 429 || status === 408 || status === 401 || status === 403 ? "GATEWAY_UNAVAILABLE" : "GATEWAY_DECLINED";
 }
 
 /* ------------------------------------------------------------------ */
