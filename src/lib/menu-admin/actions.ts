@@ -10,6 +10,7 @@
  * Rendering a screen is never the check; the action is. §41.
  */
 
+import { parseStation } from "@/lib/kitchen/stations";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
@@ -207,7 +208,12 @@ const productDetailsSchema = z.object({
   tags: z.string().optional(),
   sku: z.string().trim().max(60).optional(),
   prepMinutes: optionalInt(0, 240),
-  kdsStation: z.string().trim().max(60).optional(),
+  kdsStation: z
+    .string()
+    .trim()
+    .max(60)
+    .optional()
+    .refine((value) => !value || parseStation(value) !== null, { message: "Pick one of the listed kitchen stations, or leave it unassigned." }),
   servingInfo: z.string().trim().max(100).optional(),
   productType: z.enum(["SIMPLE", "COMBO"]).optional().default("SIMPLE"),
 });
@@ -244,7 +250,7 @@ export async function createProductAction(_prev: CreateProductResult, formData: 
         tags: splitList(parsed.data.tags),
         sku: parsed.data.sku || null,
         prepMinutes: parsed.data.prepMinutes === "" ? null : (parsed.data.prepMinutes ?? null),
-        kdsStation: parsed.data.kdsStation || null,
+        kdsStation: parseStation(parsed.data.kdsStation),
         servingInfo: parsed.data.servingInfo || null,
         productType: parsed.data.productType,
       },
@@ -280,7 +286,7 @@ export async function updateProductDetailsAction(id: string, _prev: ActionResult
         tags: splitList(parsed.data.tags),
         sku: parsed.data.sku || null,
         prepMinutes: parsed.data.prepMinutes === "" ? null : (parsed.data.prepMinutes ?? null),
-        kdsStation: parsed.data.kdsStation || null,
+        kdsStation: parseStation(parsed.data.kdsStation),
         servingInfo: parsed.data.servingInfo || null,
         productType: parsed.data.productType,
       },

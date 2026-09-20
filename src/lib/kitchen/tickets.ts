@@ -111,7 +111,7 @@ export type PrepHealth = "GREEN" | "AMBER" | "RED";
  * ticket with no target and no promise is GREEN — never guessed.
  */
 export function prepHealth(
-  ticket: Pick<KitchenTicket, "status" | "placedAt" | "promisedAt" | "prepTargetMinutes">,
+  ticket: Pick<KitchenTicket, "placedAt" | "promisedAt" | "prepTargetMinutes"> & { readonly status: string },
   now: number,
 ): PrepHealth {
   if (ticket.status === "READY") return "GREEN";
