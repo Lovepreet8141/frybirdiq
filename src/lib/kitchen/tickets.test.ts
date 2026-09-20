@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type KitchenSource, isLate, nextKitchenStatus, toKitchenTickets, waitingMinutes } from "./tickets";
+import { type KitchenSource, type KitchenTicket, NEARLY_LATE_RATIO, isLate, prepHealth, ticketPrepTarget, nextKitchenStatus, toKitchenTickets, waitingMinutes } from "./tickets";
 
 const at = (iso: string) => new Date(iso);
 
@@ -65,5 +65,67 @@ describe("kitchen tickets", () => {
     expect(nextKitchenStatus("ACCEPTED")).toEqual({ to: "PREPARING", label: "Start cooking" });
     expect(nextKitchenStatus("PREPARING")).toEqual({ to: "READY", label: "Ready" });
     expect(nextKitchenStatus("READY")).toBeNull();
+  });
+
+  it("attaches the prep target for the order, and null when none is known", () => {
+    const tickets = toKitchenTickets([source({ id: "a" }), source({ id: "b" })], new Map([["a", 12]]));
+    expect(tickets.find((t) => t.id === "a")?.prepTargetMinutes).toBe(12);
+    expect(tickets.find((t) => t.id === "b")?.prepTargetMinutes).toBeNull();
+    expect(toKitchenTickets([source()])[0]?.prepTargetMinutes).toBeNull();
+  });
+});
+
+describe("ticketPrepTarget", () => {
+  it("is the max over lines", () => {
+    expect(ticketPrepTarget([6, 12, 9])).toBe(12);
+  });
+  it("ignores lines with no target, and is null when none has one", () => {
+    expect(ticketPrepTarget([null, 8, undefined])).toBe(8);
+    expect(ticketPrepTarget([null, undefined])).toBeNull();
+    expect(ticketPrepTarget([])).toBeNull();
+  });
+  it("ignores zero, negative and non-finite values", () => {
+    expect(ticketPrepTarget([0, -3, Number.NaN])).toBeNull();
+  });
+});
+
+describe("prepHealth", () => {
+  const placedAt = "2026-09-12T10:00:00Z";
+  const ticket = (over: Partial<Pick<KitchenTicket, "status" | "placedAt" | "promisedAt" | "prepTargetMinutes">> = {}) => ({
+    status: "PREPARING" as const,
+    placedAt,
+    promisedAt: null,
+    prepTargetMinutes: 10,
+    ...over,
+  });
+  const at10 = (minutes: number, seconds = 0) => Date.parse(placedAt) + (minutes * 60 + seconds) * 1000;
+
+  it("nearly-late ratio is 80%", () => expect(NEARLY_LATE_RATIO).toBe(0.8));
+
+  it("is green before 80% of the target", () => {
+    expect(prepHealth(ticket(), at10(7, 59))).toBe("GREEN");
+  });
+  it("turns amber exactly at 80%", () => {
+    expect(prepHealth(ticket(), at10(8))).toBe("AMBER");
+    expect(prepHealth(ticket(), at10(9, 59))).toBe("AMBER");
+  });
+  it("turns red exactly at 100%", () => {
+    expect(prepHealth(ticket(), at10(10))).toBe("RED");
+    expect(prepHealth(ticket(), at10(30))).toBe("RED");
+  });
+  it("is red past the promised time even with no target", () => {
+    expect(prepHealth(ticket({ prepTargetMinutes: null, promisedAt: "2026-09-12T10:20:00Z" }), at10(21))).toBe("RED");
+  });
+  it("is green with no target and no promise, however long it waits", () => {
+    expect(prepHealth(ticket({ prepTargetMinutes: null }), at10(600))).toBe("GREEN");
+  });
+  it("is green with no placed time", () => {
+    expect(prepHealth(ticket({ placedAt: null }), at10(600))).toBe("GREEN");
+  });
+  it("is always green once READY", () => {
+    expect(prepHealth(ticket({ status: "READY" }), at10(600))).toBe("GREEN");
+  });
+  it("an ACCEPTED ticket is judged the same as a PREPARING one", () => {
+    expect(prepHealth(ticket({ status: "ACCEPTED" }), at10(9))).toBe("AMBER");
   });
 });

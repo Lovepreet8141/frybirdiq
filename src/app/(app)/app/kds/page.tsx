@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import { KdsBoard } from "@/components/kds/kds-board";
 import { PermissionDenied } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
-import { toKitchenTickets } from "@/lib/kitchen/tickets";
-import { listActiveOrders } from "@/lib/repositories/orders";
+import { loadKitchenTickets } from "@/lib/repositories/kitchen-board";
 
 export const metadata: Metadata = { title: "Kitchen", robots: { index: false, follow: false } };
 
@@ -31,7 +30,7 @@ export default async function KdsPage() {
     );
   }
 
-  const tickets = toKitchenTickets(await listActiveOrders(staff.orgId));
+  const tickets = await loadKitchenTickets(staff.orgId);
 
   return (
     <div className="lg:h-[calc(100dvh-68px)]">

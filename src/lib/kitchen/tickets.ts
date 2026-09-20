@@ -27,6 +27,13 @@ export interface KitchenTicket {
   readonly placedAt: string | null;
   /** ISO. The time the counter promised at accept; null if none was set. */
   readonly promisedAt: string | null;
+  /**
+   * Minutes the slowest line on the ticket is expected to take (roadmap 4.1):
+   * the max of `products.prep_minutes` over its lines. Null when no line has a
+   * target configured — there is deliberately no default, so an unset menu
+   * shows no amber or red rather than an invented one.
+   */
+  readonly prepTargetMinutes: number | null;
 }
 
 export interface KitchenSource {
@@ -43,7 +50,11 @@ export interface KitchenSource {
 }
 
 /** Only what the kitchen is working on, oldest first — the ticket that has waited longest is the one to cook next. */
-export function toKitchenTickets(rows: readonly KitchenSource[]): readonly KitchenTicket[] {
+export function toKitchenTickets(
+  rows: readonly KitchenSource[],
+  /** order id → ticket prep target in minutes; an order absent from the map has no target. */
+  prepTargets: ReadonlyMap<string, number | null> = new Map(),
+): readonly KitchenTicket[] {
   return rows
     .filter((row) => isLiveInKitchen(row.status))
     .map((row) => ({
@@ -57,6 +68,7 @@ export function toKitchenTickets(rows: readonly KitchenSource[]): readonly Kitch
       items: row.items,
       placedAt: row.placedAt?.toISOString() ?? null,
       promisedAt: row.estimatedReadyAt?.toISOString() ?? null,
+      prepTargetMinutes: prepTargets.get(row.id) ?? null,
     }))
     .sort((a, b) => (a.placedAt ?? "").localeCompare(b.placedAt ?? ""));
 }
@@ -68,11 +80,48 @@ export function waitingMinutes(ticket: Pick<KitchenTicket, "placedAt">, now: num
 }
 
 /**
- * Past the time the counter promised. A fact, not a score: there is no
- * amber, because "nearly late" needs a threshold nobody has decided.
+ * Past the time the counter promised. A fact, not a score; the "nearly late"
+ * judgement lives in `prepHealth`, from the prep target.
  */
 export function isLate(ticket: Pick<KitchenTicket, "promisedAt">, now: number): boolean {
   return ticket.promisedAt !== null && Date.parse(ticket.promisedAt) < now;
+}
+
+/** Share of the prep target after which a ticket is "nearly late" (roadmap 4.1). */
+export const NEARLY_LATE_RATIO = 0.8;
+
+/** The ticket's prep target: the slowest line. Lines without a target are ignored; none at all gives null. */
+export function ticketPrepTarget(lineMinutes: readonly (number | null | undefined)[]): number | null {
+  let target: number | null = null;
+  for (const minutes of lineMinutes) {
+    if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) continue;
+    target = target === null ? minutes : Math.max(target, minutes);
+  }
+  return target;
+}
+
+export type PrepHealth = "GREEN" | "AMBER" | "RED";
+
+/**
+ * GREEN / AMBER / RED for a ticket the kitchen is still working on.
+ *
+ * RED: past the prep target (100%) measured from placement, or past the time
+ * the counter promised. AMBER: at or past 80% of the target. Otherwise GREEN.
+ * A READY ticket is out of the kitchen's hands, so it is always GREEN, and a
+ * ticket with no target and no promise is GREEN — never guessed.
+ */
+export function prepHealth(
+  ticket: Pick<KitchenTicket, "status" | "placedAt" | "promisedAt" | "prepTargetMinutes">,
+  now: number,
+): PrepHealth {
+  if (ticket.status === "READY") return "GREEN";
+  if (isLate(ticket, now)) return "RED";
+  if (ticket.prepTargetMinutes === null || ticket.placedAt === null) return "GREEN";
+  const elapsed = now - Date.parse(ticket.placedAt);
+  const target = ticket.prepTargetMinutes * 60_000;
+  if (elapsed >= target) return "RED";
+  if (elapsed >= target * NEARLY_LATE_RATIO) return "AMBER";
+  return "GREEN";
 }
 
 /** The one move the kitchen makes from each column; READY is handed over by the counter, not here. */
