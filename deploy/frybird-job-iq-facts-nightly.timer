@@ -1,0 +1,24 @@
+# Starts frybird-job@iq-facts-nightly.service once a day at 20:30:00 (02:00 IST).
+# Build yesterday's IQ facts and trust scores (IQ-1), 02:00 IST. The heavy job: it ends well before the 22:00 UTC backup window, retries included.
+# OnCalendar must stay byte-for-byte the JOB_REGISTRY["iq-facts-nightly"].onCalendarUtc
+# string in src/lib/jobs/registry.ts; src/lib/jobs/registry.test.ts reads this
+# file and fails the build the moment the two drift.
+#
+#   cp deploy/frybird-job-iq-facts-nightly.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now frybird-job-iq-facts-nightly.timer
+#   systemctl list-timers frybird-job-iq-facts-nightly.timer
+#
+# Off: systemctl disable --now frybird-job-iq-facts-nightly.timer && systemctl stop 'frybird-job@iq-facts-nightly.service' (docs/DEPLOY.md 9.4).
+
+[Unit]
+Description=Build the FRYBIRD IQ daily facts nightly
+
+[Timer]
+# The target is the templated instance, not this timer's own base name.
+Unit=frybird-job@iq-facts-nightly.service
+OnCalendar=*-*-* 20:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

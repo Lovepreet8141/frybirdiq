@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { intradayBackfillDates, intradayRetentionFirstDate } from "@/lib/iq/metrics/intraday";
+import { RECON_RULE_IDS } from "@/lib/iq/reconcile/rules";
 
 import { DEFAULT_TIMING, HEAVY_JOB_NAMES, JOB_NAMES, JOB_REGISTRY, heavyJobNames, isJobName, type JobDefinition } from "./registry";
 
@@ -12,7 +13,7 @@ const JOBS_DIR = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = join(JOBS_DIR, "..", "..", "..");
 
 describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
-  it("ships heartbeat (IQ-0), the three IQ-1 facts jobs, the IQ-2 detect and intraday backfill jobs and the ref-b7 refund healer", () => {
+  it("ships heartbeat (IQ-0), the three IQ-1 facts jobs, the IQ-2 detect, reconcile, brief, pulse and intraday backfill jobs and the ref-b7 refund healer", () => {
     expect(JOB_NAMES).toEqual([
       "heartbeat",
       "iq-facts-nightly",
@@ -20,6 +21,9 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
       "iq-facts-backfill",
       "iq-detect-daily",
       "iq-intraday-backfill",
+      "iq-reconcile-nightly",
+      "iq-brief-daily",
+      "iq-service-pulse",
       "refund-followup-heal",
     ]);
     expect(isJobName("heartbeat")).toBe(true);
@@ -46,7 +50,7 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
     const WINDOW_START_MINUTE = 21 * 60 + 45;
     const WINDOW_END_MINUTE = 23 * 60;
     const daily = JOB_NAMES.filter((name) => /^\*-\*-\* \d{2}:\d{2}:00 UTC$/.test(JOB_REGISTRY[name].onCalendarUtc ?? ""));
-    expect(daily).toEqual(expect.arrayContaining(["iq-facts-nightly", "iq-detect-daily"]));
+    expect(daily).toEqual(expect.arrayContaining(["iq-facts-nightly", "iq-detect-daily", "iq-reconcile-nightly"]));
     for (const name of new Set([...HEAVY_JOB_NAMES, ...daily])) {
       const def = JOB_REGISTRY[name as keyof typeof JOB_REGISTRY];
       const match = /^\*-\*-\* (\d{2}):(\d{2}):00 UTC$/.exec(def.onCalendarUtc ?? "");
@@ -69,6 +73,49 @@ describe("job registry (DESIGN §3, DESIGN-v2-DELTA §3)", () => {
       concurrency: "light",
     });
     expect(JOB_REGISTRY["iq-intraday-backfill"]).toMatchObject({ periodKind: "day", target: "previous", onCalendarUtc: null, catchUpPeriods: 0, concurrency: "light" });
+  });
+
+  it("runs reconciliation before the detectors, with the same facts gate and catch-up (IQ-2 S4)", () => {
+    expect(JOB_REGISTRY["iq-reconcile-nightly"]).toMatchObject({
+      periodKind: "day",
+      target: "previous",
+      onCalendarUtc: "*-*-* 21:00:00 UTC",
+      catchUpPeriods: 1,
+      concurrency: "light",
+    });
+    // Every rule may spend its full statement timeout and the run must still have room to write.
+    // 10 s is iq-recon.ts's RECON_STATEMENT_TIMEOUT_MS; that module is server-only, so it is repeated here.
+    const RULE_TIMEOUT_SECONDS = 10;
+    expect(JOB_REGISTRY["iq-reconcile-nightly"].deadlineSeconds).toBeGreaterThan(RECON_RULE_IDS.length * RULE_TIMEOUT_SECONDS);
+    const hour = (name: keyof typeof JOB_REGISTRY) => /(\d{2}):(\d{2})/.exec(JOB_REGISTRY[name].onCalendarUtc ?? "")!.slice(1).join("");
+    expect(hour("iq-facts-nightly") < hour("iq-reconcile-nightly")).toBe(true);
+    expect(hour("iq-reconcile-nightly") < hour("iq-detect-daily")).toBe(true);
+  });
+
+  it("writes the brief's facts after the night's runs have had their retries, with the facts gate and no catch-up (IQ-2 S10)", () => {
+    expect(JOB_REGISTRY["iq-brief-daily"]).toMatchObject({
+      periodKind: "day",
+      target: "previous",
+      onCalendarUtc: "*-*-* 02:00:00 UTC",
+      deadlineSeconds: 30,
+      catchUpPeriods: 0,
+      concurrency: "light",
+    });
+  });
+
+  it("runs the service pulse five minutes behind the intraday writer's own quarter, with no catch-up (IQ-2 S9, C8/U3)", () => {
+    expect(JOB_REGISTRY["iq-service-pulse"]).toMatchObject({
+      periodKind: "quarter_hour",
+      target: "current",
+      onCalendarUtc: "*-*-* *:05/15:00 UTC",
+      catchUpPeriods: 0,
+      concurrency: "light",
+    });
+    // Both are quarter-hour jobs; the pulse must not start before the writer of the bucket it reads.
+    const minuteOf = (name: keyof typeof JOB_REGISTRY) => Number(/\*:(\d{2})\//.exec(JOB_REGISTRY[name].onCalendarUtc ?? "")![1]);
+    expect(minuteOf("iq-service-pulse")).toBeGreaterThan(minuteOf("iq-facts-intraday"));
+    // A run must finish inside its own quarter, so the next one never overlaps it.
+    expect(JOB_REGISTRY["iq-service-pulse"].deadlineSeconds).toBeLessThan(15 * 60);
   });
 
   it("starts the intraday backfill inside the 63-day retention it is purged by (RELIABILITY C7)", () => {

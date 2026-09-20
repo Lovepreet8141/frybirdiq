@@ -1,0 +1,24 @@
+# Starts frybird-job@iq-detect-daily.service once a day at 21:15:00 (02:45 IST).
+# Detect unusual days against the usual weekday (IQ-2), 02:45 IST, after the facts and reconciliation jobs.
+# OnCalendar must stay byte-for-byte the JOB_REGISTRY["iq-detect-daily"].onCalendarUtc
+# string in src/lib/jobs/registry.ts; src/lib/jobs/registry.test.ts reads this
+# file and fails the build the moment the two drift.
+#
+#   cp deploy/frybird-job-iq-detect-daily.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now frybird-job-iq-detect-daily.timer
+#   systemctl list-timers frybird-job-iq-detect-daily.timer
+#
+# Off: systemctl disable --now frybird-job-iq-detect-daily.timer && systemctl stop 'frybird-job@iq-detect-daily.service' (docs/DEPLOY.md 9.4).
+
+[Unit]
+Description=Run the FRYBIRD IQ detections daily
+
+[Timer]
+# The target is the templated instance, not this timer's own base name.
+Unit=frybird-job@iq-detect-daily.service
+OnCalendar=*-*-* 21:15:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

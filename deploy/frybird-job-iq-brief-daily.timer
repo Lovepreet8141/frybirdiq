@@ -1,0 +1,24 @@
+# Starts frybird-job@iq-brief-daily.service once a day at 02:00:00 (07:30 IST).
+# Write the brief's FACT rows for yesterday (IQ-2), 07:30 IST, ready for the morning. The brief itself is composed when the page is read.
+# OnCalendar must stay byte-for-byte the JOB_REGISTRY["iq-brief-daily"].onCalendarUtc
+# string in src/lib/jobs/registry.ts; src/lib/jobs/registry.test.ts reads this
+# file and fails the build the moment the two drift.
+#
+#   cp deploy/frybird-job-iq-brief-daily.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now frybird-job-iq-brief-daily.timer
+#   systemctl list-timers frybird-job-iq-brief-daily.timer
+#
+# Off: systemctl disable --now frybird-job-iq-brief-daily.timer && systemctl stop 'frybird-job@iq-brief-daily.service' (docs/DEPLOY.md 9.4).
+
+[Unit]
+Description=Write the FRYBIRD IQ daily brief facts each morning
+
+[Timer]
+# The target is the templated instance, not this timer's own base name.
+Unit=frybird-job@iq-brief-daily.service
+OnCalendar=*-*-* 02:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

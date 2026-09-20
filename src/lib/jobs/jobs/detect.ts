@@ -17,23 +17,13 @@ import { UpstreamNotReady, runDetectDaily } from "@/lib/iq/detect/detect-job";
 
 import type { JobContext, JobRunResult } from "../context";
 import { dateOfPeriodKey } from "../facts-plan";
+import { requireCodeVersion } from "./code-version";
 
-/** Insights record the deployed commit (engine contract: a git sha). */
-const GIT_SHA = /^[0-9a-f]{7,40}$/;
-
-/** The deploy did not say which commit it runs (DEPLOY_COMMIT unset), so no insight could be recorded. */
-export class CodeVersionUnknown extends Error {
-  readonly code = "CODE_VERSION_UNKNOWN";
-
-  constructor() {
-    super("deployed commit unknown");
-    this.name = "CodeVersionUnknown";
-  }
-}
+export { CodeVersionUnknown } from "./code-version";
 
 export async function runDetect(ctx: JobContext): Promise<JobRunResult> {
   // Fail before reading anything, with a code that says why, rather than at the write.
-  if (!GIT_SHA.test(ctx.codeVersion)) throw new CodeVersionUnknown();
+  requireCodeVersion(ctx.codeVersion);
   try {
     return await evaluate(ctx);
   } catch (error) {

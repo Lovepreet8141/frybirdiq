@@ -32,23 +32,35 @@ import "server-only";
  * machine, whatever org they run for).
  */
 
-import { and, eq, gt, gte, inArray, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, like, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { iqDailyTrust, iqJobRuns, orders, organizations } from "@/db/schema";
+import { addDays } from "@/lib/dates";
+import type { BriefFiguresRead, BriefPeriods } from "@/lib/iq/brief/brief-job";
+import type { CheckRun } from "@/lib/iq/brief/compose";
+import type { CheckName } from "@/lib/iq/brief/templates";
 import { detectDayFrom, type DayFacts, type DayTrustRow } from "@/lib/iq/detect/day";
+import { DETECT_JOB_NAME } from "@/lib/iq/detect/detect-job";
+import { pulseDayFrom, type OpeningHours, type PulseDay } from "@/lib/iq/detect/pulse";
 import type { DetectDay } from "@/lib/iq/detect/rules";
+import type { Observed } from "@/lib/iq/engine";
 import { observed } from "@/lib/iq/engine/observed-factory";
-import { TRUST_SIGNAL_IDS, businessDateSql, endOfBusinessDay, startOfBusinessDay, type TrustSignalId } from "@/lib/iq/metrics";
+import { TRUST_SIGNAL_IDS, businessDateSql, endOfBusinessDay, netCollected, startOfBusinessDay, type TrustSignalId } from "@/lib/iq/metrics";
 import { TRUST_GRADES, type TrustGrade } from "@/lib/iq/trust";
+import { paise } from "@/lib/money";
+import { briefFiguresFrom, type BriefSpanRead } from "@/lib/jobs/brief-figures";
 import { FACTS_NIGHTLY_JOB, nightlyDates } from "@/lib/jobs/facts-plan";
+import { INTRADAY_WRITER_JOB } from "@/lib/jobs/jobs/pulse";
 import { JOB_RUN_STATUSES, type ClaimRead, type ExpectedRow, type JobRunRow, type JobRunStatus, type JobTrigger } from "@/lib/jobs/claim-decision";
 import { LeaseLostError, type LeaseToken } from "@/lib/jobs/fence";
 import type { ClaimRequest, FinishOutcome, JobRunStore } from "@/lib/jobs/handle";
 import { DayLockBusy, DayTimeout, type FactsParity, type JobReadRepos, type JobWriteRepos } from "@/lib/jobs/repos";
+import { saleSetWhere } from "./analytics";
 import { getProfitAndLoss } from "./expenses";
 import { countStuckRefundFollowUps, healLostRefundFollowUps } from "./payments";
-import { DayLockBusyError, DayTimeoutError, purgeIntradayFacts, readDailyFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
+import { DayLockBusyError, DayTimeoutError, assertBusinessDate, purgeIntradayFacts, readDailyFacts, readIntradayFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
 import { expireInsights, getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
+import { readRecon } from "./iq-recon";
 import { TRUST_DEFINITION_VERSION, computeTrustDay } from "./iq-trust";
 import { listOpenRecommendations, proposeRecommendation } from "./iq-recommendations";
 
@@ -131,21 +143,11 @@ async function factsReadyFor(orgId: string, date: string): Promise<boolean> {
   return runs.some((run) => nightlyDates(run.periodKey).includes(date));
 }
 
-/**
- * The detectors' view of each date (IQ-2 S3 `DetectDay`). This repository does
- * only the org-scoped reads — each day's summed daily facts and the day's
- * iq_daily_trust rows — and hands them to IQ-ENGINE's pure `detectDayFrom`,
- * which owns the figures and the trust rule (ARCHITECT review of 56fc9ba).
- *
- * Facts are read per date: `readDailyFacts` sums over its range, and the dates
- * are not contiguous (the day, the day before, and 8 same-weekday days), so one
- * call over min..max would add the days together.
- */
-async function readDetectDays(orgId: string, dates: readonly string[]): Promise<DetectDay[]> {
+/** This org's stored trust rows for `dates`, keeping only signals and grades this build knows. */
+async function readDayTrustRows(orgId: string, dates: readonly string[]): Promise<(DayTrustRow & { readonly date: string })[]> {
   const unique = [...new Set(dates)];
   if (unique.length === 0) return [];
-
-  const trustRows = await db()
+  const rows = await db()
     .select({
       date: iqDailyTrust.businessDate,
       signalId: iqDailyTrust.signalId,
@@ -164,21 +166,147 @@ async function readDetectDays(orgId: string, dates: readonly string[]): Promise<
     );
   const knownSignal = (id: string): id is TrustSignalId => (TRUST_SIGNAL_IDS as readonly string[]).includes(id);
   const knownGrade = (grade: string): grade is TrustGrade => (TRUST_GRADES as readonly string[]).includes(grade);
+  return rows
+    .filter((row) => knownSignal(row.signalId) && knownGrade(row.grade))
+    .map((row) => ({ date: row.date, signalId: row.signalId as TrustSignalId, grade: row.grade as TrustGrade, numerator: row.numerator, denominator: row.denominator, computedAt: row.computedAt }));
+}
+
+/**
+ * The detectors' view of each date (IQ-2 S3 `DetectDay`). This repository does
+ * only the org-scoped reads — each day's summed daily facts and the day's
+ * iq_daily_trust rows — and hands them to IQ-ENGINE's pure `detectDayFrom`,
+ * which owns the figures and the trust rule (ARCHITECT review of 56fc9ba).
+ *
+ * Facts are read per date: `readDailyFacts` sums over its range, and the dates
+ * are not contiguous (the day, the day before, and 8 same-weekday days), so one
+ * call over min..max would add the days together.
+ */
+async function readDetectDays(orgId: string, dates: readonly string[]): Promise<DetectDay[]> {
+  if (dates.length === 0) return [];
+  const trustRows = await readDayTrustRows(orgId, dates);
 
   const days: DetectDay[] = [];
   for (const date of dates) {
     const facts = await readDailyFacts(orgId, date, date);
     const dayFacts: DayFacts = { computed: facts.computedDates.includes(date), totals: facts.totals, breakdowns: facts.breakdowns };
-    const dayTrust: DayTrustRow[] = [];
-    for (const row of trustRows) {
-      if (row.date !== date || !knownSignal(row.signalId) || !knownGrade(row.grade)) continue;
-      dayTrust.push({ signalId: row.signalId, grade: row.grade, numerator: row.numerator, denominator: row.denominator, computedAt: row.computedAt });
-    }
+    const dayTrust: DayTrustRow[] = trustRows.filter((row) => row.date === date);
     // TODO(IQ-2 S4, FINANCE-LEDGER): parityFlagged comes from S4's per-day recon.facts_parity flag once it exists
     // (god ruling on iq2-s7: detectDayFrom's false is accepted until then).
     days.push(detectDayFrom(date, dayFacts, dayTrust, observed));
   }
   return days;
+}
+
+/** Every IST date in [from, to], inclusive. */
+function datesInSpan(span: { readonly from: string; readonly to: string }): string[] {
+  const dates: string[] = [];
+  for (let date = span.from; date <= span.to; date = addDays(date, 1)) dates.push(date);
+  return dates;
+}
+
+async function readBriefSpan(orgId: string, span: { readonly from: string; readonly to: string }): Promise<BriefSpanRead> {
+  const [facts, trust] = await Promise.all([readDailyFacts(orgId, span.from, span.to), readDayTrustRows(orgId, datesInSpan(span))]);
+  return { computed: facts.computedDates.length > 0, totals: facts.totals, trust };
+}
+
+/**
+ * The daily brief's figures (IQ-2 S10 `BriefFiguresRead`). Same division as
+ * readDetectDays: org-scoped reads here, every figure and its trust in the pure
+ * `briefFiguresFrom`, so the brief's four shared day figures are the detectors'
+ * own numbers rather than a second derivation of them.
+ */
+async function readBriefFigures(orgId: string, periods: BriefPeriods): Promise<BriefFiguresRead> {
+  const date = periods.day.to;
+  const [dayFacts, dayTrust, monthToDate, sameDaysLastMonth] = await Promise.all([
+    readDailyFacts(orgId, date, date),
+    readDayTrustRows(orgId, [date]),
+    readBriefSpan(orgId, periods.monthToDate),
+    readBriefSpan(orgId, periods.sameDaysLastMonth),
+  ]);
+  const captured = dayFacts.totals.captured_amount;
+  const refunded = dayFacts.totals.refunds_amount;
+  const day = {
+    date,
+    facts: { computed: dayFacts.computedDates.includes(date), totals: dayFacts.totals, breakdowns: dayFacts.breakdowns },
+    trust: dayTrust,
+    // The catalog's own helper, so the brief's "Collected after refunds" is the metric, not a second subtraction.
+    netCollected: captured === undefined && refunded === undefined ? null : netCollected(paise(captured ?? 0n), paise(refunded ?? 0n)),
+  };
+  return briefFiguresFrom(day, monthToDate, sameDaysLastMonth, observed);
+}
+
+/**
+ * The org's opening hours, as the service pulse reads them (IQ-2 S9). Stored
+ * "HH:MM" strings; the pure rules decide what an unusable pair means.
+ */
+async function readOpeningHours(orgId: string): Promise<OpeningHours> {
+  const [org] = await db()
+    .select({ opening: organizations.openingTime, closing: organizations.closingTime })
+    .from(organizations)
+    .where(eq(organizations.id, orgId))
+    .limit(1);
+  if (org === undefined) throw new Error(`iq-job-runs: org ${orgId} not found`);
+  return { opening: org.opening, closing: org.closing };
+}
+
+/**
+ * Whether an intraday writer run has finished covering the bucket that ended
+ * at `bucketEnd` (RELIABILITY C8/U3): a SUCCEEDED iq-facts-intraday run of this
+ * org that STARTED at or after that instant, so its read of today included the
+ * whole bucket. Without one the pulse refuses to evaluate rather than read a
+ * bucket the writer has not filled yet.
+ */
+async function intradayFreshAt(orgId: string, bucketEnd: string): Promise<boolean> {
+  const [run] = await db()
+    .select({ id: iqJobRuns.id })
+    .from(iqJobRuns)
+    .where(
+      and(
+        eq(iqJobRuns.orgId, orgId),
+        eq(iqJobRuns.job, INTRADAY_WRITER_JOB),
+        eq(iqJobRuns.status, "SUCCEEDED"),
+        gte(iqJobRuns.startedAt, new Date(bucketEnd)),
+      ),
+    )
+    .limit(1);
+  return run !== undefined;
+}
+
+/**
+ * The pulse's view of each IST date: this org's current-version intraday
+ * buckets, handed to IQ-ENGINE's pure `pulseDayFrom` (same division as
+ * readDetectDays).
+ *
+ * `computed` is rows.length > 0, because an intraday rebuild writes no row for
+ * a bucket with nothing in it and none at all for an empty day: a day that was
+ * never built and a day with no orders are indistinguishable in the table. It
+ * fails safe — an unbuilt day is left out of the baseline and never fires —
+ * and today's run has already proved a writer ran (`intradayFreshAt`).
+ * TODO(IQ-2, ANALYTICS-DATA): a per-day "intraday built" marker would let a
+ * genuinely empty day count as computed.
+ */
+async function readPulseDays(orgId: string, dates: readonly string[]): Promise<PulseDay[]> {
+  const days: PulseDay[] = [];
+  for (const date of [...new Set(dates)]) {
+    const buckets = await readIntradayFacts(orgId, date);
+    const midnight = startOfBusinessDay(date).getTime();
+    const rows = buckets.map((bucket) => ({
+      startMinute: Math.round((bucket.bucketStart.getTime() - midnight) / 60_000),
+      metricId: bucket.metricId,
+      value: bucket.value,
+    }));
+    days.push(pulseDayFrom(date, rows.length > 0, rows, observed));
+  }
+  return days;
+}
+
+/** Paid orders created in [from, to) (IST timestamps), the same sale set the facts use (R2.8). */
+async function countPaidOrders(orgId: string, from: string, to: string): Promise<Observed> {
+  const [row] = await db()
+    .select({ count: sql<number>`count(*)::int` })
+    .from(orders)
+    .where(saleSetWhere(orgId, { from: new Date(from), to: new Date(to) }));
+  return observed({ unit: "count", value: row?.count ?? 0 });
 }
 
 /** The iq-* reads a job may make, with `orgId` closed over. */
@@ -193,6 +321,12 @@ export function iqRepos(orgId: string): JobReadRepos {
     readDetectDays: (dates) => readDetectDays(orgId, dates),
     // Blocked by owner decision dec-7 (food-cost target): the rule stays unevaluated until then.
     readFoodCostTarget: async () => null,
+    readRecon: (...args) => readRecon(orgId, ...args),
+    readBriefFigures: (periods) => readBriefFigures(orgId, periods),
+    readOpeningHours: () => readOpeningHours(orgId),
+    intradayFreshAt: (bucketEnd) => intradayFreshAt(orgId, bucketEnd),
+    readPulseDays: (dates) => readPulseDays(orgId, dates),
+    countPaidOrders: (from, to) => countPaidOrders(orgId, from, to),
     listInsights: (...args) => listInsights(orgId, ...args),
     getInsight: (...args) => getInsight(orgId, ...args),
     readFactFigures: (...args) => readFactFigures(orgId, ...args),
@@ -476,4 +610,76 @@ class PostgresJobRunStore implements JobRunStore<JobWriteRepos> {
       eq(iqJobRuns.leaseOwner, expected.leaseOwner),
     )!;
   }
+}
+
+/* ── The daily brief's D-1 run state (IQ-2 R2.10, S10a) ─────────────────── */
+
+/**
+ * The job that runs each check the brief names. Reconcile and signatures are
+ * not in the registry yet (their bodies are FINANCE-LEDGER's S4 and
+ * PAYMENT-SAFETY's S5): until they are, no run row exists for them and the
+ * brief reads NOT_RUN, which is what actually happened — it never all-clears
+ * a check that did not run.
+ */
+export const BRIEF_CHECK_JOBS: Readonly<Record<CheckName, string>> = {
+  detect: DETECT_JOB_NAME,
+  reconcile: "iq-reconcile-nightly",
+  signatures: "iq-money-signatures",
+};
+
+export type BriefRunState = {
+  /** How each check ended for the date. */
+  readonly checks: Readonly<Record<CheckName, CheckRun>>;
+  /** iq-facts-nightly's summary for the date, for `parityFromSummary`; null unless a run SUCCEEDED. */
+  readonly factsSummary: Readonly<Record<string, number>> | null;
+  /** iq-detect-daily's summary for the date (its `not_evaluated:<rule>:<reason>` counts); null unless a run SUCCEEDED. */
+  readonly detectSummary: Readonly<Record<string, number>> | null;
+};
+
+/**
+ * How the day's checks ran, for one org and one IST business day.
+ *
+ * A day job's period key is the date; an hourly job's is `<date>T<hour>`, so
+ * both are matched and an hourly check folds over its rows. It fails closed:
+ * any FAILED row makes the check FAILED, any row that is neither SUCCEEDED
+ * nor FAILED (RUNNING, SKIPPED) reads NOT_RUN, and no row at all is NOT_RUN.
+ * Missing hours are not counted as runs — an hourly check that ran only part
+ * of the day still reads SUCCEEDED, so the brief's "no risks found" rests on
+ * the rows that exist. Tightening that needs a per-hour expectation the
+ * registry does not state yet.
+ *
+ * A summary comes only from a SUCCEEDED run: a failed run's counts are
+ * partial, and the brief must read a missing parity summary as "not checked"
+ * rather than as zero mismatches (R2.6).
+ */
+export async function readBriefRunState(orgId: string, date: string): Promise<BriefRunState> {
+  // `_` is a single-character wildcard in LIKE: an unchecked date would match
+  // another day's hourly period keys and report that day's checks as this day's.
+  assertBusinessDate(date);
+  const jobs = [...Object.values(BRIEF_CHECK_JOBS), FACTS_NIGHTLY_JOB];
+  const rows = await db()
+    .select({ job: iqJobRuns.job, status: iqJobRuns.status, periodKey: iqJobRuns.periodKey, summary: iqJobRuns.summary })
+    .from(iqJobRuns)
+    .where(
+      and(
+        eq(iqJobRuns.orgId, orgId),
+        inArray(iqJobRuns.job, jobs),
+        or(eq(iqJobRuns.periodKey, date), like(iqJobRuns.periodKey, `${date}T%`)),
+      ),
+    );
+
+  const stateOf = (job: string): CheckRun => {
+    const mine = rows.filter((row) => row.job === job);
+    if (mine.length === 0) return "NOT_RUN";
+    if (mine.some((row) => row.status === "FAILED")) return "FAILED";
+    return mine.every((row) => row.status === "SUCCEEDED") ? "SUCCEEDED" : "NOT_RUN";
+  };
+  const summaryOf = (job: string): Readonly<Record<string, number>> | null =>
+    rows.find((row) => row.job === job && row.periodKey === date && row.status === "SUCCEEDED")?.summary ?? null;
+
+  return {
+    checks: { detect: stateOf(BRIEF_CHECK_JOBS.detect), reconcile: stateOf(BRIEF_CHECK_JOBS.reconcile), signatures: stateOf(BRIEF_CHECK_JOBS.signatures) },
+    factsSummary: summaryOf(FACTS_NIGHTLY_JOB),
+    detectSummary: summaryOf(BRIEF_CHECK_JOBS.detect),
+  };
 }

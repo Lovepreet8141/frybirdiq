@@ -476,3 +476,29 @@ State now: Release 5 live (`eddba18`, migration 0040, Tuesday marked). Working t
 - **Before keys go in (owner):** (1) decide the intent question (recommendation above); (2) go/no-go for THIS branch; (3) then the keys, and a real-money test the owner runs himself (I never place, pay or refund in production).
 - **Order now:** go/no-go for cards 1b and 2 (both waiting on the owner), then card 3 (cash sessions 5.1), then section 17.
 
+## 20. Card 1b built (2026-09-20): IQ-2 integrated, waiting for the owner's go/no-go (GATED: server jobs = production data writes)
+
+- **Branch:** `release/rc-20-iq2` (pushed), from `kit-radix-nova` `089e776`, merging `agent/automation-architect-iq2-adapt` (contains S4 reconcile, S9 pulse, S10 brief), `agent/iq-engine-iq2-s10a` (brief loader + run-state read; one conflict, union of imports in `iq-job-runs.ts`), `agent/frontend-mu4xp5yj` (insight components) and `agent/iq-engine-iq2-s11b` (detections on the alerts page). NOT merged: S5 signatures (`iq2-s5c` blocking: `double_capture` never clears); the brief lists the "signatures" check as not run until it ships, so it never says all-clear for finance viewers. No migration.
+- **New here:** Daily brief page (`/app/iq/brief`, composed at read time from stored insights, readiness line and panel above), four timers (nightly facts, reconciliation, detection, brief) with DEPLOY.md 9.6 install/verify/stop/remove steps, refund-status fix in reconciliation (a FAILED refund no longer raises a money finding; fail-first proven).
+- **Reviews:** security no blocker/high/medium (lows: parity lines visible to all analytics viewers; hourly check can read SUCCEEDED with missing hours). Payments no veto (H1 fixed; M1 cancelled-with-capture not detected, M2 GST rate not recomputed, M3 delivery-fee GST ignores price_basis, L1 zero-total orders, L2 unused fees: logged as cards `recon-*`). DevOps no blocker (HIGH-1 docs: done; HIGH-2 no alerting installed: owner decision). QA 7/7 on `ecc1ead` (unit 2611, integration 554 x3); re-run on the final commit.
+- **Production facts checked read-only:** invoices 91, no gaps or duplicates; refunds 0; no zero-total paid orders; 10 days of orders (2026-09-10 to 09-19), so detectors will say "not enough history" for weeks and the brief will be thin at first.
+- **Owner decisions needed (in the go/no-go):** install the four timers now or after alerting; accept silent failures until then; run the one-time history fill by hand.
+- **Order now:** go/no-go for card 1b (waiting on the owner), then card 2 (pay-ready, gated), then section 17.
+
+
+## 24. Owner rule change (2026-09-20, evening): deploys no longer wait for closing time, they wait for a quiet shop
+The shop is not using the POS at the counter right now. **Before any deploy, do a read-only check on production** (ssh, `PGOPTIONS='-c default_transaction_read_only=on'`, `orders` table):
+1. **No order in progress:** nothing created in the last 3 hours whose status is not COMPLETED, CANCELLED, FAILED or REFUNDED.
+2. **No website order in the last 60 minutes:** `channel = 'ONLINE'`, `created_at` within 60 minutes.
+If both are clear, deploy now. If not, wait (re-check; at the latest the shop closes at 23:00 IST, closed all day Tuesday). This replaces "deploy only while the shop is closed"; every other gate (go/no-go, fresh dump, fail-fast, smoke, zero journal errors) is unchanged.
+- **IQ-2 approved by the owner** under this check: fresh dump first, every step fail-fast, install all four timers plus the alerting unit files (no `ALERT_URL` exists: the owner has not given one, so alerts stay unconfigured and show in `systemctl --failed`), run the one-time history fill, report parity of the brief against the P&L page.
+- **Release order (owner):** one gated release at a time; each starts only after a clean report of the one before and at least 30 minutes of clean journal in between. After a clean IQ-2 report: Razorpay readiness go/no-go, then the till.
+- **Payments direction:** Paytm Business API later. Ship Razorpay readiness anyway (tests, webhook hardening, permission-gate test, order-page fixes protect any provider). No Razorpay keys. **New card after the till: "Paytm provider"** behind `PaymentProvider` (create payment, verify callback/webhook signature, refund, status check), recorded fixtures and mocks only, no account/keys/real calls; read Paytm's official API docs first and list what the owner must obtain (merchant ID, keys, webhook URL, settlement details); gated like all payment code.
+- **Pre-deploy check at 21:25 IST on 2026-09-20:** 1 order in progress, 2 website orders in the last hour: not clear, waiting.
+
+## 22. Queue state (2026-09-20, before card 3)
+
+- **Live:** Release 5 (`eddba18`, day off, migration 0040) and Release 6 (`e4d791b`, IQ readiness). `kit-radix-nova` `089e776` (+ this note).
+- **Waiting on the owner (go/no-go):** card 1b (`release/rc-20-iq2` `3de03a0`: IQ-2 daily brief page + four nightly timers; needs the decisions in section 20) and card 2 (`release/rc-21-pay-ready` `5d4ca97`: Razorpay readiness, no keys; see section 21). Neither is deployed.
+- **Starting now:** card 3, cash sessions 5.1 -> rider cash handover 5.2 -> reconciliation view 5.3 (GATED: money + migration expected).
+

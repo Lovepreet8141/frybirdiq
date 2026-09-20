@@ -431,7 +431,7 @@ journalctl -u frybird-job@heartbeat -n 20
 ```
 
 One timer per job (`deploy/frybird-job-<name>.timer`); IQ-0 ships only
-`heartbeat`. `src/lib/jobs/registry.test.ts` fails the build if a timer's
+`heartbeat` (the four IQ-2 daily timers are in 9.6). `src/lib/jobs/registry.test.ts` fails the build if a timer's
 `OnCalendar=` and the registry's `onCalendarUtc` for that job ever drift —
 adding a job means adding both together.
 
@@ -524,6 +524,26 @@ itself): 0 means it's missing from the 443 server entirely; hand-copy it in
 block, which isn't wrong, just unnecessary. Confirm which server block(s)
 hold it with `nginx -T | grep -B5 'location \^~ /api/jobs/'` before assuming
 either way.
+
+### 9.6 The four IQ-2 daily timers (card 1b) — written, NOT installed
+
+Files: `deploy/frybird-job-iq-facts-nightly.timer` (20:30 UTC = 02:00 IST, the one heavy job), `frybird-job-iq-reconcile-nightly.timer` (21:00 UTC), `frybird-job-iq-detect-daily.timer` (21:15 UTC), `frybird-job-iq-brief-daily.timer` (02:00 UTC = 07:30 IST). Each starts the template `frybird-job@<name>.service`. Worst case every job and all its systemd retries ends by 21:45 UTC, clear of the 22:00 UTC backup (which can start up to 10 minutes late and runs about 45 minutes). The service-pulse and refund-heal timers are NOT part of this set (the pulse needs `iq-facts-intraday`, which has no timer here).
+
+**Prerequisites (stop if any is false):** the app deployed at a commit that contains these jobs (otherwise the route answers 404 and `curl -f` fails every night, with 12-minute retry cycles); migrations through 0040 applied; `/etc/frybird/jobs.header` present; systemd 254 or newer (`RestartMode=direct`). **Alerting (section 11.2) should be installed first**: without `frybird-alert@.service` and the new templates a failed night writes only a journal line and nobody is told. The owner decides whether to accept silent failures until then.
+
+Fail-fast install order (root on the VPS, after the owner's yes; stop at the first failure):
+1. Read-only pre-check: `systemctl is-active frybird`; `systemctl list-timers 'frybird-*'` shows only heartbeat and backup; `test -f /etc/frybird/jobs.header`; `systemctl --version`.
+2. Copy the four timer files to `/etc/systemd/system/`; `systemctl daemon-reload`; do not enable yet.
+3. `systemd-analyze verify` on the four timers and `frybird-job@.service`; stop on any output.
+4. First run by hand, in this order: `systemctl start frybird-job@iq-facts-nightly`, then `journalctl -u frybird-job@iq-facts-nightly -n 30 --no-pager`. SUCCEEDED looks like: the unit exits 0, curl 200 in the journal, and the newest `iq_job_runs` row for that job is SUCCEEDED (NOOP or BUSY are also fine). If `systemctl is-active` says `activating` it is retrying: stop it (below) and investigate; do not continue. Then the same for `iq-reconcile-nightly`, `iq-detect-daily`, `iq-brief-daily`. Optional history fill (10 days of orders): `systemctl start frybird-job@iq-facts-backfill` once, by hand; it recomputes every day from the first order through yesterday and is resumable.
+5. Enable one timer at a time in that order: `systemctl enable --now frybird-job-iq-<name>.timer`; `systemctl list-timers frybird-job-iq-<name>.timer` and check NEXT is the expected UTC time. (`Persistent=true` means a newly enabled timer has no missed run to catch up; after a reboot every missed timer fires once, immediately.)
+6. `systemctl --failed` is empty and the backup timer is unchanged.
+
+Read-only verification any time: `systemctl list-timers 'frybird-job-iq-*' frybird-backup.timer`; `journalctl -u 'frybird-job@iq-*' --since -1d -p warning`; `systemctl --failed`. Next morning: `journalctl -u frybird-job@iq-brief-daily -n 20` and confirm 200, then open the Daily brief page.
+
+Stop a job that is retrying: `systemctl stop 'frybird-job@iq-facts-nightly.service'` then `systemctl reset-failed 'frybird-job@iq-facts-nightly.service'` (per job; `disable --now` on the timer alone does not cancel a pending restart).
+
+Remove the four timers (rollback): `systemctl disable --now` on the four timers; `systemctl stop 'frybird-job@iq-*.service'`; `systemctl reset-failed 'frybird-job@iq-*.service'`; delete the four `/etc/systemd/system/frybird-job-iq-*.timer` files; `systemctl daemon-reload`. Heartbeat, backup, the template and the alert units stay. No migration or data is touched: the jobs write only `iq_*` rows, which stay as history. To go fully dormant unset `JOB_SECRET` and `JOB_SECRET_PREVIOUS` and restart `frybird`.
 
 ## 10. This release: migrations 0033–0036 + the job runner (card `dv-1`)
 

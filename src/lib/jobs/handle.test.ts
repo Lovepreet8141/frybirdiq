@@ -599,6 +599,27 @@ describe("DAY_LOCK_BUSY partials (RELIABILITY, iq1-s7b)", () => {
     expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "UPSTREAM_NOT_READY", failures: 0, attempt: 5 });
   });
 
+  it("counts RULE_TIMEOUT as a failure even when the run committed, and keeps it across retries until the run exhausts (iq2-s5b)", async () => {
+    const h = harness(
+      job(async (ctx) => {
+        // The signatures body commits the rules it did evaluate, then reports the timeout.
+        await ctx.commit(async () => undefined, { cursor: `c${ctx.attempt}` });
+        return { status: "PARTIAL", reason: "RULE_TIMEOUT", rowsWritten: 1, summary: { rule_timeout: 1 } };
+      }),
+    );
+    const failures: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const response = await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+      expect(response).toMatchObject({ status: 500 });
+      failures.push(h.store.run("test_job", "org-a", HOUR)!.failures);
+    }
+    expect(failures).toEqual([1, 2, 3]);
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ status: "FAILED", errorCode: "RULE_TIMEOUT" });
+    // Exhausted: the fourth call must not start a fourth attempt.
+    await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
+    expect(h.store.run("test_job", "org-a", HOUR)).toMatchObject({ attempt: 3 });
+  });
+
   it("still counts a plain deadline cut without progress as a failure", async () => {
     const h = harness(job(async () => ({ status: "PARTIAL", reason: "DEADLINE", rowsWritten: 0, summary: {} })));
     await handleJobRequest(request({ jobParam: "test_job" }), h.deps);
