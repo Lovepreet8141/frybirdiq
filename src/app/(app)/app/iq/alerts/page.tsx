@@ -1,18 +1,21 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { AttentionCards } from "@/components/iq/attention-cards";
+import { InsightList } from "@/components/iq/insight/insight-card";
 import { CommandCenterNav } from "@/components/iq/command-center-nav";
 import { RightNow } from "@/components/iq/right-now";
 import { type Capability, CapabilityPanel, DataTrust, KpiTile, Panel, PanelBody, PanelHeader, SectionHeading, StatusWord } from "@/components/iq/ui";
 import { LiveRefresh } from "@/components/staff/live-refresh";
 import { PageHeader } from "@/components/staff/page-header";
-import { PermissionDenied } from "@/components/states";
+import { ErrorState, PermissionDenied } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
 import { businessDate, resolveRange } from "@/lib/dates";
 import { LEVEL_COPY, attentionInput, groupAlerts, urgentCount } from "@/lib/iq/alerts";
+import { viewerFor } from "@/lib/iq/engine";
 import { alertSummary, attentionCards } from "@/lib/iq/overview";
 import { type Paise, formatINR } from "@/lib/money";
 import { foodCostWeeklySeries, getProfitAndLoss } from "@/lib/repositories/expenses";
+import { type InsightsForViewer, loadInsightsFor } from "@/lib/repositories/iq-insights";
 import { getOverviewSettings, getRightNow, productLastSales } from "@/lib/repositories/overview";
 import { getSmart86Projections } from "@/lib/repositories/stock";
 
@@ -33,8 +36,25 @@ const SIGNALS: readonly Capability[] = [
   { name: "Cost inputs missing", connected: true, note: "Which of food, packaging, labour and operating costs have been recorded" },
   { name: "Rush mode", connected: false, note: "No hold switch or promise-time override exists; today the counter turns orders down one at a time" },
   { name: "Projected stockouts (Smart 86)", connected: true, note: "From the last 7 days' consumption and stock on hand — recommends, never changes availability itself" },
+  { name: "Detections against the usual weekday", connected: true, note: "Findings the IQ checks stored: daily sales, orders and costs, and the service pulse. Empty until those checks run" },
   { name: "Alerts to your phone", connected: false, note: "No automatic channel is wired yet — see Admin › Notifications" },
 ];
+
+/**
+ * Active DETECTION insights for this viewer. The viewer comes from the
+ * server-side session's roles, never from the client, and payment-ledger
+ * findings (recon.*, sig.*) stay behind finance.view (IQ-2 R2.2). A failed
+ * read shows an error state for this section only; the rule-based alerts
+ * above still render.
+ */
+async function loadDetections(orgId: string, roles: Parameters<typeof viewerFor>[0]): Promise<InsightsForViewer | null> {
+  try {
+    return await loadInsightsFor(orgId, viewerFor(roles), { claimTypes: ["DETECTION"], statuses: ["ACTIVE"], limit: 50 });
+  } catch (error) {
+    console.error(`alerts: detections read failed (${error instanceof Error ? error.name : "unknown"})`);
+    return null;
+  }
+}
 
 /**
  * COMMAND CENTER › Alerts. Every finding the Overview's "Needs your
@@ -55,12 +75,13 @@ export default async function AlertsPage() {
   const now = new Date();
   const today = businessDate(now);
   const settings = await getOverviewSettings(staff.orgId);
-  const [rightNow, lastSales, pnl, foodCost, smart86] = await Promise.all([
+  const [rightNow, lastSales, pnl, foodCost, smart86, detections] = await Promise.all([
     getRightNow(staff.orgId, settings.kitchenCapacity, now.getTime()),
     productLastSales(staff.orgId, now),
     getProfitAndLoss(staff.orgId, resolveRange("mtd")),
     foodCostWeeklySeries(staff.orgId),
     getSmart86Projections(staff.orgId, now),
+    loadDetections(staff.orgId, staff.roles),
   ]);
 
   const cards = attentionCards(
@@ -89,7 +110,7 @@ export default async function AlertsPage() {
       <DataTrust
         items={[
           { tone: "gain", text: `Rules over measured numbers · rendered ${clock} IST · updates as orders move` },
-          { tone: "neutral", text: "Findings and actions come only from data FRYBIRD IQ can see — no score, no forecast" },
+          { tone: "neutral", text: "Findings and actions come only from data FRYBIRD IQ can see — no forecast" },
         ]}
       />
 
@@ -167,6 +188,14 @@ export default async function AlertsPage() {
               </section>
             ))
           )}
+          <section aria-labelledby="alerts-detections" className="flex flex-col gap-3">
+            <SectionHeading id="alerts-detections" title="Detected against the usual" note="Checks that compare with the same weekday · active findings" />
+            {detections === null ? (
+              <ErrorState title="Detections could not be loaded" detail="The rule-based alerts above are unaffected. Try again in a minute." />
+            ) : (
+              <InsightList result={detections} emptyTitle="Nothing detected" emptyDetail="No check has found anything unusual that is still active." />
+            )}
+          </section>
         </div>
         <CapabilityPanel title="What the rules can see" items={SIGNALS} />
       </div>
