@@ -2,9 +2,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PERMISSIONS, ROLES } from "./permissions";
-import { CHILD_READ_LIMITS, MEMBERSHIPS_READ, READ_LIMITS, generateReadLimitStatements, readLimitPolicies, rolesHoldingAny } from "./rls-read-limits";
+import { CHILD_READ_LIMITS, MEMBERSHIPS_READ, READ_LIMITS, READ_LIMITS_0047, generateReadLimitStatements, generateReadLimitStatements0047, policies0047, readLimitPolicies, rolesHoldingAny } from "./rls-read-limits";
 
 const migration = readFileSync(path.resolve(__dirname, "../../supabase/migrations/0042_rls_role_reads.sql"), "utf8");
+const migration0047 = readFileSync(path.resolve(__dirname, "../../supabase/migrations/0047_rls_read_new_tables.sql"), "utf8");
+const undo0047 = readFileSync(path.resolve(__dirname, "../../supabase/rollback/0047_rls_read_new_tables.down.sql"), "utf8");
 const undo = readFileSync(path.resolve(__dirname, "../../supabase/rollback/0042_rls_role_reads.down.sql"), "utf8");
 
 describe("rls read limits", () => {
@@ -34,6 +36,21 @@ describe("rls read limits", () => {
       const roles = rolesHoldingAny(permissions);
       expect(roles.length).toBeGreaterThan(0);
       expect(roles).toEqual(ROLES.filter((r) => roles.includes(r)));
+    }
+  });
+
+  it("migration 0047 is exactly what the permissions table generates, and its undo drops exactly its policies", () => {
+    const body = migration0047.split("--> statement-breakpoint").slice(2).map((x) => x.trim());
+    expect([...migration0047.split("--> statement-breakpoint").slice(1)].map((x) => x.trim())).toEqual(generateReadLimitStatements0047().map((x) => x.trim()));
+    void body;
+    const dropped = [...undo0047.matchAll(/DROP POLICY IF EXISTS (\w+) ON (\w+);/g)].map((m) => `${m[2]}.${m[1]}`).sort();
+    expect(dropped).toEqual(policies0047().map((p) => `${p.table}.${p.policy}`).sort());
+  });
+
+  it("the 0047 tables name real permissions and never lock the OWNER out", () => {
+    for (const permissions of Object.values(READ_LIMITS_0047)) {
+      expect(permissions.filter((p) => !(PERMISSIONS as readonly string[]).includes(p))).toEqual([]);
+      expect(rolesHoldingAny(permissions)).toContain("OWNER");
     }
   });
 });
