@@ -143,7 +143,8 @@ describe("migration journal", () => {
       expect([entry.tag, entry.tag.slice(0, 4)]).toEqual([entry.tag, String(i).padStart(4, "0")]);
       expect([entry.tag, existsSync(join(MIGRATIONS_DIR, `${entry.tag}.sql`))]).toEqual([entry.tag, true]);
     });
-    const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql"));
+    // PENDING_<slug>.sql files are unnumbered migrations waiting for the integrator; they are not journal entries yet.
+    const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql") && !f.startsWith("PENDING_"));
     expect(files.length).toBe(journal.entries.length);
   });
 });
