@@ -29,11 +29,27 @@ export interface PaymentIntent {
   readonly requiresCustomerAction: boolean;
 }
 
+/**
+ * Why a capture did not happen, as a closed set a caller can branch on (pay-7):
+ * the Razorpay webhook decides "retry" or "final" from this, never from the
+ * wording of `error`.
+ *
+ * - `UNVERIFIED`: refused before the gateway was asked (no reference, a
+ *   signature that does not verify). Anyone holding an order UUID can cause it.
+ * - `GATEWAY_DECLINED`: the gateway answered and the answer is no — the
+ *   payment failed, is for a different order, or is the wrong amount. Final.
+ * - `GATEWAY_UNAVAILABLE`: nobody knows yet — the gateway could not be
+ *   reached, answered 5xx, or reports the payment not captured yet. Retry.
+ */
+export type CaptureFailureCode = "UNVERIFIED" | "GATEWAY_DECLINED" | "GATEWAY_UNAVAILABLE";
+
 export interface PaymentResult {
   readonly ok: boolean;
   readonly providerPaymentId: string | null;
   readonly capturedAmount: Paise;
   readonly error?: string;
+  /** Set on a failure by a provider that talks to a gateway; see `CaptureFailureCode`. */
+  readonly code?: CaptureFailureCode;
   readonly payload?: Record<string, unknown>;
 }
 

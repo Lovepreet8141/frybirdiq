@@ -342,28 +342,40 @@ describe("settle() concurrent double-capture (baseline P2-2)", () => {
     ]);
     if (!cash || !online) throw new Error("unreachable");
 
-    // Exactly one of the two took the money; the other was told, in words a
-    // cashier can act on, that it was already paid. Which one wins is timing.
+    // Exactly one of the two settled the order. Which one wins is timing.
     const results = [cash, online];
     expect(results.filter((result) => result.ok)).toHaveLength(1);
     const loser = results.find((result) => !result.ok);
     if (!loser || loser.ok) throw new Error("expected exactly one refusal");
-    expect(loser.error).toMatch(/already been paid/);
 
-    // THE assertion this card exists for: one order, one CAPTURED payment —
-    // never a cash capture and an online capture side by side.
+    // THE assertion this card exists for: the order is settled once — one
+    // APPLIED capture, one invoice. pay-7 changes only what happens to an
+    // online loser: Razorpay already took that money, so it is recorded as its
+    // own capture held for refund, never applied and never dropped. A cash
+    // loser takes nothing and is told the order was already paid.
     const capturedRows = await db().select().from(payments).where(and(eq(payments.orderId, orderId), eq(payments.status, "CAPTURED")));
-    expect(capturedRows).toHaveLength(1);
+    const applied = capturedRows.filter((row) => (row.providerPayload as { unapplied?: boolean } | null)?.unapplied !== true);
+    expect(applied).toHaveLength(1);
+    if (cash.ok) {
+      expect(online).toMatchObject({ ok: false, code: "RECORDED_FOR_REFUND" });
+      expect(capturedRows.filter((row) => row.provider === "razorpay")).toHaveLength(1);
+      expect(applied[0]?.provider).toBe("cash");
+    } else {
+      expect(loser).toMatchObject({ code: "ALREADY_PAID", error: expect.stringMatching(/already been paid/) });
+      expect(capturedRows).toHaveLength(1);
+    }
 
     const [order] = await db().select({ status: orders.status, invoiceNumber: orders.invoiceNumber }).from(orders).where(eq(orders.id, orderId));
     expect(order?.status).toBe("PAID");
     expect(order?.invoiceNumber).toBeTruthy();
 
-    // The loser's refusal was produced inside withIdempotency's work (the
-    // pre-check answers before a key is ever claimed) and stored there.
+    // The loser's answer was produced inside withIdempotency's work (the
+    // pre-check answers before a key is ever claimed) and stored there — and
+    // for an online loser what is stored is "recorded for refund", so a retry
+    // can never find a stored "already paid" and drop the money (pay-7).
     const loserKey = cash.ok ? `razorpay-payment:${providerPaymentId}` : `cash-payment:${orderId}`;
     const [loserRow] = await db().select({ responseSnapshot: idempotencyKeys.responseSnapshot }).from(idempotencyKeys).where(and(eq(idempotencyKeys.key, loserKey), eq(idempotencyKeys.operation, "recordPayment")));
-    expect(loserRow?.responseSnapshot).toMatchObject({ ok: false, error: expect.stringMatching(/already been paid/) });
+    expect(loserRow?.responseSnapshot).toMatchObject(cash.ok ? { ok: false, code: "RECORDED_FOR_REFUND" } : { ok: false, error: expect.stringMatching(/already been paid/) });
   });
 });
 
@@ -504,18 +516,18 @@ describe("settle() refuses refunded payments and terminal orders (pay-6)", () =>
     expect(auditRows).toHaveLength(0);
   });
 
-  it.each(["CANCELLED", "FAILED"] as const)("an AUTHORIZED online payment on a %s order cannot be captured by settle", async (status) => {
+  it.each(["CANCELLED", "FAILED"] as const)("an AUTHORIZED online payment on a %s order is never applied by settle", async (status) => {
     const orderId = await createOrderPendingPayment(org, { grandTotalRupees: "300" });
     const providerPaymentId = `pay_test_${randomUUID().slice(0, 12)}`;
     await db().insert(payments).values({ orgId: org.orgId, orderId, status: "AUTHORIZED", method: "UPI", amount: fromRupees("300"), provider: "razorpay", providerPaymentId, providerOrderId: `order_test_${randomUUID().slice(0, 12)}` });
     await db().update(orders).set({ status }).where(eq(orders.id, orderId));
 
-    // Refused before the provider is ever asked to capture: no Razorpay keys
-    // or fetch stub are set up in this block, so reaching capture would throw.
+    // The order can never take it. Since pay-7 the gateway is still asked —
+    // money it already took must be recorded for a refund — but no Razorpay
+    // keys are set up in this block, so the gateway gives no answer: nothing is
+    // recorded, and the webhook would retry rather than drop it.
     const result = await recordOnlinePayment({ orderId, providerPaymentId });
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("unreachable");
-    expect(result.error).toMatch(new RegExp(status.toLowerCase()));
+    expect(result).toMatchObject({ ok: false, code: "GATEWAY_UNAVAILABLE" });
     expect(await capturedCount(orderId)).toBe(0);
     const [authorized] = await db().select({ status: payments.status }).from(payments).where(eq(payments.providerPaymentId, providerPaymentId));
     expect(authorized?.status).toBe("AUTHORIZED");

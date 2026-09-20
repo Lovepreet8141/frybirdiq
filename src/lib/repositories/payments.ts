@@ -22,7 +22,7 @@ import { pointsEarned } from "@/lib/loyalty";
 import { getLoyaltyConfig, getStampConfig } from "@/lib/loyalty/config";
 import { awardStampForOrderInTx, qualifyingStampSpend, redeemStampRewardInTx, reversePointsForOrder, reverseStampForOrder } from "./loyalty";
 import { financialYear, invoiceNumber, parseInvoiceNumber } from "@/lib/invoice";
-import { CASH_PROVIDER, type PaymentMethod, type PaymentResult, RAZORPAY_PROVIDER, type RefundResult, getProvider } from "@/lib/payments";
+import { CASH_PROVIDER, type CaptureFailureCode, type PaymentMethod, type PaymentResult, RAZORPAY_PROVIDER, type RefundResult, getProvider, isRazorpayConfigured } from "@/lib/payments";
 import { IdempotencyConflict, withIdempotency } from "./idempotency";
 import { type FactsRefreshSteps, refreshFactsForDays } from "./expenses";
 import { refundFactsDays } from "@/lib/payments/refund-facts-days";
@@ -32,9 +32,40 @@ import { openSessionIdForPayment } from "./cash-sessions";
 import { canTransition, isTerminal } from "@/domain/order-status";
 import { advanceOrder } from "./orders";
 
+/**
+ * Why a payment was not recorded against the order, as a closed set (pay-7).
+ * Callers branch on this, never on the wording of `error`: the Razorpay
+ * webhook retries only GATEWAY_UNAVAILABLE and treats everything else as a
+ * final answer.
+ *
+ * - `ORDER_NOT_FOUND`: no such order in this org (a foreign org's order reads the same).
+ * - `NOT_PERMITTED`: the actor may not take payment.
+ * - `GUARD_REFUSED`: a narrower authorization's own condition failed (cash at the door).
+ * - `NOT_THIS_ORDER`: the Razorpay order named is not the one this order opened.
+ * - `ALREADY_PAID`: another settlement already took the money (cash, a double-tap).
+ * - `NOT_PAYABLE`: cancelled, failed, refunded, or already paid and refunded.
+ * - `UNVERIFIED` / `GATEWAY_DECLINED` / `GATEWAY_UNAVAILABLE`: see `CaptureFailureCode`.
+ * - `CAPTURE_FAILED`: the provider refused without a code (cash: short tender).
+ * - `RECORDED_FOR_REFUND`: money the gateway already took, for an order that
+ *   could not take it. Recorded as its own CAPTURED payment — refundable from
+ *   the payments screen — and the order left exactly as it was. Final.
+ */
+export type RecordPaymentCode =
+  | "ORDER_NOT_FOUND"
+  | "NOT_PERMITTED"
+  | "GUARD_REFUSED"
+  | "NOT_THIS_ORDER"
+  | "ALREADY_PAID"
+  | "NOT_PAYABLE"
+  | CaptureFailureCode
+  | "CAPTURE_FAILED"
+  | "RECORDED_FOR_REFUND";
+
 export type RecordPaymentResult =
   | { ok: true; paymentId: string; replayed: boolean }
-  | { ok: false; error: string };
+  | { ok: false; code: RecordPaymentCode; error: string; paymentId?: string };
+
+const ORDER_NOT_FOUND = { ok: false, code: "ORDER_NOT_FOUND", error: "That order does not exist." } as const;
 
 const METHOD_WORD: Record<PaymentMethod, string> = {
   CASH: "Cash",
@@ -88,12 +119,53 @@ export async function createPendingPayment(input: {
   return { id: row?.id ?? null, providerOrderId };
 }
 
+/**
+ * Whether an order is still waiting on an online payment the customer chose:
+ * a Razorpay payment is open for it and no money has been applied to it
+ * (pay-ready Q3). Such an order must not reach the kitchen — nobody has paid
+ * and nobody chose to pay at the counter. Cash on collection and cash on
+ * delivery are not this: cooking those unpaid is the design (order-status.ts).
+ * Read with the caller's transaction, under its order-row lock.
+ */
+export interface PaymentRowForWait {
+  readonly provider: string;
+  readonly status: string;
+  /** Money recorded for a refund, not applied to the order (pay-7). */
+  readonly unapplied: boolean;
+}
+
+/**
+ * The one rule for "this order is waiting on an online payment", pure so the
+ * kitchen guard and the staff board cannot disagree about it.
+ *
+ * Fails closed: a website order with NO payment row at all is incomplete (the
+ * pending payment row is written just after the order row commits, so a crash
+ * between the two would leave an order the kitchen could cook unpaid), and it
+ * waits. Counter and cash-on-collection orders always carry their own pending
+ * CASH row, so they are unaffected.
+ */
+export function orderAwaitsOnline(rows: readonly PaymentRowForWait[], channel: string): boolean {
+  const moneyApplied = rows.some((row) => (MONEY_TAKEN_STATUSES as readonly string[]).includes(row.status) && !row.unapplied);
+  if (moneyApplied) return false;
+  if (rows.some((row) => row.provider === RAZORPAY_PROVIDER && row.status === "PENDING")) return true;
+  return rows.length === 0 && channel === "ONLINE";
+}
+
+export async function awaitsOnlinePayment(tx: Tx, input: { orderId: string; orgId: string }): Promise<boolean> {
+  const rows = await tx
+    .select({ provider: payments.provider, status: payments.status, unapplied: UNAPPLIED })
+    .from(payments)
+    .where(and(eq(payments.orderId, input.orderId), eq(payments.orgId, input.orgId)));
+  const [order] = await tx.select({ channel: orders.channel }).from(orders).where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId))).limit(1);
+  return orderAwaitsOnline(rows, order?.channel ?? "");
+}
+
 /** Whether money has actually been captured against an order — answered by the payments table, never by the status. */
 export async function isOrderPaid(orderId: string): Promise<boolean> {
   const [captured] = await db()
     .select({ id: payments.id })
     .from(payments)
-    .where(and(eq(payments.orderId, orderId), eq(payments.status, "CAPTURED")))
+    .where(and(eq(payments.orderId, orderId), eq(payments.status, "CAPTURED"), sql`NOT ${UNAPPLIED}`))
     .limit(1);
   return captured !== undefined;
 }
@@ -134,7 +206,7 @@ export async function recordCashPayment(input: {
 }): Promise<RecordPaymentResult> {
   const deliveryCashOnly = !can(input.actorRoles, "orders.update");
   if (deliveryCashOnly && !(input.via === "delivery" && can(input.actorRoles, "delivery.complete"))) {
-    return { ok: false, error: "You don't have permission to take payment." };
+    return { ok: false, code: "NOT_PERMITTED", error: "You don't have permission to take payment." };
   }
 
   return settle({
@@ -187,7 +259,7 @@ export async function recordOnlinePayment(input: {
   // it makes is bound to the app's own organization (pay-58b, SEC c) — an
   // order UUID from any other org answers exactly like an unknown one.
   const org = await getOrg();
-  if (!org) return { ok: false, error: "That order does not exist." };
+  if (!org) return ORDER_NOT_FOUND;
 
   const [pending] = await database
     .select()
@@ -195,6 +267,27 @@ export async function recordOnlinePayment(input: {
     .where(and(eq(payments.orderId, input.orderId), eq(payments.orgId, org.id), eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.status, "PENDING")))
     .orderBy(desc(payments.createdAt))
     .limit(1);
+
+  /*
+   * The Razorpay order this payment is checked against. Normally the pending
+   * row. Once an earlier payment has settled that row it is CAPTURED, and a
+   * second payment the customer made against the same Razorpay order (two
+   * tabs, a retried UPI intent) still has to be verified against it — or it
+   * is refused as unverifiable and the money it took is never recorded
+   * (pay-7). The named reference must still be one this order opened.
+   */
+  const anchor =
+    pending ??
+    (input.providerOrderId === undefined
+      ? undefined
+      : (
+          await database
+            .select()
+            .from(payments)
+            .where(and(eq(payments.orderId, input.orderId), eq(payments.orgId, org.id), eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.providerOrderId, input.providerOrderId)))
+            .orderBy(desc(payments.createdAt))
+            .limit(1)
+        )[0]);
 
   /*
    * The Razorpay order the caller names must be the one THIS order's pending
@@ -206,8 +299,8 @@ export async function recordOnlinePayment(input: {
    * caller paid a Razorpay order; only this row says which of OUR orders that
    * Razorpay order belongs to.
    */
-  if (input.providerOrderId !== undefined && pending?.providerOrderId && input.providerOrderId !== pending.providerOrderId) {
-    return { ok: false, error: "That payment does not belong to this order." };
+  if (input.providerOrderId !== undefined && anchor?.providerOrderId && input.providerOrderId !== anchor.providerOrderId) {
+    return { ok: false, code: "NOT_THIS_ORDER", error: "That payment does not belong to this order." };
   }
 
   /*
@@ -217,7 +310,7 @@ export async function recordOnlinePayment(input: {
    * already-settled payment never gets this far (settle's captured fast path
    * answers first).
    */
-  const providerOrderId = pending?.providerOrderId ?? undefined;
+  const providerOrderId = anchor?.providerOrderId ?? undefined;
 
   // Only a failure Razorpay itself confirmed — the payment fetched from its
   // API and found failed, wrong, or short — is worth recording. A refusal
@@ -234,8 +327,14 @@ export async function recordOnlinePayment(input: {
     provider: RAZORPAY_PROVIDER,
     actorUserId: null,
     idempotencyKey: () => `razorpay-payment:${input.providerPaymentId}`,
-    amountDue: (order) => (pending ? paise(pending.amount) : paise(order.grandTotal)),
+    amountDue: (order) => (anchor ? paise(anchor.amount) : paise(order.grandTotal)),
+    // Razorpay auto-captures: by the time this runs the money has left the
+    // customer. An order that can no longer take it still gets the payment
+    // recorded, for a refund (pay-7).
+    recordUnapplied: true,
     capture: async (order, amount) => {
+      // No keys: nobody can answer for the money. Said as a code, not thrown.
+      if (!isRazorpayConfigured()) return { ok: false, providerPaymentId: null, capturedAmount: ZERO, error: "Online payment is not set up.", code: "GATEWAY_UNAVAILABLE" };
       const captured = await getProvider(RAZORPAY_PROVIDER).capture({
         orderId: order.id,
         amount,
@@ -383,6 +482,16 @@ interface Settlement {
    * to a cash session now (roadmap 5.2).
    */
   readonly cashHeldByRider?: boolean;
+  /**
+   * The provider has already taken the money before `settle` runs (Razorpay
+   * auto-capture). When the order cannot take it — already paid, cancelled,
+   * refunded, or another capture won the race under the lock — the verified
+   * payment is recorded as its own CAPTURED row marked unapplied, and the
+   * order is not touched. Without this the money sits in the gateway account
+   * with no row anywhere, so nothing can refund it (pay-7). Never set for
+   * cash: nothing has been taken until the cashier's capture.
+   */
+  readonly recordUnapplied?: boolean;
 }
 
 /**
@@ -393,7 +502,11 @@ interface Settlement {
  */
 const MONEY_TAKEN_STATUSES = ["CAPTURED", "PARTIALLY_REFUNDED", "REFUNDED"] as const;
 
-type PriorPayment = { id: string; status: (typeof payments.$inferSelect)["status"]; providerPaymentId: string | null };
+type PriorPayment = { id: string; status: (typeof payments.$inferSelect)["status"]; providerPaymentId: string | null; unapplied: boolean };
+
+/** A captured payment recorded for refund only (pay-7): money held, never applied to the order. Stored on the row's provider payload. */
+export const UNAPPLIED = sql<boolean>`coalesce((${payments.providerPayload}->>'unapplied')::boolean, false)`;
+const priorColumns = { id: payments.id, status: payments.status, providerPaymentId: payments.providerPaymentId, unapplied: UNAPPLIED };
 
 type SettlementGate =
   | { kind: "proceed" }
@@ -401,7 +514,9 @@ type SettlementGate =
   /** Another settlement's capture is committed. Stored by withIdempotency when decided inside it — pay-4's behaviour, unchanged. */
   | { kind: "alreadyPaid" }
   /** Decided from a refund or the order's status. Never stored: see `SettlementRefused`. */
-  | { kind: "refused"; error: string };
+  | { kind: "refused"; error: string }
+  /** This very payment was already recorded for refund (pay-7): the same answer again. */
+  | { kind: "recordedForRefund"; paymentId: string };
 
 /**
  * The one decision of whether `settle` may take money for an order. The
@@ -421,17 +536,23 @@ type SettlementGate =
  *     (red-team ord-2 item 4).
  */
 function settlementGate(orderStatus: OrderRow["status"], prior: readonly PriorPayment[], settlement: Settlement): SettlementGate {
-  if (prior.some((payment) => payment.status === "REFUNDED" || payment.status === "PARTIALLY_REFUNDED")) {
+  // A payment recorded for refund is money held against the order, never a
+  // settlement of it: it decides nothing below, and the same payment arriving
+  // again gets the same answer it got the first time.
+  const recorded = settlement.providerPaymentId ? prior.find((payment) => payment.unapplied && payment.providerPaymentId === settlement.providerPaymentId) : undefined;
+  if (recorded) return { kind: "recordedForRefund", paymentId: recorded.id };
+  const applied = prior.filter((payment) => !payment.unapplied);
+
+  if (applied.some((payment) => payment.status === "REFUNDED" || payment.status === "PARTIALLY_REFUNDED")) {
     // "already been paid" is kept in the wording on purpose: completeDelivery
     // and the Razorpay webhook both treat that phrase as final, which is
     // exactly right here — the order was paid, and nothing more is owed.
     return { kind: "refused", error: "That order has already been paid and refunded, so it cannot take payment again. Ring up a new order instead." };
   }
-  const captured = prior.find((payment) => payment.status === "CAPTURED");
-  if (captured) {
-    const sameSettlement = settlement.providerPaymentId ? captured.providerPaymentId === settlement.providerPaymentId : !captured.providerPaymentId;
-    return sameSettlement ? { kind: "replay", paymentId: captured.id } : { kind: "alreadyPaid" };
-  }
+  const captured = applied.filter((payment) => payment.status === "CAPTURED");
+  const same = captured.find((payment) => (settlement.providerPaymentId ? payment.providerPaymentId === settlement.providerPaymentId : !payment.providerPaymentId));
+  if (same) return { kind: "replay", paymentId: same.id };
+  if (captured.length > 0) return { kind: "alreadyPaid" };
   if (orderStatus === "PAID" || orderStatus === "COMPLETED") return { kind: "alreadyPaid" };
   if (isTerminal(orderStatus)) {
     return { kind: "refused", error: `That order is ${orderStatus.toLowerCase()}, so it cannot take payment.` };
@@ -440,6 +561,11 @@ function settlementGate(orderStatus: OrderRow["status"], prior: readonly PriorPa
 }
 
 const ALREADY_PAID = "That order has already been paid.";
+const RECORDED_FOR_REFUND = "This order had already been paid or closed, so this payment has been recorded to be refunded.";
+
+function recordedForRefund(paymentId: string): RecordPaymentResult {
+  return { ok: false, code: "RECORDED_FOR_REFUND", error: RECORDED_FOR_REFUND, paymentId };
+}
 
 /**
  * A refusal decided under the lock from a refund or the order's status.
@@ -451,9 +577,136 @@ const ALREADY_PAID = "That order has already been paid.";
  * could only ever match the database or contradict it.
  */
 class SettlementRefused extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly code: "GUARD_REFUSED" | "NOT_PAYABLE",
+  ) {
     super(message);
     this.name = "SettlementRefused";
+  }
+}
+
+/**
+ * A capture that did not happen, thrown out of withIdempotency's work for the
+ * same reason as `SettlementRefused`: its catch releases the claim instead of
+ * storing the failure for 24 hours. The key does not carry what a retry
+ * changes — the cash actually tendered, whether the gateway is reachable now —
+ * so a stored failure would be replayed to the corrected retry: the cashier
+ * could not settle the order for a day, and a Razorpay payment whose first
+ * check hit a gateway blip would get that stored failure on every webhook
+ * redelivery and never be recorded. Re-asking costs nothing: cash's capture
+ * writes nothing, and Razorpay's only fetches.
+ */
+class CaptureNotTaken extends Error {
+  constructor(readonly result: Extract<RecordPaymentResult, { ok: false }>) {
+    super(result.error);
+    this.name = "CaptureNotTaken";
+  }
+}
+
+type Tx = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
+
+/**
+ * Records money the gateway already took, for an order that cannot take it
+ * (pay-7), inside the caller's transaction and under its order-row lock.
+ *
+ * It is a payment, not a settlement: a CAPTURED row the refund flow can act
+ * on, marked `unapplied` in its provider payload, plus the audit row and an
+ * order event saying so. It never moves the order's status, never issues an
+ * invoice number, never awards loyalty. The Razorpay order's own pending row
+ * is the one it lands on when there still is one; otherwise it is a new row.
+ * Idempotent on the provider payment id, which is unique on the table.
+ */
+async function recordUnappliedInTx(tx: Tx, order: OrderRow, settlement: Settlement, captured: PaymentResult, because: string): Promise<RecordPaymentResult> {
+  const [already] = await tx
+    .select({ id: payments.id })
+    .from(payments)
+    .where(and(eq(payments.orgId, order.orgId), eq(payments.provider, settlement.provider), eq(payments.providerPaymentId, captured.providerPaymentId ?? "")))
+    .limit(1);
+  if (already) return recordedForRefund(already.id);
+
+  const now = new Date();
+  const method = settlement.methodFor(captured);
+  const values = {
+    status: "CAPTURED" as const,
+    method,
+    amount: captured.capturedAmount,
+    feeAmount: typeof captured.payload?.fee === "number" ? paise(captured.payload.fee) : paise(0),
+    capturedAt: now,
+    providerPaymentId: captured.providerPaymentId,
+    providerPayload: { ...captured.payload, unapplied: true, unappliedBecause: because },
+    updatedAt: now,
+  };
+  const [pendingForIt] = settlement.providerOrderId
+    ? await tx
+        .select({ id: payments.id })
+        .from(payments)
+        .where(and(eq(payments.orderId, order.id), eq(payments.orgId, order.orgId), eq(payments.provider, settlement.provider), eq(payments.status, "PENDING"), eq(payments.providerOrderId, settlement.providerOrderId)))
+        .limit(1)
+    : [];
+  const [row] = pendingForIt
+    ? await tx.update(payments).set(values).where(and(eq(payments.id, pendingForIt.id), eq(payments.orgId, order.orgId))).returning({ id: payments.id })
+    : await tx
+        .insert(payments)
+        .values({ ...values, orgId: order.orgId, orderId: order.id, provider: settlement.provider, providerOrderId: settlement.providerOrderId ?? null })
+        .returning({ id: payments.id });
+  if (!row) throw new Error("payments: the unapplied capture was not written");
+
+  const amount = formatINR(captured.capturedAmount);
+  await tx.insert(orderEvents).values({
+    orgId: order.orgId,
+    orderId: order.id,
+    fromStatus: order.status,
+    toStatus: order.status,
+    actorUserId: settlement.actorUserId,
+    reason: `${METHOD_WORD[method]} payment of ${amount} arrived after the order was ${because} — held, refund it`,
+  });
+  // §52: money changing hands, even when it is going back.
+  await tx.insert(auditLogs).values({
+    orgId: order.orgId,
+    locationId: order.locationId,
+    actorUserId: settlement.actorUserId,
+    action: "payment_captured_unapplied",
+    entity: "orders",
+    entityId: order.id,
+    before: { status: order.status },
+    after: { status: order.status, provider: settlement.provider, amount: captured.capturedAmount.toString(), providerPaymentId: captured.providerPaymentId, because },
+  });
+  return recordedForRefund(row.id);
+}
+
+/** Why the order could not take the payment, in the words of the order event. */
+function unappliedBecause(gate: SettlementGate, status: OrderRow["status"]): string {
+  return gate.kind === "alreadyPaid" ? "already paid" : `${status.toLowerCase().replace("_", " ")}`;
+}
+
+/**
+ * The pay-7 path from the pre-transaction fast path: the gate already says
+ * the order cannot take this payment. Asks the provider first — nothing is
+ * recorded that the gateway has not confirmed — then records it under the
+ * order lock.
+ */
+async function recordUnapplied(settlement: Settlement, order: OrderRow, gate: SettlementGate): Promise<RecordPaymentResult> {
+  const captured = await settlement.capture(order, settlement.amountDue(order));
+  if (!captured.ok) return { ok: false, code: captured.code ?? "CAPTURE_FAILED", error: captured.error ?? "The payment could not be recorded." };
+  try {
+    return await db().transaction(async (tx) => {
+      const [locked] = await tx.select().from(orders).where(and(eq(orders.id, order.id), eq(orders.orgId, order.orgId))).for("update").limit(1);
+      if (!locked) return ORDER_NOT_FOUND;
+      return recordUnappliedInTx(tx, locked, settlement, captured, unappliedBecause(gate, locked.status));
+    });
+  } catch (error) {
+    // The same payment recorded by a concurrent call (the Checkout handler and
+    // the webhook together): the unique (provider, provider_payment_id) holds.
+    const code = (error as { cause?: { code?: string }; code?: string }).cause?.code ?? (error as { code?: string }).code;
+    if (code !== "23505") throw error;
+    const [row] = await db()
+      .select({ id: payments.id })
+      .from(payments)
+      .where(and(eq(payments.orgId, order.orgId), eq(payments.provider, settlement.provider), eq(payments.providerPaymentId, captured.providerPaymentId ?? "")))
+      .limit(1);
+    if (!row) throw error;
+    return recordedForRefund(row.id);
   }
 }
 
@@ -464,10 +717,10 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
     .from(orders)
     .where(settlement.orgId ? and(eq(orders.id, settlement.orderId), eq(orders.orgId, settlement.orgId)) : eq(orders.id, settlement.orderId))
     .limit(1);
-  if (!order) return { ok: false, error: "That order does not exist." };
+  if (!order) return ORDER_NOT_FOUND;
 
   const guardRefusal = settlement.orderGuard?.(order);
-  if (guardRefusal) return { ok: false, error: guardRefusal };
+  if (guardRefusal) return { ok: false, code: "GUARD_REFUSED", error: guardRefusal };
 
   /*
    * Already settled. For a gateway, the same payment id arriving twice (the
@@ -494,13 +747,15 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
    * the invoice, the status, or the loyalty awards it skipped.
    */
   const prior = await database
-    .select({ id: payments.id, status: payments.status, providerPaymentId: payments.providerPaymentId })
+    .select(priorColumns)
     .from(payments)
     .where(and(eq(payments.orderId, order.id), eq(payments.orgId, order.orgId), inArray(payments.status, MONEY_TAKEN_STATUSES)));
   const gate = settlementGate(order.status, prior, settlement);
   if (gate.kind === "replay") return { ok: true, paymentId: gate.paymentId, replayed: true };
-  if (gate.kind === "alreadyPaid") return { ok: false, error: ALREADY_PAID };
-  if (gate.kind === "refused") return { ok: false, error: gate.error };
+  if (gate.kind === "recordedForRefund") return recordedForRefund(gate.paymentId);
+  if ((gate.kind === "alreadyPaid" || gate.kind === "refused") && settlement.recordUnapplied) return recordUnapplied(settlement, order, gate);
+  if (gate.kind === "alreadyPaid") return { ok: false, code: "ALREADY_PAID", error: ALREADY_PAID };
+  if (gate.kind === "refused") return { ok: false, code: "NOT_PAYABLE", error: gate.error };
 
   const amount = settlement.amountDue(order);
 
@@ -529,7 +784,7 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
     },
     async () => {
       const capturedResult = await settlement.capture(order, amount);
-      if (!capturedResult.ok) return { ok: false as const, error: capturedResult.error ?? "The payment could not be recorded." };
+      if (!capturedResult.ok) throw new CaptureNotTaken({ ok: false, code: capturedResult.code ?? "CAPTURE_FAILED", error: capturedResult.error ?? "The payment could not be recorded." });
 
       // Reads only, unaffected by anything the transaction below writes —
       // fetched before it opens rather than inside it on purpose.
@@ -584,23 +839,33 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
           .where(and(eq(orders.id, order.id), eq(orders.orgId, order.orgId)))
           .for("update")
           .limit(1);
-        if (!locked) return { ok: false as const, error: "That order does not exist." };
+        if (!locked) return ORDER_NOT_FOUND;
 
         // Re-checked on the locked row: the order may have moved since the first read.
         const lockedGuardRefusal = settlement.orderGuard?.(locked);
-        if (lockedGuardRefusal) throw new SettlementRefused(lockedGuardRefusal);
+        if (lockedGuardRefusal) throw new SettlementRefused(lockedGuardRefusal, "GUARD_REFUSED");
 
         // The same gate as the pre-transaction fast path — but this one is
         // authoritative, because it runs under the lock: a capture, a refund
         // or a cancellation that committed while this call waited is seen.
         const priorUnderLock = await tx
-          .select({ id: payments.id, status: payments.status, providerPaymentId: payments.providerPaymentId })
+          .select(priorColumns)
           .from(payments)
           .where(and(eq(payments.orderId, order.id), eq(payments.orgId, order.orgId), inArray(payments.status, MONEY_TAKEN_STATUSES)));
         const lockedGate = settlementGate(locked.status, priorUnderLock, settlement);
         if (lockedGate.kind === "replay") return { ok: true as const, paymentId: lockedGate.paymentId };
-        if (lockedGate.kind === "alreadyPaid") return { ok: false as const, error: ALREADY_PAID };
-        if (lockedGate.kind === "refused") throw new SettlementRefused(lockedGate.error);
+        if (lockedGate.kind === "recordedForRefund") return recordedForRefund(lockedGate.paymentId);
+        /*
+         * pay-7: this call lost the race. The gateway already confirmed the
+         * capture above, so the money is real and must land somewhere a
+         * refund can reach — recorded here, in this transaction, and that
+         * answer (not a bare "already paid") is what withIdempotency stores.
+         */
+        if ((lockedGate.kind === "alreadyPaid" || lockedGate.kind === "refused") && settlement.recordUnapplied) {
+          return recordUnappliedInTx(tx, locked, settlement, capturedResult, unappliedBecause(lockedGate, locked.status));
+        }
+        if (lockedGate.kind === "alreadyPaid") return { ok: false as const, code: "ALREADY_PAID" as const, error: ALREADY_PAID };
+        if (lockedGate.kind === "refused") throw new SettlementRefused(lockedGate.error, "NOT_PAYABLE");
 
         // See the comment above the transaction: decided from the locked
         // row, so a status that moved since the first read is respected.
@@ -860,13 +1125,15 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
   ).catch((error: unknown) => {
     // Unwraps a refusal thrown under the lock (see SettlementRefused) after
     // withIdempotency has released its claim instead of storing it.
-    if (error instanceof SettlementRefused) return error;
+    if (error instanceof SettlementRefused || error instanceof CaptureNotTaken) return error;
     throw error;
   });
-  if (settled instanceof SettlementRefused) return { ok: false, error: settled.message };
+  if (settled instanceof SettlementRefused) return { ok: false, code: settled.code, error: settled.message };
+  if (settled instanceof CaptureNotTaken) return settled.result;
 
   const { result, replayed } = settled;
-  if (!result.ok) return { ok: false, error: result.error };
+  // A result stored before results carried a code (cash only; Razorpay was never live) reads as a failed capture.
+  if (!result.ok) return { ok: false, code: result.code ?? "CAPTURE_FAILED", error: result.error, ...("paymentId" in result && result.paymentId ? { paymentId: result.paymentId } : {}) };
   return { ok: true, paymentId: result.paymentId, replayed };
 }
 

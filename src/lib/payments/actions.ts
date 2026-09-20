@@ -13,9 +13,22 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { readRememberedContact } from "@/lib/cart/remembered-contact";
 import { getCustomer } from "@/lib/customer";
-import { markOnlinePaymentFailed, recordOnlinePayment } from "@/lib/repositories/payments";
+import { type RecordPaymentCode, markOnlinePaymentFailed, recordOnlinePayment } from "@/lib/repositories/payments";
 
-export type OnlinePaymentResult = { ok: true; replayed: boolean } | { ok: false; error: string };
+/**
+ * `code` lets the order page choose what to say without reading `error`
+ * (pay-ready): GATEWAY_DECLINED — offer "Try again"; GATEWAY_UNAVAILABLE — "we
+ * are checking with the bank, do not pay again"; RECORDED_FOR_REFUND — "this
+ * order was already paid, your money will be refunded". Absent when the input
+ * itself was malformed.
+ */
+export type OnlinePaymentResult = { ok: true; replayed: boolean } | { ok: false; error: string; code?: RecordPaymentCode };
+
+/** The single answer for "could not be confirmed" that gives an unauthenticated caller nothing to probe. */
+const UNCONFIRMED = { ok: false, error: "That payment could not be confirmed. If money left your account, it will be refunded automatically.", code: "UNVERIFIED" } as const;
+
+/** For a retryable gateway failure: the money may be in flight, so say so and do not offer another payment. */
+const CHECKING_WITH_BANK = { ok: false, error: "We're checking with the bank. Please don't pay again. This page will update once your payment is confirmed.", code: "GATEWAY_UNAVAILABLE" } as const;
 
 const confirmSchema = z.object({
   orderId: z.uuid(),
@@ -37,7 +50,14 @@ export async function confirmOnlinePaymentAction(input: unknown): Promise<Online
 
   revalidatePath(`/order/${parsed.data.orderId}`);
   revalidatePath("/app/orders");
-  return result.ok ? { ok: true, replayed: result.replayed } : { ok: false, error: result.error };
+  if (result.ok) return { ok: true, replayed: result.replayed };
+  // No existence oracle: an unauthenticated caller must not be able to tell an unknown (or another shop's) order,
+  // an order that opened a different gateway order, and a bad signature apart. One answer for all three.
+  if (result.code === "ORDER_NOT_FOUND" || result.code === "NOT_THIS_ORDER" || result.code === "UNVERIFIED") return UNCONFIRMED;
+  // The gateway could not be reached or refused OUR credentials: the customer may already have paid. Never show the
+  // gateway's own words (they can name our account or keys) and never invite a second payment.
+  if (result.code === "GATEWAY_UNAVAILABLE") return CHECKING_WITH_BANK;
+  return { ok: false, error: result.error, code: result.code };
 }
 
 const failureSchema = z.object({

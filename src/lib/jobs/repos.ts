@@ -14,9 +14,12 @@
  * iq-* repositories they wrap (minus the org, transaction and lease), so the
  * two cannot drift apart. Nothing here reaches a database.
  */
+import type { BriefFiguresRead, BriefPeriods } from "@/lib/iq/brief/brief-job";
+import type { OpeningHours, PulseDay } from "@/lib/iq/detect/pulse";
 import type { DetectDay } from "@/lib/iq/detect/rules";
 import type { Observed } from "@/lib/iq/engine";
 import type * as Facts from "@/lib/repositories/iq-facts";
+import type * as Recon from "@/lib/repositories/iq-recon";
 import type * as Insights from "@/lib/repositories/iq-insights";
 import type * as Trust from "@/lib/repositories/iq-trust";
 import type * as Recommendations from "@/lib/repositories/iq-recommendations";
@@ -76,6 +79,32 @@ export type JobReadRepos = {
   readonly readDetectDays: (dates: readonly string[]) => Promise<readonly DetectDay[]>;
   /** The owner's food-cost target for the date's month; null until owner decision dec-7. */
   readonly readFoodCostTarget: (date: string) => Promise<Observed | null>;
+  /**
+   * Every reconciliation rule over `date` and the days before it, each rule in
+   * its own read-only snapshot with its own statement timeout (IQ-2 S4
+   * `readRecon`). A rule that times out comes back NOT_EVALUATED, never as a
+   * clear, so the job never expires a finding it failed to look at.
+   */
+  readonly readRecon: WithoutOrg<typeof Recon.readRecon>;
+  /**
+   * The figures the daily brief cites for its day and its two month spans
+   * (IQ-2 S10 `BriefFiguresRead`): each with the trust of the metrics it rests
+   * on. A figure with no value, and a span no day of which has facts, is
+   * absent — the brief drops that line rather than printing a zero.
+   */
+  readonly readBriefFigures: (periods: BriefPeriods) => Promise<BriefFiguresRead>;
+  /** The org's opening and closing time as stored, "HH:MM" (IQ-2 S9 service pulse). */
+  readonly readOpeningHours: () => Promise<OpeningHours>;
+  /**
+   * Whether an intraday writer run has already covered the bucket ending at
+   * `bucketEnd` (an IST timestamp): a SUCCEEDED run that started at or after
+   * it. The pulse refuses to evaluate a bucket without one (RELIABILITY C8/U3).
+   */
+  readonly intradayFreshAt: (bucketEnd: string) => Promise<boolean>;
+  /** The pulse's view of each IST date: its stored intraday buckets (IQ-2 S9 `PulseDay`). */
+  readonly readPulseDays: (dates: readonly string[]) => Promise<readonly PulseDay[]>;
+  /** Paid orders created in [from, to) (IST timestamps), counted from orders over the facts' own sale set. */
+  readonly countPaidOrders: (from: string, to: string) => Promise<Observed>;
   readonly listInsights: WithoutOrg<typeof Insights.listInsights>;
   readonly getInsight: WithoutOrg<typeof Insights.getInsight>;
   readonly readFactFigures: WithoutOrg<typeof Insights.readFactFigures>;

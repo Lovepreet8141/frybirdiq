@@ -241,7 +241,7 @@ function OrderRow({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const next = nextStep(order.status, order.fulfilment);
+  const next = nextStep(order.status, order.fulfilment, order.awaitingOnlinePayment);
   const isDelivery = order.fulfilment === "DELIVERY";
   /** Handing over an unpaid order is giving food away — the server refuses it; say so before the press. */
   const blockedByPayment = !order.isPaid && next?.to === "COMPLETED";

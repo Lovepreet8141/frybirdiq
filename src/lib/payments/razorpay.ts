@@ -19,6 +19,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { type Paise, ZERO, paise } from "@/lib/money";
 import {
+  type CaptureFailureCode,
   type PaymentIntent,
   type PaymentMethod,
   type PaymentProvider,
@@ -244,9 +245,26 @@ function noteOf(refund: RazorpayRefund): string | null {
   return typeof value === "string" ? value : null;
 }
 
-export async function fetchRazorpayPayment(config: RazorpayConfig, providerPaymentId: string): Promise<{ ok: true; payment: RazorpayPayment } | { ok: false; error: string }> {
+export async function fetchRazorpayPayment(
+  config: RazorpayConfig,
+  providerPaymentId: string,
+): Promise<{ ok: true; payment: RazorpayPayment } | { ok: false; error: string; status: number | null }> {
   const result = await call<RazorpayPayment>(config, `/payments/${encodeURIComponent(providerPaymentId)}`);
   return result.ok ? { ok: true, payment: result.data } : result;
+}
+
+/**
+ * A failed fetch is worth asking again when nobody answered, or the gateway
+ * itself failed or throttled, or OUR credentials were refused. A 401 or 403 is
+ * a wrong, rotated or test/live-mismatched key pair: the money may well have
+ * been taken and nothing here has judged the payment at all, so it must stay
+ * retryable. Answering it as a final decline made the webhook mark the event
+ * processed and the money was never recorded, not even as a refundable row.
+ * Only a payment Razorpay itself answered about (a 4xx for THIS payment, such
+ * as 404 not found) is a final answer.
+ */
+function fetchFailureCode(status: number | null): CaptureFailureCode {
+  return status === null || status >= 500 || status === 429 || status === 408 || status === 401 || status === 403 ? "GATEWAY_UNAVAILABLE" : "GATEWAY_DECLINED";
 }
 
 /* ------------------------------------------------------------------ */
@@ -254,7 +272,7 @@ export async function fetchRazorpayPayment(config: RazorpayConfig, providerPayme
 /* ------------------------------------------------------------------ */
 
 function unavailable(): PaymentResult {
-  return { ok: false, providerPaymentId: null, capturedAmount: ZERO, error: "Online payment is not set up." };
+  return { ok: false, providerPaymentId: null, capturedAmount: ZERO, error: "Online payment is not set up.", code: "GATEWAY_UNAVAILABLE" };
 }
 
 export const razorpayProvider: PaymentProvider = {
@@ -291,15 +309,15 @@ export const razorpayProvider: PaymentProvider = {
     const config = razorpayConfig();
     if (!config) return unavailable();
     if (!providerPaymentId) {
-      return { ok: false, providerPaymentId: null, capturedAmount: ZERO, error: "No Razorpay payment id was given." };
+      return { ok: false, providerPaymentId: null, capturedAmount: ZERO, error: "No Razorpay payment id was given.", code: "UNVERIFIED" };
     }
 
     if (signature !== undefined) {
       if (!providerOrderId) {
-        return { ok: false, providerPaymentId, capturedAmount: ZERO, error: "No Razorpay order id to verify against." };
+        return { ok: false, providerPaymentId, capturedAmount: ZERO, error: "No Razorpay order id to verify against.", code: "UNVERIFIED" };
       }
       if (!verifyPaymentSignature({ providerOrderId, providerPaymentId, signature, keySecret: config.keySecret })) {
-        return { ok: false, providerPaymentId, capturedAmount: ZERO, error: "The payment signature did not verify." };
+        return { ok: false, providerPaymentId, capturedAmount: ZERO, error: "The payment signature did not verify.", code: "UNVERIFIED" };
       }
     }
 
@@ -307,7 +325,7 @@ export const razorpayProvider: PaymentProvider = {
     // not lie; this says the money is actually there, for the right order,
     // in the right amount.
     const fetched = await fetchRazorpayPayment(config, providerPaymentId);
-    if (!fetched.ok) return { ok: false, providerPaymentId, capturedAmount: ZERO, error: fetched.error };
+    if (!fetched.ok) return { ok: false, providerPaymentId, capturedAmount: ZERO, error: fetched.error, code: fetchFailureCode(fetched.status) };
     const payment = fetched.payment;
 
     /*
@@ -318,7 +336,7 @@ export const razorpayProvider: PaymentProvider = {
      * can produce and which must never be written anywhere (pay-58b, R2).
      */
     if (providerOrderId && payment.order_id !== providerOrderId) {
-      return { ok: false, providerPaymentId, capturedAmount: ZERO, error: "That payment belongs to a different order.", payload: { gatewayVerified: true } };
+      return { ok: false, providerPaymentId, capturedAmount: ZERO, error: "That payment belongs to a different order.", code: "GATEWAY_DECLINED", payload: { gatewayVerified: true } };
     }
     if (payment.status !== "captured") {
       return {
@@ -326,11 +344,14 @@ export const razorpayProvider: PaymentProvider = {
         providerPaymentId,
         capturedAmount: ZERO,
         error: payment.status === "failed" ? (payment.error_description ?? "The payment failed.") : `The payment is ${payment.status}, not captured.`,
+        // Failed is an answer. Authorized or created is not yet one: Razorpay
+        // auto-captures, so the same payment asked again later is captured.
+        code: payment.status === "failed" ? "GATEWAY_DECLINED" : "GATEWAY_UNAVAILABLE",
         payload: { gatewayVerified: true },
       };
     }
     if (payment.currency !== "INR" || BigInt(payment.amount) !== amount) {
-      return { ok: false, providerPaymentId, capturedAmount: ZERO, error: "The amount Razorpay captured does not match the order.", payload: { gatewayVerified: true } };
+      return { ok: false, providerPaymentId, capturedAmount: ZERO, error: "The amount Razorpay captured does not match the order.", code: "GATEWAY_DECLINED", payload: { gatewayVerified: true } };
     }
 
     return {

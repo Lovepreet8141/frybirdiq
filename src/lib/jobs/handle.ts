@@ -63,7 +63,7 @@ export type FinishOutcome =
   | {
       /** Stored as status FAILED with this error_code; `cursor` is the one already committed (unchanged). */
       readonly status: "DEADLINE";
-      readonly errorCode: "DEADLINE" | "DAY_LOCK_BUSY" | "UPSTREAM_NOT_READY" | "REFUNDS_STILL_OPEN";
+      readonly errorCode: "DEADLINE" | "DAY_LOCK_BUSY" | "UPSTREAM_NOT_READY" | "REFUNDS_STILL_OPEN" | "RULE_TIMEOUT";
       readonly rowsWritten: number;
       readonly summary: Summary;
       readonly cursor: string | null;
@@ -370,7 +370,9 @@ async function runUnit<W>(
     // An upstream that is not final yet never counts: systemd's retries that night would
     // otherwise exhaust the period, and the next night's catch-up could never take it over
     // (RELIABILITY iq2-s7 blocker). The run still answers 500, so OnFailure still fires.
-    const progressed = committedCursor !== startCursor;
+    // A rule that ran past its own statement timeout is a fault, so RULE_TIMEOUT
+    // counts however much of the run committed (PAYMENT-SAFETY iq2-s5b, REL #1).
+    const progressed = committedCursor !== startCursor && result.reason !== "RULE_TIMEOUT";
     const lockBusy = result.reason === "DAY_LOCK_BUSY";
     const upstreamNotReady = result.reason === "UPSTREAM_NOT_READY";
     const repeatedLockBusy = lockBusy && !progressed && previousErrorCode === "DAY_LOCK_BUSY";

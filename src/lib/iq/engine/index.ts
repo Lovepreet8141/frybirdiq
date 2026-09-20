@@ -50,7 +50,7 @@ export {
   type InsightViewer,
   type ViewerPresentations,
 } from "./present-for";
-export { divRoundHalfAway, integerMedian, observedMedian, observedShare } from "./observed-stats";
+export { divRoundHalfAway, integerMedian, observedMean, observedMedian, observedShare, observedSum } from "./observed-stats";
 export {
   CLAIM_TYPES,
   ActionTierSchema,

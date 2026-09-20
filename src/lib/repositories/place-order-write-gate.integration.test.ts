@@ -556,3 +556,27 @@ describe("a closed day (ops-3): the server refuses whatever the page showed", ()
     expect(after!.scheduledFor?.toISOString()).toBe(order!.scheduledFor?.toISOString()); // nothing moved
   });
 });
+
+
+describe("a phone number alone never returns another person's order id", () => {
+  it("a guest (or anyone not signed in as its owner) retrying with that phone gets the words and NO resumeOrderId", async () => {
+    at(NOON);
+    const phone = "9000000030";
+    const [pending] = await db()
+      .insert(orders)
+      .values({ orgId: org.orgId, locationId: org.locationId, orderNumber: `RES-${randomUUID().slice(0, 6)}`, businessDate: "2026-06-10", status: "PENDING_PAYMENT", channel: "ONLINE", fulfilment: "TAKEAWAY", customerPhone: phone, grandTotal: fromRupees("100"), placedAt: NOON })
+      .returning({ id: orders.id });
+    await db().insert(payments).values({ orgId: org.orgId, orderId: pending!.id, status: "PENDING", method: "UPI", amount: fromRupees("100"), provider: "razorpay", providerOrderId: `order_res_${randomUUID().slice(0, 8)}` });
+    const before = await orderCount();
+
+    const result = await placeOrder({ ...base, phone, payment: "ONLINE" as never, idempotencyKey: randomUUID() });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.error).toContain("You already have an unpaid order");
+    expect("resumeOrderId" in result).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(pending!.id);
+    expect(await orderCount()).toBe(before);
+    expect(intents.count).toBe(0);
+  });
+});
