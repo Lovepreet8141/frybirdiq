@@ -3,7 +3,7 @@
  *
  * A line's station is resolved in this order:
  *   1. the product's own override (`products.kds_station`, set on the product form),
- *   2. its category's default (`CATEGORY_RULES` and the drinks pattern below),
+ *   2. its category's default (`CATEGORY_RULES` and the drink words below),
  *   3. ASSEMBLY.
  * There is no "unassigned": every line lands on a station screen.
  *
@@ -50,8 +50,13 @@ export function parseLineStation(raw: string | null | undefined): LineStation | 
 /* Category defaults — the owner's rules, as data.                     */
 /* ------------------------------------------------------------------ */
 
-/** Any of these anywhere in a normalised category name makes it a drinks category. */
-const DRINKS_PATTERN = /drink|beverage|shake|soda|juice|lassi|tea|coffee|water/;
+/**
+ * Any of these as a whole word (plural forms included, since names are
+ * singularised first) in a category name makes it a drinks category. Whole
+ * words only: "Steak" and "Meatballs" contain "tea" and "eat" but are not
+ * drinks. "milkshake" is listed because it is one word for a shake.
+ */
+const DRINK_WORDS: ReadonlySet<string> = new Set(["drink", "beverage", "shake", "milkshake", "soda", "juice", "lassi", "tea", "coffee", "water"]);
 
 /**
  * Category name (normalised: lower case, "&" as "and", singular words) to station.
@@ -106,7 +111,7 @@ export interface ResolvedStation {
 /** The station for a category name alone; `default` when no rule matches. */
 export function stationForCategory(categoryName: string | null | undefined): ResolvedStation {
   const normalised = normaliseCategoryName(categoryName ?? "");
-  if (normalised && DRINKS_PATTERN.test(normalised)) return { station: "DRINKS", source: "category" };
+  if (normalised.split(" ").some((word) => DRINK_WORDS.has(word))) return { station: "DRINKS", source: "category" };
   const rule = CATEGORY_RULES.find((entry) => entry.name === normalised);
   return rule ? { station: rule.station, source: "category" } : { station: DEFAULT_STATION, source: "default" };
 }

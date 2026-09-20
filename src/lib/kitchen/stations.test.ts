@@ -87,9 +87,14 @@ describe("category defaults: every real menu category", () => {
     expect(stationForCategory("chicken wing").station).toBe("FRY");
     expect(stationForCategory("mac and cheese").station).toBe("ASSEMBLY");
   });
-  it("any drinks-like word anywhere in the name makes it DRINKS", () => {
-    for (const name of ["Drinks", "Cold Drinks", "Beverages", "Milkshakes", "Shakes", "Soda", "Fresh Juices", "Lassi", "Iced Tea", "Coffee", "Mineral Water", "Hot Beverage Bar"]) {
+  it("a drink word as a whole word, singular or plural, anywhere in the name makes it DRINKS", () => {
+    for (const name of ["Drinks", "Cold Drinks", "Beverages", "Milkshakes", "Shakes", "Soda", "Fresh Juices", "Lassi", "Iced Tea", "Coffee", "Mineral Water", "Hot Beverage Bar", "Tea & Coffee", "TEA AND COFFEE", "Juice Bar"]) {
       expect(stationForCategory(name).station, name).toBe("DRINKS");
+    }
+  });
+  it("a drink word buried inside another word is not a drink", () => {
+    for (const name of ["Steak Sandwiches", "Steaks", "Meatballs", "Teaspoon Specials", "Waterfall Fries", "Sodastream Parts", "Shakespeare Bites", "Stealth Wraps"]) {
+      expect(stationForCategory(name).station, name).toBe("ASSEMBLY");
     }
   });
   it("anything unmatched, or no category at all, is ASSEMBLY by default", () => {
@@ -247,5 +252,33 @@ describe("expoView", () => {
   it("leaves out orders that are not in the kitchen and keeps oldest first", () => {
     const rows = [order({ id: "x", status: "READY" }), order({ id: "b", placedAt: "2026-09-12T10:05:00Z" }), order({ id: "a", placedAt: "2026-09-12T10:00:00Z" })];
     expect(expoView(rows).map((o) => o.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("the real menu, product by product", () => {
+  const MENU: Readonly<Record<string, readonly string[]>> = {
+    Burgers: ["Aloo Tikki Maharaja", "Cheese Volcano", "Nashville Bomb", "OG Frybird Classic", "Paneer Champ", "Peri Inferno", "The Chipotle Burger", "Thunder Burger"],
+    Chicken: ["Chicken Tenders", "Chicken Wings", "Popcorn Chicken"],
+    "Combos & Party Boxes": ["Boss Combo", "Frybird Combo", "Popcorn Party Box", "Solo Combo", "Tenders Boss Box", "Wings Party Box"],
+    Fries: ["Chilli Cheese Fries", "Frybird Loaded Fries", "Garlic Parmesan Fries", "Nachos Loaded Fries", "OG Salt Fries", "Peri Peri Fries"],
+    "Mac & Cheese": ["Chicken Loaded Mac & Fries", "Chicken Mac & Cheese", "Classic Mac & Cheese", "Nashville Chicken Mac & Cheese", "OG Mac Smash", "Paneer Mac & Cheese"],
+    "Rice Bowls": ["Classic Rice Bowl", "Frybird Rice Bowl", "Paneer Rice Bowl"],
+    Sauces: ["Cheese Sauce", "Chipotle Sauce", "Garlic Parmesan", "Garlic Sauce", "Green Sauce", "Peri Peri Mayo", "Signature Mayo"],
+    "Smash Burgers": ["Chipotle Smash", "Double Smash", "Nashville Smash", "OG Smash"],
+    Wraps: ["Aloo Chatpata Wrap", "Chipotle Crunch Wrap", "Crispy Paneer Wrap", "Nashville Fire Wrap", "The OG Wrap", "The Thunder Wrap"],
+  };
+  const FRY = new Set([...MENU.Chicken!, ...MENU.Fries!]);
+
+  it("resolves all 49 products: fried chicken and every fries item fry, everything else assembles, no drinks yet", () => {
+    const rows = Object.entries(MENU).flatMap(([category, products]) => products.map((product) => ({ category, product, override: null })));
+    expect(rows).toHaveLength(49);
+    const list = productStationList(rows);
+    expect(list).toHaveLength(49);
+    for (const row of list) expect(row.station, `${row.category} / ${row.product}`).toBe(FRY.has(row.product) ? "FRY" : "ASSEMBLY");
+    expect(list.filter((row) => row.station === "FRY")).toHaveLength(9);
+    expect(list.filter((row) => row.station === "ASSEMBLY")).toHaveLength(40);
+    expect(list.filter((row) => row.station === "DRINKS")).toHaveLength(0);
+    // Where each answer came from: explicit category rules, or the ASSEMBLY fallback for Sauces and Combos & Party Boxes.
+    for (const row of list) expect(row.source, row.product).toBe(row.category === "Sauces" || row.category === "Combos & Party Boxes" ? "default" : "category");
   });
 });
