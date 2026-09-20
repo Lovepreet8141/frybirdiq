@@ -1224,9 +1224,13 @@ async function reserveAndFinalizeRefund(input: {
       return { ok: false, error: failureOf({ ...locked, providerPayload: { failure } }) };
     }
 
+    // A cash refund comes out of the drawer, so it must be ordered against the till's close: read the open till
+    // FOR SHARE (a close waits for this refund, then counts it) and stamp the DB clock at this moment, not at
+    // transaction start (a refund that waited for a close is stamped after it and belongs to no closed till).
+    if (locked.provider === "cash" && order?.locationId) await openSessionIdForPayment(tx, input.orgId, order.locationId);
     await tx
       .update(refunds)
-      .set({ status: "SUCCEEDED", finalizedAt: sql`now()`, providerRefundId: result.providerRefundId, providerPayload: { httpStatus: result.httpStatus }, updatedAt: new Date() })
+      .set({ status: "SUCCEEDED", finalizedAt: sql`clock_timestamp()`, providerRefundId: result.providerRefundId, providerPayload: { httpStatus: result.httpStatus }, updatedAt: new Date() })
       .where(eq(refunds.id, locked.id));
 
     // Recomputed under the payment lock from what has actually SUCCEEDED

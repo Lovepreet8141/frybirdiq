@@ -6,13 +6,13 @@
  */
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, cashHandovers, cashSessions, orders, payments, refunds } from "@/db/schema";
 import { fromRupees, paise } from "@/lib/money";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 import { closeCashSession, getCashSessions, getReconciliation, getRiderCashOutstanding, openCashSession, openSessionIdForPayment, recordCashHandover } from "./cash-sessions";
-import { recordCashPayment } from "./payments";
+import { recordCashPayment, refundPayment } from "./payments";
 
 let org: TestOrg;
 let other: TestOrg;
@@ -122,7 +122,7 @@ describe("closing the till", () => {
     const sessionId = await openTill("1000");
     const orderId = await counterCash(org, "500");
     const p = await paymentOf(orderId);
-    await db().insert(refunds).values({ orgId: org.orgId, paymentId: p.id, orderId, amount: fromRupees("120"), reason: "wrong item", provider: "cash", status: "SUCCEEDED", finalizedAt: new Date() });
+    await db().insert(refunds).values({ orgId: org.orgId, paymentId: p.id, orderId, amount: fromRupees("120"), reason: "wrong item", provider: "cash", status: "SUCCEEDED", finalizedAt: sql`clock_timestamp()` });
     await db().update(payments).set({ status: "PARTIALLY_REFUNDED" }).where(eq(payments.id, p.id));
     // 1000 + 500 - 120 = 1380
     const result = await closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("1380"), note: null });
@@ -180,6 +180,41 @@ describe("closing the till", () => {
   });
 });
 
+describe("a cash refund and the close of the till", () => {
+  it("a cash refund waits for a close that is counting, and is stamped after it (it cannot fall out of every till)", async () => {
+    await reset();
+    const sessionId = await openTill("1000");
+    const orderId = await counterCash(org, "500");
+    const p = await paymentOf(orderId);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const holding = new Promise<void>((resolve) => (locked = resolve));
+    let closedAt = new Date(0);
+    // What a close does: hold the till FOR UPDATE, count, close.
+    const closing = db().transaction(async (tx) => {
+      await tx.select().from(cashSessions).where(eq(cashSessions.id, sessionId)).for("update");
+      locked();
+      await held;
+      closedAt = new Date();
+      await tx.update(cashSessions).set({ status: "CLOSED", closedBy: cashier, closedAt, countedCash: fromRupees("1500"), expectedCash: fromRupees("1500"), variance: paise(0) }).where(eq(cashSessions.id, sessionId));
+    });
+    await holding;
+
+    const refunding = refundPayment({ paymentId: p.id, amount: fromRupees("120"), reason: "wrong item", actorUserId: cashier, actorRoles: ["OWNER"], orgId: org.orgId, idempotencyKey: randomUUID() });
+    let settled = false;
+    void refunding.then(() => (settled = true));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(settled).toBe(false); // waiting for the close, not finalizing past it
+
+    release();
+    await closing;
+    expect(await refunding).toMatchObject({ ok: true });
+    const [refund] = await db().select().from(refunds).where(eq(refunds.paymentId, p.id));
+    expect(refund!.finalizedAt!.getTime()).toBeGreaterThanOrEqual(closedAt.getTime());
+  });
+});
+
 describe("rider door cash", () => {
   it("is held by the rider, in no till, until it is handed over", async () => {
     await reset();
@@ -206,6 +241,15 @@ describe("rider door cash", () => {
 
     // 500 float + 800 of the books' door cash: the till expects what the payments say, the shortfall is the rider's.
     expect(await closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("1280"), note: null })).toMatchObject({ ok: true, expected: fromRupees("1300"), variance: fromRupees("-20") });
+  });
+
+  it("a rider cannot receive their own cash", async () => {
+    await reset();
+    await openTill("500");
+    const orderId = await doorCash(org, "340");
+    const result = await recordCashHandover({ orgId: org.orgId, actorUserId: rider, riderUserId: rider, declared: fromRupees("340"), note: null });
+    expect(result).toMatchObject({ ok: false, code: "INVALID" });
+    expect(await paymentOf(orderId)).toMatchObject({ heldByRider: true, handoverId: null, cashSessionId: null });
   });
 
   it("needs an open till, and hands over nothing twice", async () => {
@@ -250,7 +294,7 @@ describe("the reconciliation view", () => {
     const online = await order(org, "600");
     await db().insert(payments).values({ orgId: org.orgId, orderId: online, status: "CAPTURED", method: "UPI", amount: fromRupees("600"), provider: "razorpay", capturedAt: new Date() });
     const p = await paymentOf(noTill);
-    await db().insert(refunds).values({ orgId: org.orgId, paymentId: p.id, orderId: noTill, amount: fromRupees("30"), reason: "x", provider: "cash", status: "SUCCEEDED", finalizedAt: new Date() });
+    await db().insert(refunds).values({ orgId: org.orgId, paymentId: p.id, orderId: noTill, amount: fromRupees("30"), reason: "x", provider: "cash", status: "SUCCEEDED", finalizedAt: sql`clock_timestamp()` });
     await closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("1390"), note: null });
 
     const today = new Date().toISOString().slice(0, 10);

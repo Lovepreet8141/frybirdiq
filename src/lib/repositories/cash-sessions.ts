@@ -201,7 +201,9 @@ export async function closeCashSession(input: { readonly orgId: string; readonly
     if (!session) return { ok: false, code: "NOT_FOUND", error: "That till could not be found." } as const;
     if (session.status === "CLOSED") return { ok: false, code: "ALREADY_CLOSED", error: "That till is already closed." } as const;
 
-    const now = new Date();
+    // The database clock, read after the lock: refunds are stamped by the same clock, so the two are comparable.
+    const clock = await tx.execute(sql`select clock_timestamp() as now`);
+    const now = new Date((clock as unknown as { now: string | Date }[])[0]!.now);
     const { taken, refunded } = await sessionCashFigures(tx, input.orgId, { id: session.id, openedAt: session.openedAt }, now);
     const expected = expectedCash({ openingFloat: paise(session.openingFloat), cashTaken: taken, cashRefunded: refunded });
     const variance = varianceOf(input.counted, expected);
@@ -274,6 +276,8 @@ export async function recordCashHandover(input: { readonly orgId: string; readon
     // The open till is held FOR SHARE for the whole handover, so it cannot close underneath it.
     const sessionId = await openSessionIdForPayment(tx, input.orgId, locationId);
     if (!sessionId) return { ok: false, code: "NO_OPEN_SESSION", error: "Open the till first: a rider's cash goes into the open till." } as const;
+
+    if (input.actorUserId === input.riderUserId) return { ok: false, code: "INVALID", error: "A rider cannot receive their own cash. Someone else must take it." } as const;
 
     const held = await tx
       .select({ id: payments.id, amount: payments.amount })
