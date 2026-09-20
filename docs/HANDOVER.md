@@ -467,3 +467,9 @@ State now: Release 5 live (`eddba18`, migration 0040, Tuesday marked). Working t
 - **Low cards:** `readiness-safe-1` (the Overview page has no fallback if a readiness query ever throws: wrap in a safe read and hide the panel); `stock-count-trace`, `cash-no-payment-row` (see section 18); `iq-flaky-1`.
 - **Order now:** card 1b (IQ-2 integration: gated), then card 2 (pay-ready, gated), then the rest of section 17.
 
+## 22. Queue state (2026-09-20, before card 3)
+
+- **Live:** Release 5 (`eddba18`, day off, migration 0040) and Release 6 (`e4d791b`, IQ readiness). `kit-radix-nova` `089e776` (+ this note).
+- **Waiting on the owner (go/no-go):** card 1b (`release/rc-20-iq2` `3de03a0`: IQ-2 daily brief page + four nightly timers; needs the decisions in section 20) and card 2 (`release/rc-21-pay-ready` `5d4ca97`: Razorpay readiness, no keys; see section 21). Neither is deployed.
+- **Starting now:** card 3, cash sessions 5.1 -> rider cash handover 5.2 -> reconciliation view 5.3 (GATED: money + migration expected).
+
