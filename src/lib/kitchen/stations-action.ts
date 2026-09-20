@@ -3,8 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
-import { STATIONS, type StationOrder } from "@/lib/kitchen/stations";
-import { loadStationOrders, markOrderReadyFromExpo, setLineDone } from "@/lib/repositories/kitchen-stations";
+import { LINE_STATIONS, type StationOrder } from "@/lib/kitchen/stations";
+import { loadStationOrders, markOrderReadyFromExpo, setLineDone, setOrderPacked } from "@/lib/repositories/kitchen-stations";
 
 /**
  * Server actions for the station screens and EXPO (roadmap 4.2). Reading is
@@ -38,7 +38,7 @@ const lineSchema = z.object({
   orderItemId: z.uuid(),
   done: z.boolean(),
   /** Set by a station screen; absent from EXPO. */
-  station: z.enum(STATIONS).optional(),
+  station: z.enum(LINE_STATIONS).optional(),
 });
 
 export async function setLineDoneAction(input: unknown): Promise<StationActionResult> {
@@ -47,7 +47,22 @@ export async function setLineDoneAction(input: unknown): Promise<StationActionRe
   try {
     const staff = await requirePermission("kitchen.update");
     const result = await setLineDone({ orgId: staff.orgId, orderItemId: parsed.data.orderItemId, done: parsed.data.done, actorUserId: staff.userId, onlyStation: parsed.data.station });
+    revalidatePath("/app/orders");
     return result;
+  } catch (error) {
+    return explain(error);
+  }
+}
+
+const packSchema = z.object({ orderId: z.uuid(), packed: z.boolean() });
+
+/** PACK marks a takeaway or delivery order packed (or undoes it). `kitchen.update`, re-checked here. */
+export async function setOrderPackedAction(input: unknown): Promise<StationActionResult> {
+  const parsed = packSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "That change could not be applied." };
+  try {
+    const staff = await requirePermission("kitchen.update");
+    return await setOrderPacked({ orgId: staff.orgId, orderId: parsed.data.orderId, packed: parsed.data.packed, actorUserId: staff.userId });
   } catch (error) {
     return explain(error);
   }

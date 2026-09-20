@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { KdsViewTabs } from "@/components/kds/kds-view-tabs";
-import { StationBoard } from "@/components/kds/stations-boards";
+import { PackBoard, StationBoard } from "@/components/kds/stations-boards";
 import { PermissionDenied } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
-import { parseStation } from "@/lib/kitchen/stations";
+import { parseLineStation, parseStation } from "@/lib/kitchen/stations";
 import { loadStationOrders } from "@/lib/repositories/kitchen-stations";
 
 export const metadata: Metadata = { title: "Kitchen station", robots: { index: false, follow: false } };
@@ -16,6 +16,7 @@ export default async function StationPage({ params }: { params: Promise<{ statio
   if (!station) notFound();
 
   const staff = await requireStaff();
+  const lineStation = parseLineStation(station);
   const [canView, canUpdate] = await Promise.all([staffCan("kitchen.view"), staffCan("kitchen.update")]);
   if (!canView) {
     return (
@@ -28,7 +29,11 @@ export default async function StationPage({ params }: { params: Promise<{ statio
   return (
     <div>
       <KdsViewTabs active={station} />
-      <StationBoard station={station} initial={await loadStationOrders(staff.orgId)} canUpdate={canUpdate} orgId={staff.orgId} />
+      {lineStation ? (
+        <StationBoard station={lineStation} initial={await loadStationOrders(staff.orgId)} canUpdate={canUpdate} orgId={staff.orgId} />
+      ) : (
+        <PackBoard initial={await loadStationOrders(staff.orgId)} canUpdate={canUpdate} orgId={staff.orgId} />
+      )}
     </div>
   );
 }
