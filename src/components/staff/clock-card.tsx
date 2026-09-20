@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { errorNoteClass, submitClass, successNoteClass } from "@/components/inventory/field";
-import { type ShiftActionState, clockInAction, clockOutAction } from "@/lib/shifts/actions";
+import { type ShiftActionState, clockInAction, clockOutAction, endBreakAction, startBreakAction } from "@/lib/shifts/actions";
 
 function Tap({ label, busy, offline }: { label: string; busy: string; offline: boolean }) {
   const { pending } = useFormStatus();
@@ -15,9 +15,11 @@ function Tap({ label, busy, offline }: { label: string; busy: string; offline: b
 }
 
 /** Clock in or out for the signed-in person. The server decides who: nothing about the person is sent. */
-export function ClockCard({ onShiftSince }: { onShiftSince: string | null }) {
+export function ClockCard({ onShiftSince, onBreakSince }: { onShiftSince: string | null; onBreakSince: string | null }) {
   const [inState, inAction] = useActionState<ShiftActionState, FormData>(clockInAction, { status: "idle" });
   const [outState, outAction] = useActionState<ShiftActionState, FormData>(clockOutAction, { status: "idle" });
+  const [startState, startAction] = useActionState<ShiftActionState, FormData>(startBreakAction, { status: "idle" });
+  const [endState, endAction] = useActionState<ShiftActionState, FormData>(endBreakAction, { status: "idle" });
   const [online, setOnline] = useState(true);
   useEffect(() => {
     const sync = () => setOnline(navigator.onLine);
@@ -30,7 +32,7 @@ export function ClockCard({ onShiftSince }: { onShiftSince: string | null }) {
     };
   }, []);
 
-  const state = onShiftSince ? outState : inState;
+  const state = onShiftSince ? (onBreakSince ? endState : [startState, outState].find((x) => x.status !== "idle") ?? outState) : inState;
   return (
     <div className="flex flex-col gap-3">
       {!online && (
@@ -47,6 +49,12 @@ export function ClockCard({ onShiftSince }: { onShiftSince: string | null }) {
         <p role="status" className={successNoteClass}>
           {state.message}
         </p>
+      )}
+      {onShiftSince && (
+        <form action={onBreakSince ? endAction : startAction} className="flex flex-wrap items-center gap-4">
+          <Tap label={onBreakSince ? "End break" : "Start break"} busy={onBreakSince ? "Ending…" : "Starting…"} offline={!online} />
+          <span className="text-sm text-muted-foreground">{onBreakSince ? `On a break since ${onBreakSince}` : "Not on a break."}</span>
+        </form>
       )}
       {onShiftSince ? (
         <form action={outAction} className="flex flex-wrap items-center gap-4">
