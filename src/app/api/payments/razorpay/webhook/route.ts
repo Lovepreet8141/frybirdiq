@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import { db } from "@/db";
 import { payments, webhookEvents } from "@/db/schema";
 import { RAZORPAY_PROVIDER, getProvider, isRazorpayConfigured } from "@/lib/payments";
-import { markOnlinePaymentFailed, recordOnlinePayment } from "@/lib/repositories/payments";
+import { getOrg } from "@/lib/repositories/org";
+import { type RecordPaymentCode, markOnlinePaymentFailed, recordOnlinePayment } from "@/lib/repositories/payments";
 
 /**
  * Razorpay webhook. Roadmap 1.3 (and the server half of 1.5).
@@ -19,9 +20,15 @@ import { markOnlinePaymentFailed, recordOnlinePayment } from "@/lib/repositories
  * before it records a rupee. Replaying the same webhook twice records one
  * payment.
  *
- * A processing failure (Razorpay unreachable, say) is stored on the event
- * row and answered with 500 so Razorpay retries; the retry finds the row
- * unprocessed and runs it again. A duplicate of a processed event is 200.
+ * Retry or final is decided by the settlement's result code, never by the
+ * wording of its message (pay-7): only GATEWAY_UNAVAILABLE — Razorpay could
+ * not be asked, or has not captured yet — is answered 500, left unprocessed,
+ * and run again on the redelivery. Every other answer is final: 200, the event
+ * marked processed with its error kept for the audit trail. A final answer
+ * sent as 500 is a retry loop for a day; a retryable one sent as 200 is a
+ * payment nobody records. A payment the order can no longer take is recorded
+ * for a refund (RECORDED_FOR_REFUND), which is a success here. A duplicate of
+ * a processed event is 200.
  */
 
 interface RazorpayWebhookBody {
@@ -92,24 +99,38 @@ export async function POST(request: Request): Promise<NextResponse> {
     outcome = { ok: false, error: error instanceof Error ? error.message : "unexpected error", retry: true };
   }
 
+  // A final answer is processed, whether or not it succeeded, so a redelivery
+  // is answered from this row; only a retryable one stays open to run again.
+  const done = outcome.ok || !outcome.retry;
+  const note = outcome.ok ? (outcome.note ?? null) : outcome.error.slice(0, 500);
   await database
     .update(webhookEvents)
-    .set(outcome.ok ? { processedAt: new Date(), error: null } : { error: outcome.error.slice(0, 500) })
+    .set(done ? { processedAt: new Date(), error: note } : { error: note })
     .where(eq(webhookEvents.id, eventRowId));
 
   if (!outcome.ok) return NextResponse.json({ error: outcome.error }, { status: outcome.retry ? 500 : 200 });
   return NextResponse.json({ ok: true });
 }
 
-type Outcome = { ok: true } | { ok: false; error: string; retry: boolean };
+type Outcome = { ok: true; note?: string } | { ok: false; error: string; retry: boolean };
 
-/** Which of our orders a Razorpay order id belongs to — through the pending payment row that was opened for it. */
+/** The one settlement answer worth asking again: nobody could say what happened to the money yet. */
+const RETRYABLE: ReadonlySet<RecordPaymentCode> = new Set(["GATEWAY_UNAVAILABLE"]);
+
+/**
+ * Which of our orders a Razorpay order id belongs to — through the payment row
+ * that was opened for it, in this app's own organization. A Razorpay order of
+ * another organization's (one Razorpay account, a second org) is not ours to
+ * settle here: found nowhere, which is a final answer, not a 500 loop.
+ */
 async function orderIdForProviderOrder(providerOrderId: string | null | undefined): Promise<string | null> {
   if (!providerOrderId) return null;
+  const org = await getOrg();
+  if (!org) return null;
   const [row] = await db()
     .select({ orderId: payments.orderId })
     .from(payments)
-    .where(and(eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.providerOrderId, providerOrderId)))
+    .where(and(eq(payments.orgId, org.id), eq(payments.provider, RAZORPAY_PROVIDER), eq(payments.providerOrderId, providerOrderId)))
     .limit(1);
   return row?.orderId ?? null;
 }
@@ -127,10 +148,9 @@ async function handle(eventType: string, body: RazorpayWebhookBody): Promise<Out
       if (!orderId) return { ok: false, error: `no order for razorpay order ${payment.order_id ?? "?"}`, retry: false };
       const result = await recordOnlinePayment({ orderId, providerPaymentId: payment.id, providerOrderId: payment.order_id ?? undefined });
       if (result.ok) return { ok: true };
-      // "already paid" by another attempt is final; a gateway or database
-      // error is worth a retry.
-      const final = /already been paid|different order|does not match/i.test(result.error);
-      return { ok: false, error: result.error, retry: !final };
+      // Money held for a refund is recorded: done. Its note stays on the event.
+      if (result.code === "RECORDED_FOR_REFUND") return { ok: true, note: `${result.code}: ${result.error}` };
+      return { ok: false, error: `${result.code}: ${result.error}`, retry: RETRYABLE.has(result.code) };
     }
     case "payment.failed": {
       const orderId = await orderIdForProviderOrder(payment?.order_id);
