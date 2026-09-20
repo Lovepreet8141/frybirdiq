@@ -1,17 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { history } from "@/lib/iq/detect/__test-support__/days";
+import type { BriefFiguresRead, BriefPeriods } from "@/lib/iq/brief/brief-job";
 
 import type { JobContext } from "../context";
 import type { JobReadRepos, JobWriteRepos } from "../repos";
-import { runDetect } from "./detect";
+import { runBrief } from "./brief";
 
 const unused = async (): Promise<never> => {
   throw new Error("not used");
 };
 
+/** Every figure absent: the body's own tests cover what it writes when they are not. */
+const nothingRead: BriefFiguresRead = { day: {}, monthToDate: null, sameDaysLastMonth: null };
+
 function fakeContext(options: { factsReady: boolean }) {
   const calls: string[] = [];
+  let periods: BriefPeriods | null = null;
   const readers: JobReadRepos = {
     factsHistoryStart: unused,
     checkFactsParity: unused,
@@ -21,32 +25,24 @@ function fakeContext(options: { factsReady: boolean }) {
       calls.push(`factsReady ${date}`);
       return options.factsReady;
     },
-    readDetectDays: async (dates) => {
-      calls.push(`readDays ${dates.length} from ${dates[0]}`);
-      return history();
-    },
+    readDetectDays: unused,
+    readFoodCostTarget: unused,
     readOpeningHours: unused,
     intradayFreshAt: unused,
     readPulseDays: unused,
     countPaidOrders: unused,
-    readFoodCostTarget: async (date) => {
-      calls.push(`target ${date}`);
-      return null;
-    },
     readRecon: unused,
-    readBriefFigures: unused,
+    readBriefFigures: async (asked) => {
+      periods = asked;
+      calls.push(`readFigures ${asked.day.to}`);
+      return nothingRead;
+    },
     listInsights: unused,
     getInsight: unused,
     readFactFigures: unused,
     listOpenRecommendations: unused,
   };
-  const writers = {
-    writeInsight: async () => ({ outcome: "INSERTED" }),
-    expireInsights: async (requests: readonly unknown[]) => {
-      calls.push(`expire ${requests.length}`);
-      return { expired: 0, expiredIds: [], staleWrites: 0, absent: requests.length, supersededRecommendationIds: [] };
-    },
-  } as unknown as JobWriteRepos;
+  const writers = { writeInsight: async () => ({ outcome: "INSERTED" }) } as unknown as JobWriteRepos;
   let commits = 0;
   const ctx: JobContext = {
     orgId: "11111111-1111-4111-8111-111111111111",
@@ -63,31 +59,34 @@ function fakeContext(options: { factsReady: boolean }) {
       return write(writers);
     },
     shouldStop: () => false,
-    remainingMs: () => 60_000,
+    remainingMs: () => 30_000,
   };
-  return { ctx, calls, commits: () => commits };
+  return { ctx, calls, commits: () => commits, periods: () => periods };
 }
 
-describe("iq-detect-daily adapter (IQ-2 R2.1, R2.8)", () => {
-  it("evaluates the period's day through ctx.repos and writes in one fenced chunk", async () => {
+describe("iq-brief-daily adapter (IQ-2 R2.1, R2.10)", () => {
+  it("reads the period's day and its two month spans, then writes in one fenced chunk", async () => {
     const f = fakeContext({ factsReady: true });
-    const result = await runDetect(f.ctx);
+    const result = await runBrief(f.ctx);
     expect(result.status).toBe("COMPLETE");
-    expect(f.calls[0]).toBe("factsReady 2026-09-11");
-    expect(f.calls[1]).toBe("readDays 10 from 2026-09-11");
-    expect(f.calls[2]).toBe("target 2026-09-11");
+    expect(f.calls).toEqual(["factsReady 2026-09-11", "readFigures 2026-09-11"]);
+    expect(f.periods()).toMatchObject({
+      day: { from: "2026-09-11", to: "2026-09-11" },
+      monthToDate: { from: "2026-09-01", to: "2026-09-11" },
+      sameDaysLastMonth: { from: "2026-08-01", to: "2026-08-11" },
+    });
     expect(f.commits()).toBe(1);
   });
 
   it("fails with CODE_VERSION_UNKNOWN before reading anything when the deployed commit is unknown", async () => {
     const f = fakeContext({ factsReady: true });
-    await expect(runDetect({ ...f.ctx, codeVersion: "unversioned" })).rejects.toMatchObject({ code: "CODE_VERSION_UNKNOWN" });
+    await expect(runBrief({ ...f.ctx, codeVersion: "unversioned" })).rejects.toMatchObject({ code: "CODE_VERSION_UNKNOWN" });
     expect(f.calls).toEqual([]);
   });
 
-  it("stops PARTIAL UPSTREAM_NOT_READY before reading or writing anything when facts are not final (C4, iq2-s7 blocker)", async () => {
+  it("stops PARTIAL UPSTREAM_NOT_READY before reading or writing anything when facts are not final", async () => {
     const f = fakeContext({ factsReady: false });
-    expect(await runDetect(f.ctx)).toEqual({ status: "PARTIAL", reason: "UPSTREAM_NOT_READY", rowsWritten: 0, summary: { upstream_not_ready: 1 } });
+    expect(await runBrief(f.ctx)).toEqual({ status: "PARTIAL", reason: "UPSTREAM_NOT_READY", rowsWritten: 0, summary: { upstream_not_ready: 1 } });
     expect(f.calls).toEqual(["factsReady 2026-09-11"]);
     expect(f.commits()).toBe(0);
   });

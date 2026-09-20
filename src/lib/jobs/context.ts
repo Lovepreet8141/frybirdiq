@@ -56,9 +56,13 @@ export type JobRunResult =
        * this run depends on is not final yet, and the next scheduled catch-up
        * must still be able to take the period over (RELIABILITY iq2-s7).
        * REFUNDS_STILL_OPEN is an alert (stuck refund follow-ups, state-based)
-       * and counts, so systemd's OnFailure fires.
+       * and counts, so systemd's OnFailure fires. RULE_TIMEOUT always counts,
+       * even when other rules of the same run committed: a rule that cannot
+       * finish inside its statement timeout is a fault, and the count must
+       * survive the retries so the run exhausts and OnFailure fires
+       * (PAYMENT-SAFETY iq2-s5b, RELIABILITY #1).
        */
-      readonly reason?: "DEADLINE" | "DAY_LOCK_BUSY" | "UPSTREAM_NOT_READY" | "REFUNDS_STILL_OPEN";
+      readonly reason?: "DEADLINE" | "DAY_LOCK_BUSY" | "UPSTREAM_NOT_READY" | "REFUNDS_STILL_OPEN" | "RULE_TIMEOUT";
       readonly rowsWritten: number;
       readonly summary: Readonly<Record<string, number>>;
     };
