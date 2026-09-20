@@ -28,6 +28,7 @@ import { type FactsRefreshSteps, refreshFactsForDays } from "./expenses";
 import { refundFactsDays } from "@/lib/payments/refund-facts-days";
 import { orderPaymentState } from "@/domain/order-payment-state";
 import { getOrg } from "./org";
+import { openSessionIdForPayment } from "./cash-sessions";
 import { canTransition, isTerminal } from "@/domain/order-status";
 import { advanceOrder } from "./orders";
 
@@ -142,6 +143,8 @@ export async function recordCashPayment(input: {
     orderGuard: deliveryCashOnly ? deliveryCashGuard : undefined,
     provider: CASH_PROVIDER,
     actorUserId: input.actorUserId,
+    // Door cash taken by a rider (no till access) stays with the rider until a handover.
+    cashHeldByRider: deliveryCashOnly,
     idempotencyKey: (order) => `cash-payment:${order.id}`,
     // The server decides what is owed. Nothing passes an amount in.
     amountDue: (order) => paise(order.grandTotal),
@@ -374,6 +377,12 @@ interface Settlement {
    * does not cover. Refusals are never stored by withIdempotency.
    */
   readonly orderGuard?: (order: OrderRow) => string | null;
+  /**
+   * Cash taken at the door by a rider (not someone with till access): it is held by
+   * the rider until a handover puts it into the open till, so it is NOT attached
+   * to a cash session now (roadmap 5.2).
+   */
+  readonly cashHeldByRider?: boolean;
 }
 
 /**
@@ -608,11 +617,23 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
           .orderBy(desc(payments.createdAt))
           .limit(1);
 
+        // Cash only (roadmap 5.1-5.2): who took it, and which open till it goes into. Read FOR SHARE inside this
+        // transaction, so a till that is closing waits for this payment and a closed till is never added to.
+        const cashFields =
+          method === "CASH"
+            ? {
+                collectedBy: settlement.actorUserId,
+                heldByRider: settlement.cashHeldByRider === true,
+                cashSessionId: settlement.cashHeldByRider === true ? null : await openSessionIdForPayment(tx, order.orgId, order.locationId),
+              }
+            : {};
+
         const paymentId = existing
           ? (
               await tx
                 .update(payments)
                 .set({
+                  ...cashFields,
                   status: "CAPTURED",
                   method,
                   amount: capturedResult.capturedAmount,
@@ -631,6 +652,7 @@ async function settle(settlement: Settlement): Promise<RecordPaymentResult> {
               await tx
                 .insert(payments)
                 .values({
+                  ...cashFields,
                   orgId: order.orgId,
                   orderId: order.id,
                   status: "CAPTURED",

@@ -3,6 +3,8 @@ import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { CapturedChart } from "@/components/finance/captured-chart";
 import { PaymentsTable } from "@/components/finance/payments-table";
+import { ReconciliationTable } from "@/components/finance/reconciliation-table";
+import { TillPanel } from "@/components/finance/till-panel";
 import { PeriodSwitch } from "@/components/iq/period-switch";
 import { BarList, DataTrust, KpiTile, Panel, PanelBody, PanelHeader, StatusWord } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
@@ -14,6 +16,7 @@ import { requireStaff, staffCan } from "@/lib/auth";
 import { type RangeKey, daysInRange, resolveRange } from "@/lib/dates";
 import { capturedByDay, methodShares, tillSplit } from "@/lib/finance/ledger-view";
 import { formatBps, formatINR } from "@/lib/money";
+import { type CashSessionView, getCashSessions, getReconciliation, getRiderCashOutstanding } from "@/lib/repositories/cash-sessions";
 import { type RefundRow, getPaymentsLedger } from "@/lib/repositories/finance";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +27,22 @@ function refundStatusText(row: RefundRow): string {
   if (row.status === "SUCCEEDED") return "Refunded";
   if (row.status === "FAILED") return "Failed — no money moved";
   return row.stale ? "Stuck in progress — check it" : "In progress — held, not refunded yet";
+}
+
+function tillRow(row: CashSessionView) {
+  return {
+    id: row.id,
+    openedAt: row.openedAt.toISOString(),
+    openedBy: row.openedBy.name,
+    openingFloat: row.openingFloat,
+    cashPaymentCount: row.cashPaymentCount,
+    closedAt: row.closedAt?.toISOString() ?? null,
+    closedBy: row.closedBy?.name ?? null,
+    countedCash: row.countedCash,
+    expectedCash: row.expectedCash,
+    variance: row.variance,
+    note: row.note,
+  };
 }
 
 export const metadata: Metadata = { title: "Finance", robots: { index: false, follow: false } };
@@ -46,7 +65,7 @@ const RANGES: { key: RangeKey; label: string }[] = [
  */
 export default async function FinancePage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
   const staff = await requireStaff();
-  const [canView, canRefund, canExport, canSeeAnalytics] = await Promise.all([staffCan("finance.view"), staffCan("orders.refund"), staffCan("reports.export"), staffCan("analytics.view")]);
+  const [canView, canRefund, canExport, canSeeAnalytics, canManageTill] = await Promise.all([staffCan("finance.view"), staffCan("orders.refund"), staffCan("reports.export"), staffCan("analytics.view"), staffCan("finance.manage")]);
 
   if (!canView) {
     return (
@@ -59,9 +78,13 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const { range: requested } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "today") as RangeKey;
   const range = resolveRange(key);
-  const ledger = await getPaymentsLedger(staff.orgId, range);
-
   const days = daysInRange(range);
+  const [ledger, tills, riderCash, reconciliation] = await Promise.all([
+    getPaymentsLedger(staff.orgId, range),
+    getCashSessions(staff.orgId),
+    getRiderCashOutstanding(staff.orgId),
+    getReconciliation(staff.orgId, { from: days[0]!, to: days[days.length - 1]! }),
+  ]);
   const series = capturedByDay(ledger.payments, days);
   const shares = methodShares(ledger.byMethod, ledger.capturedTotal);
   const split = tillSplit(ledger.byMethod);
@@ -99,7 +122,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         items={[
           { tone: "gain", text: `Payments ledger live · ${ledger.payments.length} ${ledger.payments.length === 1 ? "record" : "records"} ${range.label.toLowerCase()}` },
           { tone: "neutral", text: "Captured payments only are summed; pending and failed are listed, never counted" },
-          { tone: "flag", text: "Cash sessions, rider handovers and reconciliation not connected (roadmap 5.1–5.3)" },
+          { tone: "gain", text: "Till, rider cash and daily reconciliation are live · Razorpay settlements are matched once Razorpay is live" },
         ]}
       />
 
@@ -155,6 +178,13 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         </Panel>
       </div>
 
+      <TillPanel
+        canManage={canManageTill}
+        open={tills.open ? tillRow(tills.open) : null}
+        recent={tills.recent.map(tillRow)}
+        riders={riderCash.map((rider) => ({ riderUserId: rider.riderUserId, riderName: rider.riderName, paymentCount: rider.paymentCount, amount: rider.amount, since: rider.oldest.toISOString() }))}
+      />
+
       <Tabs defaultValue="payments" className="flex flex-col gap-4">
         <TabsList variant="line" aria-label="Ledger">
           <TabsTrigger value="payments">
@@ -163,6 +193,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
           <TabsTrigger value="refunds">
             Refunds <span className="tabular ml-1.5 text-xs text-muted-foreground">{ledger.refunds.length}</span>
           </TabsTrigger>
+          <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>
         </TabsList>
 
         <TabsContent value="payments">
@@ -188,6 +219,10 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
             canRefund={canRefund}
             canExport={canExport}
           />
+        </TabsContent>
+
+        <TabsContent value="reconciliation">
+          <ReconciliationTable days={reconciliation.days} openSession={reconciliation.openSession} periodLabel={range.label} />
         </TabsContent>
 
         <TabsContent value="refunds">

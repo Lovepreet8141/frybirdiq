@@ -1,9 +1,10 @@
 /** Orders, items, events, payments, refunds. BUILD-PLAN.md §16, §17, §43, §51. */
 
 import { sql } from "drizzle-orm";
-import { check, date, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { type AnyPgColumn, boolean, check, date, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { FULFILMENT_TYPES, ORDER_STATUSES } from "@/domain/order-status";
 import { ORDER_CHANNELS } from "@/domain/order-channel";
+import { cashHandovers, cashSessions } from "./cash";
 import { customers } from "./customers";
 import { modifiers, products } from "./menu";
 import { locations, organizations } from "./tenancy";
@@ -336,9 +337,31 @@ export const payments = pgTable(
 
     capturedAt: timestamp("captured_at", { withTimezone: true }),
     failureReason: text("failure_reason"),
+
+    /*
+     * Cash only (roadmap 5.1-5.2, migration 0041); null for everything else.
+     *
+     * `cash_session_id` is the till session this cash sits in: set when a counter
+     * payment is taken while a session is open, or when a rider's door cash is
+     * handed over. Null on a cash payment taken with no session open (the
+     * reconciliation view lists those) and on rider cash not yet handed over.
+     * `collected_by` is the person who took it. `held_by_rider` marks door cash
+     * the rider is carrying: it is not in any till until its handover.
+     */
+    cashSessionId: uuid("cash_session_id").references((): AnyPgColumn => cashSessions.id, { onDelete: "restrict" }),
+    collectedBy: uuid("collected_by"),
+    heldByRider: boolean("held_by_rider").notNull().default(false),
+    handoverId: uuid("handover_id").references((): AnyPgColumn => cashHandovers.id, { onDelete: "restrict" }),
     ...timestamps,
   },
   (table) => [
+    // Rider cash is in a session only through a handover, and only rider cash has a handover.
+    check(
+      "payments_cash_holder_check",
+      sql`(${table.handoverId} IS NULL OR ${table.heldByRider}) AND (NOT ${table.heldByRider} OR (${table.handoverId} IS NULL) = (${table.cashSessionId} IS NULL))`,
+    ),
+    index("payments_cash_session_idx").on(table.cashSessionId).where(sql`${table.cashSessionId} IS NOT NULL`),
+    index("payments_rider_unhanded_idx").on(table.orgId, table.collectedBy).where(sql`${table.heldByRider} AND ${table.handoverId} IS NULL`),
     unique("payments_provider_payment_unique").on(table.provider, table.providerPaymentId),
     index("payments_order_idx").on(table.orderId),
     // IQ-1 P1: the sale set's EXISTS over money actually taken.
