@@ -34,7 +34,9 @@ const GATED: Readonly<Record<string, readonly string[]>> = {
   "src/lib/kitchen/board-action.ts#pollKitchenBoard": ["kitchen.view"],
   "src/lib/kitchen/stations-action.ts#markOrderReadyAction": ["kitchen.update"],
   "src/lib/kitchen/stations-action.ts#pollStationOrders": ["kitchen.view"],
+  "src/lib/kitchen/stations-action.ts#setOrderPackedAction": ["kitchen.update"],
   "src/lib/kitchen/stations-action.ts#setLineDoneAction": ["kitchen.update"],
+  "src/lib/shifts/actions.ts#correctBreakAction": ["staff.manage"],
   "src/lib/shifts/actions.ts#correctShiftAction": ["staff.manage"],
   "src/lib/finance/actions.ts#refundPaymentAction": ["orders.refund"],
   "src/lib/hardware/actions.ts#createPrintJobAction": ["orders.create",  "orders.refund"],
@@ -137,6 +139,8 @@ const GATED: Readonly<Record<string, readonly string[]>> = {
 /** Any signed-in staff member, on purpose: the action acts only on the caller's own record. */
 const STAFF_ONLY: Readonly<Record<string, string>> = {
   "src/lib/shifts/actions.ts#clockInAction": "a person clocks themselves in; the person comes from the session, never the form",
+  "src/lib/shifts/actions.ts#startBreakAction": "a person starts their own break; the person comes from the session, never the form",
+  "src/lib/shifts/actions.ts#endBreakAction": "a person ends their own break; the person comes from the session, never the form",
   "src/lib/shifts/actions.ts#clockOutAction": "a person clocks themselves out; the person comes from the session, never the form",
 };
 

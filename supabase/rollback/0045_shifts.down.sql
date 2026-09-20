@@ -1,4 +1,4 @@
--- Hand-run only. Reverses 0044_shifts: drops the shifts table.
+-- Hand-run only. Reverses 0045_shifts: drops the shifts table.
 -- REFUSES while any shift row exists: those rows are the record of who worked
 -- when. Export them first (COPY shifts TO ...), then delete the rows and run
 -- this. The code-only rollback needs none of this: the older build ignores the table.

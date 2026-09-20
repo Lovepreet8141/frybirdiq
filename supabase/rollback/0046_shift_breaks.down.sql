@@ -1,4 +1,4 @@
--- Hand-run only. Reverses PENDING_shift_breaks: drops the shift_breaks table.
+-- Hand-run only. Reverses 0046_shift_breaks: drops the shift_breaks table.
 -- REFUSES while any break row exists (they are the record of recorded break
 -- times): export (COPY shift_breaks TO ...) and delete deliberately first.
 -- The code-only rollback needs none of this: the older build ignores the table.

@@ -1,6 +1,6 @@
 -- Basic shifts (roadmap 6.4): clock in / clock out, one row per stretch of work.
 -- Expand-only: one new empty table, nothing existing is touched. Recovery:
--- supabase/rollback/0044_shifts.down.sql. No wages, breaks or overtime.
+-- supabase/rollback/0045_shifts.down.sql. No wages, breaks or overtime.
 --
 -- Same posture as 0041: RLS on and forced, no client DML for either API role,
 -- members may read their own org's rows through a Supabase key. The app writes
