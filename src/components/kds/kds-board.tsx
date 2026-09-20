@@ -7,10 +7,10 @@ import { OfflineState } from "@/components/states";
 import { useOnline } from "@/components/pos/use-online";
 import { useChime } from "@/components/staff/use-chime";
 import { useOrderEvents } from "@/lib/realtime/client";
-import { pollKitchenTickets } from "@/lib/auth/kitchen-action";
+import { pollKitchenBoard } from "@/lib/kitchen/board-action";
 import { advanceOrderAction } from "@/lib/auth/staff-actions";
 import { STALE_DEPLOYMENT_MESSAGE, isStaleDeploymentError } from "@/lib/errors/stale-deployment";
-import { type KitchenStatus, type KitchenTicket, isLate, nextKitchenStatus, waitingMinutes } from "@/lib/kitchen/tickets";
+import { type KitchenStatus, type KitchenTicket, nextKitchenStatus, prepHealth, waitingMinutes } from "@/lib/kitchen/tickets";
 import { cn } from "@/lib/utils";
 
 /** Fallback only: the order_events channel moves tickets the moment they change (roadmap 2.2); this catches a dropped socket. */
@@ -40,9 +40,10 @@ function clock(iso: string): string {
  * asks `advanceOrderAction` for the one move `nextKitchenStatus` names, and
  * the server decides whether it is legal, exactly as the Orders screen does.
  *
- * No station, no routing, no priority score: the domain has none of those
- * yet. "Late" is the only judgement shown, and it is a fact (past the
- * promised time), not a model. Nothing animates: a screen a cook glances at
+ * No station, no routing, no priority score. The one judgement shown is
+ * `prepHealth`: amber at 80% of the ticket's prep target, red at 100% or past
+ * the promised time — a rule from configured data, not a model. A ticket with
+ * no target configured stays neutral. Nothing animates: a screen a cook glances at
  * two hundred times a shift must never be mid-transition.
  */
 export function KdsBoard({ initial, canUpdate, orgId }: { initial: readonly KitchenTicket[]; canUpdate: boolean; orgId: string }) {
@@ -80,7 +81,7 @@ export function KdsBoard({ initial, canUpdate, orgId }: { initial: readonly Kitc
     const tick = async () => {
       let result;
       try {
-        result = await pollKitchenTickets();
+        result = await pollKitchenBoard();
       } catch (error) {
         if (!isStaleDeploymentError(error)) throw error;
         if (!stopped) setStaleDeployment(true);
@@ -102,7 +103,7 @@ export function KdsBoard({ initial, canUpdate, orgId }: { initial: readonly Kitc
   }, [online]);
 
   const refresh = async () => {
-    const result = await pollKitchenTickets();
+    const result = await pollKitchenBoard();
     setTickets(result.tickets);
     setNow(Date.now());
   };
@@ -148,7 +149,9 @@ export function KdsBoard({ initial, canUpdate, orgId }: { initial: readonly Kitc
 function Ticket({ ticket, now, canUpdate, onChanged }: { ticket: KitchenTicket; now: number; canUpdate: boolean; onChanged: () => Promise<void> }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const late = isLate(ticket, now);
+  const health = prepHealth(ticket, now);
+  const late = health === "RED";
+  const nearly = health === "AMBER";
   const minutes = waitingMinutes(ticket, now);
   const next = nextKitchenStatus(ticket.status);
 
@@ -168,7 +171,7 @@ function Ticket({ ticket, now, canUpdate, onChanged }: { ticket: KitchenTicket; 
   return (
     <article
       aria-label={`Order ${ticket.orderNumber}`}
-      className={cn("flex flex-col gap-3 rounded-xl border-2 bg-panel p-4", late ? "border-loss" : "border-border")}
+      className={cn("flex flex-col gap-3 rounded-xl border-2 bg-panel p-4", late ? "border-loss" : nearly ? "border-flag" : "border-border")}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col">
@@ -183,7 +186,14 @@ function Ticket({ ticket, now, canUpdate, onChanged }: { ticket: KitchenTicket; 
               Late
             </span>
           )}
-          <span className={cn("tabular text-2xl font-bold leading-none", late && "text-destructive")}>{minutes} min</span>
+          {nearly && (
+            <span className="flex items-center gap-1 rounded-full bg-flag-soft px-2.5 py-1 text-xs font-bold uppercase tracking-[0.08em] text-flag">
+              <AlarmClock className="size-3.5" aria-hidden="true" />
+              Nearly late
+            </span>
+          )}
+          <span className={cn("tabular text-2xl font-bold leading-none", late && "text-destructive", nearly && "text-flag")}>{minutes} min</span>
+          {ticket.prepTargetMinutes !== null && <span className="tabular text-xs text-muted-foreground">target {ticket.prepTargetMinutes} min</span>}
           {ticket.promisedAt && <span className="tabular text-xs text-muted-foreground">by {clock(ticket.promisedAt)}</span>}
         </div>
       </div>

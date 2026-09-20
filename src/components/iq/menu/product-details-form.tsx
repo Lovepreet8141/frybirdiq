@@ -4,6 +4,7 @@ import { useActionState, useMemo, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { type ActionResult, updateProductDetailsAction } from "@/lib/menu-admin/actions";
 import { ReloadAppButton } from "@/components/reload-app-button";
+import { STATIONS, STATION_LABEL, parseStation } from "@/lib/kitchen/stations";
 import { STALE_DEPLOYMENT_MESSAGE, recoverFromStaleDeployment } from "@/lib/errors/stale-deployment";
 
 const IDLE: ActionResult = { ok: true };
@@ -215,8 +216,16 @@ export function ProductDetailsForm({
           <input name="prepMinutes" type="number" min={0} max={240} defaultValue={initial.prepMinutes ?? ""} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal" />
         </label>
         <label className="flex flex-col gap-1 text-sm font-semibold">
-          KDS station <span className="font-normal text-muted-foreground">(for later)</span>
-          <input name="kdsStation" defaultValue={initial.kdsStation ?? ""} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal" />
+          Kitchen station <span className="font-normal text-muted-foreground">(where this is made)</span>
+          <select name="kdsStation" defaultValue={initial.kdsStation ?? ""} className="min-h-[40px] rounded-md border border-border bg-surface px-3 font-normal">
+            <option value="">Unassigned (shows on Expo only)</option>
+            {STATIONS.map((station) => (
+              <option key={station} value={station}>
+                {STATION_LABEL[station]}
+              </option>
+            ))}
+            {initial.kdsStation && parseStation(initial.kdsStation) === null && <option value={initial.kdsStation}>{initial.kdsStation} (not a station: pick one)</option>}
+          </select>
         </label>
       </div>
 
