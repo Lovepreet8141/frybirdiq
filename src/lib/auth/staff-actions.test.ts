@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
   requirePermission: vi.fn(),
   advanceOrder: vi.fn(),
   completeDelivery: vi.fn(),
+  assignRider: vi.fn(),
+  failDelivery: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -19,9 +21,15 @@ vi.mock("@/lib/repositories/orders", () => ({
   rejectOrder: vi.fn(),
 }));
 vi.mock("@/lib/repositories/payments", () => ({ recordCashPayment: vi.fn() }));
+vi.mock("@/lib/repositories/rider-assignment", () => ({
+  FAIL_REASON_MIN: 3,
+  FAIL_REASON_MAX: 200,
+  assignRider: mocks.assignRider,
+  failDelivery: mocks.failDelivery,
+}));
 
 import { NotPermitted, NotSignedIn } from "@/lib/auth";
-import { advanceOrderAction, completeDeliveryAction } from "./staff-actions";
+import { advanceOrderAction, assignRiderAction, completeDeliveryAction, failDeliveryAction } from "./staff-actions";
 
 const orderId = "7d9f2c1e-4b3a-4c5d-8e6f-1a2b3c4d5e6f";
 const staff = { userId: "11111111-1111-4111-8111-111111111111", orgId: "22222222-2222-4222-8222-222222222222", roles: ["CASHIER"] };
@@ -91,5 +99,49 @@ describe("completeDeliveryAction", () => {
     expect(result).toEqual({ ok: false, code: "SERVER_ERROR", error: "Something went wrong closing that delivery. Try again." });
     expect(logged).toHaveBeenCalled();
     logged.mockRestore();
+  });
+});
+
+describe("assignRiderAction", () => {
+  const riderUserId = "33333333-3333-4333-8333-333333333333";
+  beforeEach(() => {
+    mocks.requirePermission.mockReset().mockResolvedValue({ ...staff, roles: ["MANAGER"] });
+    mocks.assignRider.mockReset().mockResolvedValue({ ok: true, changed: true });
+  });
+
+  it("checks delivery.assign, then assigns within the staff member's own org; the client sends no org", async () => {
+    expect(await assignRiderAction({ orderId, riderUserId })).toEqual({ ok: true });
+    expect(mocks.requirePermission).toHaveBeenCalledWith("delivery.assign");
+    expect(mocks.assignRider).toHaveBeenCalledWith({ orgId: staff.orgId, orderId, riderUserId, actorUserId: staff.userId });
+  });
+
+  it("refuses bad input before any permission check or database call", async () => {
+    expect(await assignRiderAction({ orderId: "nope", riderUserId })).toMatchObject({ ok: false });
+    expect(mocks.requirePermission).not.toHaveBeenCalled();
+    expect(mocks.assignRider).not.toHaveBeenCalled();
+  });
+
+  it("without the permission nothing is assigned", async () => {
+    mocks.requirePermission.mockRejectedValue(new NotPermitted("delivery.assign" as never));
+    expect(await assignRiderAction({ orderId, riderUserId })).toMatchObject({ ok: false });
+    expect(mocks.assignRider).not.toHaveBeenCalled();
+  });
+});
+
+describe("failDeliveryAction", () => {
+  beforeEach(() => {
+    mocks.requirePermission.mockReset().mockResolvedValue({ ...staff, roles: ["RIDER"] });
+    mocks.failDelivery.mockReset().mockResolvedValue({ ok: true });
+  });
+
+  it("checks delivery.complete and hands the actor's roles to the repository, which limits a rider to their own delivery", async () => {
+    expect(await failDeliveryAction({ orderId, reason: "Customer not answering" })).toEqual({ ok: true });
+    expect(mocks.requirePermission).toHaveBeenCalledWith("delivery.complete");
+    expect(mocks.failDelivery).toHaveBeenCalledWith({ orgId: staff.orgId, orderId, actorUserId: staff.userId, actorRoles: ["RIDER"], reason: "Customer not answering" });
+  });
+
+  it("a blank or missing reason never reaches the repository", async () => {
+    expect(await failDeliveryAction({ orderId, reason: "  " })).toMatchObject({ ok: false });
+    expect(mocks.failDelivery).not.toHaveBeenCalled();
   });
 });

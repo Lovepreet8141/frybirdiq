@@ -22,6 +22,7 @@ const PERMISSION_INFO: Record<Permission, { readonly group: string; readonly lab
   "kitchen.update": { group: "Kitchen", label: "Update ticket status" },
   "delivery.view": { group: "Delivery", label: "View deliveries" },
   "delivery.complete": { group: "Delivery", label: "Complete a delivery" },
+  "delivery.assign": { group: "Delivery", label: "Assign a rider to a delivery" },
   "menu.view": { group: "Menu", label: "View the menu" },
   "menu.edit": { group: "Menu", label: "Edit the menu" },
   "menu.price": { group: "Menu", label: "Change prices" },

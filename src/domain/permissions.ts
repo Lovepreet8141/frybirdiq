@@ -32,6 +32,13 @@ export const PERMISSIONS = [
   "delivery.view",
   /** Mark a delivery done and record the cash taken at the door. */
   "delivery.complete",
+  /**
+   * Choosing which rider takes a delivery (roadmap 6.3), and reassigning it.
+   * OWNER, ADMIN and MANAGER. Deliberately not RIDER: a rider cannot hand
+   * themselves the deliveries they would like, and not CASHIER (a cashier can
+   * still close any delivery at the counter, `delivery.complete`).
+   */
+  "delivery.assign",
   "menu.view",
   "menu.edit",
   "menu.price",
@@ -147,6 +154,7 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     "kitchen.update",
     "delivery.view",
     "delivery.complete",
+    "delivery.assign",
     "menu.view",
     "menu.edit",
     "inventory.view",
@@ -248,6 +256,29 @@ export function can(roles: readonly Role[], permission: Permission): boolean {
 export function canGrantRole(actorRoles: readonly Role[], targetRole: Role): boolean {
   const granted = new Set(actorRoles.flatMap((role) => permissionsFor(role)));
   return permissionsFor(targetRole).every((permission) => granted.has(permission));
+}
+
+/**
+ * Whether these roles are limited to the deliveries assigned to them (roadmap
+ * 6.3). A rider is: they hold `delivery.complete` but not `orders.update`. Anyone
+ * who can update orders at the counter (OWNER, ADMIN, MANAGER, CASHIER) sees and
+ * may close every delivery, as before. The same "rider, not counter" test the
+ * cash-at-the-door path uses, kept in one place.
+ */
+export function seesOnlyOwnDeliveries(roles: readonly Role[]): boolean {
+  return !can(roles, "orders.update");
+}
+
+/**
+ * Who may open the orders board (/app/orders). It lists every open order with
+ * customer names, phones and delivery addresses, so it is for the counter and the
+ * kitchen (`orders.view` or `kitchen.view`), not for a rider, who has their own
+ * scoped Deliveries page. The page used to require only a signed-in staff member,
+ * so a rider who typed the address saw every delivery in the shop (found in the
+ * rider-assignment review).
+ */
+export function mayOpenOrdersBoard(roles: readonly Role[]): boolean {
+  return can(roles, "orders.view") || can(roles, "kitchen.view");
 }
 
 export class Forbidden extends Error {

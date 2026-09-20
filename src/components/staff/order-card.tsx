@@ -1,5 +1,6 @@
 "use client";
 
+import { AssignRiderControl, type RiderOption } from "./delivery-rider-controls";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -52,6 +53,8 @@ const ORDER_STATUS_TINT: Record<OrderStatusKey, { pill: string; dot: string }> =
 export interface StaffOrder {
   id: string;
   orderNumber: string;
+  /** The rider a delivery is assigned to (roadmap 6.3). */
+  riderUserId?: string | null;
   status: OrderStatus;
   customerName: string | null;
   customerPhone: string | null;
@@ -90,8 +93,11 @@ export function OrderCard({
   canAdvance,
   canPrintKot,
   canSeeCustomers = false,
+  riders,
 }: {
   order: StaffOrder;
+  /** Present only for people who may assign a rider (`delivery.assign`): shows the assign control on a delivery order. */
+  riders?: readonly RiderOption[];
   canSettle: boolean;
   canAdvance: boolean;
   canPrintKot: boolean;
@@ -203,6 +209,7 @@ export function OrderCard({
       </ul>
 
       {order.delivery && <DeliveryPanel {...order.delivery} />}
+      {riders && order.fulfilment === "DELIVERY" && <AssignRiderControl orderId={order.id} riderUserId={order.riderUserId ?? null} riders={riders} />}
 
       {order.notes && <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">{order.notes}</p>}
 

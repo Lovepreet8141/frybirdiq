@@ -6,7 +6,9 @@ import { PageHeader } from "@/components/staff/page-header";
 import { SectionHeading } from "@/components/iq/ui";
 import { EmptyState, PermissionDenied } from "@/components/states";
 import { getStaff, staffCan } from "@/lib/auth";
+import { seesOnlyOwnDeliveries } from "@/domain/permissions";
 import { listDeliveries } from "@/lib/repositories/orders";
+import { listAssignableRiders } from "@/lib/repositories/rider-assignment";
 
 export const metadata: Metadata = { title: "Deliveries", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -24,7 +26,10 @@ export default async function DeliveriesPage() {
     );
   }
 
-  const deliveries = await listDeliveries(staff.orgId);
+  // A rider sees only the deliveries assigned to them; the counter and managers see all, and can assign (roadmap 6.3).
+  const canAssign = await staffCan("delivery.assign");
+  const deliveries = await listDeliveries(staff.orgId, seesOnlyOwnDeliveries(staff.roles) ? { onlyRiderUserId: staff.userId } : {});
+  const riders = canAssign ? await listAssignableRiders(staff.orgId) : undefined;
   const onTheRoad = deliveries.filter((d) => d.status === "OUT_FOR_DELIVERY");
   const waiting = deliveries.length - onTheRoad.length;
 
@@ -49,7 +54,7 @@ export default async function DeliveriesPage() {
       {deliveries.length === 0 ? (
         <EmptyState
           title="Nothing to deliver."
-          detail="Delivery orders appear here once the kitchen marks them ready. Collection orders never do — they are handed over at the counter."
+          detail={seesOnlyOwnDeliveries(staff.roles) ? "Deliveries assigned to you appear here once the kitchen marks them ready. Nothing assigned yet? Ask the shop." : "Delivery orders appear here once the kitchen marks them ready. Collection orders never do — they are handed over at the counter."}
         />
       ) : (
         <div className="flex flex-col gap-3">
@@ -69,9 +74,11 @@ export default async function DeliveriesPage() {
                     isPaid: order.isPaid,
                     items: order.items.map((item) => ({ ...item, modifiers: [...item.modifiers] })),
                     notes: order.notes,
+                    riderUserId: order.riderUserId,
                     delivery: order.delivery ? { ...order.delivery } : null,
                   } satisfies RiderDelivery
                 }
+                riders={riders}
               />
             ))}
           </ul>

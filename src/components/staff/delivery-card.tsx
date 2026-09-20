@@ -9,6 +9,7 @@ import { formatDistance } from "@/lib/delivery";
 import { completeDeliveryAction } from "@/lib/auth/staff-actions";
 import type { OrderStatus } from "@/domain/order-status";
 import { classifyCloseResult, type CloseOutcome } from "./delivery-close";
+import { AssignRiderControl, FailDeliveryControl, type RiderOption } from "./delivery-rider-controls";
 
 export interface RiderDelivery {
   id: string;
@@ -20,6 +21,8 @@ export interface RiderDelivery {
   isPaid: boolean;
   items: { name: string; quantity: number; modifiers: string[] }[];
   notes: string | null;
+  /** The rider it is assigned to (roadmap 6.3); null when unassigned. */
+  riderUserId?: string | null;
   delivery: {
     line1: string;
     landmark: string;
@@ -36,7 +39,7 @@ export interface RiderDelivery {
  * Big targets, the address and the money first, and two taps to finish: open
  * the map, then close the job. Nothing on this card can move any other order.
  */
-export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
+export function DeliveryCard({ delivery, riders }: { delivery: RiderDelivery; /** Present only for people who may assign (`delivery.assign`): shows the assign control. */ riders?: readonly RiderOption[] }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [outcome, setOutcome] = useState<CloseOutcome | null>(null);
@@ -134,6 +137,8 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
 
       {delivery.notes && <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">{delivery.notes}</p>}
 
+      {riders && <AssignRiderControl orderId={delivery.id} riderUserId={delivery.riderUserId ?? null} riders={riders} />}
+
       {outcome && outcome.kind !== "ok" && (
         <p role="alert" className="rounded-md border-l-2 border-loss bg-loss-soft/60 px-4 py-3 text-sm">
           {outcome.kind === "offline" && "No connection — try again."}
@@ -177,6 +182,9 @@ export function DeliveryCard({ delivery }: { delivery: RiderDelivery }) {
               Customer paid another way? Leave this open and call the shop. The shop records the payment, then you can close it.
             </p>
           )}
+
+          {/* A paid order that failed needs a manager's refund: the server refuses it here. */}
+          {!delivery.isPaid && <FailDeliveryControl orderId={delivery.id} />}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">Waiting for the kitchen to send this out.</p>

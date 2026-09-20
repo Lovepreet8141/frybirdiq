@@ -6,6 +6,7 @@ import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
 import { type CompleteDeliveryCode, acceptOrder, advanceOrder, completeDelivery, rejectOrder } from "@/lib/repositories/orders";
 import { recordCashPayment } from "@/lib/repositories/payments";
+import { FAIL_REASON_MAX, FAIL_REASON_MIN, assignRider, failDelivery } from "@/lib/repositories/rider-assignment";
 import { staffMayAdvanceTo } from "@/lib/orders/staff-advance";
 import { ORDER_STATUSES } from "@/domain/order-status";
 import { REJECTION_REASONS } from "@/domain/rejection";
@@ -139,6 +140,49 @@ export async function completeDeliveryAction(input: unknown): Promise<CompleteDe
     // The detail stays in the server log; the rider gets a plain message.
     console.error("completeDeliveryAction failed", error);
     return { ok: false, code: "SERVER_ERROR", error: "Something went wrong closing that delivery. Try again." };
+  }
+}
+
+const assignRiderSchema = z.object({ orderId: z.uuid(), riderUserId: z.uuid() });
+
+/**
+ * Assigns a rider to a delivery (roadmap 6.3). `delivery.assign`: OWNER, ADMIN,
+ * MANAGER. The repository re-checks that the order is an open delivery of this
+ * org and that the person is one of its active riders.
+ */
+export async function assignRiderAction(input: unknown): Promise<StaffActionResult> {
+  const parsed = assignRiderSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Pick a rider." };
+
+  try {
+    const staff = await requirePermission("delivery.assign");
+    const result = await assignRider({ orgId: staff.orgId, orderId: parsed.data.orderId, riderUserId: parsed.data.riderUserId, actorUserId: staff.userId });
+    revalidatePath("/app/deliveries");
+    revalidatePath("/app/orders");
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  } catch (error) {
+    return explain(error);
+  }
+}
+
+const failDeliverySchema = z.object({ orderId: z.uuid(), reason: z.string().trim().min(FAIL_REASON_MIN).max(FAIL_REASON_MAX) });
+
+/**
+ * Records a delivery that could not be made, with a reason. `delivery.complete`
+ * is the permission; the repository limits a rider to their own delivery.
+ */
+export async function failDeliveryAction(input: unknown): Promise<StaffActionResult> {
+  const parsed = failDeliverySchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: `Say why it could not be delivered (${FAIL_REASON_MIN}-${FAIL_REASON_MAX} characters).` };
+
+  try {
+    const staff = await requirePermission("delivery.complete");
+    const result = await failDelivery({ orgId: staff.orgId, orderId: parsed.data.orderId, actorUserId: staff.userId, actorRoles: staff.roles, reason: parsed.data.reason });
+    revalidatePath("/app/deliveries");
+    revalidatePath("/app/orders");
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  } catch (error) {
+    return explain(error);
   }
 }
 
