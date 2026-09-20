@@ -9,7 +9,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requirePermission, requireStaff } from "@/lib/auth";
-import { clockIn, clockOut, correctShift } from "@/lib/repositories/shifts";
+import { clockIn, clockOut, correctBreak, correctShift, endBreak, startBreak } from "@/lib/repositories/shifts";
 import { parseIstLocal } from "./hours";
 
 export type ShiftActionState = { status: "idle" } | { status: "error"; message: string } | { status: "success"; message: string };
@@ -86,4 +86,64 @@ export async function correctShiftAction(_previous: ShiftActionState, formData: 
   }
   revalidatePath("/app/staff/shifts");
   return { status: "success", message: "Shift corrected." };
+}
+
+export async function startBreakAction(_previous: ShiftActionState, _formData: FormData): Promise<ShiftActionState> {
+  let staff;
+  try {
+    staff = await requireStaff();
+  } catch {
+    return { status: "error", message: NOT_SIGNED_IN };
+  }
+  try {
+    const result = await startBreak(staff.orgId, staff.userId);
+    if (!result.ok) return { status: "error", message: "Clock in before starting a break." };
+    revalidatePath("/app/staff/shifts");
+    return { status: "success", message: result.alreadyOn ? "You were already on a break." : "Break started." };
+  } catch {
+    return { status: "error", message: FAILED };
+  }
+}
+
+export async function endBreakAction(_previous: ShiftActionState, _formData: FormData): Promise<ShiftActionState> {
+  let staff;
+  try {
+    staff = await requireStaff();
+  } catch {
+    return { status: "error", message: NOT_SIGNED_IN };
+  }
+  try {
+    const result = await endBreak(staff.orgId, staff.userId);
+    revalidatePath("/app/staff/shifts");
+    return { status: "success", message: result.alreadyOff ? "You were not on a break." : "Break ended." };
+  } catch {
+    return { status: "error", message: FAILED };
+  }
+}
+
+export async function correctBreakAction(_previous: ShiftActionState, formData: FormData): Promise<ShiftActionState> {
+  let staff;
+  try {
+    staff = await requirePermission("staff.manage");
+  } catch {
+    return { status: "error", message: "You don't have permission to correct breaks." };
+  }
+  const field = (name: string) => String(formData.get(name) ?? "");
+  const startedAt = parseIstLocal(field("start"));
+  if (!startedAt) return { status: "error", message: "Enter the break start time." };
+  const endRaw = field("end");
+  const endedAt = endRaw === "" ? null : parseIstLocal(endRaw);
+  if (endRaw !== "" && !endedAt) return { status: "error", message: "That break end time isn't valid." };
+  try {
+    const result = await correctBreak({ orgId: staff.orgId, actorUserId: staff.userId, breakId: field("breakId"), startedAt, endedAt, reason: field("reason") });
+    if (!result.ok) {
+      const message =
+        result.reason === "not_found" ? "That break no longer exists." : result.reason === "other_open" ? "Another break on this shift is still open." : (result.message ?? "Check the times.");
+      return { status: "error", message };
+    }
+  } catch {
+    return { status: "error", message: FAILED };
+  }
+  revalidatePath("/app/staff/shifts");
+  return { status: "success", message: "Break corrected." };
 }
