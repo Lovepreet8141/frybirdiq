@@ -70,6 +70,14 @@ describe("confirmOnlinePaymentAction", () => {
     expect(JSON.stringify(answers[0])).not.toMatch(/exist|belong|signature/i);
   });
 
+  it("a retryable gateway failure says 'checking with the bank, do not pay again' and never the gateway's own words", async () => {
+    recordOnlinePayment.mockResolvedValue({ ok: false, code: "GATEWAY_UNAVAILABLE", error: "Razorpay: Authentication failed (key rzp_live_abc)" });
+    const result = await confirmOnlinePaymentAction(VALID);
+    expect(result).toMatchObject({ ok: false, code: "GATEWAY_UNAVAILABLE" });
+    expect(result.ok === false && result.error).toContain("Please don't pay again");
+    expect(JSON.stringify(result)).not.toMatch(/Razorpay|rzp_|Authentication/);
+  });
+
   it("passes the server's refusal through — including money recorded for a refund", async () => {
     recordOnlinePayment.mockResolvedValue({ ok: false, code: "RECORDED_FOR_REFUND", error: "This order had already been paid or closed, so this payment has been recorded to be refunded.", paymentId: "p-2" });
     expect(await confirmOnlinePaymentAction(VALID)).toEqual({ ok: false, code: "RECORDED_FOR_REFUND", error: "This order had already been paid or closed, so this payment has been recorded to be refunded." });

@@ -23,7 +23,7 @@ declare global {
   }
 }
 
-type Phase = "loading" | "ready" | "open" | "confirming" | "done" | "dismissed" | "failed" | "error";
+type Phase = "loading" | "ready" | "open" | "confirming" | "done" | "dismissed" | "failed" | "error" | "checking";
 
 /**
  * Razorpay Checkout on the order page. Roadmap 1.2 / 1.5.
@@ -96,6 +96,10 @@ export function PayOnline({
         if (result.ok) {
           setPhase("done");
           router.refresh();
+        } else if (result.code === "GATEWAY_UNAVAILABLE") {
+          // The money may already be in flight: say we are checking, offer NO second payment, only a refresh.
+          setPhase("checking");
+          setMessage(result.error);
         } else {
           setPhase("error");
           setMessage(result.error);
@@ -129,6 +133,21 @@ export function PayOnline({
           <ShieldCheck className="size-5 text-[#3F9D52]" aria-hidden="true" />
           Payment received. Updating your order…
         </p>
+      ) : phase === "checking" ? (
+        <>
+          <p className="font-heading text-lg font-semibold">Checking your payment</p>
+          <p role="status" className="mt-1 text-sm text-muted-foreground">
+            {message}
+          </p>
+          <button
+            type="button"
+            onClick={() => router.refresh()}
+            className="flex min-h-[56px] w-full items-center justify-center gap-2 rounded-md border border-border bg-panel px-6 text-base font-semibold hover:bg-surface"
+          >
+            <RotateCcw className="size-4" aria-hidden="true" />
+            Check again
+          </button>
+        </>
       ) : (
         <>
           <div>
