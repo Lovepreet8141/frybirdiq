@@ -467,3 +467,12 @@ State now: Release 5 live (`eddba18`, migration 0040, Tuesday marked). Working t
 - **Low cards:** `readiness-safe-1` (the Overview page has no fallback if a readiness query ever throws: wrap in a safe read and hide the panel); `stock-count-trace`, `cash-no-payment-row` (see section 18); `iq-flaky-1`.
 - **Order now:** card 1b (IQ-2 integration: gated), then card 2 (pay-ready, gated), then the rest of section 17.
 
+## 20. Card 1b built (2026-09-20): IQ-2 integrated, waiting for the owner's go/no-go (GATED: server jobs = production data writes)
+
+- **Branch:** `release/rc-20-iq2` (pushed), from `kit-radix-nova` `089e776`, merging `agent/automation-architect-iq2-adapt` (contains S4 reconcile, S9 pulse, S10 brief), `agent/iq-engine-iq2-s10a` (brief loader + run-state read; one conflict, union of imports in `iq-job-runs.ts`), `agent/frontend-mu4xp5yj` (insight components) and `agent/iq-engine-iq2-s11b` (detections on the alerts page). NOT merged: S5 signatures (`iq2-s5c` blocking: `double_capture` never clears); the brief lists the "signatures" check as not run until it ships, so it never says all-clear for finance viewers. No migration.
+- **New here:** Daily brief page (`/app/iq/brief`, composed at read time from stored insights, readiness line and panel above), four timers (nightly facts, reconciliation, detection, brief) with DEPLOY.md 9.6 install/verify/stop/remove steps, refund-status fix in reconciliation (a FAILED refund no longer raises a money finding; fail-first proven).
+- **Reviews:** security no blocker/high/medium (lows: parity lines visible to all analytics viewers; hourly check can read SUCCEEDED with missing hours). Payments no veto (H1 fixed; M1 cancelled-with-capture not detected, M2 GST rate not recomputed, M3 delivery-fee GST ignores price_basis, L1 zero-total orders, L2 unused fees: logged as cards `recon-*`). DevOps no blocker (HIGH-1 docs: done; HIGH-2 no alerting installed: owner decision). QA 7/7 on `ecc1ead` (unit 2611, integration 554 x3); re-run on the final commit.
+- **Production facts checked read-only:** invoices 91, no gaps or duplicates; refunds 0; no zero-total paid orders; 10 days of orders (2026-09-10 to 09-19), so detectors will say "not enough history" for weeks and the brief will be thin at first.
+- **Owner decisions needed (in the go/no-go):** install the four timers now or after alerting; accept silent failures until then; run the one-time history fill by hand.
+- **Order now:** go/no-go for card 1b (waiting on the owner), then card 2 (pay-ready, gated), then section 17.
+

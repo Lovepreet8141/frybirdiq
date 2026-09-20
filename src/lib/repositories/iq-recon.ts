@@ -15,9 +15,9 @@ import "server-only";
  * (`src/lib/iq/reconcile/rules.ts`). Days are the IST business day of the
  * order's created_at, the same anchor as the sale set and the daily facts.
  *
- * Refunds: this schema has no refund status yet, so every refunds row counts
- * (R2.6 "today"); the refund release switches `COUNTED_REFUND` to
- * SUCCEEDED rows only.
+ * Refunds: only a refund that SUCCEEDED counts as money back (`COUNTED_REFUND`,
+ * migration 0038). A FAILED refund never left the till, and counting it would
+ * raise a refund-on-captured or over-refund finding for money that did not move.
  */
 import { sql } from "drizzle-orm";
 
@@ -87,8 +87,8 @@ const text = (value: unknown) => String(value);
 
 /** Statuses of a payment that took money at some point (F8). */
 const EVER_CAPTURED = sql.raw(`('CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED')`);
-/** Refund rows that count as money back. Today every row; SUCCEEDED only once refunds carry a status. */
-const COUNTED_REFUND = sql.raw(`TRUE`);
+/** Refund rows that count as money back: SUCCEEDED only (0038). A FAILED or still-RESERVED refund has not moved money. */
+const COUNTED_REFUND = sql.raw(`r.status = 'SUCCEEDED'`);
 /** Orders that were never priced for a sale are not reconciled here (half orders are PAYMENT-SAFETY's signature). */
 const PRICED_ORDER = sql.raw(`o.status NOT IN ('DRAFT', 'PENDING_PAYMENT', 'FAILED')`);
 
