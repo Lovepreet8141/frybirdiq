@@ -1,6 +1,10 @@
--- Hand-run only. Reverses 0042: drops the 40 restrictive read policies. No data is touched; the previous permissive policies were never changed, so they are exactly as before. One transaction.
+-- Hand-run only. Reverses 0042: drops the 40 restrictive read policies and restores the table-level SELECT grant on memberships. No data is touched; the previous permissive policies were never changed, so they are exactly as before. One transaction.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
+REVOKE SELECT (id, org_id, user_id, role, location_id, display_name, is_active, created_at, updated_at) ON memberships FROM authenticated;
+
+GRANT SELECT ON memberships TO authenticated;
+
 DROP POLICY IF EXISTS accounts_role_read ON accounts;
 
 DROP POLICY IF EXISTS expenses_role_read ON expenses;

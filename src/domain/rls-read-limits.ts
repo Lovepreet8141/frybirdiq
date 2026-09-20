@@ -79,6 +79,14 @@ export const CHILD_READ_LIMITS: Readonly<Record<string, { readonly parent: strin
   ai_tool_calls: { parent: "ai_conversations", fk: "conversation_id", permissions: ["analytics.view"] },
 };
 
+/**
+ * Every memberships column a login may read through the database. `pos_pin_hash`
+ * is deliberately absent: the app never reads it through PostgREST, and a short
+ * PIN hash read there could be brute-forced offline (p0-7 review, both reviewers).
+ * A new column is unreadable until it is added here, and a test forces the choice.
+ */
+export const MEMBERSHIPS_READABLE_COLUMNS: readonly string[] = ["id", "org_id", "user_id", "role", "location_id", "display_name", "is_active", "created_at", "updated_at"];
+
 /** Memberships hold every login's role and a PIN hash: staff managers read them all, everyone else reads only their own row. */
 export const MEMBERSHIPS_READ: readonly Permission[] = ["staff.manage"];
 
@@ -104,8 +112,14 @@ export function generateReadLimitStatements(): readonly string[] {
   statements.push(
     `CREATE POLICY memberships_role_read ON memberships\n  AS RESTRICTIVE FOR SELECT TO authenticated\n  USING (user_id = auth.uid() OR auth_has_role(org_id, ${array(rolesHoldingAny(MEMBERSHIPS_READ))}));`,
   );
+  // Column-level: the table-level SELECT is replaced by a grant of every column except pos_pin_hash.
+  statements.push("REVOKE SELECT ON memberships FROM authenticated;");
+  statements.push(`GRANT SELECT (${MEMBERSHIPS_READABLE_COLUMNS.join(", ")}) ON memberships TO authenticated;`);
   return statements;
 }
+
+/** The undo of the column grant: put the table-level SELECT back. */
+export const RESTORE_MEMBERSHIPS_GRANT = ["REVOKE SELECT (" + MEMBERSHIPS_READABLE_COLUMNS.join(", ") + ") ON memberships FROM authenticated;", "GRANT SELECT ON memberships TO authenticated;"] as const;
 
 /** Every policy the migration creates, for the undo script and the tests. */
 export function readLimitPolicies(): readonly { readonly table: string; readonly policy: string }[] {

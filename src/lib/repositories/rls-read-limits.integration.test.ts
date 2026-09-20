@@ -15,7 +15,7 @@ import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
 import { cashSessions, memberships, orderEvents, orders, payments } from "@/db/schema";
-import { ALREADY_ROLE_AWARE, CHILD_READ_LIMITS, OPEN_TO_MEMBERS_ON_PURPOSE, MEMBERSHIPS_READ, READ_LIMITS, readLimitPolicies, rolesHoldingAny } from "@/domain/rls-read-limits";
+import { ALREADY_ROLE_AWARE, MEMBERSHIPS_READABLE_COLUMNS, CHILD_READ_LIMITS, OPEN_TO_MEMBERS_ON_PURPOSE, MEMBERSHIPS_READ, READ_LIMITS, readLimitPolicies, rolesHoldingAny } from "@/domain/rls-read-limits";
 import { ROLES, type Role } from "@/domain/permissions";
 import { fromRupees } from "@/lib/money";
 import { createTestCustomer, createTestOrg, createTestProduct, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
@@ -117,7 +117,7 @@ sharedStackOnly("0042: staff reads through the database are limited by role", ()
   it("memberships: everyone reads their own row (no PIN hash leaks to others); only staff.manage roles read the roster", async () => {
     const managers = rolesHoldingAny(MEMBERSHIPS_READ);
     for (const role of ROLES) {
-      const { data, error } = await clients.get(role)!.from("memberships").select("user_id, role, pos_pin_hash").eq("org_id", org.orgId);
+      const { data, error } = await clients.get(role)!.from("memberships").select("user_id, role").eq("org_id", org.orgId);
       if (error) throw new Error(error.message);
       const rows = data ?? [];
       if (managers.includes(role)) expect(rows.length, `${role} roster`).toBe(ROLES.length);
@@ -130,6 +130,17 @@ sharedStackOnly("0042: staff reads through the database are limited by role", ()
     const withOrg = new Set(rows.map((r) => r.table_name));
     for (const table of Object.keys(READ_LIMITS)) expect(withOrg.has(table), `${table} has org_id`).toBe(true);
     for (const table of Object.keys(CHILD_READ_LIMITS)) expect(withOrg.has(table), `${table} has no org_id of its own`).toBe(false);
+  });
+
+  it("the PIN hash is not readable through the database by any login, the owner included; the other membership columns are", async () => {
+    for (const role of ROLES) {
+      const hash = await clients.get(role)!.from("memberships").select("pos_pin_hash").eq("org_id", org.orgId);
+      expect(hash.error?.code, `${role} pos_pin_hash`).toBe("42501");
+      const ok = await clients.get(role)!.from("memberships").select("user_id, role").eq("org_id", org.orgId);
+      expect(ok.error, `${role} other columns`).toBeNull();
+    }
+    const cols = (await db().execute(sql`select column_name from information_schema.columns where table_schema = 'public' and table_name = 'memberships'`)) as unknown as { column_name: string }[];
+    expect(cols.map((c) => c.column_name).filter((c) => c !== "pos_pin_hash").sort(), "a new memberships column must be added to MEMBERSHIPS_READABLE_COLUMNS or left unreadable on purpose").toEqual([...MEMBERSHIPS_READABLE_COLUMNS].sort());
   });
 
   it("no table is open to every member by accident: each is restricted, already role-aware, open on purpose, or has no client policy at all", async () => {

@@ -6,7 +6,7 @@
 -- reads through Drizzle as `postgres`, which bypasses RLS: pages and actions
 -- are unaffected.
 --
--- Additive: this only ADDS restrictive SELECT policies (40). A restrictive
+-- Additive: this ADDS restrictive SELECT policies (40) and narrows the memberships column grant so pos_pin_hash is unreadable to logins. A restrictive
 -- policy is ANDed with the existing permissive ones, so no existing policy,
 -- grant or row changes; undo = drop the policies
 -- (supabase/rollback/0042_rls_role_reads.down.sql), no data involved. The role
@@ -176,3 +176,7 @@ CREATE POLICY ai_tool_calls_role_read ON ai_tool_calls
 CREATE POLICY memberships_role_read ON memberships
   AS RESTRICTIVE FOR SELECT TO authenticated
   USING (user_id = auth.uid() OR auth_has_role(org_id, ARRAY['OWNER', 'ADMIN']));
+--> statement-breakpoint
+REVOKE SELECT ON memberships FROM authenticated;
+--> statement-breakpoint
+GRANT SELECT (id, org_id, user_id, role, location_id, display_name, is_active, created_at, updated_at) ON memberships TO authenticated;
