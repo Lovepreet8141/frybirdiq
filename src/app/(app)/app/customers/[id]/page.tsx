@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { CustomerEditForm } from "@/components/staff/customer-edit-form";
 import { MiniStat } from "@/components/staff/mini-stat";
 import { PageHeader } from "@/components/staff/page-header";
 import { PermissionDenied } from "@/components/states";
@@ -31,6 +32,7 @@ export default async function CustomerProfilePage({ params }: { params: Promise<
   const { id } = await params;
   const staff = await requireStaff();
   const canView = await staffCan("customers.view");
+  const canEdit = await staffCan("customers.edit");
 
   if (!canView) {
     return (
@@ -56,6 +58,30 @@ export default async function CustomerProfilePage({ params }: { params: Promise<
         <MiniStat label="Average order" value={profile.orderCount === 0 ? "—" : formatINR(profile.averageOrder, "whole")} />
         <MiniStat label="Last order" value={formatDate(profile.lastOrderAt)} />
       </div>
+
+      {canEdit ? (
+        <Card>
+          <CardContent className="flex flex-col gap-4">
+            <h2 className="font-heading text-lg font-semibold">Details and notes</h2>
+            <CustomerEditForm
+              customerId={profile.id}
+              name={profile.name}
+              phone={profile.phone}
+              email={profile.email}
+              notes={profile.notes}
+            />
+          </CardContent>
+        </Card>
+      ) : (
+        profile.notes && (
+          <Card>
+            <CardContent className="flex flex-col gap-2">
+              <h2 className="font-heading text-lg font-semibold">Notes</h2>
+              <p className="whitespace-pre-wrap text-sm">{profile.notes}</p>
+            </CardContent>
+          </Card>
+        )
+      )}
 
       {profile.loyalty && (
         <Card>

@@ -2,10 +2,12 @@ import type { Metadata } from "next";
 import { PromotionsWorkspace, type SavedPromo } from "@/components/promotions/workspace";
 import { PermissionDenied } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
-import { businessDate } from "@/lib/dates";
+import { PromotionAovCard, AOV_RANGES, type AovRangeKey } from "@/components/promotions/aov-card";
+import { businessDate, resolveRange } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import { promoToInput } from "@/lib/promotions/form";
 import { getMenu } from "@/lib/repositories/menu";
+import { listPromotionAov } from "@/lib/repositories/promotion-aov";
 import { listPromotions } from "@/lib/repositories/promotions";
 
 export const metadata: Metadata = { title: "Promotions", robots: { index: false, follow: false } };
@@ -23,7 +25,8 @@ async function snapshot(orgId: string) {
  * the counter, you may see the codes); changing them takes
  * `promotions.manage`, because a promotion changes what an order costs.
  */
-export default async function PromotionsPage() {
+export default async function PromotionsPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
+  const { range } = await searchParams;
   const staff = await requireStaff();
   const [canView, canEdit] = await Promise.all([staffCan("orders.discount"), staffCan("promotions.manage")]);
   if (!canView) {
@@ -35,6 +38,12 @@ export default async function PromotionsPage() {
   }
 
   const { promotions, menu, today } = await snapshot(staff.orgId);
+
+  // The AOV comparison is analytics: promotions.manage or analytics.view.
+  const canMeasure = canEdit || (await staffCan("analytics.view"));
+  const aovKey: AovRangeKey = AOV_RANGES.find((r) => r.key === range)?.key ?? "30d";
+  const aovRange = resolveRange(aovKey);
+  const aov = canMeasure ? await listPromotionAov(staff.orgId, aovRange) : null;
 
   const promos: SavedPromo[] = promotions.map(({ promo, performance }) => ({
     input: { ...promoToInput(promo), id: promo.id },
@@ -49,6 +58,7 @@ export default async function PromotionsPage() {
   return (
     <div className="mx-auto flex w-full max-w-[1360px] flex-col gap-6 px-[var(--gutter)] py-8">
       <PromotionsWorkspace promos={promos} products={products} today={today} canEdit={canEdit} />
+      {aov && <PromotionAovCard rows={aov} rangeLabel={aovRange.label} activeRange={aovKey} />}
     </div>
   );
 }

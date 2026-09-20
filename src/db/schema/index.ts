@@ -22,3 +22,4 @@ export * from "./iq-facts";
 export * from "./closures";
 export * from "./cash";
 export * from "./kitchen";
+export * from "./shifts";

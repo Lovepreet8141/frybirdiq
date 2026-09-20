@@ -3,7 +3,8 @@ import "server-only";
 /**
  * Customer lookup and the Customer 360 profile.
  *
- * Read-only apart from `ensureCustomerByPhone`, the one write: a counter
+ * Writes: `updateCustomer` (a staff correction, audited and idempotent) and
+ * `ensureCustomerByPhone`: a counter
  * enrolment that needs a record to attach an order to. "Paid" here means the same
  * thing it means everywhere else revenue is computed in this app (see
  * `analytics.ts`'s `paidOrders`): a payment in `PAID_PAYMENT_STATUSES`
@@ -18,7 +19,9 @@ import "server-only";
 
 import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { customers, loyaltyAccounts, orderItems, orders, organizations } from "@/db/schema";
+import { auditLogs, customers, loyaltyAccounts, orderItems, orders, organizations } from "@/db/schema";
+import { maskPhone } from "@/lib/customers/edit";
+import { withIdempotency } from "@/lib/repositories/idempotency";
 import type { OrderChannel } from "@/domain/order-channel";
 import type { OrderStatus } from "@/domain/order-status";
 import { hasPaidPayment } from "@/lib/repositories/analytics";
@@ -162,6 +165,7 @@ export interface CustomerProfile {
   readonly name: string | null;
   readonly phone: string | null;
   readonly email: string | null;
+  readonly notes: string | null;
   readonly marketingConsent: boolean;
   readonly orderCount: number;
   readonly totalSpend: Paise;
@@ -233,6 +237,7 @@ export async function getCustomerProfile(orgId: string, customerId: string): Pro
     name: customer.name,
     phone: customer.phone,
     email: customer.email,
+    notes: customer.notes,
     marketingConsent: customer.marketingConsent,
     orderCount,
     totalSpend,
@@ -249,4 +254,84 @@ export async function getCustomerProfile(orgId: string, customerId: string): Pro
       : null,
     recentOrders: recent.map((row) => ({ ...row, grandTotal: paise(row.grandTotal) })),
   };
+}
+
+export interface UpdateCustomerInput {
+  readonly orgId: string;
+  readonly actorUserId: string;
+  readonly customerId: string;
+  readonly name: string | null;
+  readonly phone: string | null;
+  readonly email: string | null;
+  readonly notes: string | null;
+  /** Idempotency key: a retry with the same key replays the first result. */
+  readonly key: string;
+}
+
+export type UpdateCustomerResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: "not_found" | "phone_taken" };
+
+/**
+ * A staff correction to a customer: name, phone, email, notes. Marketing
+ * consent and loyalty are untouched. Scoped to the org; the caller has
+ * already passed `customers.edit`.
+ *
+ * The audit row records who and which fields changed, with the phone masked
+ * to its last four digits and the note as a length — the audit log is not a
+ * second copy of personal data. Retried by key: one write, one audit row.
+ * A number already on another customer of this org is refused (the unique
+ * index would refuse it anyway; this says so plainly).
+ */
+export async function updateCustomer(input: UpdateCustomerInput): Promise<UpdateCustomerResult> {
+  const { result } = await withIdempotency(
+    { key: input.key, operation: "customer_update", orgId: input.orgId, request: { ...input, key: undefined } },
+    async (): Promise<UpdateCustomerResult> =>
+      db().transaction(async (tx) => {
+        const [current] = await tx
+          .select()
+          .from(customers)
+          .where(and(eq(customers.orgId, input.orgId), eq(customers.id, input.customerId)))
+          .for("update")
+          .limit(1);
+        if (!current) return { ok: false, reason: "not_found" };
+
+        if (input.phone && input.phone !== current.phone) {
+          const [clash] = await tx
+            .select({ id: customers.id })
+            .from(customers)
+            .where(and(eq(customers.orgId, input.orgId), eq(customers.phone, input.phone)))
+            .limit(1);
+          if (clash) return { ok: false, reason: "phone_taken" };
+        }
+
+        await tx
+          .update(customers)
+          .set({ name: input.name, phone: input.phone, email: input.email, notes: input.notes, updatedAt: new Date() })
+          .where(and(eq(customers.orgId, input.orgId), eq(customers.id, input.customerId)));
+
+        const changed = (
+          [
+            ["name", current.name !== input.name],
+            ["phone", current.phone !== input.phone],
+            ["email", current.email !== input.email],
+            ["notes", current.notes !== input.notes],
+          ] as const
+        )
+          .filter(([, differs]) => differs)
+          .map(([field]) => field);
+
+        await tx.insert(auditLogs).values({
+          orgId: input.orgId,
+          actorUserId: input.actorUserId,
+          action: "customer_updated",
+          entity: "customers",
+          entityId: input.customerId,
+          before: { phone: maskPhone(current.phone), notesLength: current.notes?.length ?? 0 },
+          after: { changed, phone: maskPhone(input.phone), notesLength: input.notes?.length ?? 0 },
+        });
+        return { ok: true };
+      }),
+  );
+  return result;
 }

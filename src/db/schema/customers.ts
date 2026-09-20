@@ -18,6 +18,8 @@ export const customers = pgTable(
     /** The identity that actually matters in India. E.164. */
     phone: text("phone"),
     email: text("email"),
+    /** Staff-written, up to 1000 characters (check constraint). Never shown to the customer. */
+    notes: text("notes"),
 
     /** §83: consent is explicit and separately recorded, never assumed. */
     marketingConsent: boolean("marketing_consent").notNull().default(false),
@@ -28,6 +30,7 @@ export const customers = pgTable(
     ...timestamps,
   },
   (table) => [
+    check("customers_notes_length_check", sql`${table.notes} IS NULL OR char_length(${table.notes}) <= 1000`),
     unique("customers_org_phone_unique").on(table.orgId, table.phone),
     index("customers_org_idx").on(table.orgId),
   ],
