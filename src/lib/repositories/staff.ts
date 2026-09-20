@@ -82,7 +82,13 @@ export type InviteStaffResult = { ok: true; resent: boolean } | { ok: false; err
  * still-pending invite — is a real, expected case, not a crash: Supabase
  * refuses to invite it twice, and a pending invite is instead resent.
  */
-export async function inviteStaff(orgId: string, actorUserId: string, email: string, role: Role): Promise<InviteStaffResult> {
+export async function inviteStaff(orgId: string, actorUserId: string, actorRoles: readonly Role[], email: string, role: Role): Promise<InviteStaffResult> {
+  // The ceiling first, before Supabase Auth is contacted: a refused invite must not leave an auth user behind.
+  // Same rule as `changeStaffRole` and `deactivateStaff`; without it `staff.manage` alone could mint an OWNER (p0-7).
+  if (!canGrantRole(actorRoles, role)) {
+    return { ok: false, error: `Your account can't invite someone as ${role} — that role can do more than yours can.` };
+  }
+
   const supabase = createAdminClient();
   const { data, error } = await supabase.auth.admin.inviteUserByEmail(email, { redirectTo: inviteRedirectUrl() });
 

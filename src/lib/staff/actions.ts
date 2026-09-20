@@ -43,7 +43,7 @@ export async function inviteStaffAction(raw: unknown): Promise<StaffActionResult
   const auth = await authorise();
   if ("error" in auth) return { ok: false, error: auth.error };
 
-  const result = await inviteStaff(auth.orgId, auth.userId, parsed.data.email, parsed.data.role);
+  const result = await inviteStaff(auth.orgId, auth.userId, auth.roles, parsed.data.email, parsed.data.role);
   if (!result.ok) return result;
 
   revalidatePath("/app/staff");

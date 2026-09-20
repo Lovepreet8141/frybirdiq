@@ -226,7 +226,7 @@ sharedStackOnly("0033 — client-side writes are refused, tenant reads still wor
     expect(rows).toEqual([{ status: "PENDING_PAYMENT" }]);
   });
 
-  it("still lets the cashier read their own org's orders, order events, memberships, flags and organization", async () => {
+  it("still lets the cashier read their own org's orders, order events, their own membership, flags and organization", async () => {
     const ownOrders = await cashier.from("orders").select("id").eq("org_id", org.orgId);
     expect(ownOrders.error).toBeNull();
     expect(ownOrders.data?.map((row) => row.id)).toEqual([orderId]);
@@ -237,7 +237,8 @@ sharedStackOnly("0033 — client-side writes are refused, tenant reads still wor
 
     const ownMemberships = await cashier.from("memberships").select("user_id").eq("org_id", org.orgId);
     expect(ownMemberships.error).toBeNull();
-    expect(ownMemberships.data).toHaveLength(2);
+    // 0042 (p0-7): a member reads only their own membership row (the roster and PIN hashes are for staff.manage roles).
+    expect(ownMemberships.data).toHaveLength(1);
 
     const ownFlags = await cashier.from("feature_flags").select("key").eq("org_id", org.orgId);
     expect(ownFlags.error).toBeNull();

@@ -295,6 +295,13 @@
       "when": 1790600000000,
       "tag": "0041_cash_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1790700000000,
+      "tag": "0042_rls_role_reads",
+      "breakpoints": true
     }
   ]
 }
