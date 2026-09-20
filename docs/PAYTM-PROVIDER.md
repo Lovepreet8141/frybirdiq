@@ -1,6 +1,10 @@
+> **MOCK ONLY - NOT VERIFIED AGAINST PAYTM SANDBOX - CANNOT GO LIVE until the checksum is proven with real sandbox credentials**
+>
+> Owner decision: this stays mock-only. `PAYTM_SANDBOX_VERIFIED` in `src/lib/payments/paytm.ts` is `false`, and while it is false `PAYTM_ENV=production` is refused (`isPaytmConfigured()` is false and `getProvider("paytm")` throws "not verified against Paytm sandbox"). Staging is allowed, because that is how the proof is made.
+
 # Paytm provider
 
-Status: built and tested against constructed fixtures only. No Paytm account, no
+Status: mock-only. Built and tested against constructed fixtures only. No Paytm account, no
 key, no call to any Paytm endpoint has ever been made. Not enabled: with no
 `PAYTM_*` variables set the provider is "not configured" and `getProvider("paytm")`
 throws. It is also not in `availableMethods()`, so checkout does not offer it.
@@ -81,6 +85,45 @@ the Paytm sandbox (or their SDK's `generateSignature`) on one message and compar
 Also unverified: a response's `head.signature` is checked over `JSON.stringify(parsed body)`,
 which matches Paytm's samples but depends on key order surviving the parse.
 
+## Sandbox proof procedure
+
+Done by the owner and the integrator together, in a staging-only environment, never
+production. Nothing here needs a live payment of real money.
+
+1. Owner obtains the **staging** MID and merchant key from the Paytm dashboard (test
+   credentials, not production). Set `PAYTM_ENV=staging` and the other `PAYTM_*` values
+   on a non-production server (or local shell), never in a committed file.
+2. Generate one checksum for a fixed message with Paytm's own library (their Node SDK's
+   `PaytmChecksum.generateSignature`, or their checksum utility) and with
+   `generateChecksum` here, using the same key and, for ours, the salt decrypted from
+   theirs. Confirm `verifyChecksum` accepts Paytm's checksum and their library accepts
+   ours.
+3. Send **one** initiate-transaction request to the **staging** URL through
+   `initiatePaytmTransaction`. Paytm must accept the signature and return a `txnToken`
+   with the success `resultStatus` (this also settles assumption 3).
+4. Complete one test payment on Paytm's staging checkout with their test instrument.
+5. Take the callback Paytm posts for it and run `verifyCallbackParams` on it: it must
+   verify. Then call the staging Transaction Status API through `capture`: the response
+   signature must verify and the result must be `ok`. This settles the status URL
+   (assumption 2) and the signed-envelope shape (assumptions 4, 5, 7).
+6. Run one small staging refund and its status through `refund` and `findRefund` (settles
+   assumptions 4 to 6).
+7. Only if every step above agreed, in a **separate commit made after the proof**, replace
+   the constructed fixtures with the recorded ones below, set
+   `PAYTM_SANDBOX_VERIFIED = true`, and change its test. That commit goes to the payments
+   reviewer. If any step disagreed, fix the implementation first; the constant stays false.
+
+Record these as fixtures at that point (redact the MID and key; keep everything else as
+Paytm sent it, byte for byte, because signature checks depend on it):
+
+- one message with the checksum Paytm's library produced for it (the known-answer vector);
+- the raw initiate-transaction request body and Paytm's raw response (with `head.signature`);
+- the raw callback form fields, including `CHECKSUMHASH`, from the staging payment;
+- the raw Transaction Status request and response, for a success and, if obtainable, a
+  failed and a pending payment;
+- the raw refund request and response, and the refund-status response, for the staging refund;
+- the exact URLs that answered, for the status endpoint and both refund endpoints.
+
 ## What stays safe if an assumption is wrong
 
 - Capture never believes a callback or a response it cannot verify. A wrong checksum
@@ -157,6 +200,9 @@ which matches Paytm's samples but depends on key order surviving the parse.
 
 ## Proposals (not built: outside this card, payments-reviewer territory)
 
+The production gate (`PAYTM_SANDBOX_VERIFIED`) is built. Everything below is still to do and
+none of it should be wired to production before the sandbox proof above is done.
+
 None of these edit `payments.ts`, `orders.ts`, `actions.ts`, the Razorpay webhook route or checkout.
 
 1. **Callback and webhook route** `POST /api/paytm/callback`. Read the raw form body, convert
@@ -178,3 +224,6 @@ None of these edit `payments.ts`, `orders.ts`, `actions.ts`, the Razorpay webhoo
    past Paytm's status lag (and the 10 minute duplicate window) before asking again.
 6. **Reconciliation.** A periodic status check on orders that stayed pending, as a backstop
    for a missed webhook. Paytm itself recommends confirming with the status API.
+7. **The verification flag.** Reviewer to confirm that `PAYTM_SANDBOX_VERIFIED` and
+   `paytmEnvAllowed` are the only gate, that no other code path reads `PAYTM_ENV`, and that
+   the flip commit contains the recorded fixtures listed in the sandbox proof procedure.

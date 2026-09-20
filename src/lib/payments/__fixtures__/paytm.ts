@@ -1,4 +1,6 @@
 /**
+ * MOCK ONLY - NOT VERIFIED AGAINST PAYTM SANDBOX - CANNOT GO LIVE until the checksum is proven with real sandbox credentials
+ *
  * CONSTRUCTED FROM THE PUBLISHED DOCS, NOT CAPTURED FROM PAYTM.
  *
  * No Paytm account exists yet, so nothing here was ever sent or received by

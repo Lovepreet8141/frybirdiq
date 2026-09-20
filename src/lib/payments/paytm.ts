@@ -1,4 +1,6 @@
 /**
+ * MOCK ONLY - NOT VERIFIED AGAINST PAYTM SANDBOX - CANNOT GO LIVE until the checksum is proven with real sandbox credentials
+ *
  * Paytm Payment Gateway. docs/PAYTM-PROVIDER.md is the reference for every
  * endpoint, field and assumption in this file.
  *
@@ -38,6 +40,30 @@ import type {
 export const PAYTM_PROVIDER = "paytm";
 export const PAYTM_TIMEOUT_MS = 8_000;
 
+/**
+ * Whether the checksum scheme in this file has been proven against a real
+ * Paytm sandbox response. It is false, and it flips to true ONLY in a commit
+ * made after the owner's staging credentials have shown Paytm accepting our
+ * signature and our code verifying Paytm's (docs/PAYTM-PROVIDER.md, "Sandbox
+ * proof procedure"). While false, `PAYTM_ENV=production` is refused, so no
+ * real money can ever go through an unproven checksum; staging stays allowed
+ * because that is how the proof is made.
+ */
+export const PAYTM_SANDBOX_VERIFIED = false;
+
+export const PAYTM_NOT_VERIFIED_MESSAGE = "paytm is not verified against Paytm sandbox, so production is refused";
+
+/** The one rule: production needs a verified sandbox proof; staging never does. Pure, so all four combinations are testable. */
+export function paytmEnvAllowed(env: "staging" | "production", sandboxVerified: boolean): boolean {
+  return env === "staging" || sandboxVerified;
+}
+
+/** Why the provider cannot be used right now, or null when it can. For error messages only; never decides anything itself. */
+export function paytmUnavailableReason(): string | null {
+  if (process.env.PAYTM_ENV?.trim() === "production" && !PAYTM_SANDBOX_VERIFIED) return PAYTM_NOT_VERIFIED_MESSAGE;
+  return isPaytmConfigured() ? null : "paytm is not configured";
+}
+
 export interface PaytmConfig {
   readonly mid: string;
   readonly merchantKey: string;
@@ -55,6 +81,7 @@ export function paytmConfig(): PaytmConfig | null {
   const callbackUrl = process.env.PAYTM_CALLBACK_URL?.trim();
   if (!mid || !merchantKey || !websiteName || !callbackUrl) return null;
   if (env !== "staging" && env !== "production") return null;
+  if (!paytmEnvAllowed(env, PAYTM_SANDBOX_VERIFIED)) return null;
   // AES-128: the merchant key is exactly 16 bytes. Anything else cannot sign.
   if (Buffer.byteLength(merchantKey, "utf8") !== 16) return null;
   return { mid, merchantKey, websiteName, env, callbackUrl };

@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fromRupees, paise } from "@/lib/money";
 import { getProvider } from "./index";
 import {
+  PAYTM_NOT_VERIFIED_MESSAGE,
   PAYTM_PROVIDER,
+  PAYTM_SANDBOX_VERIFIED,
+  paytmEnvAllowed,
+  paytmUnavailableReason,
   callbackChecksumMessage,
   classifyPaytmRefund,
   classifyPaytmRefundFailure,
@@ -107,6 +111,38 @@ describe("amounts and ids", () => {
     expect(splitPaymentId(null)).toBeNull();
     expect(splitPaymentId("nocolon")).toBeNull();
     expect(splitPaymentId(":x")).toBeNull();
+  });
+});
+
+describe("sandbox verification gate", () => {
+  it("is not verified yet; flipping it needs the sandbox proof commit", () => {
+    expect(PAYTM_SANDBOX_VERIFIED).toBe(false);
+  });
+
+  it("allows staging always and production only once verified (all four combinations)", () => {
+    expect(paytmEnvAllowed("staging", false)).toBe(true);
+    expect(paytmEnvAllowed("staging", true)).toBe(true);
+    expect(paytmEnvAllowed("production", false)).toBe(false);
+    expect(paytmEnvAllowed("production", true)).toBe(true);
+  });
+
+  it("with the real constant: staging is usable, production is refused with the reason", () => {
+    expect(isPaytmConfigured()).toBe(true);
+    expect(paytmUnavailableReason()).toBeNull();
+    vi.stubEnv("PAYTM_ENV", "production");
+    expect(isPaytmConfigured()).toBe(false);
+    expect(paytmUnavailableReason()).toBe(PAYTM_NOT_VERIFIED_MESSAGE);
+    expect(PAYTM_NOT_VERIFIED_MESSAGE).toContain("not verified against Paytm sandbox");
+    expect(() => getProvider(PAYTM_PROVIDER)).toThrow(/not verified against Paytm sandbox/);
+  });
+
+  it("refuses production without calling Paytm, even with every other value present", async () => {
+    vi.stubEnv("PAYTM_ENV", "production");
+    const calls = fakeFetch(() => reply(fx.statusSuccess));
+    expect((await paytmProvider.capture({ orderId: fx.ORDER_ID, amount: AMOUNT, actorUserId: null, providerPaymentId: fx.TXN_ID, providerOrderId: fx.ORDER_ID })).ok).toBe(false);
+    expect((await paytmProvider.refund({ providerPaymentId: PAYMENT_ID, amount: AMOUNT, reason: "x", refundId: "r" })).outcome).toBe("refused");
+    await expect(paytmProvider.createIntent({ orderId: fx.ORDER_ID, amount: AMOUNT, method: "UPI" })).rejects.toThrow();
+    expect(calls).toHaveLength(0);
   });
 });
 
