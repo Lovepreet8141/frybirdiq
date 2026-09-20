@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { StaffOrder } from "@/components/staff/order-card";
 import { LiveRefresh } from "@/components/staff/live-refresh";
+import { listAssignableRiders } from "@/lib/repositories/rider-assignment";
 import { OrdersBoard } from "@/components/staff/orders-board";
 import { requireStaff, staffCan } from "@/lib/auth";
 import { listActiveOrders } from "@/lib/repositories/orders";
@@ -18,14 +19,16 @@ async function snapshot(orgId: string) {
 
 export default async function StaffOrdersPage({ searchParams }: { searchParams: Promise<{ open?: string }> }) {
   const staff = await requireStaff();
-  const [{ open }, { orders, nowMs }, canSettle, canAdvance, canPrintKot, canSeeCustomers] = await Promise.all([
+  const [{ open }, { orders, nowMs }, canSettle, canAdvance, canPrintKot, canSeeCustomers, canAssign] = await Promise.all([
     searchParams,
     snapshot(staff.orgId),
     staffCan("orders.update"),
     staffCan("kitchen.update"),
     staffCan("kitchen.view"),
     staffCan("customers.view"),
+    staffCan("delivery.assign"),
   ]);
+  const riders = canAssign ? await listAssignableRiders(staff.orgId) : undefined;
 
   return (
     <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-6 px-[var(--gutter)] py-8">
@@ -48,6 +51,7 @@ export default async function StaffOrdersPage({ searchParams }: { searchParams: 
         canAdvance={canAdvance}
         canPrintKot={canPrintKot}
         canSeeCustomers={canSeeCustomers}
+        riders={riders}
         initialSelectedId={open ?? null}
       />
 

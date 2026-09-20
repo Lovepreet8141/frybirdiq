@@ -18,7 +18,7 @@ import { db } from "@/db";
 import { addresses, customers, locations, loyaltyStampEvents, memberships, orderEvents, orderItemModifiers, orderItems, orders, organizations, payments, tables } from "@/db/schema";
 import { assertChannelFulfilment, fulfilmentsFor, type OrderChannel } from "@/domain/order-channel";
 import { type FulfilmentType, type OrderStatus, TERMINAL_STATUSES, assertTransition, foodWasCooking } from "@/domain/order-status";
-import type { Role } from "@/domain/permissions";
+import { type Role, seesOnlyOwnDeliveries } from "@/domain/permissions";
 import { REJECTION_LABELS, type RejectionReason } from "@/domain/rejection";
 import { businessDate } from "@/lib/dates";
 import { closedDay } from "@/lib/orders/closures";
@@ -1188,6 +1188,8 @@ export interface StaffOrderView {
   readonly isPaid: boolean;
   /** Waiting on an online payment: the kitchen will refuse to accept it until money is recorded. */
   readonly awaitingOnlinePayment: boolean;
+  /** The rider a delivery is assigned to (roadmap 6.3); null when unassigned or not a delivery. */
+  readonly riderUserId: string | null;
   readonly invoiceNumber: string | null;
   readonly estimatedReadyAt: Date | null;
   /** The customer's own requested time, when they chose one instead of ASAP — distinct from `estimatedReadyAt` (the kitchen's promise). */
@@ -1275,6 +1277,7 @@ export async function listActiveOrders(orgId: string): Promise<readonly StaffOrd
     grandTotal: paise(row.grandTotal),
     isPaid: paidOrderIds.has(row.id),
     awaitingOnlinePayment: row.status === "PENDING_PAYMENT" && orderAwaitsOnline(paymentRows.filter((payment) => payment.orderId === row.id), row.channel),
+    riderUserId: row.riderId,
     invoiceNumber: row.invoiceNumber,
     estimatedReadyAt: row.estimatedReadyAt,
     scheduledFor: row.scheduledFor,
@@ -1651,10 +1654,14 @@ export async function listCustomerOrders(input: {
 /* ------------------------------------------------------------------ */
 
 /** Deliveries currently on the road. */
-export async function listDeliveries(orgId: string): Promise<readonly StaffOrderView[]> {
+export async function listDeliveries(orgId: string, opts: { readonly onlyRiderUserId?: string } = {}): Promise<readonly StaffOrderView[]> {
   const all = await listActiveOrders(orgId);
   return all.filter(
-    (order) => order.fulfilment === "DELIVERY" && (order.status === "READY" || order.status === "OUT_FOR_DELIVERY"),
+    (order) =>
+      order.fulfilment === "DELIVERY" &&
+      (order.status === "READY" || order.status === "OUT_FOR_DELIVERY") &&
+      // A rider sees only the deliveries assigned to them (roadmap 6.3); an unassigned one is on nobody's list.
+      (opts.onlyRiderUserId === undefined || order.riderUserId === opts.onlyRiderUserId),
   );
 }
 
@@ -1673,6 +1680,7 @@ export type CompleteDeliveryCode =
   | "NOT_FOUND"
   | "NOT_A_DELIVERY"
   | "NOT_OUT_FOR_DELIVERY"
+  | "NOT_YOUR_DELIVERY"
   | "ALREADY_CLOSED"
   | "PAYMENT_REFUSED"
   | "TRANSITION_REFUSED";
@@ -1713,6 +1721,11 @@ export async function completeDelivery(input: {
 
   if (order.fulfilment !== "DELIVERY") {
     return { ok: false, code: "NOT_A_DELIVERY", error: "That order is not a delivery." };
+  }
+
+  // A rider closes only their own delivery (roadmap 6.3); the counter (orders.update) may close any, as before.
+  if (seesOnlyOwnDeliveries(input.actorRoles) && order.riderId !== input.actorUserId) {
+    return { ok: false, code: "NOT_YOUR_DELIVERY", error: "That delivery is assigned to someone else." };
   }
 
   if (order.status === "COMPLETED") {

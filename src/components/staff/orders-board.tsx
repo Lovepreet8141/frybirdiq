@@ -1,5 +1,6 @@
 "use client";
 
+import type { RiderOption } from "./delivery-rider-controls";
 import { useMemo, useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Bike, Eye, Globe, Loader2, MoreHorizontal, Printer, Search, ShoppingBag, Utensils, type LucideIcon } from "lucide-react";
@@ -432,10 +433,13 @@ export function OrdersBoard({
   canAdvance,
   canPrintKot,
   canSeeCustomers = false,
+  riders,
   initialSelectedId = null,
   density = "comfortable",
 }: {
   orders: readonly StaffOrder[];
+  /** Active riders, passed only to people who may assign one (`delivery.assign`). */
+  riders?: readonly RiderOption[];
   /** The server's clock when the list was fetched; the client ticks on from it. */
   nowMs: number;
   canSettle: boolean;
@@ -625,7 +629,7 @@ export function OrdersBoard({
           </SheetHeader>
           {selectedOrder && (
             <ul className="list-none px-4 pb-4">
-              <OrderCard order={selectedOrder} canSettle={canSettle} canAdvance={canAdvance} canPrintKot={canPrintKot} canSeeCustomers={canSeeCustomers} />
+              <OrderCard order={selectedOrder} canSettle={canSettle} canAdvance={canAdvance} canPrintKot={canPrintKot} canSeeCustomers={canSeeCustomers} riders={riders} />
             </ul>
           )}
         </SheetContent>

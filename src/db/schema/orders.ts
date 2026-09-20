@@ -159,6 +159,13 @@ export const orders = pgTable(
      * because the chicken ran out.
      */
     cancellationReason: text("cancellation_reason"),
+    /**
+     * The rider a delivery is assigned to (roadmap 6.3): a membership's
+     * `user_id`, null until someone assigns one. A rider sees and closes only
+     * their own deliveries. Only a DELIVERY order can have one (check below).
+     */
+    riderId: uuid("rider_id"),
+    riderAssignedAt: timestamp("rider_assigned_at", { withTimezone: true }),
 
     promotionCode: text("promotion_code"),
     notes: text("notes"),
@@ -220,6 +227,9 @@ export const orders = pgTable(
       sql`(${table.tableId} IS NULL OR ${table.fulfilment} = 'DINE_IN')`,
     ),
     index("orders_table_idx").on(table.tableId),
+    // Only a delivery is carried by a rider; a dine-in or takeaway order with one is not a state to recover from.
+    check("orders_rider_only_when_delivery", sql`(${table.riderId} IS NULL OR ${table.fulfilment} = 'DELIVERY')`),
+    index("orders_rider_idx").on(table.orgId, table.riderId).where(sql`${table.riderId} IS NOT NULL`),
   ],
 );
 

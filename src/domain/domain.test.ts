@@ -1,3 +1,4 @@
+import { seesOnlyOwnDeliveries } from "./permissions";
 import { describe, expect, it } from "vitest";
 import {
   InvalidOrderTransition,
@@ -425,5 +426,19 @@ describe("turning an order down", () => {
     expect(isRejectionReason("SOLD_OUT")).toBe(true);
     expect(isRejectionReason("BECAUSE")).toBe(false);
     expect(isRejectionReason(null)).toBe(false);
+  });
+});
+
+describe("rider assignment (roadmap 6.3)", () => {
+  it("only OWNER, ADMIN and MANAGER may assign a rider; a rider, a cashier and the rest may not", () => {
+    for (const role of ["OWNER", "ADMIN", "MANAGER"] as const) expect(can([role], "delivery.assign"), role).toBe(true);
+    for (const role of ["CASHIER", "KITCHEN", "RIDER", "INVENTORY", "ANALYST"] as const) expect(can([role], "delivery.assign"), role).toBe(false);
+  });
+
+  it("a rider sees only their own deliveries; anyone who can update orders at the counter sees all", () => {
+    expect(seesOnlyOwnDeliveries(["RIDER"])).toBe(true);
+    for (const role of ["OWNER", "ADMIN", "MANAGER", "CASHIER"] as const) expect(seesOnlyOwnDeliveries([role]), role).toBe(false);
+    // holding a rider role does not narrow someone who also works the counter
+    expect(seesOnlyOwnDeliveries(["RIDER", "CASHIER"])).toBe(false);
   });
 });
