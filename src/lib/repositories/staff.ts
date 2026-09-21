@@ -147,7 +147,7 @@ export type StaffWriteResult = { ok: true } | { ok: false; error: string };
 export async function deactivateStaff(orgId: string, actorUserId: string, actorRoles: readonly Role[], targetUserId: string): Promise<StaffWriteResult> {
   return db().transaction(async (tx) => {
     // FOR UPDATE: the role ceiling below is decided from these rows, so a simultaneous role change on the same person must finish first (staff-lock-1).
-    const rows = await tx.select().from(memberships).where(and(eq(memberships.orgId, orgId), eq(memberships.userId, targetUserId))).for("update");
+    const rows = await tx.select().from(memberships).where(and(eq(memberships.orgId, orgId), eq(memberships.userId, targetUserId))).orderBy(memberships.id).for("update");
     if (rows.length === 0) return { ok: false, error: "That person is not on the roster." };
 
     const activeRoles = rows.filter((row) => row.isActive).map((row) => row.role);
@@ -184,7 +184,7 @@ export async function changeStaffRole(orgId: string, actorUserId: string, actorR
 
   return db().transaction(async (tx) => {
     // FOR UPDATE: the role ceiling below is decided from these rows, so a simultaneous role change on the same person must finish first (staff-lock-1).
-    const rows = await tx.select().from(memberships).where(and(eq(memberships.orgId, orgId), eq(memberships.userId, targetUserId))).for("update");
+    const rows = await tx.select().from(memberships).where(and(eq(memberships.orgId, orgId), eq(memberships.userId, targetUserId))).orderBy(memberships.id).for("update");
     if (rows.length === 0) return { ok: false, error: "That person is not on the roster." };
 
     const active = rows.filter((row) => row.isActive);
