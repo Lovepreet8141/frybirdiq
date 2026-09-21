@@ -1,9 +1,10 @@
 /**
- * Kitchen stations (roadmap 4.2). Migration: PENDING_stations.
+ * Kitchen stations (roadmap 4.2). Migrations: PENDING_stations, PENDING_station_tasks.
  *
- * Which station a line belongs to is read live from `products.kds_station`.
- * This table only records that a station finished a line. One row per order
- * item; presence means done, deleting the row is "undo".
+ * Which station a line belongs to is resolved live (override, category,
+ * combo components: `src/lib/kitchen/stations.ts`). This table only records
+ * that a station finished a task. One row per (order item, station) — a combo
+ * line has several; presence means done, deleting the row is "undo".
  */
 
 import { sql } from "drizzle-orm";
@@ -32,7 +33,7 @@ export const kitchenLineStatus = pgTable(
     doneAt: timestamp("done_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("kitchen_line_status_item_idx").on(table.orderItemId),
+    uniqueIndex("kitchen_line_status_item_station_idx").on(table.orderItemId, table.station),
     index("kitchen_line_status_org_order_idx").on(table.orgId, table.orderId),
     check("kitchen_line_status_station_check", sql`${table.station} IN ('FRY', 'ASSEMBLY', 'DRINKS', 'PACK', 'UNASSIGNED')`),
   ],
