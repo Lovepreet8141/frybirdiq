@@ -9,8 +9,8 @@
 -- The app itself reads through Drizzle as `postgres`, which bypasses RLS: no page or action changes.
 --
 -- Additive: one function and six restrictive policies, generated from
--- src/domain/rls-read-limits.ts (scripts/gen-rls-read-policies.ts 0051) and drift-tested.
--- Undo (supabase/rollback/0051_rider_rls_scope.down.sql) drops them; no data is touched.
+-- src/domain/rls-read-limits.ts (scripts/gen-rls-read-policies.ts 0052) and drift-tested.
+-- Undo (supabase/rollback/0052_rider_rls_scope.down.sql) drops them; no data is touched.
 -- Recovery: docs/MIGRATION-RECOVERY.md 4k.
 SET LOCAL lock_timeout = '5s';
 --> statement-breakpoint

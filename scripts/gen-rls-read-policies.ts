@@ -2,11 +2,11 @@
 import { RESTORE_MEMBERSHIPS_GRANT, generateRiderScopeStatements, riderScopePolicies, generateReadLimitStatements, generateReadLimitStatements0047, policies0047, readLimitPolicies } from "../src/domain/rls-read-limits";
 
 const mode = process.argv[2];
-if (mode === "0051") {
+if (mode === "0052") {
   console.log(generateRiderScopeStatements().join("\n--> statement-breakpoint\n"));
   process.exit(0);
 }
-if (mode === "0051-down") {
+if (mode === "0052-down") {
   console.log([...riderScopePolicies().map(({ table, policy }) => `DROP POLICY IF EXISTS ${policy} ON ${table};`), "DROP FUNCTION IF EXISTS auth_is_rider_scoped(uuid);"].join("\n"));
   process.exit(0);
 }

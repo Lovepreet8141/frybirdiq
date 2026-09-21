@@ -192,7 +192,7 @@ export const policies0047 = (): readonly { readonly table: string; readonly poli
 
 
 /**
- * rider-rls-scope (migration 0051): a rider-only login reads only the deliveries assigned to it, at the database
+ * rider-rls-scope (migration 0052): a rider-only login reads only the deliveries assigned to it, at the database
  * level. "Rider-only" = holds RIDER and no role that reads orders for its work (any of these permissions), so
  * a person who is a rider AND works the counter or the kitchen is not narrowed. Generated from the permissions
  * table, like 0042, so a permission change cannot leave a stale role list.
