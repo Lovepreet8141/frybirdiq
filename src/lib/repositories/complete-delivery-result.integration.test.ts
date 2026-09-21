@@ -171,3 +171,56 @@ describe("completeDelivery result codes", () => {
     expect(await statusOf(orderId)).toBe("COMPLETED");
   });
 });
+
+/**
+ * reassign-race-1 / complete-release-race: the rider-owns-it check used to be one unlocked read at the top of
+ * `completeDelivery`. A manager reassigning (or the rider's hold ending) while the close waited on the order lock
+ * left the cash recorded against, and the order completed by, a rider who no longer held the delivery.
+ */
+describe("completeDelivery: the delivery must still be the closing rider's under the order lock", () => {
+  let org: TestOrg;
+  const OTHER_RIDER = "00000000-0000-4000-8000-0000000000b2";
+
+  beforeAll(async () => {
+    org = await createTestOrg();
+  });
+  afterAll(async () => {
+    await deleteTestOrg(org.orgId);
+  });
+
+  const close = (orderId: string, cashCollected: boolean) => completeDelivery({ orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: org.orgId, cashCollected });
+
+  it.each([true, false])("reassigned to another rider while the close waited (cash %s): refused, no payment, still OUT_FOR_DELIVERY", async (cash) => {
+    const orderId = await createOrder(org, "DELIVERY", "OUT_FOR_DELIVERY");
+    const result = await withOrderRowHeld(
+      orderId,
+      () => close(orderId, cash),
+      async (tx) => {
+        await tx.update(orders).set({ riderId: OTHER_RIDER }).where(eq(orders.id, orderId));
+      },
+    );
+    expect(result).toMatchObject({ ok: false, code: "NOT_YOUR_DELIVERY" });
+    expect(await statusOf(orderId)).toBe("OUT_FOR_DELIVERY");
+    expect(await db().select().from(payments).where(eq(payments.orderId, orderId))).toHaveLength(0);
+  });
+
+  it("released (rider cleared) while the close waited: refused the same way", async () => {
+    const orderId = await createOrder(org, "DELIVERY", "OUT_FOR_DELIVERY");
+    const result = await withOrderRowHeld(
+      orderId,
+      () => close(orderId, true),
+      async (tx) => {
+        await tx.update(orders).set({ riderId: null }).where(eq(orders.id, orderId));
+      },
+    );
+    expect(result).toMatchObject({ ok: false, code: "NOT_YOUR_DELIVERY" });
+    expect(await statusOf(orderId)).toBe("OUT_FOR_DELIVERY");
+    expect(await db().select().from(payments).where(eq(payments.orderId, orderId))).toHaveLength(0);
+  });
+
+  it("the counter (orders.update) still closes any delivery whoever holds it", async () => {
+    const orderId = await createOrder(org, "DELIVERY", "OUT_FOR_DELIVERY");
+    const result = await completeDelivery({ orderId, actorUserId: randomUUID(), actorRoles: ["CASHIER"], orgId: org.orgId, cashCollected: true });
+    expect(result).toEqual({ ok: true });
+  });
+});

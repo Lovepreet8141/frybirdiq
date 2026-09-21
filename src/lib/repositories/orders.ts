@@ -1403,6 +1403,8 @@ export async function advanceOrder(input: {
   reason?: string;
   /** Only meaningful alongside `to: "CANCELLED"` — stored on the order row itself, not just the event, so a rejection's reason survives on the order the way it always has. */
   cancellationReason?: string;
+  /** A rider closing their own delivery: refused under the order's lock if it is no longer theirs (reassign-race-1, complete-release-race). */
+  onlyIfRiderUserId?: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const database = db();
 
@@ -1415,6 +1417,7 @@ export async function advanceOrder(input: {
       .limit(1);
 
     if (!order) return { ok: false, error: "That order does not exist." };
+    if (input.onlyIfRiderUserId !== undefined && order.riderId !== input.onlyIfRiderUserId) return { ok: false, error: "That delivery is assigned to someone else." };
 
     /*
      * An order cannot be completed until it has been paid for.
@@ -1806,6 +1809,7 @@ export async function completeDelivery(input: {
         .where(and(eq(orders.id, order.id), eq(orders.orgId, input.orgId)))
         .limit(1);
       if (current?.status === "COMPLETED") return { ok: true };
+      if (paid.error === "That delivery is assigned to someone else.") return { ok: false, code: "NOT_YOUR_DELIVERY", error: paid.error };
       return { ok: false, code: "PAYMENT_REFUSED", error: paid.error };
     }
   }
@@ -1815,6 +1819,7 @@ export async function completeDelivery(input: {
     to: "COMPLETED",
     actorUserId: input.actorUserId,
     orgId: input.orgId,
+    ...(seesOnlyOwnDeliveries(input.actorRoles) ? { onlyIfRiderUserId: input.actorUserId } : {}),
   });
   if (advanced.ok) return advanced;
 
@@ -1828,6 +1833,10 @@ export async function completeDelivery(input: {
     .where(and(eq(orders.id, order.id), eq(orders.orgId, input.orgId)))
     .limit(1);
   if (after?.status === "COMPLETED") return { ok: false, code: "ALREADY_CLOSED", error: ALREADY_CLOSED_MESSAGE };
+  if (seesOnlyOwnDeliveries(input.actorRoles)) {
+    const [held] = await database.select({ riderId: orders.riderId }).from(orders).where(and(eq(orders.id, order.id), eq(orders.orgId, input.orgId))).limit(1);
+    if (held && held.riderId !== input.actorUserId) return { ok: false, code: "NOT_YOUR_DELIVERY", error: "That delivery is assigned to someone else." };
+  }
   return { ok: false, code: "TRANSITION_REFUSED", error: advanced.error };
 }
 

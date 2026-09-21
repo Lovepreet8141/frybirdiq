@@ -212,7 +212,7 @@ export async function recordCashPayment(input: {
   return settle({
     orderId: input.orderId,
     orgId: input.orgId,
-    orderGuard: deliveryCashOnly ? deliveryCashGuard : undefined,
+    orderGuard: deliveryCashOnly ? (order) => deliveryCashGuard(order, input.actorUserId) : undefined,
     provider: CASH_PROVIDER,
     actorUserId: input.actorUserId,
     // Door cash taken by a rider (no till access) stays with the rider until a handover.
@@ -228,10 +228,12 @@ export async function recordCashPayment(input: {
 }
 
 /** The only orders `delivery.complete` may take cash for: a delivery on the road. */
-function deliveryCashGuard(order: OrderRow): string | null {
+function deliveryCashGuard(order: OrderRow, riderUserId: string): string | null {
   if (order.fulfilment !== "DELIVERY" || order.status !== "OUT_FOR_DELIVERY") {
     return "Only a delivery that is out for delivery can take cash at the door.";
   }
+  // Runs again under the order's lock (reassign-race-1): a manager reassigning while this rider is mid-close must not leave the cash recorded against a rider who no longer holds the delivery.
+  if (order.riderId !== riderUserId) return "That delivery is assigned to someone else.";
   return null;
 }
 
