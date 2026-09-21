@@ -54,7 +54,8 @@ export default async function DeliveriesPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-[var(--gutter)] py-6 md:py-8">
-      <LiveRefresh orgId={staff.orgId} />
+      {/* A rider-only login no longer receives events for unassigned orders (rider-rls-scope), so a new "Available" delivery is found by polling: every 10 s instead of the 60 s fallback. */}
+      <LiveRefresh orgId={staff.orgId} fallbackMs={riderOnly ? 10_000 : undefined} />
 
       <PageHeader title="Deliveries" description={<span aria-live="polite">{headline}</span>} />
 

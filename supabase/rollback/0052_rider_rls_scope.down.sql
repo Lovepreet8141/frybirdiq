@@ -1,4 +1,4 @@
--- Hand-run only. Reverses 0051 (rider-rls-scope): drops its six restrictive policies and the helper function. No data is touched; one transaction.
+-- Hand-run only. Reverses 0052 (rider-rls-scope): drops its six restrictive policies and the helper function. No data is touched; one transaction.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 DROP POLICY IF EXISTS orders_rider_scope ON orders;

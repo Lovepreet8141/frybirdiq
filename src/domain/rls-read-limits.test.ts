@@ -7,8 +7,8 @@ import { ORDER_READER_PERMISSIONS, CHILD_READ_LIMITS, generateRiderScopeStatemen
 const migration = readFileSync(path.resolve(__dirname, "../../supabase/migrations/0042_rls_role_reads.sql"), "utf8");
 const migration0047 = readFileSync(path.resolve(__dirname, "../../supabase/migrations/0051_rls_read_new_tables.sql"), "utf8");
 const undo0047 = readFileSync(path.resolve(__dirname, "../../supabase/rollback/0051_rls_read_new_tables.down.sql"), "utf8");
-const migration0051 = readFileSync(path.resolve(__dirname, "../../supabase/migrations/0052_rider_rls_scope.sql"), "utf8");
-const undo0051 = readFileSync(path.resolve(__dirname, "../../supabase/rollback/0052_rider_rls_scope.down.sql"), "utf8");
+const migration0052 = readFileSync(path.resolve(__dirname, "../../supabase/migrations/0052_rider_rls_scope.sql"), "utf8");
+const undo0052 = readFileSync(path.resolve(__dirname, "../../supabase/rollback/0052_rider_rls_scope.down.sql"), "utf8");
 const undo = readFileSync(path.resolve(__dirname, "../../supabase/rollback/0042_rls_role_reads.down.sql"), "utf8");
 
 describe("rls read limits", () => {
@@ -57,10 +57,10 @@ describe("rls read limits", () => {
   });
 
   it("migration 0052 is exactly what the permissions table generates, and its undo drops exactly its policies and the function", () => {
-    expect(migration0051.split("--> statement-breakpoint").slice(1).map((x) => x.trim())).toEqual(generateRiderScopeStatements().map((x) => x.trim()));
-    const dropped = [...undo0051.matchAll(/DROP POLICY IF EXISTS (\w+) ON (\w+);/g)].map((m) => `${m[2]}.${m[1]}`).sort();
+    expect(migration0052.split("--> statement-breakpoint").slice(1).map((x) => x.trim())).toEqual(generateRiderScopeStatements().map((x) => x.trim()));
+    const dropped = [...undo0052.matchAll(/DROP POLICY IF EXISTS (\w+) ON (\w+);/g)].map((m) => `${m[2]}.${m[1]}`).sort();
     expect(dropped).toEqual(riderScopePolicies().map((p) => `${p.table}.${p.policy}`).sort());
-    expect(undo0051).toMatch(/DROP FUNCTION IF EXISTS auth_is_rider_scoped\(uuid\);/);
+    expect(undo0052).toMatch(/DROP FUNCTION IF EXISTS auth_is_rider_scoped\(uuid\);/);
   });
 
   it("the rider-scope role list is derived from the permissions: a RIDER (and INVENTORY) is not an order reader, every role that works orders is", () => {
