@@ -420,6 +420,11 @@ export const refunds = pgTable(
      * or FAILED insert must therefore pass `finalizedAt: null` explicitly.
      */
     finalizedAt: timestamp("finalized_at", { withTimezone: true }).defaultNow(),
+    /**
+     * For a CASH refund: the till that paid it, read FOR SHARE when the refund was finalized (null when no till was
+     * open). A till's expected cash counts exactly the refunds attributed to it: no timestamp comparison.
+     */
+    cashSessionId: uuid("cash_session_id").references((): AnyPgColumn => cashSessions.id, { onDelete: "restrict" }),
     ...timestamps,
   },
   (table) => [
@@ -431,6 +436,9 @@ export const refunds = pgTable(
     index("refunds_reserved_idx").on(table.orgId, table.createdAt).where(sql`${table.status} = 'RESERVED'`),
     check("refunds_status_check", sql`${table.status} IN ('RESERVED', 'SUCCEEDED', 'FAILED')`),
     check("refunds_finalized_check", sql`(${table.status} = 'SUCCEEDED') = (${table.finalizedAt} IS NOT NULL)`),
+    // Only a cash refund comes out of a till.
+    check("refunds_cash_session_only_cash", sql`(${table.cashSessionId} IS NULL OR ${table.provider} = 'cash')`),
+    index("refunds_cash_session_idx").on(table.cashSessionId).where(sql`${table.cashSessionId} IS NOT NULL`),
     check(
       "refunds_idempotency_key_check",
       sql`${table.idempotencyKey} IS NULL OR char_length(${table.idempotencyKey}) BETWEEN 1 AND 200`,

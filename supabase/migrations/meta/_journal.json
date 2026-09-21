@@ -372,6 +372,13 @@
       "when": 1791700000000,
       "tag": "0052_rider_rls_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1791800000000,
+      "tag": "0053_refund_cash_session",
+      "breakpoints": true
     }
   ]
 }

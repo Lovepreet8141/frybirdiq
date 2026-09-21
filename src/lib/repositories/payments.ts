@@ -1494,10 +1494,12 @@ async function reserveAndFinalizeRefund(input: {
     // A cash refund comes out of the drawer, so it must be ordered against the till's close: read the open till
     // FOR SHARE (a close waits for this refund, then counts it) and stamp the DB clock at this moment, not at
     // transaction start (a refund that waited for a close is stamped after it and belongs to no closed till).
-    if (locked.provider === "cash" && order?.locationId) await openSessionIdForPayment(tx, input.orgId, order.locationId);
+    // The till that pays it is recorded on the refund (null when none is open, or one closed while this waited for
+    // the lock): a till's expected cash counts exactly the refunds attributed to it, never a time window.
+    const cashSessionId = locked.provider === "cash" && order?.locationId ? await openSessionIdForPayment(tx, input.orgId, order.locationId) : null;
     await tx
       .update(refunds)
-      .set({ status: "SUCCEEDED", finalizedAt: sql`clock_timestamp()`, providerRefundId: result.providerRefundId, providerPayload: { httpStatus: result.httpStatus }, updatedAt: new Date() })
+      .set({ status: "SUCCEEDED", finalizedAt: sql`clock_timestamp()`, ...(cashSessionId ? { cashSessionId } : {}), providerRefundId: result.providerRefundId, providerPayload: { httpStatus: result.httpStatus }, updatedAt: new Date() })
       .where(eq(refunds.id, locked.id));
 
     // Recomputed under the payment lock from what has actually SUCCEEDED
