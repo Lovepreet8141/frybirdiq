@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { serverEnv } from "./index";
+import { cookieSecret, serverEnv } from "./index";
 
 const REQUIRED = {
   DATABASE_URL: "postgres://localhost:5432/test",
@@ -161,5 +161,46 @@ describe("serverEnv DEPLOY_COMMIT", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(() => serverEnv()).toThrow(/JOB_SECRET/);
     delete process.env.JOB_SECRET;
+  });
+});
+
+describe("cookieSecret (cookie-sign-1)", () => {
+  const set = (value: string | undefined) => {
+    if (value === undefined) delete process.env.COOKIE_SECRET;
+    else process.env.COOKIE_SECRET = value;
+  };
+  afterEach(() => set(undefined));
+
+  it("unset or blank means none: the cookie stays plain JSON", () => {
+    set(undefined);
+    expect(cookieSecret()).toEqual({ kind: "none" });
+    set("");
+    expect(cookieSecret()).toEqual({ kind: "none" });
+  });
+
+  it("a good secret (32+ printable characters, no spaces) is ok", () => {
+    set("a".repeat(64));
+    expect(cookieSecret()).toEqual({ kind: "ok", secret: "a".repeat(64) });
+  });
+
+  it("a malformed secret is INVALID, never 'none': the cookie is treated as absent and checkout keeps working (it must not throw)", () => {
+    for (const bad of ["short", "a".repeat(31), "a".repeat(40) + " ", "a".repeat(40) + "\n", "é".repeat(40)]) {
+      set(bad);
+      expect(() => cookieSecret()).not.toThrow();
+      expect(cookieSecret(), JSON.stringify(bad)).toEqual({ kind: "invalid" });
+    }
+  });
+
+  it("a bad COOKIE_SECRET does not break serverEnv(): checkout and order pages need the rest of the environment, not this", () => {
+    const saved = { d: process.env.DATABASE_URL, k: process.env.SUPABASE_SERVICE_ROLE_KEY };
+    process.env.DATABASE_URL = REQUIRED.DATABASE_URL;
+    process.env.SUPABASE_SERVICE_ROLE_KEY = REQUIRED.SUPABASE_SERVICE_ROLE_KEY;
+    try {
+      set("bad secret");
+      expect(() => serverEnv()).not.toThrow();
+    } finally {
+      if (saved.d === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = saved.d;
+      if (saved.k === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = saved.k;
+    }
   });
 });

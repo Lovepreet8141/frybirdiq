@@ -36,7 +36,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
   // Same rule as /order/[id]: the link alone does not prove the viewer is the
   // customer, so their name and phone are withheld from anyone else. The
   // invoice never carries an email, so only phone decides this here.
-  const isOwner = viewerOwnsOrder({ customerPhone: receipt.customer.phone, customerEmail: null }, customer, remembered);
+  const isOwner = viewerOwnsOrder({ id, customerPhone: receipt.customer.phone, customerEmail: null }, customer, remembered);
   const receiptData = { ...receipt, customer: redactReceiptCustomerForViewer(receipt.customer, isOwner) };
 
   return (

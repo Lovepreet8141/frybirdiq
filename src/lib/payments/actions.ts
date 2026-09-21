@@ -12,6 +12,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { readRememberedContact } from "@/lib/cart/remembered-contact";
+import { rememberedPhoneFor } from "@/components/order/viewer-owns-order";
 import { getCustomer } from "@/lib/customer";
 import { type RecordPaymentCode, markOnlinePaymentFailed, recordOnlinePayment } from "@/lib/repositories/payments";
 
@@ -88,7 +89,7 @@ export async function reportOnlinePaymentFailureAction(input: unknown): Promise<
   const [customer, contact] = await Promise.all([getCustomer(), readRememberedContact()]);
   const { ok } = await markOnlinePaymentFailed({
     orderId: parsed.data.orderId,
-    via: { kind: "customer", customerId: customer?.id ?? null, phone: contact?.phone ?? customer?.phone ?? null },
+    via: { kind: "customer", customerId: customer?.id ?? null, phone: rememberedPhoneFor(parsed.data.orderId, contact) ?? customer?.phone ?? null },
   });
 
   if (ok) revalidatePath(`/order/${parsed.data.orderId}`);
