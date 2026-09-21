@@ -57,6 +57,7 @@ async function counterCash(rupees: string) {
 }
 async function doorCash(rupees: string) {
   const orderId = await newOrder(rupees, "delivery");
+  await db().update(orders).set({ riderId: rider }).where(eq(orders.id, orderId)); // door cash only on a delivery the rider holds (reassign-race-1)
   const result = await recordCashPayment({ orderId, actorUserId: rider, actorRoles: ["RIDER"], orgId: org.orgId, via: "delivery" });
   if (!result.ok) throw new Error(result.error);
   return paymentOf(orderId);
