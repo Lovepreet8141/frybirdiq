@@ -23,7 +23,7 @@ import "server-only";
  * transaction, against the person who did it. Money is integer paise.
  */
 
-import { and, asc, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, cashHandovers, cashSessions, memberships, payments, refunds } from "@/db/schema";
 import { type Paise, ZERO, add, paise, subtract } from "@/lib/money";
