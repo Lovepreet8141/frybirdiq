@@ -23,7 +23,7 @@ import { REJECTION_LABELS, type RejectionReason } from "@/domain/rejection";
 import { businessDate } from "@/lib/dates";
 import { closedDay } from "@/lib/orders/closures";
 import { isValidScheduledTime } from "@/lib/cart/scheduled-time";
-import { isSupabaseConfigured } from "@/lib/env";
+import { isSupabaseConfigured, serverEnv, whatsappUpdatesEnabled } from "@/lib/env";
 import { type Paise, ZERO, formatINR, paise, subtract } from "@/lib/money";
 import { type PricedOrder, priceOrder } from "@/lib/pricing";
 import { fromMicro, toPoint } from "@/lib/delivery";
@@ -46,6 +46,7 @@ import { getCustomer } from "@/lib/customer";
 import { awaitsOnlinePayment, createPendingPayment, orderAwaitsOnline, recordCashPayment, UNAPPLIED as UNAPPLIED_PAYMENT } from "./payments";
 import { CASH_PROVIDER, RAZORPAY_PROVIDER, availableMethods, codAllowed, getProvider, type PaymentMethod } from "@/lib/payments";
 import { reversePointsForOrder, reverseStampForOrder, spendPointsForOrder } from "./loyalty";
+import { enqueueOrderUpdate } from "./notification-outbox";
 import { recordConsumption, reverseConsumption } from "./stock";
 import { IdempotencyConflict, findIdempotentResult, withIdempotency } from "./idempotency";
 
@@ -1530,6 +1531,26 @@ export async function advanceOrder(input: {
   });
 
   if (!outcome.ok) return outcome;
+
+  /*
+   * WhatsApp order update (roadmap 7.2): queue one message for this status change.
+   *
+   * Off unless WHATSAPP_UPDATES=on, so production copies no customer phone number
+   * anywhere until someone deliberately enables it (nothing sends today: no
+   * provider account). It runs after the status write, outside the locked
+   * transaction, and a failure here NEVER turns an order that moved into
+   * `{ ok: false }`: the outbox is a side effect, the order is the business.
+   * One row per order and status (unique key), so a retry or a second call
+   * queues nothing more.
+   */
+  if (whatsappUpdatesEnabled()) {
+    try {
+      const siteUrl = serverEnv().SITE_URL;
+      if (siteUrl) await enqueueOrderUpdate({ orgId: input.orgId, orderId: outcome.orderId, toStatus: input.to, siteUrl });
+    } catch (error) {
+      console.error("advanceOrder: could not queue the WhatsApp update", error instanceof Error ? error.message : error);
+    }
+  }
 
   /*
    * FRYBIRD REWARDS reverses automatically the moment an order is marked

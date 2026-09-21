@@ -70,6 +70,13 @@ const serverSchema = z.object({
    * link in every WhatsApp message would quietly stay localhost.
    */
   SITE_URL: optionalSecret,
+  /**
+   * "on" queues a WhatsApp order-update message (to the mock provider) whenever
+   * an order moves to a status customers are told about. Unset means nothing is
+   * queued and no customer phone number is copied into the outbox. Nothing sends
+   * today: there is no provider account.
+   */
+  WHATSAPP_UPDATES: z.enum(["on", "off"]).optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   ANTHROPIC_API_KEY: optionalSecret,
   RAZORPAY_KEY_ID: optionalSecret,
@@ -162,6 +169,14 @@ export function clientEnv(): ClientEnv {
     );
   }
   return result.data;
+}
+
+/**
+ * The WhatsApp order-update switch (roadmap 7.2). Off unless `WHATSAPP_UPDATES=on`.
+ * A plain non-secret switch read on the order hot path, so it does not parse the whole server environment.
+ */
+export function whatsappUpdatesEnabled(): boolean {
+  return process.env.WHATSAPP_UPDATES === "on";
 }
 
 export function serverEnv(): ServerEnv {

@@ -1,17 +1,11 @@
 /**
- * HANDOFF to the integrator (roadmap 7.2): advanceOrder lives in orders.ts, which the
- * integrations lane may not edit, so nothing yet enqueues a message when an order moves.
- * This marks the gap with it.fails: it passes today because advanceOrder does not enqueue.
- * When the hook lands, it starts failing, which is the cue to change `it.fails` to `it`.
- *
- * The change: after advanceOrder commits a transition (not inside its locked transaction,
- * and never letting a failure roll the order back), call
- *   await enqueueOrderUpdate({ orgId, orderId, toStatus: to, siteUrl: <SITE_URL> }).catch(() => undefined);
- * then a worker/cron calls dispatchPending({ orgId, provider }) with the provider from a registry.
+ * The hook in advanceOrder (roadmap 7.2): when WHATSAPP_UPDATES=on, moving an order to a status customers
+ * are told about queues ONE outbox row; when it is off (the default, and production today) nothing is queued and
+ * no phone number is copied; a failure to queue never fails the order move.
  */
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { notificationOutbox, orders } from "@/db/schema";
 import { fromRupees } from "@/lib/money";
@@ -27,7 +21,9 @@ describe("advanceOrder enqueues a WhatsApp update", () => {
     await deleteTestOrg(org.orgId);
   });
 
-  it.fails("PREPARING -> READY leaves one outbox row (NOT WIRED YET: needs the hook in orders.ts)", async () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  async function orderAt(status: "PREPARING" | "ACCEPTED") {
     const [o] = await db()
       .insert(orders)
       .values({
@@ -35,7 +31,7 @@ describe("advanceOrder enqueues a WhatsApp update", () => {
         locationId: org.locationId,
         orderNumber: `T-${randomUUID().slice(0, 6)}`,
         businessDate: new Date().toISOString().slice(0, 10),
-        status: "PREPARING",
+        status,
         channel: "ONLINE",
         fulfilment: "TAKEAWAY",
         grandTotal: fromRupees("200"),
@@ -43,9 +39,37 @@ describe("advanceOrder enqueues a WhatsApp update", () => {
       })
       .returning({ id: orders.id });
     if (!o) throw new Error("fixture");
-    const r = await advanceOrder({ orderId: o.id, to: "READY", actorUserId: randomUUID(), orgId: org.orgId });
-    expect(r.ok).toBe(true);
-    const rows = await db().select().from(notificationOutbox).where(eq(notificationOutbox.orderId, o.id));
-    expect(rows).toHaveLength(1);
+    return o.id;
+  }
+  const rowsFor = (orderId: string) => db().select().from(notificationOutbox).where(eq(notificationOutbox.orderId, orderId));
+
+  it("PREPARING -> READY leaves exactly one outbox row when switched on, and a second identical call adds none", async () => {
+    vi.stubEnv("WHATSAPP_UPDATES", "on");
+    vi.stubEnv("SITE_URL", "https://example.test");
+    const id = await orderAt("PREPARING");
+    expect((await advanceOrder({ orderId: id, to: "READY", actorUserId: randomUUID(), orgId: org.orgId })).ok).toBe(true);
+    expect(await rowsFor(id)).toHaveLength(1);
+    expect((await advanceOrder({ orderId: id, to: "READY", actorUserId: randomUUID(), orgId: org.orgId })).ok).toBe(false); // already READY: refused, nothing more queued
+    expect(await rowsFor(id)).toHaveLength(1);
+  });
+
+  it("switched off (the default): the order moves and nothing is queued, no phone number is copied", async () => {
+    vi.stubEnv("SITE_URL", "https://example.test");
+    const id = await orderAt("PREPARING");
+    expect((await advanceOrder({ orderId: id, to: "READY", actorUserId: randomUUID(), orgId: org.orgId })).ok).toBe(true);
+    expect(await rowsFor(id)).toEqual([]);
+  });
+
+  it("a queueing failure never fails the order move", async () => {
+    vi.stubEnv("WHATSAPP_UPDATES", "on");
+    vi.stubEnv("SITE_URL", "https://example.test");
+    const id = await orderAt("PREPARING");
+    await db().execute(sql`alter table notification_outbox rename to notification_outbox_x`);
+    try {
+      expect((await advanceOrder({ orderId: id, to: "READY", actorUserId: randomUUID(), orgId: org.orgId })).ok).toBe(true);
+    } finally {
+      await db().execute(sql`alter table notification_outbox_x rename to notification_outbox`);
+    }
+    expect((await db().select({ status: orders.status }).from(orders).where(eq(orders.id, id)))[0]!.status).toBe("READY");
   });
 });
