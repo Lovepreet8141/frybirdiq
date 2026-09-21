@@ -10,7 +10,7 @@ describe("provider registry", () => {
 
   it("refuses an unknown provider rather than falling back", () => {
     // A silent fallback would let a typo route real money through cash.
-    expect(() => getProvider("paytm")).toThrow(/no provider named/);
+    expect(() => getProvider("stripe")).toThrow(/no provider named/);
   });
 
   it("offers only cash without gateway keys", () => {

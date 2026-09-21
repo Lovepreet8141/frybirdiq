@@ -76,6 +76,20 @@ const serverSchema = z.object({
   RAZORPAY_KEY_SECRET: optionalSecret,
   RAZORPAY_WEBHOOK_SECRET: optionalSecret,
   /**
+   * Paytm (docs/PAYTM-PROVIDER.md). All unset means the provider is not
+   * configured and fails closed. `PAYTM_ENV` must be exactly "staging" or
+   * "production": there is no default, so a forgotten value can never send
+   * test traffic to the live gateway or the reverse. Read only by
+   * `paytmConfig()` in `src/lib/payments/paytm.ts`.
+   */
+  PAYTM_MID: optionalSecret,
+  PAYTM_MERCHANT_KEY: optionalSecret,
+  PAYTM_WEBSITE_NAME: optionalSecret,
+  PAYTM_ENV: z.preprocess((value) => (value === "" ? undefined : value), z.enum(["staging", "production"]).optional()),
+  PAYTM_CALLBACK_URL: optionalSecret,
+  /** Only the exact string "true" opts in. Lets staging credentials run on the production deployment, for the sandbox proof only. Off by default. */
+  PAYTM_ALLOW_STAGING: optionalSecret,
+  /**
    * Bearer secret for `/api/jobs/[job]`. Unset means the job runner is
    * dormant — every job route 404s rather than running unauthenticated.
    * `JOB_SECRET_PREVIOUS` accepts the outgoing secret during rotation so a

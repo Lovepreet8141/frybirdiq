@@ -136,7 +136,12 @@ export interface PaymentProvider {
    * id — before a resumed refund asks again. Absent for a provider with
    * nothing external to look up (cash).
    */
-  findRefund?(input: { providerPaymentId: string | null; refundId: string }): Promise<RefundLookup>;
+  findRefund?(input: {
+    providerPaymentId: string | null;
+    refundId: string;
+    /** When the refund was first asked for. A provider whose lookup can lag (Paytm) reports "not found" only once this is old enough, else "unknown". */
+    requestedAt?: Date;
+  }): Promise<RefundLookup>;
 
   /** Verifies an inbound webhook. §45. */
   verifyWebhook(input: { body: string; signature: string | null }): Promise<WebhookVerification>;

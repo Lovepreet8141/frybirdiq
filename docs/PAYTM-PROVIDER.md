@@ -1,0 +1,248 @@
+> **MOCK ONLY - NOT VERIFIED AGAINST PAYTM SANDBOX - CANNOT GO LIVE until the checksum is proven with real sandbox credentials**
+>
+> Owner decision: this stays mock-only. `PAYTM_SANDBOX_VERIFIED` in `src/lib/payments/paytm.ts` is `false`, and while it is false `PAYTM_ENV=production` is refused (`isPaytmConfigured()` is false and `getProvider("paytm")` throws "not verified against Paytm sandbox"). Staging is allowed off the live site, because that is how the proof is made. **On the production deployment (NODE_ENV=production, the live server) staging credentials are refused too**, unless `PAYTM_ALLOW_STAGING=true` (exact string; off by default; only for the sandbox proof), because a staging payment "succeeds" without money and would book a real order as paid.
+
+# Paytm provider
+
+Status: mock-only. Built and tested against constructed fixtures only. No Paytm account, no
+key, no call to any Paytm endpoint has ever been made. Not enabled: with no
+`PAYTM_*` variables set the provider is "not configured" and `getProvider("paytm")`
+throws. It is also not in `availableMethods()`, so checkout does not offer it.
+It needs the payments reviewer's sign-off before anything below "Proposals" is wired.
+
+Code: `src/lib/payments/paytm.ts`, registry line in `src/lib/payments/index.ts`,
+tests `paytm.test.ts`, constructed fixtures `__fixtures__/paytm.ts`.
+
+## Where the documentation lives
+
+`developer.paytm.com` and `business.paytm.com` both 301-redirect to
+`www.paytmpayments.com/docs/`, which is where the pages below were read
+(public pages only, nothing called).
+
+## Flows and endpoints used
+
+| Flow | Method and URL | Source |
+|---|---|---|
+| Initiate transaction | POST `https://securegw-stage.paytm.in/theia/api/v1/initiateTransaction?mid=..&orderId=..` (production `securegw.paytm.in`) | Initiate Transaction API page |
+| Transaction status | POST `https://securegw-stage.paytm.in/v3/order/status` (production `securegw.paytm.in`) | **ASSUMPTION**: the status page did not print its URL (it points at the dashboard). This is Paytm's long-standing v3 endpoint. Confirm from the dashboard. |
+| Refund | POST `https://securestage.paytmpayments.com/refund/apply` (production `secureglobal.paytmpayments.com`) | Refund API page |
+| Refund status | POST `https://securestage.paytmpayments.com/v2/refund/status` (production `paytmpayments.com/v2/refund/status`) | Refund Status API page |
+| Callback / webhook | Paytm posts key-value pairs to the callback URL and the webhook URL | Payment Status page |
+
+### Initiate transaction
+
+Body: `requestType: "Payment"`, `mid`, `websiteName`, `orderId` (unique, at most 50
+alphanumeric characters), `callbackUrl`, `txnAmount: { value: "940.00", currency: "INR" }`,
+`userInfo: { custId }`. Head: `signature`. Response: a `txnToken` used by Paytm's
+checkout on the client. We use our own order id as Paytm's `orderId`, so a retry
+reaches the same Paytm order. The request has no timestamp or random field, so it is
+byte-identical each time (the checksum salt is random, the signed body is not).
+`userInfo.custId` is the order id: no customer personal data is sent to Paytm.
+ASSUMPTION: a success answer is `resultInfo.resultStatus == "S"` with a non-empty
+`txnToken` (the page listed a token but not the result codes).
+
+### Transaction status
+
+Body `{ mid, orderId }`, head `signature`. Response `body.resultInfo.resultStatus` is
+`TXN_SUCCESS`, `TXN_FAILURE`, `PENDING` or `NO_RECORD_FOUND`, with `txnId`, `orderId`,
+`txnAmount` ("940.00"), `paymentMode` (UPI, CC, DC, NB, PPI).
+
+### Refund and refund status
+
+Refund body: `mid`, `txnType: "REFUND"`, `orderId`, `txnId`, `refId` (our refund row id),
+`refundAmount` ("940.00", two decimals), `comments` (at most 500). `refId` is Paytm's
+idempotency: a duplicate within 10 minutes answers code 617. Answers: `TXN_SUCCESS`,
+`PENDING`, `TXN_FAILURE`; codes 601, 628, 677 pending; 617 duplicate; 629 already
+successful; 620 insufficient balance. Refund status body: `mid`, `orderId`, `refId`;
+answers add `NO_RECORD_FOUND` (code 631).
+
+### Callback and webhook fields
+
+`ORDERID`, `TXNID`, `STATUS` (TXN_SUCCESS or TXN_FAILURE), `RESPCODE`, `RESPMSG`,
+`TXNAMOUNT`, `PAYMENTMODE`, `CHECKSUMHASH`. Paytm says to always verify
+`CHECKSUMHASH` and to confirm with the Transaction Status API, since a webhook may be
+delayed or missed.
+
+## Checksum
+
+The docs pages say "SHA256 hashing and AES128 encryption", that a JSON request is
+signed over the complete body string with the merchant key, and that the signature goes
+in `head.signature`. **They do not print the salt, IV, mode or a test vector.** What is
+implemented is Paytm's published checksum library as I know it, and it is the single
+biggest assumption here:
+
+1. salt: 4 characters (3 random bytes, base64)
+2. `hash = sha256("<message>|<salt>")` in hex, then append the salt (68 characters)
+3. encrypt with AES-128-CBC, PKCS7, key = the 16-byte merchant key, fixed IV
+   `@@@@&&&&####$$$$`, output base64
+4. verify: decrypt, take the last 4 characters as salt, recompute, compare in constant time
+5. API bodies: message is `JSON.stringify(body)`. Callbacks: keys sorted, values joined
+   with `|`, null or "null" as empty, `CHECKSUMHASH` excluded
+
+The test pins one vector computed independently with openssl from this description. That
+proves the code does what is written above, not that Paytm agrees. **Before go-live:** run
+the Paytm sandbox (or their SDK's `generateSignature`) on one message and compare.
+Response signatures are checked over the **exact text of the `body` member as received** (`rawBodyOf`), never over a re-serialisation, because parse-then-stringify turns `940.00` into `940` and reformats whitespace. A missing, duplicated, or non-object `body` fails closed. **Unverified against real responses:** if Paytm signs a normalised form rather than the wire text, every answer will fail verification (fail closed) and the sandbox proof will show it; step 5 of the proof below must confirm which.
+
+## Sandbox proof procedure
+
+Done by the owner and the integrator together, in a staging-only environment, never
+production. Nothing here needs a live payment of real money.
+
+1. Owner obtains the **staging** MID and merchant key from the Paytm dashboard (test
+   credentials, not production). Set `PAYTM_ENV=staging` and the other `PAYTM_*` values
+   on a non-production server (or local shell), never in a committed file. If the proof must run on the live server, set `PAYTM_ALLOW_STAGING=true` for the duration and remove it after; no customer order may be placed while it is set.
+2. Generate one checksum for a fixed message with Paytm's own library (their Node SDK's
+   `PaytmChecksum.generateSignature`, or their checksum utility) and with
+   `generateChecksum` here, using the same key and, for ours, the salt decrypted from
+   theirs. Confirm `verifyChecksum` accepts Paytm's checksum and their library accepts
+   ours.
+3. Send **one** initiate-transaction request to the **staging** URL through
+   `initiatePaytmTransaction`. Paytm must accept the signature and return a `txnToken`
+   with the success `resultStatus` (this also settles assumption 3).
+4. Complete one test payment on Paytm's staging checkout with their test instrument.
+5. Take the callback Paytm posts for it and run `verifyCallbackParams` on it: it must
+   verify. Then call the staging Transaction Status API through `capture`: the response
+   signature must verify **over the raw response text** and the result must be `ok`. Also capture a response containing a number-typed amount if Paytm sends one (e.g. `940.00` not `"940.00"`), the case raw-body verification exists for. This settles the status URL
+   (assumption 2) and the signed-envelope shape (assumptions 4, 5, 7).
+6. Run one small staging refund and its status through `refund` and `findRefund` (settles
+   assumptions 4 to 6).
+7. Only if every step above agreed, in a **separate commit made after the proof**, replace
+   the constructed fixtures with the recorded ones below, set
+   `PAYTM_SANDBOX_VERIFIED = true`, and change its test. That commit goes to the payments
+   reviewer. If any step disagreed, fix the implementation first; the constant stays false.
+
+Record these as fixtures at that point (redact the MID and key; keep everything else as
+Paytm sent it, byte for byte, because signature checks depend on it):
+
+- one message with the checksum Paytm's library produced for it (the known-answer vector);
+- the raw initiate-transaction request body and Paytm's raw response (with `head.signature`);
+- the raw callback form fields, including `CHECKSUMHASH`, from the staging payment;
+- the raw Transaction Status request and response, for a success and, if obtainable, a
+  failed and a pending payment;
+- the raw refund request and response, and the refund-status response, for the staging refund;
+- the exact URLs that answered, for the status endpoint and both refund endpoints.
+
+## What stays safe if an assumption is wrong
+
+- Capture never believes a callback or a response it cannot verify. A wrong checksum
+  scheme makes every response fail verification, so nothing is ever captured (fails
+  closed, visible as retryable "unavailable") rather than wrongly captured.
+- Capture is ok only for a verified `TXN_SUCCESS` with our order id, exactly our amount,
+  and our order id. If Paytm's own transaction id differs from the one asked about, the payment is recorded under Paytm's id (a retry on the same order can fail as txn A and pay as txn B); it is never a decline. A `TXN_FAILURE` for a different transaction than the one asked about is "not yet" (retryable, unverified), because it may be an earlier attempt on an order a later attempt can still pay; only a failure for the asked transaction is a final decline. `PENDING`, `NO_RECORD_FOUND`, an unknown status, a non-200,
+  a bad signature and a network error are all "not yet", never a final decline and never paid.
+- Refunds: only a verified `TXN_SUCCESS` for exactly the amount asked is money back. A
+  duplicate or already-successful code, a different amount, a 5xx, a 409, a 429, a
+  timeout or a bad signature is ambiguous (the row stays reserved and `findRefund` looks
+  it up by `refId`). Only a verified `TXN_FAILURE` or a definite 4xx is a refusal.
+  ASSUMPTION: every other `TXN_FAILURE` code means no money moved.
+- `NO_RECORD_FOUND` (or 631) from refund status is **unknown**, not "safe to refund again":
+  Paytm's status may lag its apply, and a second apply after the first landed would refund
+  twice (duplicate code 617 only guards 10 minutes). `findRefund` returns `found: false`
+  only when the caller passes `requestedAt` (new optional input on the interface) at least
+  `REFUND_LOOKUP_LAG_MS` (30 minutes) old; with no time, or inside the window, it returns
+  `unknown` and the row stays reserved. **The 30 minute window is a decision the payments
+  reviewer must confirm**, as is the rule that the service layer must never call `refund`
+  again for a row while its lookup is unknown. Until the service passes `requestedAt`,
+  `findRefund` never answers "not found".
+- A refund-status answer that echoes another `orderId`, `refId` or `txnId` is unknown, not
+  an answer for this refund (assumption 11: an echo, when present, is on the same fields).
+- A zero or negative refund amount returns `refused` without asking Paytm and without throwing.
+
+## Identifiers and how the interface is used
+
+- `providerOrderId` = our order id (the intent is created before the order row, per
+  HANDOVER 25, so the id is reserved first; it must match `^[A-Za-z0-9@_.-]{1,50}$`, and a
+  UUID does).
+- `providerPaymentId` is stored as `<orderId>:<txnId>` because a Paytm refund needs both
+  and `refund()` receives only the payment id. `capture()` accepts a bare txn id when
+  `providerOrderId` is also given, and returns the composite.
+- `createIntent` returns the interface's `PaymentIntent`, which has no place for the
+  `txnToken` the browser needs. `initiatePaytmTransaction()` is exported and returns it.
+  See Proposals.
+- `capture`'s `signature` argument is ignored: a callback's hash covers all its fields, so
+  one string cannot be verified alone. Use `verifyWebhook` for the callback and `capture`
+  for the truth.
+- Amounts: `toPaytmAmount` and `fromPaytmAmount` are wire formatting only (paise bigint
+  to "940.00" and back, strict). They are not display formatting, which stays `formatINR`.
+
+## What the owner must obtain from Paytm
+
+1. A Paytm Payment Gateway merchant account (business KYC), activated for online payments.
+2. Test (staging) credentials first, then production credentials. Both are different
+   sets. Staging first, and a test payment in staging before production is enabled.
+3. **Merchant ID (MID)**, 20 characters, per environment. Goes in `PAYTM_MID`.
+4. **Merchant key**, exactly 16 characters, per environment, secret. Goes in `PAYTM_MERCHANT_KEY`.
+   A key of any other length is treated as "not configured".
+5. **Website name** (`PAYTM_WEBSITE_NAME`): `WEBSTAGING` for staging, `DEFAULT` (or the
+   registered name Paytm gives) for production. Industry type (for food and restaurant)
+   is set on the merchant profile by Paytm.
+6. The **callback URL** to register, and to put in `PAYTM_CALLBACK_URL`, on frybirdiq.tech
+   (proposed `/api/paytm/callback`, see Proposals), plus the **webhook URL** registered in the
+   Paytm dashboard (the same route is fine). It must be a public https URL.
+7. **Settlement details**: the bank account Paytm settles to, the settlement cycle, and
+   the MDR/fee rates (so the fee can be recorded on the payment).
+8. Refund settings: whether refunds are enabled on the account, instant refund
+   (`preferredDestination: TO_INSTANT`) availability, and the refund window.
+9. Which payment modes (UPI, cards, net banking, wallet) are enabled on the MID.
+10. Confirmation of the Transaction Status API URL for the account (the docs pages
+    say to read it from the dashboard) and of the initiate result code for success.
+11. Set `PAYTM_ENV` to `staging` or `production` (there is no default), on the server only.
+
+## Assumptions made (all of them)
+
+1. The checksum algorithm and its parameters (above). Highest risk, checked by one
+   independently computed vector, not by Paytm.
+2. The Transaction Status endpoint URL (v3/order/status on the securegw hosts).
+3. Initiate success is `resultStatus "S"`.
+4. Refund and refund-status answers use `body.resultInfo` and `body.refundId`,
+   `body.refundAmount` as strings, in a signed `{ head, body }` envelope.
+5. All refund answers are signed the way status answers are.
+6. `TXN_FAILURE` on refund, other than 617 and 629, means no money moved.
+7. `TXN_SUCCESS` on a status check carries `txnAmount` in rupees with two decimals.
+8. Paytm order ids may contain letters, digits and `@ _ . -`, at most 50.
+9. Paytm's callback field values are strings; the route will turn the form post into a
+   JSON object of them.
+10. A callback's `CHECKSUMHASH` covers every other posted field (as the library does).
+11. Refund and refund-status answers may echo `orderId`, `refId`, `txnId`; if present they are checked.
+12. A response's signature covers the exact wire text of `body` (see Checksum).
+13. "Production deployment" means `NODE_ENV=production`, which is what the live server sets (docs/DEPLOY.md) and what the rest of the app already uses.
+
+## Proposals (not built: outside this card, payments-reviewer territory)
+
+The production gate (`PAYTM_SANDBOX_VERIFIED`) is built. Everything below is still to do and
+none of it should be wired to production before the sandbox proof above is done.
+
+None of these edit `payments.ts`, `orders.ts`, `actions.ts`, the Razorpay webhook route or checkout.
+
+1. **Callback and webhook route** `POST /api/paytm/callback`. Read the raw form body, convert
+   to an object, run `paytmProvider.verifyWebhook`, then handle it exactly as the Razorpay
+   webhook handler does: dedupe on the returned `eventId`, and never trust the callback beyond
+   "go and look": call `paytmProvider.capture({ orderId, amount: <server's amount for the
+   order>, providerOrderId: ORDERID, providerPaymentId: TXNID })` and let the service layer set
+   status. Respond 200 only after the outcome is recorded; a retryable `GATEWAY_UNAVAILABLE`
+   answers 5xx so Paytm retries. The customer's browser return (same callback URL, POST) should
+   only redirect to the order page, which reads state from our database.
+2. **`txnToken` for the client.** Either add an optional `clientToken?: string` to
+   `PaymentIntent` (interface change, reviewer's call) or have the checkout action call
+   `initiatePaytmTransaction` directly for this provider.
+3. **Checkout offering.** Add a Paytm entry to `availableMethods()` only behind
+   `isPaytmConfigured()` and its own toggle, after 1 and 2 exist.
+4. **Amount at capture.** The caller must pass the server-computed amount, never one
+   from the callback, exactly as with Razorpay.
+5. **Refund wait.** Decide whether a refund whose `findRefund` says "not found" must wait
+   past Paytm's status lag (and the 10 minute duplicate window) before asking again.
+6. **Reconciliation.** A periodic status check on orders that stayed pending, as a backstop
+   for a missed webhook. Paytm itself recommends confirming with the status API.
+7. **The verification flag.** Reviewer to confirm that `PAYTM_SANDBOX_VERIFIED` and
+   `paytmEnvAllowed` are the only gate, that no other code path reads `PAYTM_ENV`, and that
+   the flip commit contains the recorded fixtures listed in the sandbox proof procedure.
+8. **Pass `requestedAt`.** The refund service must pass the refund row's first-request time to
+   `findRefund`, and must not call `refund` again for a row whose lookup is `unknown`. Without
+   it, Paytm refunds that never landed stay reserved until a human resolves them (safe, not
+   automatic).
+9. **Failure callbacks.** The callback handler should treat a `GATEWAY_UNAVAILABLE` from a
+   failure callback as "check again later", not as a failed order, and should record a
+   decline only from a `GATEWAY_DECLINED` with `payload.gatewayVerified`.
+10. **Deployment signal.** Confirm `NODE_ENV=production` is the right "live site" signal, and
+    that `PAYTM_ALLOW_STAGING` is removed from the server's environment after the proof.
