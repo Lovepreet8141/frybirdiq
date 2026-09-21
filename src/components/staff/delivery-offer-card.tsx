@@ -14,7 +14,7 @@ import { formatINR } from "@/lib/money";
  * collect. Deliberately nothing about the customer or where they live: that appears once it is
  * theirs. "Take it" is first-tap-wins on the server; a rider who lost the race is told plainly.
  */
-export function DeliveryOfferCard({ offer }: { offer: DeliveryOffer }) {
+export function DeliveryOfferCard({ offer, atLimit = false }: { offer: DeliveryOffer; atLimit?: boolean }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
@@ -57,11 +57,11 @@ export function DeliveryOfferCard({ offer }: { offer: DeliveryOffer }) {
           {message}
         </p>
       )}
-      <Button type="button" size="lg" disabled={pending} aria-busy={pending} onClick={take} className="min-h-16 gap-3 text-lg">
+      <Button type="button" size="lg" disabled={pending || atLimit} aria-busy={pending} onClick={take} className="min-h-16 gap-3 text-lg">
         {pending && <Loader2 className="size-5 animate-spin" aria-hidden="true" />}
         Take it
       </Button>
-      <p className="text-center text-xs text-muted-foreground">The customer’s name and address appear once it is yours.</p>
+      <p className="text-center text-xs text-muted-foreground">{atLimit ? "You already hold 2 deliveries. Finish or release one to take another." : "The customer’s name and address appear once it is yours."}</p>
     </li>
   );
 }

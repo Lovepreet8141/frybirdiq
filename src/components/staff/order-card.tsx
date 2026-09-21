@@ -55,6 +55,8 @@ export interface StaffOrder {
   orderNumber: string;
   /** The rider a delivery is assigned to (roadmap 6.3). */
   riderUserId?: string | null;
+  /** A held delivery that has not moved for a while: minutes (flag only, computed on the server); null otherwise. */
+  staleHoldMinutes?: number | null;
   status: OrderStatus;
   customerName: string | null;
   customerPhone: string | null;
@@ -209,6 +211,11 @@ export function OrderCard({
       </ul>
 
       {order.delivery && <DeliveryPanel {...order.delivery} />}
+      {order.staleHoldMinutes != null && (
+        <p role="status" className="rounded-md border-l-2 border-flag bg-flag-soft/60 px-3 py-2 text-sm font-semibold">
+          Held for {order.staleHoldMinutes} min without moving. Check with the rider.
+        </p>
+      )}
       {riders && order.fulfilment === "DELIVERY" && <AssignRiderControl orderId={order.id} riderUserId={order.riderUserId ?? null} riders={riders} />}
 
       {order.notes && <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">{order.notes}</p>}

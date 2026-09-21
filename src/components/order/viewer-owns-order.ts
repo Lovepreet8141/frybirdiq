@@ -11,6 +11,8 @@
  */
 
 export interface OrderContact {
+  /** Needed for a signed cookie, which proves the orders this browser placed, not a phone number. */
+  readonly id?: string;
   readonly customerPhone: string | null;
   readonly customerEmail: string | null;
 }
@@ -22,6 +24,21 @@ export interface SignedInIdentity {
 
 export interface RememberedIdentity {
   readonly phone: string;
+  /** True only when the cookie was verified against COOKIE_SECRET (cookie-sign-1). Absent/false = the legacy unsigned cookie. */
+  readonly trusted?: boolean;
+  /** The orders this browser placed (only meaningful when `trusted`). */
+  readonly orderIds?: readonly string[];
+}
+
+/**
+ * The phone a remembered-contact cookie may vouch for on this order. A signed cookie proves only the orders it was issued for
+ * (an attacker can get a validly signed cookie for a victim's phone by typing it into their own checkout), so it vouches for its
+ * phone on those orders alone; the legacy unsigned cookie behaves as before.
+ */
+export function rememberedPhoneFor(orderId: string, remembered: RememberedIdentity | null): string | null {
+  if (!remembered) return null;
+  if (remembered.trusted) return remembered.orderIds?.includes(orderId) ? remembered.phone : null;
+  return remembered.phone;
 }
 
 export function viewerOwnsOrder(
@@ -31,6 +48,7 @@ export function viewerOwnsOrder(
 ): boolean {
   if (order.customerPhone && customer?.phone === order.customerPhone) return true;
   if (order.customerEmail && customer?.email === order.customerEmail) return true;
+  if (remembered?.trusted) return !!order.id && !!remembered.orderIds?.includes(order.id);
   if (order.customerPhone && remembered?.phone === order.customerPhone) return true;
   return false;
 }

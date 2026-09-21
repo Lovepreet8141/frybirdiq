@@ -4,6 +4,7 @@ import { LiveRefresh } from "@/components/staff/live-refresh";
 import { listAssignableRiders } from "@/lib/repositories/rider-assignment";
 import { OrdersBoard } from "@/components/staff/orders-board";
 import { PermissionDenied } from "@/components/states";
+import { heldMinutes, isStaleHold } from "@/lib/delivery/hold";
 import { mayOpenOrdersBoard } from "@/domain/permissions";
 import { requireStaff, staffCan } from "@/lib/auth";
 import { listActiveOrders } from "@/lib/repositories/orders";
@@ -50,6 +51,8 @@ export default async function StaffOrdersPage({ searchParams }: { searchParams: 
               ...order,
               placedAt: order.placedAt?.toISOString() ?? null,
               fulfilment: order.fulfilment,
+              // Flag only, for the manager: a delivery a rider holds that has not moved for 15 minutes (server clock, no client time).
+              staleHoldMinutes: canAssign && isStaleHold(order, new Date(nowMs)) ? heldMinutes(order.lastMovedAt, new Date(nowMs)) : null,
               invoiceNumber: order.invoiceNumber,
               estimatedReadyAt: order.estimatedReadyAt?.toISOString() ?? null,
               scheduledFor: order.scheduledFor?.toISOString() ?? null,

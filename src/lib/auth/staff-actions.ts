@@ -6,7 +6,7 @@ import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
 import { type CompleteDeliveryCode, acceptOrder, advanceOrder, completeDelivery, rejectOrder } from "@/lib/repositories/orders";
 import { recordCashPayment } from "@/lib/repositories/payments";
-import { FAIL_REASON_MAX, FAIL_REASON_MIN, assignRider, failDelivery, takeDelivery } from "@/lib/repositories/rider-assignment";
+import { FAIL_REASON_MAX, FAIL_REASON_MIN, assignRider, failDelivery, releaseDelivery, takeDelivery } from "@/lib/repositories/rider-assignment";
 import { staffMayAdvanceTo } from "@/lib/orders/staff-advance";
 import { ORDER_STATUSES } from "@/domain/order-status";
 import { REJECTION_REASONS } from "@/domain/rejection";
@@ -178,6 +178,25 @@ export async function takeDeliveryAction(input: unknown): Promise<StaffActionRes
   try {
     const staff = await requirePermission("delivery.take");
     const result = await takeDelivery({ orgId: staff.orgId, orderId: parsed.data.orderId, riderUserId: staff.userId });
+    revalidatePath("/app/deliveries");
+    revalidatePath("/app/orders");
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  } catch (error) {
+    return explain(error);
+  }
+}
+
+/**
+ * A rider gives a delivery they hold back to Available (owner decision, 2026-09-21). `delivery.take`; the rider is the
+ * signed-in person, never the form; the repository releases only a delivery THIS rider holds. Audited.
+ */
+export async function releaseDeliveryAction(input: unknown): Promise<StaffActionResult> {
+  const parsed = takeDeliverySchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "That delivery could not be found." };
+
+  try {
+    const staff = await requirePermission("delivery.take");
+    const result = await releaseDelivery({ orgId: staff.orgId, orderId: parsed.data.orderId, riderUserId: staff.userId });
     revalidatePath("/app/deliveries");
     revalidatePath("/app/orders");
     return result.ok ? { ok: true } : { ok: false, error: result.error };
