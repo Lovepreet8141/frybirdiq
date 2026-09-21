@@ -608,3 +608,10 @@ If both are clear, deploy now. If not, wait (re-check; at the latest the shop cl
 - **The first real till open and close stay the owner's.**
 - **Env backup** `/etc/frybird/env.bak-cookie-202609212141`: keep 7 days, then delete and tell the owner (due 2026-09-28 21:41 UTC).
 - **Still open on the till checklist:** only the owner's first open/close with him watching, and the low "paid with no till open" label looseness.
+
+## 36. Release 21 live (till go-live) (22 Sep 2026)
+
+- **Live:** `2eb78f0` (BUILD_ID `a8971b211203c5ad`, no migration, 55 applied). The till is ready to be used: the owner opens and closes the first real till himself, with the runbook in DEPLOY.md 13. Fingerprint baseline still `2e1c2fd91279`.
+- **Owner decision:** blind close stays as is (only OWNER has finance access today; finance lists keep showing cash). **Low card `blind-close-finance-lists`:** when a non-owner finance role exists, hide cash on the finance lists (Payments, Refunds, Captured, Through a provider) while a till is open, or give that role a view without cash.
+- **Till checklist now:** only the owner's first open/close, and the low "paid with no till open" label looseness.
+- **Overnight orders from the owner (no gates, sprint rules):** (1) one release batching every low card that touches no money, order-placement, auth or migration code; report included vs held back and why; (2) `docs/SHOP-RUNBOOK.md`, plain language, one shift; (3) 12-hour summary and a `/compact` reminder.
