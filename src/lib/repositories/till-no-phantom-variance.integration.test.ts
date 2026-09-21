@@ -62,13 +62,13 @@ async function doorCash(rupees: string) {
   return paymentOf(orderId);
 }
 const openTill = async (float: string) => {
-  const r = await openCashSession({ orgId: org.orgId, actorUserId: cashier, openingFloat: fromRupees(float), note: null });
+  const r = await openCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, openingFloat: fromRupees(float), note: null });
   if (!r.ok) throw new Error(r.error);
   return r.sessionId;
 };
 const refund = (paymentId: string, rupees: string) => refundPayment({ paymentId, amount: fromRupees(rupees), reason: "wrong item", actorUserId: cashier, actorRoles: ["OWNER"], orgId: org.orgId, idempotencyKey: randomUUID() });
-const close = (sessionId: string, counted: string) => closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees(counted), note: null });
-const handover = (declared: string) => recordCashHandover({ orgId: org.orgId, actorUserId: cashier, riderUserId: rider, declared: fromRupees(declared), note: null });
+const close = (sessionId: string, counted: string) => closeCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees(counted), note: null });
+const handover = (declared: string) => recordCashHandover({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, riderUserId: rider, declared: fromRupees(declared), note: null });
 
 describe("no phantom variance", () => {
   it("rider-held door cash partly refunded BEFORE the handover: float 1000, rider took 340, drawer paid a 100 refund, rider hands over 340 -> the till holds 1240 and reports no variance", async () => {

@@ -20,19 +20,19 @@ export function ReconciliationTable({ days, openSession, periodLabel }: { readon
     <div className="flex flex-col gap-3" data-reconciliation="">
       <p className="text-[13px] text-muted-foreground">
         Each row adds up what was captured that day (cash in a till, cash not in any till, cash a rider still carries, and online) and takes off what was refunded. Razorpay settlements are matched once Razorpay is live: not connected yet.
-        {openSession ? " A till is open now; it is counted when it closes." : ""}
+        {openSession ? " A till is open now; it is counted when it closes, and until then the cash it holds, cash refunds and the net for its days are hidden so the count stays blind." : ""}
       </p>
       <ul className="grid gap-3">
         {days.map((day) => (
           <li key={day.date} className="grid gap-2 rounded-lg border border-border bg-panel p-4 text-sm" data-reconciliation-day={day.date}>
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <h3 className="font-semibold">{dayLabel(day.date)}</h3>
-              <p className="tabular font-money text-lg">Net {formatINR(day.net)}</p>
+              <p className="tabular font-money text-lg">{day.cashHidden ? "Net shown when the till closes" : `Net ${formatINR(day.net)}`}</p>
             </div>
             <dl className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Cash in a till</dt>
-                <dd className="tabular">{formatINR(day.cashInTill)}</dd>
+                <dd className="tabular">{day.cashHidden ? "Hidden until the till closes" : formatINR(day.cashInTill)}</dd>
               </div>
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Online (provider)</dt>
@@ -48,7 +48,7 @@ export function ReconciliationTable({ days, openSession, periodLabel }: { readon
               </div>
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Refunded in cash</dt>
-                <dd className="tabular">{formatINR(day.cashRefunded)}</dd>
+                <dd className="tabular">{day.cashHidden ? "Hidden until the till closes" : formatINR(day.cashRefunded)}</dd>
               </div>
               {day.cashRefundedNoTill > 0n && (
                 <div className="flex justify-between gap-3">

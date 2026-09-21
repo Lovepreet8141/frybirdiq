@@ -44,13 +44,13 @@ async function counterCash(rupees: string): Promise<{ orderId: string; paymentId
   return { orderId: order!.id, paymentId: payment!.id };
 }
 const openTill = async (float: string) => {
-  const r = await openCashSession({ orgId: org.orgId, actorUserId: cashier, openingFloat: fromRupees(float), note: null });
+  const r = await openCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, openingFloat: fromRupees(float), note: null });
   if (!r.ok) throw new Error(r.error);
   return r.sessionId;
 };
 const cashRefund = (paymentId: string, rupees: string) => refundPayment({ paymentId, amount: fromRupees(rupees), reason: "wrong item", actorUserId: cashier, actorRoles: ["OWNER"], orgId: org.orgId, idempotencyKey: randomUUID() });
 const refundRow = async (paymentId: string) => (await db().select().from(refunds).where(eq(refunds.paymentId, paymentId)))[0]!;
-const close = (sessionId: string, counted: string) => closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees(counted), note: null });
+const close = (sessionId: string, counted: string) => closeCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees(counted), note: null });
 
 describe("a cash refund is attributed to the till that paid it", () => {
   it("refunded while a till is open: the refund records that till, and the till expects the cash to be lower by it", async () => {

@@ -13,6 +13,7 @@ import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
 import { CASH_NOTE_MAX } from "@/db/schema";
 import { parseCashAmount, varianceWords } from "@/lib/cash/session";
+import { IdempotencyConflict } from "@/lib/repositories/idempotency";
 import { closeCashSession, openCashSession, recordCashHandover } from "@/lib/repositories/cash-sessions";
 import { formatINR } from "@/lib/money";
 
@@ -35,7 +36,21 @@ async function authorise(): Promise<{ readonly orgId: string; readonly userId: s
   }
 }
 
+/** One key per form attempt, minted by the form; a missing or malformed one is refused rather than replaced. */
+const keySchema = z.uuid();
+const REPEAT_CONFLICT: CashFormState = { status: "error", message: "That looks like a repeat of an earlier submission with different details. Reload the page and try again." };
+
 const isFailure = (value: { orgId: string; userId: string } | CashFormState): value is CashFormState => "status" in value;
+
+/** Runs a till write; a key reused with different content comes back as a form error, anything else is a real failure and propagates. */
+async function guarded<T>(run: () => Promise<T>): Promise<T | CashFormState> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof IdempotencyConflict) return REPEAT_CONFLICT;
+    throw error;
+  }
+}
 
 function refresh() {
   revalidatePath("/app/finance");
@@ -49,7 +64,11 @@ export async function openCashSessionAction(_previous: CashFormState, formData: 
   const note = noteSchema.safeParse(String(formData.get("note") ?? ""));
   if (!note.success) return { status: "error", message: note.error.issues[0]?.message ?? "Check the note." };
 
-  const result = await openCashSession({ orgId: who.orgId, actorUserId: who.userId, openingFloat: float.value, note: note.data });
+  const key = keySchema.safeParse(String(formData.get("idempotencyKey") ?? ""));
+  if (!key.success) return { status: "error", message: "This form is out of date. Reload the page and try again." };
+
+  const result = await guarded(() => openCashSession({ orgId: who.orgId, actorUserId: who.userId, openingFloat: float.value, note: note.data, idempotencyKey: key.data }));
+  if ("status" in result) return result;
   if (!result.ok) return { status: "error", message: result.error };
   refresh();
   return { status: "success", message: `Till opened with a float of ${formatINR(float.value)}.` };
@@ -65,7 +84,11 @@ export async function closeCashSessionAction(_previous: CashFormState, formData:
   const note = noteSchema.safeParse(String(formData.get("note") ?? ""));
   if (!note.success) return { status: "error", message: note.error.issues[0]?.message ?? "Check the note." };
 
-  const result = await closeCashSession({ orgId: who.orgId, actorUserId: who.userId, sessionId: sessionId.data, counted: counted.value, note: note.data });
+  const key = keySchema.safeParse(String(formData.get("idempotencyKey") ?? ""));
+  if (!key.success) return { status: "error", message: "This form is out of date. Reload the page and try again." };
+
+  const result = await guarded(() => closeCashSession({ orgId: who.orgId, actorUserId: who.userId, sessionId: sessionId.data, counted: counted.value, note: note.data, idempotencyKey: key.data }));
+  if ("status" in result) return result;
   if (!result.ok) return { status: "error", message: result.error };
   refresh();
   // The expected figure is shown only now: the count above was made without seeing it.
@@ -82,7 +105,11 @@ export async function recordCashHandoverAction(_previous: CashFormState, formDat
   const note = noteSchema.safeParse(String(formData.get("note") ?? ""));
   if (!note.success) return { status: "error", message: note.error.issues[0]?.message ?? "Check the note." };
 
-  const result = await recordCashHandover({ orgId: who.orgId, actorUserId: who.userId, riderUserId: riderUserId.data, declared: declared.value, note: note.data });
+  const key = keySchema.safeParse(String(formData.get("idempotencyKey") ?? ""));
+  if (!key.success) return { status: "error", message: "This form is out of date. Reload the page and try again." };
+
+  const result = await guarded(() => recordCashHandover({ orgId: who.orgId, actorUserId: who.userId, riderUserId: riderUserId.data, declared: declared.value, note: note.data, idempotencyKey: key.data }));
+  if ("status" in result) return result;
   if (!result.ok) return { status: "error", message: result.error };
   refresh();
   return {

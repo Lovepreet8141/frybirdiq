@@ -30,6 +30,7 @@ import { type Paise, ZERO, add, paise, subtract } from "@/lib/money";
 import { businessDate } from "@/lib/dates";
 import { expectedCash, varianceOf } from "@/lib/cash/session";
 import { getStoreLocationId } from "./hardware";
+import { withIdempotency } from "./idempotency";
 
 type Executor = Pick<ReturnType<typeof db>, "select">;
 
@@ -137,7 +138,20 @@ export type CashWriteFailure = { readonly ok: false; readonly code: "NO_LOCATION
 
 export type OpenSessionResult = { readonly ok: true; readonly sessionId: string } | CashWriteFailure;
 
-export async function openCashSession(input: { readonly orgId: string; readonly actorUserId: string; readonly openingFloat: Paise; readonly note: string | null }): Promise<OpenSessionResult> {
+/**
+ * Idempotent (§17): the form mints one key per attempt, so a double-tap or a retried request returns the first
+ * result and never a second "already open" refusal for the same tap. A key reused with different content is an
+ * `IdempotencyConflict`. The stored result holds no bigint (JSON), so amounts are stored as text and read back.
+ */
+export async function openCashSession(input: { readonly orgId: string; readonly actorUserId: string; readonly openingFloat: Paise; readonly note: string | null; readonly idempotencyKey: string }): Promise<OpenSessionResult> {
+  const { result } = await withIdempotency(
+    { key: input.idempotencyKey, operation: "cash_session_open", orgId: input.orgId, request: { openingFloat: input.openingFloat.toString(), note: input.note, actor: input.actorUserId } },
+    () => openCashSessionOnce(input),
+  );
+  return result;
+}
+
+async function openCashSessionOnce(input: { readonly orgId: string; readonly actorUserId: string; readonly openingFloat: Paise; readonly note: string | null }): Promise<OpenSessionResult> {
   const locationId = await getStoreLocationId(input.orgId);
   if (!locationId) return { ok: false, code: "NO_LOCATION", error: "This shop has no location set up yet." };
 
@@ -189,7 +203,21 @@ export type CloseSessionResult =
   | { readonly ok: true; readonly counted: Paise; readonly expected: Paise; readonly variance: Paise }
   | CashWriteFailure;
 
-export async function closeCashSession(input: { readonly orgId: string; readonly actorUserId: string; readonly sessionId: string; readonly counted: Paise; readonly note: string | null }): Promise<CloseSessionResult> {
+type StoredClose = { readonly ok: true; readonly counted: string; readonly expected: string; readonly variance: string } | CashWriteFailure;
+
+/** Idempotent (§17), same shape as `openCashSession`: a replay returns the first close's counted, expected and variance. */
+export async function closeCashSession(input: { readonly orgId: string; readonly actorUserId: string; readonly sessionId: string; readonly counted: Paise; readonly note: string | null; readonly idempotencyKey: string }): Promise<CloseSessionResult> {
+  const { result } = await withIdempotency<StoredClose>(
+    { key: input.idempotencyKey, operation: "cash_session_close", orgId: input.orgId, request: { sessionId: input.sessionId, counted: input.counted.toString(), note: input.note, actor: input.actorUserId } },
+    async () => {
+      const done = await closeCashSessionOnce(input);
+      return done.ok ? { ok: true, counted: done.counted.toString(), expected: done.expected.toString(), variance: done.variance.toString() } : done;
+    },
+  );
+  return result.ok ? { ok: true, counted: paise(BigInt(result.counted)), expected: paise(BigInt(result.expected)), variance: paise(BigInt(result.variance)) } : result;
+}
+
+async function closeCashSessionOnce(input: { readonly orgId: string; readonly actorUserId: string; readonly sessionId: string; readonly counted: Paise; readonly note: string | null }): Promise<CloseSessionResult> {
   return db().transaction(async (tx) => {
     // FOR UPDATE: waits for any cash payment that is mid-settlement (it holds the row FOR SHARE), then counts.
     const [session] = await tx
@@ -269,7 +297,20 @@ export type HandoverResult =
  * payments add up to. Both are stored, and the difference is recorded against
  * the rider. The payments themselves join the session at their own amounts.
  */
-export async function recordCashHandover(input: { readonly orgId: string; readonly actorUserId: string; readonly riderUserId: string; readonly declared: Paise; readonly note: string | null }): Promise<HandoverResult> {
+export async function recordCashHandover(input: { readonly orgId: string; readonly actorUserId: string; readonly riderUserId: string; readonly declared: Paise; readonly note: string | null; readonly idempotencyKey: string }): Promise<HandoverResult> {
+  const { result } = await withIdempotency<StoredHandover>(
+    { key: input.idempotencyKey, operation: "cash_handover", orgId: input.orgId, request: { riderUserId: input.riderUserId, declared: input.declared.toString(), note: input.note, actor: input.actorUserId } },
+    async () => {
+      const done = await recordCashHandoverOnce(input);
+      return done.ok ? { ok: true, handoverId: done.handoverId, expected: done.expected.toString(), declared: done.declared.toString(), variance: done.variance.toString(), paymentCount: done.paymentCount } : done;
+    },
+  );
+  return result.ok ? { ok: true, handoverId: result.handoverId, expected: paise(BigInt(result.expected)), declared: paise(BigInt(result.declared)), variance: paise(BigInt(result.variance)), paymentCount: result.paymentCount } : result;
+}
+
+type StoredHandover = { readonly ok: true; readonly handoverId: string; readonly expected: string; readonly declared: string; readonly variance: string; readonly paymentCount: number } | CashWriteFailure;
+
+async function recordCashHandoverOnce(input: { readonly orgId: string; readonly actorUserId: string; readonly riderUserId: string; readonly declared: Paise; readonly note: string | null }): Promise<HandoverResult> {
   const locationId = await getStoreLocationId(input.orgId);
   if (!locationId) return { ok: false, code: "NO_LOCATION", error: "This shop has no location set up yet." };
 
@@ -348,6 +389,12 @@ export interface ReconciliationDay {
   readonly counted: Paise;
   readonly expected: Paise;
   readonly variance: Paise;
+  /**
+   * True while a till that was opened on or before this day is still open. The count is blind, so this day's till cash,
+   * cash refunds and net are withheld (returned as zero) until it closes: they would give away what the till should hold.
+   * Enforced here, in the repository, so no screen can forget to hide them.
+   */
+  readonly cashHidden: boolean;
 }
 
 export interface Reconciliation {
@@ -394,7 +441,9 @@ export async function getReconciliation(orgId: string, range: { readonly from: s
     .where(and(eq(cashSessions.orgId, orgId), eq(cashSessions.status, "CLOSED"), sql`(${cashSessions.closedAt} AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${range.from} AND ${range.to}`))
     .groupBy(day(cashSessions.closedAt));
 
-  const [open] = await db().select({ id: cashSessions.id }).from(cashSessions).where(and(eq(cashSessions.orgId, orgId), eq(cashSessions.status, "OPEN"))).limit(1);
+  const [open] = await db().select({ id: cashSessions.id, openedAt: cashSessions.openedAt }).from(cashSessions).where(and(eq(cashSessions.orgId, orgId), eq(cashSessions.status, "OPEN"))).limit(1);
+  // Business date the open till started on; every day from it on is blind until it closes.
+  const blindFrom = open ? businessDate(open.openedAt) : null;
 
   const dates = [...new Set([...paymentRows.map((r) => r.date), ...refundRows.map((r) => r.date), ...sessionRows.map((r) => r.date)])].sort().reverse();
   const p = (row: { [k: string]: unknown } | undefined, key: string): Paise => paise(BigInt((row?.[key] as string | undefined) ?? "0"));
@@ -404,16 +453,18 @@ export async function getReconciliation(orgId: string, range: { readonly from: s
     const ses = sessionRows.find((r) => r.date === date);
     const captured = add(p(pay, "cashInTill"), p(pay, "cashUnassigned"), p(pay, "cashWithRiders"), p(pay, "onlineCaptured"));
     const refunded = add(p(ref, "cashRefunded"), p(ref, "onlineRefunded"));
+    const cashHidden = blindFrom !== null && date >= blindFrom;
     return {
       date,
-      cashInTill: p(pay, "cashInTill"),
+      cashHidden,
+      cashInTill: cashHidden ? ZERO : p(pay, "cashInTill"),
       cashUnassigned: p(pay, "cashUnassigned"),
       cashWithRiders: p(pay, "cashWithRiders"),
-      cashRefunded: p(ref, "cashRefunded"),
-      cashRefundedNoTill: p(ref, "cashRefundedNoTill"),
+      cashRefunded: cashHidden ? ZERO : p(ref, "cashRefunded"),
+      cashRefundedNoTill: cashHidden ? ZERO : p(ref, "cashRefundedNoTill"),
       onlineCaptured: p(pay, "onlineCaptured"),
       onlineRefunded: p(ref, "onlineRefunded"),
-      net: subtract(captured, refunded),
+      net: cashHidden ? ZERO : subtract(captured, refunded),
       sessionsClosed: ses?.n ?? 0,
       counted: p(ses, "counted"),
       expected: p(ses, "expected"),

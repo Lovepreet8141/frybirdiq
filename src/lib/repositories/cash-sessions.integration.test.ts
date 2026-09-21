@@ -68,7 +68,7 @@ const doorCash = async (owner: TestOrg, rupees: string, riderId = rider) => {
 };
 const paymentOf = async (orderId: string) => (await db().select().from(payments).where(eq(payments.orderId, orderId)))[0]!;
 const openTill = async (float = "2000") => {
-  const result = await openCashSession({ orgId: org.orgId, actorUserId: cashier, openingFloat: fromRupees(float), note: null });
+  const result = await openCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, openingFloat: fromRupees(float), note: null });
   if (!result.ok) throw new Error(result.error);
   return result.sessionId;
 };
@@ -94,7 +94,7 @@ describe("counter cash and the open till", () => {
   it("only one till is open at a time; the second open says so and changes nothing", async () => {
     await reset();
     await openTill();
-    const second = await openCashSession({ orgId: org.orgId, actorUserId: cashier, openingFloat: fromRupees("500"), note: null });
+    const second = await openCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, openingFloat: fromRupees("500"), note: null });
     expect(second).toMatchObject({ ok: false, code: "ALREADY_OPEN" });
     expect((await db().select().from(cashSessions).where(eq(cashSessions.orgId, org.orgId))).length).toBe(1);
   });
@@ -108,7 +108,7 @@ describe("closing the till", () => {
     await counterCash(org, "700");
     // float 2000 + 1000 taken = 3000 expected; counted 2980.
     const closer = randomUUID();
-    const result = await closeCashSession({ orgId: org.orgId, actorUserId: closer, sessionId, counted: fromRupees("2980"), note: "Short by a coin" });
+    const result = await closeCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: closer, sessionId, counted: fromRupees("2980"), note: "Short by a coin" });
     expect(result).toEqual({ ok: true, counted: fromRupees("2980"), expected: fromRupees("3000"), variance: fromRupees("-20") });
 
     const [row] = await db().select().from(cashSessions).where(eq(cashSessions.id, sessionId));
@@ -125,7 +125,7 @@ describe("closing the till", () => {
     await db().insert(refunds).values({ orgId: org.orgId, paymentId: p.id, orderId, amount: fromRupees("120"), reason: "wrong item", provider: "cash", status: "SUCCEEDED", finalizedAt: sql`clock_timestamp()`, cashSessionId: sessionId });
     await db().update(payments).set({ status: "PARTIALLY_REFUNDED" }).where(eq(payments.id, p.id));
     // 1000 + 500 - 120 = 1380
-    const result = await closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("1380"), note: null });
+    const result = await closeCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("1380"), note: null });
     expect(result).toMatchObject({ ok: true, expected: fromRupees("1380"), variance: paise(0) });
   });
 
@@ -133,8 +133,8 @@ describe("closing the till", () => {
     await reset();
     const sessionId = await openTill("100");
     await counterCash(org, "50");
-    expect(await closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("150"), note: null })).toMatchObject({ ok: true, variance: paise(0) });
-    expect(await closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("150"), note: null })).toMatchObject({ ok: false, code: "ALREADY_CLOSED" });
+    expect(await closeCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("150"), note: null })).toMatchObject({ ok: true, variance: paise(0) });
+    expect(await closeCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("150"), note: null })).toMatchObject({ ok: false, code: "ALREADY_CLOSED" });
     const late = await paymentOf(await counterCash(org, "80"));
     expect(late.cashSessionId).toBeNull();
   });
@@ -142,9 +142,9 @@ describe("closing the till", () => {
   it("another organization's till cannot be closed with this org's authority", async () => {
     await reset();
     await reset(other);
-    const theirs = await openCashSession({ orgId: other.orgId, actorUserId: cashier, openingFloat: fromRupees("100"), note: null });
+    const theirs = await openCashSession({ idempotencyKey: crypto.randomUUID(), orgId: other.orgId, actorUserId: cashier, openingFloat: fromRupees("100"), note: null });
     if (!theirs.ok) throw new Error(theirs.error);
-    expect(await closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId: theirs.sessionId, counted: fromRupees("100"), note: null })).toMatchObject({ ok: false, code: "NOT_FOUND" });
+    expect(await closeCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, sessionId: theirs.sessionId, counted: fromRupees("100"), note: null })).toMatchObject({ ok: false, code: "NOT_FOUND" });
     const [row] = await db().select().from(cashSessions).where(eq(cashSessions.id, theirs.sessionId));
     expect(row?.status).toBe("OPEN");
   });
@@ -168,7 +168,7 @@ describe("closing the till", () => {
     });
     await holding;
 
-    const closing = closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("350"), note: null });
+    const closing = closeCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("350"), note: null });
     let settled = false;
     void closing.then(() => (settled = true));
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -230,7 +230,7 @@ describe("rider door cash", () => {
     const sessionId = await openTill("500");
     const a = await doorCash(org, "340");
     const b = await doorCash(org, "460");
-    const result = await recordCashHandover({ orgId: org.orgId, actorUserId: cashier, riderUserId: rider, declared: fromRupees("780"), note: null });
+    const result = await recordCashHandover({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, riderUserId: rider, declared: fromRupees("780"), note: null });
     expect(result).toMatchObject({ ok: true, expected: fromRupees("800"), declared: fromRupees("780"), variance: fromRupees("-20"), paymentCount: 2 });
 
     const [handover] = await db().select().from(cashHandovers).where(eq(cashHandovers.orgId, org.orgId));
@@ -240,14 +240,14 @@ describe("rider door cash", () => {
     expect((await audit("cash_handover_recorded"))[0]).toMatchObject({ actorUserId: cashier, after: expect.objectContaining({ riderUserId: rider, variance: "-2000" }) });
 
     // 500 float + 800 of the books' door cash: the till expects what the payments say, the shortfall is the rider's.
-    expect(await closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("1280"), note: null })).toMatchObject({ ok: true, expected: fromRupees("1300"), variance: fromRupees("-20") });
+    expect(await closeCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("1280"), note: null })).toMatchObject({ ok: true, expected: fromRupees("1300"), variance: fromRupees("-20") });
   });
 
   it("a rider cannot receive their own cash", async () => {
     await reset();
     await openTill("500");
     const orderId = await doorCash(org, "340");
-    const result = await recordCashHandover({ orgId: org.orgId, actorUserId: rider, riderUserId: rider, declared: fromRupees("340"), note: null });
+    const result = await recordCashHandover({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: rider, riderUserId: rider, declared: fromRupees("340"), note: null });
     expect(result).toMatchObject({ ok: false, code: "INVALID" });
     expect(await paymentOf(orderId)).toMatchObject({ heldByRider: true, handoverId: null, cashSessionId: null });
   });
@@ -255,10 +255,10 @@ describe("rider door cash", () => {
   it("needs an open till, and hands over nothing twice", async () => {
     await reset();
     await doorCash(org, "200");
-    expect(await recordCashHandover({ orgId: org.orgId, actorUserId: cashier, riderUserId: rider, declared: fromRupees("200"), note: null })).toMatchObject({ ok: false, code: "NO_OPEN_SESSION" });
+    expect(await recordCashHandover({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, riderUserId: rider, declared: fromRupees("200"), note: null })).toMatchObject({ ok: false, code: "NO_OPEN_SESSION" });
     await openTill("0");
-    expect((await recordCashHandover({ orgId: org.orgId, actorUserId: cashier, riderUserId: rider, declared: fromRupees("200"), note: null })).ok).toBe(true);
-    expect(await recordCashHandover({ orgId: org.orgId, actorUserId: cashier, riderUserId: rider, declared: fromRupees("200"), note: null })).toMatchObject({ ok: false, code: "NOTHING_TO_HAND_OVER" });
+    expect((await recordCashHandover({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, riderUserId: rider, declared: fromRupees("200"), note: null })).ok).toBe(true);
+    expect(await recordCashHandover({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, riderUserId: rider, declared: fromRupees("200"), note: null })).toMatchObject({ ok: false, code: "NOTHING_TO_HAND_OVER" });
   });
 
   it("only this org's rider cash is handed over; another org's cash for the same rider id is untouched", async () => {
@@ -267,7 +267,7 @@ describe("rider door cash", () => {
     await openTill("0");
     const mine = await doorCash(org, "100");
     const theirs = await doorCash(other, "999");
-    const result = await recordCashHandover({ orgId: org.orgId, actorUserId: cashier, riderUserId: rider, declared: fromRupees("100"), note: null });
+    const result = await recordCashHandover({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, riderUserId: rider, declared: fromRupees("100"), note: null });
     // The books' figure is THIS org's ₹100 only, never the other org's ₹999 for the same rider id.
     expect(result).toMatchObject({ ok: true, expected: fromRupees("100"), paymentCount: 1, variance: paise(0) });
     expect((await paymentOf(mine)).handoverId).not.toBeNull();
@@ -295,7 +295,7 @@ describe("the reconciliation view", () => {
     await db().insert(payments).values({ orgId: org.orgId, orderId: online, status: "CAPTURED", method: "UPI", amount: fromRupees("600"), provider: "razorpay", capturedAt: new Date() });
     const p = await paymentOf(noTill);
     await db().insert(refunds).values({ orgId: org.orgId, paymentId: p.id, orderId: noTill, amount: fromRupees("30"), reason: "x", provider: "cash", status: "SUCCEEDED", finalizedAt: sql`clock_timestamp()`, cashSessionId: sessionId });
-    await closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("1390"), note: null });
+    await closeCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("1390"), note: null });
 
     const today = new Date().toISOString().slice(0, 10);
     const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);

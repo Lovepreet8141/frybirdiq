@@ -767,3 +767,17 @@ before. Rollback: remove the `COOKIE_SECRET` line and restart: signed cookies th
 (the phone rule returns, so the forgery returns). Rotating the secret signs everyone out of their remembered contact once. Verify with a
 real order placed by the owner from a phone: `/order/<id>` shows their own details right after checkout; a browser that never placed
 it shows nothing personal.
+
+## 13. Till runbook: refunding cash a rider is still carrying
+
+For staff and the owner. A door-cash order is paid to the rider, and that cash joins the drawer only when the rider hands it over. If the customer needs a cash refund before that happens:
+
+1. **Open the till first** (Finance, Till). A cash refund is charged to the till that is open at the moment it is paid, and to none if no till is open. With no till open it shows on Reconciliation as "paid with no till open" and no closing count includes it.
+2. **Pay the customer from the drawer, not from the rider's pocket.** The refund is recorded against the drawer's till.
+3. **Leave the rider's cash alone until the handover.** The rider still hands over the full amount they took at the door (a partial refund does not reduce it). Receive it with **Receive it**; the till then holds float + everything taken - the refund, so the close shows no difference.
+4. A refund of a rider's cash from an **earlier** till (the day before) comes out of the till that is open when it is paid, never the old one.
+5. If a close shows a difference that matches a refund amount, check Reconciliation for "paid with no till open" first: that is the refund paid while no till was open.
+
+While a till is open, Finance hides the cash it has taken, cash refunds and the net for its days (the count is blind); they appear once it is closed. The payments list itself stays visible, because it is the audit trail: someone who adds it up can work out the drawer, so the count is a control against a casual glance, not against a determined person.
+
+The first real till open and close belong to the owner.

@@ -1528,6 +1528,9 @@ async function reserveAndFinalizeRefund(input: {
         providerRefundId: result.providerRefundId,
         refundId: locked.id,
         orderId: locked.orderId,
+        // A cash refund names the till it came out of, in the same transaction that attributed it: the till's id, or
+        // null when no till was open (in no till's count). Absent for provider refunds: no drawer is involved.
+        ...(locked.provider === "cash" ? { cashSessionId } : {}),
       },
     });
 

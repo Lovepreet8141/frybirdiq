@@ -1,8 +1,9 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { closeCashSessionAction, openCashSessionAction, recordCashHandoverAction, type CashFormState } from "@/lib/cash/actions";
+import { isSettledFormStatus } from "@/lib/inventory/idempotency-key";
 import { varianceWords } from "@/lib/cash/session";
 import { type Paise, formatINR, isNegative, isZero } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,46 @@ export interface RiderCashItem {
   readonly since: string;
 }
 
+/**
+ * One idempotency key per submission attempt, carried on every retry of it (a timeout, a double-tap past the
+ * disabled button) so the server returns the first result instead of a second "already open/closed". It rotates
+ * once an attempt settles, success or error, so a corrected resubmission is a new request. Compared by reference:
+ * `useActionState` hands back a new object each time, even when two settle with the same status.
+ */
+function useAttemptKey(state: CashFormState): string {
+  const [key, setKey] = useState(() => crypto.randomUUID());
+  const [seen, setSeen] = useState(state);
+  if (state !== seen) {
+    setSeen(state);
+    if (isSettledFormStatus(state.status)) setKey(crypto.randomUUID());
+  }
+  return key;
+}
+
+function HandoverForm({ rider }: { readonly rider: RiderCashItem }) {
+  const [state, action] = useActionState<CashFormState, FormData>(recordCashHandoverAction, { status: "idle" });
+  const key = useAttemptKey(state);
+  return (
+    <form action={action} className="grid gap-2" data-handover="">
+      <input type="hidden" name="riderUserId" value={rider.riderUserId} />
+      <input type="hidden" name="idempotencyKey" value={key} />
+      <p className="text-[13px]" data-handover-owed="">
+        Amount owed by {rider.riderName ?? "this rider"}: <span className="tabular font-semibold">{formatINR(rider.amount)}</span> ({rider.paymentCount} {rider.paymentCount === 1 ? "delivery" : "deliveries"}). Count what they hand you and type it below; a difference is recorded against the rider.
+      </p>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="grid gap-1">
+          <label htmlFor={`handover-${rider.riderUserId}`} className="text-[13px] font-semibold">
+            Cash handed over (₹)
+          </label>
+          <input id={`handover-${rider.riderUserId}`} name="declaredCash" type="text" inputMode="decimal" required className={cn(inputClass, "w-40")} />
+        </div>
+        <Submit label="Receive it" pending="Saving…" />
+      </div>
+      <Feedback state={state} />
+    </form>
+  );
+}
+
 function Submit({ label, pending: pendingLabel }: { label: string; pending: string }) {
   const { pending } = useFormStatus();
   return (
@@ -66,7 +107,8 @@ const when = (iso: string) => new Date(iso).toLocaleString("en-IN", { timeZone: 
 export function TillPanel({ open, recent, riders, canManage }: { readonly open: TillSessionRow | null; readonly recent: readonly TillSessionRow[]; readonly riders: readonly RiderCashItem[]; readonly canManage: boolean }) {
   const [openState, openAction] = useActionState<CashFormState, FormData>(openCashSessionAction, { status: "idle" });
   const [closeState, closeAction] = useActionState<CashFormState, FormData>(closeCashSessionAction, { status: "idle" });
-  const [handoverState, handoverAction] = useActionState<CashFormState, FormData>(recordCashHandoverAction, { status: "idle" });
+  const openKey = useAttemptKey(openState);
+  const closeKey = useAttemptKey(closeState);
 
   return (
     <section aria-labelledby="till-heading" className="flex flex-col gap-5 rounded-lg border border-border p-4 sm:p-5" data-till="">
@@ -94,6 +136,7 @@ export function TillPanel({ open, recent, riders, canManage }: { readonly open: 
           {canManage && (
             <form action={closeAction} className="grid gap-3 border-t border-border pt-3">
               <input type="hidden" name="sessionId" value={open.id} />
+              <input type="hidden" name="idempotencyKey" value={closeKey} />
               <div className="grid gap-1.5">
                 <label htmlFor="till-counted" className="text-[13px] font-semibold">
                   Cash counted in the drawer (₹)
@@ -115,6 +158,7 @@ export function TillPanel({ open, recent, riders, canManage }: { readonly open: 
         </div>
       ) : canManage ? (
         <form action={openAction} className="grid gap-3 rounded-md border border-border p-3">
+          <input type="hidden" name="idempotencyKey" value={openKey} />
           <p className="text-sm font-semibold">No till is open</p>
           <div className="grid gap-1.5">
             <label htmlFor="till-float" className="text-[13px] font-semibold">
@@ -150,16 +194,7 @@ export function TillPanel({ open, recent, riders, canManage }: { readonly open: 
                   <span className="font-semibold">{rider.riderName ?? "A rider"}</span> is carrying {formatINR(rider.amount)} from {rider.paymentCount} {rider.paymentCount === 1 ? "delivery" : "deliveries"}, since {when(rider.since)}.
                 </p>
                 {canManage && open ? (
-                  <form action={handoverAction} className="flex flex-wrap items-end gap-2">
-                    <input type="hidden" name="riderUserId" value={rider.riderUserId} />
-                    <div className="grid gap-1">
-                      <label htmlFor={`handover-${rider.riderUserId}`} className="text-[13px] font-semibold">
-                        Cash handed over (₹)
-                      </label>
-                      <input id={`handover-${rider.riderUserId}`} name="declaredCash" type="text" inputMode="decimal" required className={cn(inputClass, "w-40")} />
-                    </div>
-                    <Submit label="Receive it" pending="Saving…" />
-                  </form>
+                  <HandoverForm rider={rider} />
                 ) : (
                   <p className="text-[13px] text-muted-foreground">{canManage ? "Open the till to receive this cash." : "Receiving it needs the finance permission."}</p>
                 )}
@@ -167,7 +202,6 @@ export function TillPanel({ open, recent, riders, canManage }: { readonly open: 
             ))}
           </ul>
         )}
-        <Feedback state={handoverState} />
       </div>
 
       <div className="grid gap-2">

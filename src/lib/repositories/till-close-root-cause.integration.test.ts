@@ -52,7 +52,7 @@ describe("the till-close-micros root cause", () => {
   });
 
   it("a cash refund finalized in the same millisecond as the close, later within it, is in the till's expected cash (it was dropped before)", async () => {
-    const opened = await openCashSession({ orgId: org.orgId, actorUserId: cashier, openingFloat: fromRupees("1000"), note: null });
+    const opened = await openCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, openingFloat: fromRupees("1000"), note: null });
     if (!opened.ok) throw new Error(opened.error);
     const [order] = await db()
       .insert(orders)
@@ -79,7 +79,7 @@ describe("the till-close-micros root cause", () => {
       });
 
     injectClock(`${second}.123900Z`);
-    const closed = await closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId: opened.sessionId, counted: fromRupees("1380"), note: null });
+    const closed = await closeCashSession({ idempotencyKey: crypto.randomUUID(), orgId: org.orgId, actorUserId: cashier, sessionId: opened.sessionId, counted: fromRupees("1380"), note: null });
     // 1000 float + 500 taken - 120 refunded. The old code returned expected 1500 (the refund missing) and a false "over" of 120.
     expect(closed).toMatchObject({ ok: true, expected: fromRupees("1380"), variance: paise(0) });
     const [row] = await db().select().from(cashSessions).where(eq(cashSessions.id, opened.sessionId));

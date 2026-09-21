@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { requireStaff, staffCan } from "@/lib/auth";
-import { type RangeKey, daysInRange, resolveRange } from "@/lib/dates";
+import { type RangeKey, businessDate, daysInRange, resolveRange } from "@/lib/dates";
 import { capturedByDay, methodShares, tillSplit } from "@/lib/finance/ledger-view";
 import { formatBps, formatINR } from "@/lib/money";
 import { type CashSessionView, getCashSessions, getReconciliation, getRiderCashOutstanding } from "@/lib/repositories/cash-sessions";
@@ -88,7 +88,12 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const series = capturedByDay(ledger.payments, days);
   const shares = methodShares(ledger.byMethod, ledger.capturedTotal);
   const split = tillSplit(ledger.byMethod);
-  const top = shares[0];
+  // Blind count, enforced on the cash figures too: from the day the open till started, this screen does not show how
+  // much cash was taken (the KPI, the cash card and chart, the cash row of By method), which would give away what the
+  // drawer should hold. Provider money is unaffected. The payment list below stays: it is the audit trail.
+  const blind = tills.open !== null && days.some((day) => day >= businessDate(tills.open!.openedAt));
+  const visibleShares = blind ? shares.filter((row) => row.method !== "CASH") : shares;
+  const top = visibleShares[0];
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-[var(--gutter)] py-8">
@@ -128,7 +133,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KpiTile label="Captured" value={formatINR(ledger.capturedTotal, "whole")} note={ledger.capturedCount === 0 ? `No captured payments ${range.label.toLowerCase()}` : `${ledger.capturedCount} ${ledger.capturedCount === 1 ? "payment" : "payments"} · ${range.label}`} emphasis={ledger.capturedCount > 0} />
-        <KpiTile label="Cash payments" value={split.cashBps === null ? "—" : formatBps(split.cashBps, 0)} missing={split.cashBps === null} note={split.cashBps === null ? "Nothing captured yet, so no split to show" : `${formatINR(split.cash, "whole")} cash · ${formatINR(split.online, "whole")} through a provider`} />
+        <KpiTile label="Cash payments" value={blind ? "Hidden" : split.cashBps === null ? "—" : formatBps(split.cashBps, 0)} missing={!blind && split.cashBps === null} note={blind ? "Shown when the open till is closed, so the count stays blind" : split.cashBps === null ? "Nothing captured yet, so no split to show" : `${formatINR(split.cash, "whole")} cash · ${formatINR(split.online, "whole")} through a provider`} />
         <KpiTile label="Provider fees" value={ledger.feeTotal === 0n ? "—" : formatINR(ledger.feeTotal)} note={ledger.feeTotal === 0n ? "No provider fees recorded; cash carries none" : "Kept separate so a payout reconciles"} />
         <KpiTile
           label="Refunded"
@@ -153,13 +158,15 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="rounded-lg border border-border px-4 py-3">
                   <p className="text-[13px] text-muted-foreground">Cash</p>
-                  <p className="tabular font-money mt-1 text-[26px] leading-none">{formatINR(split.cash, "whole")}</p>
+                  <p className="tabular font-money mt-1 text-[26px] leading-none">{blind ? "Hidden until the till closes" : formatINR(split.cash, "whole")}</p>
                 </div>
                 <div className="rounded-lg border border-border px-4 py-3">
                   <p className="text-[13px] text-muted-foreground">Through a provider</p>
                   <p className="tabular font-money mt-1 text-[26px] leading-none">{formatINR(split.online, "whole")}</p>
                 </div>
               </div>
+            ) : blind ? (
+              <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-[13px] text-muted-foreground">Cash by day is hidden while a till is open, so the count stays blind. Through a provider: {formatINR(split.online, "whole")}.</p>
             ) : (
               <CapturedChart days={series} />
             )}
@@ -169,10 +176,10 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         <Panel>
           <PanelHeader title="By method" meta={top ? `${top.label} leads` : undefined} />
           <PanelBody className="pt-0">
-            {shares.length === 0 ? (
+            {visibleShares.length === 0 ? (
               <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground">No captured payments to split.</p>
             ) : (
-              <BarList rows={shares.map((row) => ({ key: row.method, label: `${row.label} · ${row.count}`, share: row.share, shareLabel: row.shareLabel, amount: formatINR(row.total, "whole") }))} />
+              <BarList rows={visibleShares.map((row) => ({ key: row.method, label: `${row.label} · ${row.count}`, share: row.share, shareLabel: row.shareLabel, amount: formatINR(row.total, "whole") }))} />
             )}
           </PanelBody>
         </Panel>
