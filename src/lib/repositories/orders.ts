@@ -1804,12 +1804,13 @@ export async function completeDelivery(input: {
       // payment step refuses. The delivery is closed, which is what this
       // caller asked for — report that, not an error (card ord-4b).
       const [current] = await database
-        .select({ status: orders.status })
+        .select({ status: orders.status, riderId: orders.riderId })
         .from(orders)
         .where(and(eq(orders.id, order.id), eq(orders.orgId, input.orgId)))
         .limit(1);
       if (current?.status === "COMPLETED") return { ok: true };
-      if (paid.error === "That delivery is assigned to someone else.") return { ok: false, code: "NOT_YOUR_DELIVERY", error: paid.error };
+      // Read the fact, not the wording: the delivery is no longer this rider's (reassign-race-1).
+      if (seesOnlyOwnDeliveries(input.actorRoles) && current && current.riderId !== input.actorUserId) return { ok: false, code: "NOT_YOUR_DELIVERY", error: "That delivery is assigned to someone else." };
       return { ok: false, code: "PAYMENT_REFUSED", error: paid.error };
     }
   }

@@ -169,6 +169,11 @@ sharedStackOnly("0042: staff reads through the database are limited by role", ()
     }
   });
 
+  it("0055: anon holds no SELECT on any column of orders or memberships, table-level or column-level (red-team a1)", async () => {
+    const rows = (await db().execute(sql`select table_name, column_name from information_schema.column_privileges where table_schema = 'public' and table_name in ('orders', 'memberships') and grantee = 'anon' and privilege_type = 'SELECT'`)) as unknown as { table_name: string; column_name: string }[];
+    expect(rows).toEqual([]);
+  });
+
   it("0055: every orders column is either readable on purpose or a contact column: a new column forces the choice", async () => {
     const cols = (await db().execute(sql`select column_name from information_schema.columns where table_schema = 'public' and table_name = 'orders'`)) as unknown as { column_name: string }[];
     expect(cols.map((c) => c.column_name).sort()).toEqual([...ORDERS_READABLE_COLUMNS, ...ORDERS_CONTACT_COLUMNS].sort());

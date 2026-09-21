@@ -15,6 +15,7 @@ import { orders, payments } from "@/db/schema";
 import type { OrderStatus } from "@/domain/order-status";
 import { fromRupees } from "@/lib/money";
 import { completeDelivery } from "./orders";
+import { failDelivery } from "./rider-assignment";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 
 type Tx = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
@@ -216,6 +217,19 @@ describe("completeDelivery: the delivery must still be the closing rider's under
     expect(result).toMatchObject({ ok: false, code: "NOT_YOUR_DELIVERY" });
     expect(await statusOf(orderId)).toBe("OUT_FOR_DELIVERY");
     expect(await db().select().from(payments).where(eq(payments.orderId, orderId))).toHaveLength(0);
+  });
+
+  it("a rider cannot fail a delivery that was reassigned while the call waited on the lock (red-team c2)", async () => {
+    const orderId = await createOrder(org, "DELIVERY", "OUT_FOR_DELIVERY");
+    const result = await withOrderRowHeld(
+      orderId,
+      () => failDelivery({ orgId: org.orgId, orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], reason: "customer not home" }),
+      async (tx) => {
+        await tx.update(orders).set({ riderId: OTHER_RIDER }).where(eq(orders.id, orderId));
+      },
+    );
+    expect(result).toMatchObject({ ok: false, code: "NOT_YOUR_DELIVERY" });
+    expect(await statusOf(orderId)).toBe("OUT_FOR_DELIVERY");
   });
 
   it("the counter (orders.update) still closes any delivery whoever holds it", async () => {

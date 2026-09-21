@@ -129,8 +129,15 @@ export async function failDelivery(input: {
     .limit(1);
   if (captured) return { ok: false, code: "ALREADY_PAID", error: "This order is already paid. Ask a manager to refund it." };
 
-  const moved = await advanceOrder({ orderId: order.id, to: "FAILED", actorUserId: input.actorUserId, orgId: input.orgId, reason });
-  if (!moved.ok) return { ok: false, code: "TRANSITION_REFUSED", error: moved.error };
+  // A rider fails only their own delivery, re-checked under the order's lock: a reassignment landing after the read above must not let the old rider fail it.
+  const moved = await advanceOrder({ orderId: order.id, to: "FAILED", actorUserId: input.actorUserId, orgId: input.orgId, reason, ...(seesOnlyOwnDeliveries(input.actorRoles) ? { onlyIfRiderUserId: input.actorUserId } : {}) });
+  if (!moved.ok) {
+    if (seesOnlyOwnDeliveries(input.actorRoles)) {
+      const [now] = await db().select({ riderId: orders.riderId }).from(orders).where(and(eq(orders.id, order.id), eq(orders.orgId, input.orgId))).limit(1);
+      if (now && now.riderId !== input.actorUserId) return { ok: false, code: "NOT_YOUR_DELIVERY", error: "That delivery is assigned to someone else." };
+    }
+    return { ok: false, code: "TRANSITION_REFUSED", error: moved.error };
+  }
 
   await db().insert(auditLogs).values({
     orgId: input.orgId,
