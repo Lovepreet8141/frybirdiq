@@ -77,12 +77,6 @@ const serverSchema = z.object({
    * today: there is no provider account.
    */
   WHATSAPP_UPDATES: z.enum(["on", "off"]).optional(),
-  /**
-   * Signs the `frybird_contact` cookie (cookie-sign-1). Unset = the cookie stays plain JSON (today's behaviour). Set to
-   * 32 or more printable characters, generated on the server, never printed or committed; changing it signs everyone out
-   * of their remembered contact once.
-   */
-  COOKIE_SECRET: optionalBearerSecret(32),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   ANTHROPIC_API_KEY: optionalSecret,
   RAZORPAY_KEY_ID: optionalSecret,
@@ -183,6 +177,22 @@ export function clientEnv(): ClientEnv {
  */
 export function whatsappUpdatesEnabled(): boolean {
   return process.env.WHATSAPP_UPDATES === "on";
+}
+
+export type CookieSecret = { readonly kind: "none" } | { readonly kind: "invalid" } | { readonly kind: "ok"; readonly secret: string };
+
+/**
+ * The secret that signs the `frybird_contact` cookie (cookie-sign-1). Read on its own, NOT through `serverEnv()`, on purpose:
+ * checkout and every order page read the cookie, and a malformed secret must never be able to take them down. Unset or blank
+ * means `none` (the cookie stays plain JSON, as before). A secret that is too short or contains whitespace or non-ASCII
+ * is `invalid` and FAILS CLOSED: the cookie is treated as absent and no contact is remembered, so a typo in the server
+ * environment can never re-open the forgery it was meant to close, and never breaks a page.
+ */
+export function cookieSecret(): CookieSecret {
+  const raw = process.env.COOKIE_SECRET;
+  if (raw === undefined || raw === "") return { kind: "none" };
+  if (raw.length < 32 || !SECRET_CHARSET.test(raw)) return { kind: "invalid" };
+  return { kind: "ok", secret: raw };
 }
 
 export function serverEnv(): ServerEnv {

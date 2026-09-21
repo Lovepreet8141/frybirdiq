@@ -9,6 +9,10 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  * (`COOKIE_SECRET`) the cookie is `v1.<base64url json>.<base64url HMAC-SHA256>` and only a cookie this server signed is
  * believed. With no secret configured it is the plain JSON it always was, so nothing changes until the secret is set.
  *
+ * A signature alone is not enough (found in review): anyone can place an order typing a victim's phone number and be issued a
+ * validly signed cookie for it. So the signed cookie also carries the ids of the orders THIS browser placed, and ownership of an
+ * order is decided by that list (`viewerOwnsOrder`), never by the phone in the cookie.
+ *
  * A plain or wrongly signed cookie, once a secret is set, is simply treated as absent: the returning customer types their
  * details once and the cookie is re-issued signed. A signed cookie with no secret configured fails closed (it cannot be
  * verified), e.g. after the secret is removed.
@@ -43,4 +47,12 @@ export function decodeContactCookie(raw: string, secret?: string): unknown | nul
   } catch {
     return null;
   }
+}
+
+/** How many of this browser's most recent orders the cookie remembers. */
+export const MAX_REMEMBERED_ORDERS = 20;
+
+/** The order ids this browser has placed with `orderId` added first: no duplicates, at most the newest MAX_REMEMBERED_ORDERS. */
+export function withOrder(existing: readonly string[] | undefined, orderId: string): readonly string[] {
+  return [orderId, ...(existing ?? []).filter((id) => id !== orderId)].slice(0, MAX_REMEMBERED_ORDERS);
 }

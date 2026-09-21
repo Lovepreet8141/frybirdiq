@@ -17,34 +17,58 @@ import "server-only";
 
 import { cookies } from "next/headers";
 import { z } from "zod";
-import { serverEnv } from "@/lib/env";
-import { decodeContactCookie, encodeContactCookie } from "./contact-cookie";
+import { cookieSecret } from "@/lib/env";
+import { MAX_REMEMBERED_ORDERS, decodeContactCookie, encodeContactCookie, withOrder } from "./contact-cookie";
 
 const COOKIE = "frybird_contact";
 
-const schema = z.object({
+const contactSchema = z.object({
   name: z.string().min(1).max(80),
   phone: z.string().regex(/^[6-9]\d{9}$/),
   email: z.string().email().max(160),
 });
+const payloadSchema = contactSchema.extend({ orders: z.array(z.string().uuid()).max(MAX_REMEMBERED_ORDERS).optional() });
 
-export type RememberedContact = z.infer<typeof schema>;
+export type RememberedContact = z.infer<typeof contactSchema> & {
+  /** The orders this browser placed, newest first. Empty for an unsigned cookie. */
+  readonly orderIds: readonly string[];
+  /** True only for a cookie verified against COOKIE_SECRET. A trusted cookie proves orders, not a phone number. */
+  readonly trusted: boolean;
+};
 
-export async function readRememberedContact(): Promise<RememberedContact | null> {
+async function readPayload(): Promise<{ contact: z.infer<typeof payloadSchema>; trusted: boolean } | null> {
   const raw = (await cookies()).get(COOKIE)?.value;
   if (!raw) return null;
-  // With COOKIE_SECRET set only a cookie this server signed is believed (cookie-sign-1); unset, the plain JSON as before.
-  const parsed = schema.safeParse(decodeContactCookie(raw, serverEnv().COOKIE_SECRET));
-  return parsed.success ? parsed.data : null;
+  const secret = cookieSecret();
+  if (secret.kind === "invalid") return null; // a malformed secret fails closed: no remembered contact, never a broken page
+  const parsed = payloadSchema.safeParse(decodeContactCookie(raw, secret.kind === "ok" ? secret.secret : undefined));
+  return parsed.success ? { contact: parsed.data, trusted: secret.kind === "ok" } : null;
 }
 
-export async function rememberContact(contact: unknown): Promise<void> {
-  const parsed = schema.safeParse(contact);
-  if (!parsed.success) return;
+export async function readRememberedContact(): Promise<RememberedContact | null> {
+  const read = await readPayload();
+  if (!read) return null;
+  const { orders, ...contact } = read.contact;
+  return { ...contact, orderIds: read.trusted ? (orders ?? []) : [], trusted: read.trusted };
+}
 
-  (await cookies()).set(COOKIE, encodeContactCookie(parsed.data, serverEnv().COOKIE_SECRET), {
+/**
+ * Remembers who ordered (to pre-fill the next checkout) and, with COOKIE_SECRET set, which order this browser just placed.
+ * The signed cookie proves the orders it was issued for; ownership of an order is decided by that list, never by a phone
+ * number someone typed (see viewer-owns-order.ts).
+ */
+export async function rememberContact(contact: unknown, orderId?: string): Promise<void> {
+  const parsed = contactSchema.safeParse(contact);
+  if (!parsed.success) return;
+  const secret = cookieSecret();
+  if (secret.kind === "invalid") return;
+
+  const previous = secret.kind === "ok" ? ((await readPayload())?.contact.orders ?? []) : [];
+  const payload = secret.kind === "ok" ? { ...parsed.data, orders: withOrder(previous, orderId ?? "").filter(Boolean) } : parsed.data;
+  (await cookies()).set(COOKIE, encodeContactCookie(payload, secret.kind === "ok" ? secret.secret : undefined), {
     httpOnly: true,
     sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
     path: "/",
     maxAge: 60 * 60 * 24 * 180,
   });

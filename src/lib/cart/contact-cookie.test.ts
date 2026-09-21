@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeContactCookie, encodeContactCookie } from "./contact-cookie";
+import { MAX_REMEMBERED_ORDERS, decodeContactCookie, encodeContactCookie, withOrder } from "./contact-cookie";
 
 const contact = { name: "Asha Verma", phone: "9000000001", email: "asha@example.test" };
 const secret = "s".repeat(40);
@@ -51,5 +51,28 @@ describe("the remembered-contact cookie (cookie-sign-1)", () => {
       const flipped = body.slice(0, i) + (body[i] === "A" ? "B" : "A") + body.slice(i + 1);
       expect(decodeContactCookie(`${v}.${flipped}.${mac}`, secret), `char ${i}`).toBeNull();
     }
+  });
+});
+
+describe("withOrder: the orders this browser placed", () => {
+  const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+  it("adds the new order first and keeps the older ones behind it", () => {
+    expect(withOrder([id(1)], id(2))).toEqual([id(2), id(1)]);
+    expect(withOrder(undefined, id(1))).toEqual([id(1)]);
+  });
+
+  it("never lists an order twice", () => {
+    expect(withOrder([id(2), id(1)], id(1))).toEqual([id(1), id(2)]);
+  });
+
+  it("keeps at most the newest MAX_REMEMBERED_ORDERS, so the cookie stays small", () => {
+    let orders: readonly string[] = [];
+    for (let n = 1; n <= MAX_REMEMBERED_ORDERS + 5; n++) orders = withOrder(orders, id(n));
+    expect(orders).toHaveLength(MAX_REMEMBERED_ORDERS);
+    expect(orders[0]).toBe(id(MAX_REMEMBERED_ORDERS + 5));
+    expect(orders).not.toContain(id(1));
+    // and a signed cookie carrying that many is still comfortably below the ~4 KB cookie limit
+    expect(encodeContactCookie({ name: "Asha Verma", phone: "9000000001", email: "asha@example.test", orders }, "s".repeat(40)).length).toBeLessThan(2500);
   });
 });

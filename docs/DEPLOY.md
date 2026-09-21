@@ -740,11 +740,15 @@ way FRYBIRD takes orders.
 
 ## 12. Cookie signing secret (cookie-sign-1) - owner-approved step, run only when asked
 
-`COOKIE_SECRET` signs the `frybird_contact` cookie so nobody can type another customer's phone number into their own cookie
-and read that customer's order page. The code ships with the secret UNSET: nothing changes until it is set.
+`COOKIE_SECRET` signs the `frybird_contact` cookie AND makes it carry the ids of the orders this browser placed. With it set,
+`/order/[id]`, the invoice page, the payment-failure report and the WhatsApp link decide ownership by "this order id is in my signed
+cookie", never by a phone number in the cookie: before, anyone could type a victim's phone number (into their own cookie, or into their
+own checkout) and read that customer's order page. The code ships with the secret UNSET: nothing changes until it is set.
 
-Setting it (root on the VPS, after the owner's yes; the value is generated on the server and never printed, logged, committed
-or pasted anywhere):
+The secret is read on its own, not through the strict server environment: a malformed value (under 32 characters, a space, non-ASCII)
+FAILS CLOSED (no remembered contact, cookie treated as absent) and can never break checkout or an order page.
+
+Setting it (root on the VPS, after the owner's yes; the value is generated on the server and never printed, logged, committed or pasted):
 
 ```bash
 set -euo pipefail
@@ -752,10 +756,14 @@ grep -q '^COOKIE_SECRET=' /etc/frybird/env && { echo "already set: stop"; exit 1
 printf '\nCOOKIE_SECRET=%s\n' "$(openssl rand -hex 32)" >> /etc/frybird/env    # 64 hex characters; not echoed
 systemctl restart frybird
 systemctl is-active frybird
+curl -s -o /dev/null -w 'checkout %{http_code}\n' https://frybirdiq.tech/checkout   # expect 200
+curl -s -o /dev/null -w 'menu %{http_code}\n' https://frybirdiq.tech/menu           # expect 200
 ```
 
-Effect: a returning customer's existing plain cookie is treated as absent once; they type their details on their next order and
-the cookie is re-issued signed. A wrongly signed or plain cookie is never believed. Rollback: remove the `COOKIE_SECRET` line and
-restart: signed cookies then fail closed (treated as absent) and new cookies are plain JSON again, as before. Rotating the secret
-signs everyone out of their remembered contact once. Verify: `/order/<id>` still shows the customer their own order after they
-re-enter their details; a hand-made cookie with someone else's phone shows nothing.
+Effect: existing plain cookies are treated as absent once (the customer types their details on the next order and gets a signed cookie
+that also remembers that order). An order placed BEFORE the secret was set can no longer be opened by the phone-in-cookie rule: its
+customer signs in, or uses the link they were sent, or places a new order; the order page for a stranger shows nothing personal, as
+before. Rollback: remove the `COOKIE_SECRET` line and restart: signed cookies then fail closed and new cookies are plain JSON again
+(the phone rule returns, so the forgery returns). Rotating the secret signs everyone out of their remembered contact once. Verify with a
+real order placed by the owner from a phone: `/order/<id>` shows their own details right after checkout; a browser that never placed
+it shows nothing personal.
