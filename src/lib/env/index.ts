@@ -77,6 +77,12 @@ const serverSchema = z.object({
    * today: there is no provider account.
    */
   WHATSAPP_UPDATES: z.enum(["on", "off"]).optional(),
+  /**
+   * Signs the `frybird_contact` cookie (cookie-sign-1). Unset = the cookie stays plain JSON (today's behaviour). Set to
+   * 32 or more printable characters, generated on the server, never printed or committed; changing it signs everyone out
+   * of their remembered contact once.
+   */
+  COOKIE_SECRET: optionalBearerSecret(32),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   ANTHROPIC_API_KEY: optionalSecret,
   RAZORPAY_KEY_ID: optionalSecret,

@@ -10,12 +10,15 @@ import "server-only";
  * knows their number.
  *
  * httpOnly, so a script on the page cannot read it either. Validated on read
- * and re-validated on submit — a tampered cookie changes what its own owner
- * sees and nothing else.
+ * and re-validated on submit. With `COOKIE_SECRET` set it is also SIGNED
+ * (contact-cookie.ts): before, a tampered cookie could carry someone else's
+ * phone number and `/order/[id]` would believe it.
  */
 
 import { cookies } from "next/headers";
 import { z } from "zod";
+import { serverEnv } from "@/lib/env";
+import { decodeContactCookie, encodeContactCookie } from "./contact-cookie";
 
 const COOKIE = "frybird_contact";
 
@@ -30,19 +33,16 @@ export type RememberedContact = z.infer<typeof schema>;
 export async function readRememberedContact(): Promise<RememberedContact | null> {
   const raw = (await cookies()).get(COOKIE)?.value;
   if (!raw) return null;
-  try {
-    const parsed = schema.safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
+  // With COOKIE_SECRET set only a cookie this server signed is believed (cookie-sign-1); unset, the plain JSON as before.
+  const parsed = schema.safeParse(decodeContactCookie(raw, serverEnv().COOKIE_SECRET));
+  return parsed.success ? parsed.data : null;
 }
 
 export async function rememberContact(contact: unknown): Promise<void> {
   const parsed = schema.safeParse(contact);
   if (!parsed.success) return;
 
-  (await cookies()).set(COOKIE, JSON.stringify(parsed.data), {
+  (await cookies()).set(COOKIE, encodeContactCookie(parsed.data, serverEnv().COOKIE_SECRET), {
     httpOnly: true,
     sameSite: "lax",
     path: "/",

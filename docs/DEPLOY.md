@@ -736,3 +736,26 @@ reachable, not that jobs are running.
 
 None of these block a first deploy. All of them matter before this is the only
 way FRYBIRD takes orders.
+
+
+## 12. Cookie signing secret (cookie-sign-1) - owner-approved step, run only when asked
+
+`COOKIE_SECRET` signs the `frybird_contact` cookie so nobody can type another customer's phone number into their own cookie
+and read that customer's order page. The code ships with the secret UNSET: nothing changes until it is set.
+
+Setting it (root on the VPS, after the owner's yes; the value is generated on the server and never printed, logged, committed
+or pasted anywhere):
+
+```bash
+set -euo pipefail
+grep -q '^COOKIE_SECRET=' /etc/frybird/env && { echo "already set: stop"; exit 1; }
+printf '\nCOOKIE_SECRET=%s\n' "$(openssl rand -hex 32)" >> /etc/frybird/env    # 64 hex characters; not echoed
+systemctl restart frybird
+systemctl is-active frybird
+```
+
+Effect: a returning customer's existing plain cookie is treated as absent once; they type their details on their next order and
+the cookie is re-issued signed. A wrongly signed or plain cookie is never believed. Rollback: remove the `COOKIE_SECRET` line and
+restart: signed cookies then fail closed (treated as absent) and new cookies are plain JSON again, as before. Rotating the secret
+signs everyone out of their remembered contact once. Verify: `/order/<id>` still shows the customer their own order after they
+re-enter their details; a hand-made cookie with someone else's phone shows nothing.
