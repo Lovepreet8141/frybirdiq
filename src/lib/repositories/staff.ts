@@ -104,6 +104,14 @@ export async function inviteStaff(orgId: string, actorUserId: string, actorRoles
   const userId = data.user.id;
 
   return db().transaction(async (tx) => {
+    // Insert first and let the unique (org, user, role) index arbitrate: two identical invites in flight
+    // used to both see "no row" and the loser died on a unique violation (a 500). The loser now takes the resend path (invite-race-1).
+    const [inserted] = await tx.insert(memberships).values({ orgId, userId, role, displayName: email.split("@")[0] }).onConflictDoNothing().returning();
+    if (inserted) {
+      await tx.insert(auditLogs).values({ orgId, actorUserId, action: "staff_invited", entity: "memberships", entityId: inserted.id, after: { email, role } });
+      return { ok: true, resent: false };
+    }
+
     const [existing] = await tx
       .select()
       .from(memberships)
@@ -120,10 +128,7 @@ export async function inviteStaff(orgId: string, actorUserId: string, actorRoles
       return { ok: true, resent: true };
     }
 
-    const [created] = await tx.insert(memberships).values({ orgId, userId, role, displayName: email.split("@")[0] }).returning();
-    if (!created) return { ok: false, error: "The invite could not be recorded. Try again." };
-    await tx.insert(auditLogs).values({ orgId, actorUserId, action: "staff_invited", entity: "memberships", entityId: created.id, after: { email, role } });
-    return { ok: true, resent: false };
+    return { ok: false, error: "The invite could not be recorded. Try again." };
   });
 }
 
@@ -141,7 +146,8 @@ export type StaffWriteResult = { ok: true } | { ok: false; error: string };
  */
 export async function deactivateStaff(orgId: string, actorUserId: string, actorRoles: readonly Role[], targetUserId: string): Promise<StaffWriteResult> {
   return db().transaction(async (tx) => {
-    const rows = await tx.select().from(memberships).where(and(eq(memberships.orgId, orgId), eq(memberships.userId, targetUserId)));
+    // FOR UPDATE: the role ceiling below is decided from these rows, so a simultaneous role change on the same person must finish first (staff-lock-1).
+    const rows = await tx.select().from(memberships).where(and(eq(memberships.orgId, orgId), eq(memberships.userId, targetUserId))).for("update");
     if (rows.length === 0) return { ok: false, error: "That person is not on the roster." };
 
     const activeRoles = rows.filter((row) => row.isActive).map((row) => row.role);
@@ -177,7 +183,8 @@ export async function changeStaffRole(orgId: string, actorUserId: string, actorR
   }
 
   return db().transaction(async (tx) => {
-    const rows = await tx.select().from(memberships).where(and(eq(memberships.orgId, orgId), eq(memberships.userId, targetUserId)));
+    // FOR UPDATE: the role ceiling below is decided from these rows, so a simultaneous role change on the same person must finish first (staff-lock-1).
+    const rows = await tx.select().from(memberships).where(and(eq(memberships.orgId, orgId), eq(memberships.userId, targetUserId))).for("update");
     if (rows.length === 0) return { ok: false, error: "That person is not on the roster." };
 
     const active = rows.filter((row) => row.isActive);
