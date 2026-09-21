@@ -72,12 +72,12 @@ function OrderHeader({ order, now }: { order: StationOrder; now: number }) {
 
 const cardBorder = (health: string) => (health === "RED" ? "border-loss" : health === "AMBER" ? "border-flag" : "border-border");
 
-function LineRow({ line, station, canUpdate, onChanged, onError }: { line: StationLine; station?: LineStation; canUpdate: boolean; onChanged: () => Promise<void>; onError: (message: string | null) => void }) {
+function LineRow({ line, canUpdate, onChanged, onError }: { line: StationLine; canUpdate: boolean; onChanged: () => Promise<void>; onError: (message: string | null) => void }) {
   const [pending, startTransition] = useTransition();
   const toggle = () => {
     onError(null);
     startTransition(async () => {
-      const result = await setLineDoneAction({ orderItemId: line.id, done: !line.done, station });
+      const result = await setLineDoneAction({ orderItemId: line.id, done: !line.done, station: line.station });
       if (!result.ok) {
         onError(result.error ?? "That didn't work.");
         return;
@@ -132,7 +132,7 @@ export function StationBoard({ station, initial, canUpdate, orgId }: { station: 
               <OrderHeader order={order} now={state.now} />
               <ul className="flex flex-col gap-3 border-t border-border pt-3">
                 {order.lines.map((line) => (
-                  <LineRow key={line.id} line={line} station={station} canUpdate={canUpdate} onChanged={state.refresh} onError={setLineError} />
+                  <LineRow key={`${line.id}-${line.station}`} line={line} canUpdate={canUpdate} onChanged={state.refresh} onError={setLineError} />
                 ))}
               </ul>
               {order.notes && <p className="rounded-md bg-warning/15 px-3 py-2 text-base font-semibold">{order.notes}</p>}
@@ -238,6 +238,8 @@ export function ExpoBoard({ initial, canUpdate, orgId }: { initial: readonly Sta
 }
 
 function PackCard({ order, now, canUpdate, onChanged }: { order: StationOrder; now: number; canUpdate: boolean; onChanged: () => Promise<void> }) {
+  const toPack = order.lines.filter((line) => line.station === "PACK");
+  const rest = order.lines.filter((line) => line.station !== "PACK");
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const pack = () => {
@@ -254,14 +256,24 @@ function PackCard({ order, now, canUpdate, onChanged }: { order: StationOrder; n
   return (
     <article aria-label={`Order ${order.orderNumber}`} className={cn("flex flex-col gap-3 rounded-xl border-2 bg-panel p-4", cardBorder(prepHealth(order, now)))}>
       <OrderHeader order={order} now={now} />
-      <ul className="flex flex-col gap-1.5 border-t border-border pt-3">
-        {order.lines.map((line) => (
-          <li key={line.id} className="text-lg leading-snug">
+      <ul className="flex flex-col gap-1.5 border-t border-border pt-3" aria-label="Lines to pack">
+        {toPack.length === 0 && <li className="text-sm text-muted-foreground">No sauces or dips on this order. Check the bag against the lines below.</li>}
+        {toPack.map((line) => (
+          <li key={`${line.id}-${line.station}`} className="text-lg leading-snug">
             <span className="tabular font-bold">{line.quantity}×</span> <span className="font-semibold">{line.name}</span>
             {line.modifiers.length > 0 && <span className="block pl-7 text-base text-muted-foreground">{line.modifiers.join(", ")}</span>}
           </li>
         ))}
       </ul>
+      {rest.length > 0 && (
+        <ul className="flex flex-col gap-1 text-sm text-muted-foreground" aria-label="Already made">
+          {rest.map((line) => (
+            <li key={`${line.id}-${line.station}`}>
+              <span className="tabular font-semibold">{line.quantity}×</span> {line.name}
+            </li>
+          ))}
+        </ul>
+      )}
       {order.notes && <p className="rounded-md bg-warning/15 px-3 py-2 text-base font-semibold">{order.notes}</p>}
       {error && (
         <p role="alert" className="text-sm text-destructive">
@@ -277,7 +289,7 @@ function PackCard({ order, now, canUpdate, onChanged }: { order: StationOrder; n
   );
 }
 
-/** PACK: takeaway and delivery orders whose every line is done and that are not yet packed. Dine-in never appears. */
+/** PACK: takeaway and delivery orders whose every other task is done and that are not yet packed. Lists the sauce and dip lines to pack; "Packed" completes them and the order step. Dine-in never appears. */
 export function PackBoard({ initial, canUpdate, orgId }: { initial: readonly StationOrder[]; canUpdate: boolean; orgId: string }) {
   const state = useStationOrders(initial, orgId);
   const board = packBoard(state.orders);

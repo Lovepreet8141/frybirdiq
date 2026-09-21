@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { STATIONS, STATION_LABEL } from "@/lib/kitchen/stations";
+import { STATIONS, STATION_LABEL, type Station } from "@/lib/kitchen/stations";
 import { cn } from "@/lib/utils";
 
 /** Which kitchen screen you are on: the all-in-one board, one station, or EXPO. */
-export function KdsViewTabs({ active }: { active: "ALL" | "EXPO" | (typeof STATIONS)[number] }) {
+export function KdsViewTabs({ active, stations = STATIONS }: { active: "ALL" | "EXPO" | Station; /** The stations that get a tab; DRINKS is left out until the menu has a drink. */ stations?: readonly Station[] }) {
   const tabs = [
     { key: "ALL", href: "/app/kds", label: "All tickets" },
-    ...STATIONS.map((station) => ({ key: station, href: `/app/kds/station/${station.toLowerCase()}`, label: STATION_LABEL[station] })),
+    ...stations.map((station) => ({ key: station, href: `/app/kds/station/${station.toLowerCase()}`, label: STATION_LABEL[station] })),
     { key: "EXPO", href: "/app/kds/expo", label: "Expo" },
   ];
   return (

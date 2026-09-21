@@ -3,7 +3,7 @@
 -- order status change. Same RLS posture as closed_dates (0040): forced, no
 -- client DML, members may read their own org's rows; the app writes as
 -- `postgres` through Drizzle. Unnumbered: the integrator numbers it and adds
--- the journal entry. Down file: supabase/rollback/0049_notification_outbox.down.sql
+-- the journal entry. Down file: supabase/rollback/0050_notification_outbox.down.sql
 SET LOCAL lock_timeout = '5s';--> statement-breakpoint
 CREATE TABLE "notification_outbox" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

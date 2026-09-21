@@ -5,8 +5,8 @@ import { PERMISSIONS, ROLES } from "./permissions";
 import { ORDER_READER_PERMISSIONS, CHILD_READ_LIMITS, generateRiderScopeStatements, riderScopePolicies, MEMBERSHIPS_READ, READ_LIMITS, READ_LIMITS_0047, generateReadLimitStatements, generateReadLimitStatements0047, policies0047, readLimitPolicies, rolesHoldingAny } from "./rls-read-limits";
 
 const migration = readFileSync(path.resolve(__dirname, "../../supabase/migrations/0042_rls_role_reads.sql"), "utf8");
-const migration0047 = readFileSync(path.resolve(__dirname, "../../supabase/migrations/0050_rls_read_new_tables.sql"), "utf8");
-const undo0047 = readFileSync(path.resolve(__dirname, "../../supabase/rollback/0050_rls_read_new_tables.down.sql"), "utf8");
+const migration0047 = readFileSync(path.resolve(__dirname, "../../supabase/migrations/0051_rls_read_new_tables.sql"), "utf8");
+const undo0047 = readFileSync(path.resolve(__dirname, "../../supabase/rollback/0051_rls_read_new_tables.down.sql"), "utf8");
 const migration0051 = readFileSync(path.resolve(__dirname, "../../supabase/migrations/0052_rider_rls_scope.sql"), "utf8");
 const undo0051 = readFileSync(path.resolve(__dirname, "../../supabase/rollback/0052_rider_rls_scope.down.sql"), "utf8");
 const undo = readFileSync(path.resolve(__dirname, "../../supabase/rollback/0042_rls_role_reads.down.sql"), "utf8");
@@ -41,7 +41,7 @@ describe("rls read limits", () => {
     }
   });
 
-  it("migration 0050 is exactly what the permissions table generates, and its undo drops exactly its policies", () => {
+  it("migration 0051 is exactly what the permissions table generates, and its undo drops exactly its policies", () => {
     const body = migration0047.split("--> statement-breakpoint").slice(2).map((x) => x.trim());
     expect([...migration0047.split("--> statement-breakpoint").slice(1)].map((x) => x.trim())).toEqual(generateReadLimitStatements0047().map((x) => x.trim()));
     void body;
