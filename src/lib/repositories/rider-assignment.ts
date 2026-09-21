@@ -11,12 +11,13 @@ import "server-only";
  * is not authorization. Every query is scoped by org_id; every write is audited.
  */
 
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, memberships, orders, payments } from "@/db/schema";
 import { isTerminal, type OrderStatus } from "@/domain/order-status";
 import { type Role, seesOnlyOwnDeliveries } from "@/domain/permissions";
-import { advanceOrder } from "./orders";
+import { toOffer, type DeliveryOffer } from "@/lib/delivery/offer";
+import { advanceOrder, listActiveOrders, type StaffOrderView } from "./orders";
 
 export interface AssignableRider {
   readonly userId: string;
@@ -141,4 +142,85 @@ export async function failDelivery(input: {
     after: { status: "FAILED", reason },
   });
   return { ok: true };
+}
+
+
+/** The statuses a delivery is on a rider's list in: ready to go, or already on the road. */
+const OFFERED_STATUSES = ["READY", "OUT_FOR_DELIVERY"] as const;
+
+export type TakeDeliveryCode = "NOT_FOUND" | "NOT_A_DELIVERY" | "NOT_A_RIDER" | "NOT_AVAILABLE" | "ALREADY_TAKEN";
+export type TakeDeliveryResult = { readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly code: TakeDeliveryCode; readonly error: string };
+
+/**
+ * A rider takes an unassigned delivery ("Take it"). ONE conditional UPDATE decides it: the row is
+ * claimed only where nobody holds it yet, so however many riders tap at once exactly one wins and the
+ * others are told it is taken. The rider comes from the session, never the form, and must be an active
+ * RIDER of this org. Taking a delivery that is already yours is a no-op, not an error.
+ */
+export async function takeDelivery(input: { readonly orgId: string; readonly orderId: string; readonly riderUserId: string }): Promise<TakeDeliveryResult> {
+  return db().transaction(async (tx) => {
+    const [rider] = await tx
+      .select({ id: memberships.id })
+      .from(memberships)
+      .where(and(eq(memberships.orgId, input.orgId), eq(memberships.userId, input.riderUserId), eq(memberships.role, "RIDER"), eq(memberships.isActive, true)))
+      .limit(1);
+    if (!rider) return { ok: false, code: "NOT_A_RIDER", error: "Only an active rider can take a delivery." } as const;
+
+    const claimed = await tx
+      .update(orders)
+      .set({ riderId: input.riderUserId, riderAssignedAt: new Date(), updatedAt: new Date() })
+      .where(
+        and(
+          eq(orders.id, input.orderId),
+          eq(orders.orgId, input.orgId),
+          eq(orders.fulfilment, "DELIVERY"),
+          inArray(orders.status, [...OFFERED_STATUSES]),
+          isNull(orders.riderId),
+        ),
+      )
+      .returning({ id: orders.id, locationId: orders.locationId });
+
+    const [won] = claimed;
+    if (won) {
+      await tx.insert(auditLogs).values({
+        orgId: input.orgId,
+        locationId: won.locationId,
+        actorUserId: input.riderUserId,
+        action: "rider_took_delivery",
+        entity: "orders",
+        entityId: won.id,
+        before: { riderId: null },
+        after: { riderId: input.riderUserId },
+      });
+      return { ok: true, changed: true } as const;
+    }
+
+    // Not claimed: say why, from what is there now.
+    const [order] = await tx
+      .select({ status: orders.status, fulfilment: orders.fulfilment, riderId: orders.riderId })
+      .from(orders)
+      .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId)))
+      .limit(1);
+    if (!order) return { ok: false, code: "NOT_FOUND", error: "That delivery does not exist." } as const;
+    if (order.fulfilment !== "DELIVERY") return { ok: false, code: "NOT_A_DELIVERY", error: "That order is not a delivery." } as const;
+    if (order.riderId === input.riderUserId) return { ok: true, changed: false } as const;
+    if (order.riderId !== null) return { ok: false, code: "ALREADY_TAKEN", error: "Someone else has just taken that delivery." } as const;
+    return { ok: false, code: "NOT_AVAILABLE", error: "That delivery is not ready to be taken." } as const;
+  });
+}
+
+export interface RiderDeliveries {
+  /** Deliveries assigned to this rider, with every detail needed to deliver them. */
+  readonly mine: readonly StaffOrderView[];
+  /** Unassigned deliveries any active rider may take: pickup-level facts only. */
+  readonly offers: readonly DeliveryOffer[];
+}
+
+/** What a rider's Deliveries screen shows: their own deliveries in full, and the available ones as offers. */
+export async function listRiderDeliveries(orgId: string, riderUserId: string): Promise<RiderDeliveries> {
+  const active = (await listActiveOrders(orgId)).filter((order) => order.fulfilment === "DELIVERY" && (OFFERED_STATUSES as readonly string[]).includes(order.status));
+  return {
+    mine: active.filter((order) => order.riderUserId === riderUserId),
+    offers: active.filter((order) => order.riderUserId === null).map(toOffer),
+  };
 }
