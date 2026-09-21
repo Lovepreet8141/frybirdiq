@@ -737,3 +737,13 @@ rollback to any of 0022–0026 would first need down paths for 0033…0027, whic
 **Code-only rollback.** Safe: the code never depends on the policies. **Undo.** `supabase/rollback/0052_rider_rls_scope.down.sql` (drops the six policies and the function; no data).
 
 **Behaviour to expect.** A rider's Deliveries screen now has "Available" (offers) above "Yours". Reading orders directly through the database as a rider now returns only the rider's own deliveries.
+
+## 4l. 0053 `refund_cash_session` (till go-live fixes, `release/rc-28-till-fix`)
+
+**What it is.** `refunds.cash_session_id uuid` (nullable, FK to `cash_sessions`, ON DELETE RESTRICT), a CHECK that only a cash refund has one (`refunds_cash_session_only_cash`) and a partial index. A CASH refund now records the open till at the moment it is finalized (read FOR SHARE, the same lock the till's close takes), and a till's expected cash counts exactly the refunds attributed to it: no comparison of timestamps. A refund paid while no till is open, or one that waited for a close and found the till closed, is in no till (null). This fixes both go-live checklist items: `cash-refund-attribution` (refunds are no longer guessed from a time window) and `till-close-micros` (a millisecond/microsecond or clock difference can no longer drop a refund from a close).
+
+**Classification.** Additive: one nullable column, an FK, a CHECK and an index on `refunds`. Production has no cash refunds and no till has been opened, so nothing needs backfilling. Undo drilled on a real schema built from migrations 0000-0052 with a full fingerprint: restored exactly, re-apply identical.
+
+**Code-only rollback.** Safe: the previous build never names the column and counts a till's refunds by time window as before. **Undo.** `supabase/rollback/0053_refund_cash_session.down.sql` (drops the index, constraints and column; loses only which till paid each refund).
+
+**Money/till code = gated.** Reviewed by the payments reviewer (veto) and security before a go/no-go.

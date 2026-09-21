@@ -122,7 +122,7 @@ describe("closing the till", () => {
     const sessionId = await openTill("1000");
     const orderId = await counterCash(org, "500");
     const p = await paymentOf(orderId);
-    await db().insert(refunds).values({ orgId: org.orgId, paymentId: p.id, orderId, amount: fromRupees("120"), reason: "wrong item", provider: "cash", status: "SUCCEEDED", finalizedAt: sql`clock_timestamp()` });
+    await db().insert(refunds).values({ orgId: org.orgId, paymentId: p.id, orderId, amount: fromRupees("120"), reason: "wrong item", provider: "cash", status: "SUCCEEDED", finalizedAt: sql`clock_timestamp()`, cashSessionId: sessionId });
     await db().update(payments).set({ status: "PARTIALLY_REFUNDED" }).where(eq(payments.id, p.id));
     // 1000 + 500 - 120 = 1380
     const result = await closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("1380"), note: null });
@@ -294,7 +294,7 @@ describe("the reconciliation view", () => {
     const online = await order(org, "600");
     await db().insert(payments).values({ orgId: org.orgId, orderId: online, status: "CAPTURED", method: "UPI", amount: fromRupees("600"), provider: "razorpay", capturedAt: new Date() });
     const p = await paymentOf(noTill);
-    await db().insert(refunds).values({ orgId: org.orgId, paymentId: p.id, orderId: noTill, amount: fromRupees("30"), reason: "x", provider: "cash", status: "SUCCEEDED", finalizedAt: sql`clock_timestamp()` });
+    await db().insert(refunds).values({ orgId: org.orgId, paymentId: p.id, orderId: noTill, amount: fromRupees("30"), reason: "x", provider: "cash", status: "SUCCEEDED", finalizedAt: sql`clock_timestamp()`, cashSessionId: sessionId });
     await closeCashSession({ orgId: org.orgId, actorUserId: cashier, sessionId, counted: fromRupees("1390"), note: null });
 
     const today = new Date().toISOString().slice(0, 10);
@@ -309,6 +309,7 @@ describe("the reconciliation view", () => {
       cashWithRiders: fromRupees("250"),
       onlineCaptured: fromRupees("600"),
       cashRefunded: fromRupees("30"),
+      cashRefundedNoTill: paise(0), // the refund was paid while the till was open (attributed to it)
       onlineRefunded: paise(0),
       net: fromRupees("1320"), // 400 + 100 + 250 + 600 - 30
       sessionsClosed: 1,

@@ -23,7 +23,7 @@ import "server-only";
  * transaction, against the person who did it. Money is integer paise.
  */
 
-import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, cashHandovers, cashSessions, memberships, payments, refunds } from "@/db/schema";
 import { type Paise, ZERO, add, paise, subtract } from "@/lib/money";
@@ -173,7 +173,7 @@ export async function openCashSession(input: { readonly orgId: string; readonly 
 /* ------------------------------------------------------------------ */
 
 /** Cash taken in a session and cash refunded out of it, summed from rows inside `tx`. */
-async function sessionCashFigures(tx: Executor, orgId: string, session: { id: string; openedAt: Date }, until: Date): Promise<{ readonly taken: Paise; readonly refunded: Paise }> {
+async function sessionCashFigures(tx: Executor, orgId: string, session: { id: string }): Promise<{ readonly taken: Paise; readonly refunded: Paise }> {
   const [taken] = await tx
     .select({ total: sql<string>`coalesce(sum(${payments.amount}), 0)::text` })
     .from(payments)
@@ -181,7 +181,7 @@ async function sessionCashFigures(tx: Executor, orgId: string, session: { id: st
   const [refunded] = await tx
     .select({ total: sql<string>`coalesce(sum(${refunds.amount}), 0)::text` })
     .from(refunds)
-    .where(and(eq(refunds.orgId, orgId), eq(refunds.provider, "cash"), eq(refunds.status, "SUCCEEDED"), gte(refunds.finalizedAt, session.openedAt), lte(refunds.finalizedAt, until)));
+    .where(and(eq(refunds.orgId, orgId), eq(refunds.provider, "cash"), eq(refunds.status, "SUCCEEDED"), eq(refunds.cashSessionId, session.id)));
   return { taken: paise(BigInt(taken?.total ?? "0")), refunded: paise(BigInt(refunded?.total ?? "0")) };
 }
 
@@ -201,10 +201,11 @@ export async function closeCashSession(input: { readonly orgId: string; readonly
     if (!session) return { ok: false, code: "NOT_FOUND", error: "That till could not be found." } as const;
     if (session.status === "CLOSED") return { ok: false, code: "ALREADY_CLOSED", error: "That till is already closed." } as const;
 
-    // The database clock, read after the lock: refunds are stamped by the same clock, so the two are comparable.
+    // The database clock, read after the lock, is only the time the till closed. Cash and refunds are counted by the
+    // till they are attributed to (payments.cash_session_id, refunds.cash_session_id): no timestamps are compared.
     const clock = await tx.execute(sql`select clock_timestamp() as now`);
     const now = new Date((clock as unknown as { now: string | Date }[])[0]!.now);
-    const { taken, refunded } = await sessionCashFigures(tx, input.orgId, { id: session.id, openedAt: session.openedAt }, now);
+    const { taken, refunded } = await sessionCashFigures(tx, input.orgId, { id: session.id });
     const expected = expectedCash({ openingFloat: paise(session.openingFloat), cashTaken: taken, cashRefunded: refunded });
     const variance = varianceOf(input.counted, expected);
 
@@ -335,6 +336,8 @@ export interface ReconciliationDay {
   /** Door cash taken that day that a rider still carries. */
   readonly cashWithRiders: Paise;
   readonly cashRefunded: Paise;
+  /** Part of `cashRefunded` that was paid while NO till was open: in no till's count, so nothing else will show it. */
+  readonly cashRefundedNoTill: Paise;
   /** Provider (online) money captured that day. */
   readonly onlineCaptured: Paise;
   readonly onlineRefunded: Paise;
@@ -372,6 +375,7 @@ export async function getReconciliation(orgId: string, range: { readonly from: s
     .select({
       date: day(refunds.finalizedAt),
       cashRefunded: sql<string>`coalesce(sum(${refunds.amount}) filter (where ${refunds.provider} = 'cash'), 0)::text`,
+      cashRefundedNoTill: sql<string>`coalesce(sum(${refunds.amount}) filter (where ${refunds.provider} = 'cash' and ${refunds.cashSessionId} is null), 0)::text`,
       onlineRefunded: sql<string>`coalesce(sum(${refunds.amount}) filter (where ${refunds.provider} <> 'cash'), 0)::text`,
     })
     .from(refunds)
@@ -406,6 +410,7 @@ export async function getReconciliation(orgId: string, range: { readonly from: s
       cashUnassigned: p(pay, "cashUnassigned"),
       cashWithRiders: p(pay, "cashWithRiders"),
       cashRefunded: p(ref, "cashRefunded"),
+      cashRefundedNoTill: p(ref, "cashRefundedNoTill"),
       onlineCaptured: p(pay, "onlineCaptured"),
       onlineRefunded: p(ref, "onlineRefunded"),
       net: subtract(captured, refunded),
