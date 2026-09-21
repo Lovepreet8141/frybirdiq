@@ -15,7 +15,7 @@ import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
 import { cashSessions, memberships, orderEvents, orders, payments } from "@/db/schema";
-import { ALREADY_ROLE_AWARE, MEMBERSHIPS_READABLE_COLUMNS, CHILD_READ_LIMITS, OPEN_TO_MEMBERS_ON_PURPOSE, OWN_ROW_LIMITS_0047, permissionsReadingAll0047, MEMBERSHIPS_READ, READ_LIMITS, READ_LIMITS_0047, policies0047, readLimitPolicies, rolesHoldingAny } from "@/domain/rls-read-limits";
+import { ALREADY_ROLE_AWARE, MEMBERSHIPS_READABLE_COLUMNS, ORDERS_CONTACT_COLUMNS, ORDERS_READABLE_COLUMNS, CHILD_READ_LIMITS, OPEN_TO_MEMBERS_ON_PURPOSE, OWN_ROW_LIMITS_0047, permissionsReadingAll0047, MEMBERSHIPS_READ, READ_LIMITS, READ_LIMITS_0047, policies0047, readLimitPolicies, rolesHoldingAny } from "@/domain/rls-read-limits";
 import { ROLES, type Role } from "@/domain/permissions";
 import { fromRupees } from "@/lib/money";
 import { createTestCustomer, createTestOrg, createTestProduct, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
@@ -145,6 +145,35 @@ sharedStackOnly("0042: staff reads through the database are limited by role", ()
     }
     const cols = (await db().execute(sql`select column_name from information_schema.columns where table_schema = 'public' and table_name = 'memberships'`)) as unknown as { column_name: string }[];
     expect(cols.map((c) => c.column_name).filter((c) => c !== "pos_pin_hash").sort(), "a new memberships column must be added to MEMBERSHIPS_READABLE_COLUMNS or left unreadable on purpose").toEqual([...MEMBERSHIPS_READABLE_COLUMNS].sort());
+  });
+
+  it("0055: no login reads a customer's contact fields off orders through the database (row policies cannot limit columns); every other orders column still reads", async () => {
+    for (const role of ROLES) {
+      for (const column of ORDERS_CONTACT_COLUMNS) {
+        const closed = await clients.get(role)!.from("orders").select(column).eq("org_id", org.orgId);
+        expect(closed.error?.code, `${role} orders.${column}`).toBe("42501");
+      }
+      const star = await clients.get(role)!.from("orders").select("*").eq("org_id", org.orgId);
+      expect(star.error?.code, `${role} select *`).toBe("42501");
+      const open = await clients.get(role)!.from("orders").select("id, status, rider_id").eq("org_id", org.orgId);
+      expect(open.error, `${role} readable columns`).toBeNull();
+    }
+  });
+
+  it("0055: the anon key reads neither memberships (PIN hash included) nor orders", async () => {
+    const { url, anonKey } = localEnv();
+    const anon = createClient(url, anonKey, noSession);
+    for (const [table, column] of [["memberships", "pos_pin_hash"], ["memberships", "user_id"], ["orders", "customer_phone"], ["orders", "id"]] as const) {
+      const result = await anon.from(table).select(column).limit(1);
+      expect(result.error?.code, `anon ${table}.${column}`).toBe("42501");
+    }
+  });
+
+  it("0055: every orders column is either readable on purpose or a contact column: a new column forces the choice", async () => {
+    const cols = (await db().execute(sql`select column_name from information_schema.columns where table_schema = 'public' and table_name = 'orders'`)) as unknown as { column_name: string }[];
+    expect(cols.map((c) => c.column_name).sort()).toEqual([...ORDERS_READABLE_COLUMNS, ...ORDERS_CONTACT_COLUMNS].sort());
+    const granted = (await db().execute(sql`select column_name from information_schema.column_privileges where table_schema = 'public' and table_name = 'orders' and grantee = 'authenticated' and privilege_type = 'SELECT'`)) as unknown as { column_name: string }[];
+    expect(granted.map((c) => c.column_name).sort()).toEqual([...ORDERS_READABLE_COLUMNS].sort());
   });
 
   it("no table is open to every member by accident: each is restricted, already role-aware, open on purpose, or has no client policy at all", async () => {

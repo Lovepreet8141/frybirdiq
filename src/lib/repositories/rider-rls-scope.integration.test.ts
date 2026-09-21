@@ -86,7 +86,7 @@ const countsFor = (userId: string) =>
 describe("a rider-only login", () => {
   it("reads only its own assigned delivery, with its items, modifiers, events and kitchen rows: not the other rider's, not an unassigned one, not a takeaway", async () => {
     for (const t of TABLES) expect((await countsFor(riderA))[t], `rider A ${t}`).toBe(1);
-    const orderRows = await asUser(riderA, (q) => q(`select id, customer_phone from orders where org_id = '${org.orgId}'`));
+    const orderRows = await asUser(riderA, (q) => q(`select id, rider_id from orders where org_id = '${org.orgId}'`));
     expect(orderRows.map((r) => r.id)).toEqual([ids.A]);
     const events = await asUser(riderA, (q) => q(`select order_id from order_events where org_id = '${org.orgId}'`));
     expect(events.map((r) => r.order_id)).toEqual([ids.A]);

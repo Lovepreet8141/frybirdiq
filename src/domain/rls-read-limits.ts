@@ -87,6 +87,16 @@ export const CHILD_READ_LIMITS: Readonly<Record<string, { readonly parent: strin
  */
 export const MEMBERSHIPS_READABLE_COLUMNS: readonly string[] = ["id", "org_id", "user_id", "role", "location_id", "display_name", "is_active", "created_at", "updated_at"];
 
+/**
+ * `orders` columns a signed-in login may read through PostgREST (0055, orders-column-limits). Customer contact fields are
+ * deliberately absent: a row policy cannot limit columns, and no client path reads `orders` (the app uses Drizzle, which
+ * bypasses grants; Realtime subscribes to order_events). A new column is unreadable until added here; a test forces the choice.
+ */
+export const ORDERS_READABLE_COLUMNS: readonly string[] = "id, org_id, location_id, order_number, status, channel, fulfilment, customer_id, table_label, subtotal, discount_total, taxable_total, cgst_total, sgst_total, igst_total, tax_total, delivery_fee, packaging_fee, tip_amount, grand_total, promotion_code, placed_at, accepted_at, ready_at, completed_at, scheduled_for, created_at, updated_at, delivery_distance_metres, points_redeemed, points_earned, invoice_number, invoiced_at, cancellation_reason, estimated_ready_at, business_date, stamp_reward_discount, stamp_reward_id, stamp_reward_product_slug, table_id, rider_id, rider_assigned_at".split(", ");
+
+/** The `orders` columns that hold customer contact details and stay closed to every client login. */
+export const ORDERS_CONTACT_COLUMNS: readonly string[] = ["customer_name", "customer_phone", "delivery_address", "delivery_lat_micro", "delivery_lng_micro", "notes"];
+
 /** Memberships hold every login's role and a PIN hash: staff managers read them all, everyone else reads only their own row. */
 export const MEMBERSHIPS_READ: readonly Permission[] = ["staff.manage"];
 
