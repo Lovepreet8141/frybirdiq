@@ -781,3 +781,5 @@ For staff and the owner. A door-cash order is paid to the rider, and that cash j
 While a till is open, Finance hides the cash it has taken, cash refunds and the net for its days (the count is blind); they appear once it is closed. The payments list itself stays visible, because it is the audit trail: someone who adds it up can work out the drawer, so the count is a control against a casual glance, not against a determined person.
 
 The first real till open and close belong to the owner.
+
+**Note (card `secure-cookie-note`):** the `frybird_contact` cookie carries the `Secure` flag in production whether or not `COOKIE_SECRET` is set. That is correct because the site is served over HTTPS only (nginx redirects HTTP), but it means the cookie is never sent over plain HTTP: do not test the site on an `http://` address and expect a returning customer to be recognised.

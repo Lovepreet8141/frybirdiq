@@ -100,3 +100,28 @@ describe("correctShift", () => {
     expect(open.alreadyOn).toBe(false);
   });
 });
+
+describe("clock-out ordering", () => {
+  it("clockout-same-ms: a clock-out in the same millisecond as the clock-in, or before it (clock skew), closes the shift one millisecond after it began instead of failing the table's order check", async () => {
+    const at = new Date("2026-09-12T05:00:00.000Z");
+    const same = randomUUID();
+    await clockIn(org.orgId, same, at);
+    expect(await clockOut(org.orgId, same, at)).toMatchObject({ ok: true, alreadyOff: false });
+    const [row] = await db().select().from(shifts).where(and(eq(shifts.orgId, org.orgId), eq(shifts.userId, same)));
+    expect(row!.clockOutAt!.getTime() - row!.clockInAt.getTime()).toBe(1);
+
+    const skew = randomUUID();
+    await clockIn(org.orgId, skew, at);
+    expect(await clockOut(org.orgId, skew, new Date(at.getTime() - 5_000))).toMatchObject({ ok: true, alreadyOff: false });
+    const [skewed] = await db().select().from(shifts).where(and(eq(shifts.orgId, org.orgId), eq(shifts.userId, skew)));
+    expect(skewed!.clockOutAt!.getTime()).toBe(at.getTime() + 1);
+  });
+
+  it("an ordinary clock-out is stamped at the time given, not adjusted", async () => {
+    const p = randomUUID();
+    await clockIn(org.orgId, p, new Date("2026-09-12T06:00:00Z"));
+    await clockOut(org.orgId, p, new Date("2026-09-12T14:00:00Z"));
+    const [row] = await db().select().from(shifts).where(and(eq(shifts.orgId, org.orgId), eq(shifts.userId, p)));
+    expect(row!.clockOutAt!.toISOString()).toBe("2026-09-12T14:00:00.000Z");
+  });
+});

@@ -560,7 +560,16 @@ describe("proposeRecommendation — concurrency and re-proposal (RELIABILITY M1,
     const b = db()
       .transaction((tx) => second(tx))
       .finally(() => (secondDone = true));
-    await sleep(400);
+    // Wait until `second` is actually blocked on a lock (or has finished without blocking), not for a fixed time: under
+    // load a fixed 400 ms could release `first` before `second` had even reached the lock, so the race never happened
+    // (card iq-flaky-1). Bounded at 5 s; a short settle after that keeps the previous behaviour for the not-blocking case.
+    const waitedFrom = Date.now();
+    while (!secondDone && Date.now() - waitedFrom < 5_000) {
+      const blocked = await db().execute(sql`select 1 from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' limit 1`);
+      if ((blocked as unknown as unknown[]).length > 0) break;
+      await sleep(25);
+    }
+    await sleep(100);
     const finishedWhileFirstOpen = secondDone;
     release();
     return { a: await a, b: await b, finishedWhileFirstOpen };

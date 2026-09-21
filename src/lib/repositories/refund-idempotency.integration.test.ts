@@ -944,5 +944,7 @@ describe("refundPayment — reserve, finalize, converge (ref-b3)", () => {
     expect(result.ok).toBe(true);
     expect(await refundRows(o.paymentId)).toHaveLength(1);
     expect(await statusOf("payment", o.paymentId)).toBe("REFUNDED");
-  }, 30_000);
+    // The takeover waits IN_FLIGHT_WAIT_MS (10 s) for the dead caller's result first, so on a loaded machine 30 s was too
+    // tight (card flaky-s4). Test timeout only; the code and its 10 s wait are unchanged.
+  }, 90_000);
 });

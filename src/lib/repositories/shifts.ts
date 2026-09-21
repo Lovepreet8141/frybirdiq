@@ -10,7 +10,7 @@ import "server-only";
  * second tap finds none to close and says so.
  */
 
-import { and, asc, desc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, cashSessions, memberships, shiftBreaks, shifts } from "@/db/schema";
 import { businessDate } from "@/lib/dates";
@@ -79,13 +79,16 @@ export type ClockOutResult = { readonly ok: true; readonly shiftId: string; read
 /** Closes this person's open shift. With none open (a second tap) it changes nothing. */
 export async function clockOut(orgId: string, userId: string, now: Date = new Date()): Promise<ClockOutResult> {
   return db().transaction(async (tx) => {
+    // The table requires clock_out_at > clock_in_at. A clock-out in the very same millisecond as the clock-in (a double
+    // tap, or two clocks a few ms apart) would violate it and fail; the shift is closed one millisecond after it began instead.
     const closed = await tx
       .update(shifts)
-      .set({ clockOutAt: now })
+      .set({ clockOutAt: sql`greatest(${now.toISOString()}::timestamptz, ${shifts.clockInAt} + interval '1 millisecond')` })
       .where(and(eq(shifts.orgId, orgId), eq(shifts.userId, userId), isNull(shifts.clockOutAt)))
-      .returning({ id: shifts.id, clockInAt: shifts.clockInAt });
+      .returning({ id: shifts.id, clockInAt: shifts.clockInAt, clockOutAt: shifts.clockOutAt });
     const row = closed[0];
     if (!row) return { ok: true, alreadyOff: true } as const;
+    const out = row.clockOutAt ?? now;
     // A break still open at clock-out ends at the same instant.
     const [openBreak] = await tx
       .select({ id: shiftBreaks.id, startedAt: shiftBreaks.startedAt })
@@ -93,7 +96,7 @@ export async function clockOut(orgId: string, userId: string, now: Date = new Da
       .where(and(eq(shiftBreaks.orgId, orgId), eq(shiftBreaks.shiftId, row.id), isNull(shiftBreaks.endedAt)))
       .limit(1);
     if (openBreak) {
-      await tx.update(shiftBreaks).set({ endedAt: now }).where(and(eq(shiftBreaks.orgId, orgId), eq(shiftBreaks.id, openBreak.id)));
+      await tx.update(shiftBreaks).set({ endedAt: out }).where(and(eq(shiftBreaks.orgId, orgId), eq(shiftBreaks.id, openBreak.id)));
       await tx.insert(auditLogs).values({
         orgId,
         actorUserId: userId,
@@ -101,7 +104,7 @@ export async function clockOut(orgId: string, userId: string, now: Date = new Da
         entity: "shift_breaks",
         entityId: openBreak.id,
         before: { startedAt: openBreak.startedAt.toISOString() },
-        after: { endedAt: now.toISOString(), closedByClockOut: true },
+        after: { endedAt: out.toISOString(), closedByClockOut: true },
       });
     }
     await tx.insert(auditLogs).values({
@@ -111,7 +114,7 @@ export async function clockOut(orgId: string, userId: string, now: Date = new Da
       entity: "shifts",
       entityId: row.id,
       before: { clockInAt: row.clockInAt.toISOString() },
-      after: { clockOutAt: now.toISOString() },
+      after: { clockOutAt: out.toISOString() },
     });
     return { ok: true, shiftId: row.id, alreadyOff: false } as const;
   });

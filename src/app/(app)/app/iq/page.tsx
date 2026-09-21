@@ -22,7 +22,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { getStaff, staffCan } from "@/lib/auth";
 import { businessDate, resolveRange } from "@/lib/dates";
 import { attentionInput, urgentCount } from "@/lib/iq/alerts";
-import { limitedReasons } from "@/lib/iq/readiness/scores";
+import { type ReadinessCard, limitedReasons } from "@/lib/iq/readiness/scores";
 import { type OverviewRange, OVERVIEW_RANGES, attentionCards, compareOptions, deltaBps, excludedNote, isMultiDay, isOverviewRange, resolveCompare } from "@/lib/iq/overview";
 import { type Paise, formatINR } from "@/lib/money";
 import { listRecentOrderEvents } from "@/lib/repositories/activity";
@@ -82,8 +82,10 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     productLastSales(staff.orgId, now),
     listActiveOrders(staff.orgId),
     listRecentOrderEvents(staff.orgId, 8),
-    getReadiness(staff.orgId, now),
+    // A readiness query that throws must not take the Overview down: the panel is replaced by a note and every card that leans on it is marked limited (never silently "trusted").
+    getReadiness(staff.orgId, now).catch(() => null),
   ]);
+  const limitedFor = (card: ReadinessCard): readonly string[] => (readiness ? limitedReasons(readiness, card) : ["Readiness could not be read just now"]);
   const excluded = await countExcluded(staff.orgId, comparison.window);
 
   const directTotal = pnl.direct.reduce((sum, row) => sum + row.amount, 0n) as Paise;
@@ -177,7 +179,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
           />
           <KpiCompact
             label="Net profit · month"
-            limited={limitedReasons(readiness, "netProfit")}
+            limited={limitedFor("netProfit")}
             value={pnl.hasExpenses ? formatINR(pnl.result.netProfit, "whole") : "—"}
             missing={!pnl.hasExpenses}
             note={pnl.hasExpenses ? `${costLinesRecorded} of 4 cost lines recorded` : "Not yet tracked — record what you spend"}
@@ -188,18 +190,18 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
 
         {/* Readiness: how far the record-keeping behind these numbers can be trusted. Read-only. */}
         <MotionStaggerItem className="lg:col-span-12">
-          <ReadinessPanel readiness={readiness} />
+          {readiness ? <ReadinessPanel readiness={readiness} /> : <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground">Readiness could not be read just now, so the cards that depend on it are marked limited. Reload to try again.</p>}
         </MotionStaggerItem>
 
         {/* Row 2 — the E-commerce dashboard's 4 / 4 / 4. */}
         <MotionStaggerItem className="lg:col-span-4">
-          <ChannelPerformanceCard limited={limitedReasons(readiness, "channels")} channels={channels.channels.map((stat) => ({ channel: stat.channel, revenue: stat.revenue.value, orders: stat.orders.value, shareBps: stat.shareBps, changeBps: stat.revenue.changeBps }))} total={channels.total} periodLabel={rangeLabel} />
+          <ChannelPerformanceCard limited={limitedFor("channels")} channels={channels.channels.map((stat) => ({ channel: stat.channel, revenue: stat.revenue.value, orders: stat.orders.value, shareBps: stat.shareBps, changeBps: stat.revenue.changeBps }))} total={channels.total} periodLabel={rangeLabel} />
         </MotionStaggerItem>
         <MotionStaggerItem className="lg:col-span-4">
-          <PaymentMethodsCard limited={limitedReasons(readiness, "paymentMethods")} methods={ledger.byMethod.map((row) => ({ method: row.method, label: METHOD_LABELS[row.method], count: row.count, total: row.total }))} capturedTotal={ledger.capturedTotal} periodLabel={rangeLabel} />
+          <PaymentMethodsCard limited={limitedFor("paymentMethods")} methods={ledger.byMethod.map((row) => ({ method: row.method, label: METHOD_LABELS[row.method], count: row.count, total: row.total }))} capturedTotal={ledger.capturedTotal} periodLabel={rangeLabel} />
         </MotionStaggerItem>
         <MotionStaggerItem className="lg:col-span-4">
-          <AttentionCard cards={cards} limited={limitedReasons(readiness, "attention")} />
+          <AttentionCard cards={cards} limited={limitedFor("attention")} />
         </MotionStaggerItem>
 
         {/* Row 3 — 8 / 4: what the kitchen and counter look like right now, and what is selling. */}
@@ -223,7 +225,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
           </Card>
         </MotionStaggerItem>
         <MotionStaggerItem className="lg:col-span-4">
-          <ProductsCard limited={limitedReasons(readiness, "topProducts")} top={dashboard.topProducts} gaps={gaps} periodLabel={rangeLabel} />
+          <ProductsCard limited={limitedFor("topProducts")} top={dashboard.topProducts} gaps={gaps} periodLabel={rangeLabel} />
         </MotionStaggerItem>
 
         {/* Row 4 — 8 / 4: the open orders table and the latest movements. */}
