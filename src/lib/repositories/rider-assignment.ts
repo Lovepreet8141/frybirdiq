@@ -11,11 +11,12 @@ import "server-only";
  * is not authorization. Every query is scoped by org_id; every write is audited.
  */
 
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, memberships, orders, payments } from "@/db/schema";
 import { isTerminal, type OrderStatus } from "@/domain/order-status";
 import { type Role, seesOnlyOwnDeliveries } from "@/domain/permissions";
+import { MAX_ACTIVE_DELIVERIES, MAX_TAKES_PER_HOUR } from "@/lib/delivery/hold";
 import { toOffer, type DeliveryOffer } from "@/lib/delivery/offer";
 import { advanceOrder, listActiveOrders, type StaffOrderView } from "./orders";
 
@@ -148,7 +149,7 @@ export async function failDelivery(input: {
 /** The statuses a delivery is on a rider's list in: ready to go, or already on the road. */
 const OFFERED_STATUSES = ["READY", "OUT_FOR_DELIVERY"] as const;
 
-export type TakeDeliveryCode = "NOT_FOUND" | "NOT_A_DELIVERY" | "NOT_A_RIDER" | "NOT_AVAILABLE" | "ALREADY_TAKEN";
+export type TakeDeliveryCode = "NOT_FOUND" | "NOT_A_DELIVERY" | "NOT_A_RIDER" | "NOT_AVAILABLE" | "ALREADY_TAKEN" | "AT_LIMIT" | "TOO_MANY_TAKES";
 export type TakeDeliveryResult = { readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly code: TakeDeliveryCode; readonly error: string };
 
 /**
@@ -166,7 +167,22 @@ export async function takeDelivery(input: { readonly orgId: string; readonly ord
       .limit(1);
     if (!rider) return { ok: false, code: "NOT_A_RIDER", error: "Only an active rider can take a delivery." } as const;
 
-    const claimed = await tx
+    // One rider's takes are serialized, so a burst of taps cannot beat the limit (the count and the claim below are then
+    // one atomic step for this rider). Other riders are not affected.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`take:${input.orgId}:${input.riderUserId}`}))`);
+    const [held] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(orders)
+      .where(and(eq(orders.orgId, input.orgId), eq(orders.riderId, input.riderUserId), inArray(orders.status, [...OFFERED_STATUSES])));
+    const atLimit = (held?.n ?? 0) >= MAX_ACTIVE_DELIVERIES;
+    // Taking reveals the customer's details, so takes are bounded per rolling hour whatever is released (audit rows are the count).
+    const [recent] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(auditLogs)
+      .where(and(eq(auditLogs.orgId, input.orgId), eq(auditLogs.actorUserId, input.riderUserId), eq(auditLogs.action, "rider_took_delivery"), sql`${auditLogs.createdAt} > now() - interval '1 hour'`));
+    const tooManyTakes = (recent?.n ?? 0) >= MAX_TAKES_PER_HOUR;
+
+    const claimed = atLimit || tooManyTakes ? [] : await tx
       .update(orders)
       .set({ riderId: input.riderUserId, riderAssignedAt: new Date(), updatedAt: new Date() })
       .where(
@@ -205,11 +221,56 @@ export async function takeDelivery(input: { readonly orgId: string; readonly ord
     if (order.fulfilment !== "DELIVERY") return { ok: false, code: "NOT_A_DELIVERY", error: "That order is not a delivery." } as const;
     if (order.riderId === input.riderUserId) return { ok: true, changed: false } as const;
     if (order.riderId !== null) return { ok: false, code: "ALREADY_TAKEN", error: "Someone else has just taken that delivery." } as const;
+    if (tooManyTakes && (OFFERED_STATUSES as readonly string[]).includes(order.status)) {
+      return { ok: false, code: "TOO_MANY_TAKES", error: "You have taken several deliveries in the last hour. Ask the shop to assign this one." } as const;
+    }
+    if (atLimit && (OFFERED_STATUSES as readonly string[]).includes(order.status)) {
+      return { ok: false, code: "AT_LIMIT", error: `You already hold ${MAX_ACTIVE_DELIVERIES} deliveries. Finish or release one first.` } as const;
+    }
     return { ok: false, code: "NOT_AVAILABLE", error: "That delivery is not ready to be taken." } as const;
   });
 }
 
+export type ReleaseDeliveryCode = "NOT_FOUND" | "NOT_YOUR_DELIVERY" | "NOT_RELEASABLE";
+export type ReleaseDeliveryResult = { readonly ok: true } | { readonly ok: false; readonly code: ReleaseDeliveryCode; readonly error: string };
+
+/**
+ * A rider gives a delivery they hold back to Available (owner decision, 2026-09-21). One conditional UPDATE: it only
+ * releases a delivery THIS rider holds that is still READY (not yet on the road: once it is out, the rider uses "Couldn't deliver",
+ * which needs a reason, or the manager reassigns). Audited. Releasing again, or someone
+ * else's delivery, changes nothing.
+ */
+export async function releaseDelivery(input: { readonly orgId: string; readonly orderId: string; readonly riderUserId: string }): Promise<ReleaseDeliveryResult> {
+  return db().transaction(async (tx) => {
+    const released = await tx
+      .update(orders)
+      .set({ riderId: null, riderAssignedAt: null, updatedAt: new Date() })
+      .where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId), eq(orders.riderId, input.riderUserId), eq(orders.status, "READY")))
+      .returning({ id: orders.id, locationId: orders.locationId });
+    const [gone] = released;
+    if (gone) {
+      await tx.insert(auditLogs).values({
+        orgId: input.orgId,
+        locationId: gone.locationId,
+        actorUserId: input.riderUserId,
+        action: "rider_released_delivery",
+        entity: "orders",
+        entityId: gone.id,
+        before: { riderId: input.riderUserId },
+        after: { riderId: null },
+      });
+      return { ok: true } as const;
+    }
+    const [order] = await tx.select({ status: orders.status, riderId: orders.riderId }).from(orders).where(and(eq(orders.id, input.orderId), eq(orders.orgId, input.orgId))).limit(1);
+    if (!order) return { ok: false, code: "NOT_FOUND", error: "That delivery does not exist." } as const;
+    if (order.riderId !== input.riderUserId) return { ok: false, code: "NOT_YOUR_DELIVERY", error: "That delivery is not yours." } as const;
+    return { ok: false, code: "NOT_RELEASABLE", error: order.status === "OUT_FOR_DELIVERY" ? "It is already on the road. Use Couldn’t deliver, or ask the shop to reassign it." : "That delivery can no longer be released." } as const;
+  });
+}
+
 export interface RiderDeliveries {
+  /** The rider already holds the most active deliveries they may: "Take it" is refused until one is finished or released. */
+  readonly atLimit: boolean;
   /** Deliveries assigned to this rider, with every detail needed to deliver them. */
   readonly mine: readonly StaffOrderView[];
   /** Unassigned deliveries any active rider may take: pickup-level facts only. */
@@ -219,8 +280,10 @@ export interface RiderDeliveries {
 /** What a rider's Deliveries screen shows: their own deliveries in full, and the available ones as offers. */
 export async function listRiderDeliveries(orgId: string, riderUserId: string): Promise<RiderDeliveries> {
   const active = (await listActiveOrders(orgId)).filter((order) => order.fulfilment === "DELIVERY" && (OFFERED_STATUSES as readonly string[]).includes(order.status));
+  const mine = active.filter((order) => order.riderUserId === riderUserId);
   return {
-    mine: active.filter((order) => order.riderUserId === riderUserId),
+    atLimit: mine.length >= MAX_ACTIVE_DELIVERIES,
+    mine,
     offers: active.filter((order) => order.riderUserId === null).map(toOffer),
   };
 }

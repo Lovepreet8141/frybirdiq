@@ -48,7 +48,7 @@ export async function whatsappOrderLink(input: { orderId: string }): Promise<Sha
   if (!order) return DENIED;
 
   // Phone only, exactly as the invoice page decides it: orders carry no email.
-  if (!viewerOwnsOrder({ customerPhone: order.customerPhone, customerEmail: null }, customer, remembered)) return DENIED;
+  if (!viewerOwnsOrder({ id: order.id, customerPhone: order.customerPhone, customerEmail: null }, customer, remembered)) return DENIED;
 
   // Unreachable while email is null above, kept as a guard for when it is not.
   // Same DENIED as every refusal, so "no phone" never tells apart from "not yours".

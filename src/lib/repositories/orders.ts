@@ -1191,6 +1191,8 @@ export interface StaffOrderView {
   readonly awaitingOnlinePayment: boolean;
   /** The rider a delivery is assigned to (roadmap 6.3); null when unassigned or not a delivery. */
   readonly riderUserId: string | null;
+  /** When the order last changed (a status change, a take, a release): a held delivery that has not moved for 15 minutes is flagged. */
+  readonly lastMovedAt: Date;
   readonly invoiceNumber: string | null;
   readonly estimatedReadyAt: Date | null;
   /** The customer's own requested time, when they chose one instead of ASAP — distinct from `estimatedReadyAt` (the kitchen's promise). */
@@ -1279,6 +1281,7 @@ export async function listActiveOrders(orgId: string): Promise<readonly StaffOrd
     isPaid: paidOrderIds.has(row.id),
     awaitingOnlinePayment: row.status === "PENDING_PAYMENT" && orderAwaitsOnline(paymentRows.filter((payment) => payment.orderId === row.id), row.channel),
     riderUserId: row.riderId,
+    lastMovedAt: row.updatedAt,
     invoiceNumber: row.invoiceNumber,
     estimatedReadyAt: row.estimatedReadyAt,
     scheduledFor: row.scheduledFor,
