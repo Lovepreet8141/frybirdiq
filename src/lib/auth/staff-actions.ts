@@ -5,6 +5,7 @@ import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
 import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
 import { type CompleteDeliveryCode, acceptOrder, advanceOrder, completeDelivery, rejectOrder } from "@/lib/repositories/orders";
+import { readyGateRefusal } from "@/lib/repositories/kitchen-stations";
 import { recordCashPayment } from "@/lib/repositories/payments";
 import { FAIL_REASON_MAX, FAIL_REASON_MIN, assignRider, failDelivery, releaseDelivery, takeDelivery } from "@/lib/repositories/rider-assignment";
 import { staffMayAdvanceTo } from "@/lib/orders/staff-advance";
@@ -75,6 +76,10 @@ export async function advanceOrderAction(input: unknown): Promise<StaffActionRes
 
   try {
     const staff = await requirePermission("kitchen.update");
+    if (parsed.data.to === "READY") {
+      const refusal = await readyGateRefusal(staff.orgId, parsed.data.orderId);
+      if (refusal) return { ok: false, error: refusal };
+    }
     const result = await advanceOrder({
       orderId: parsed.data.orderId,
       to: parsed.data.to,

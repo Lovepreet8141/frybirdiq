@@ -23,7 +23,7 @@ import "server-only";
 import { and, asc, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/db";
-import { categories, comboItems, kitchenLineStatus, kitchenOrderPack, orderItemModifiers, orderItems, orders, products, tables } from "@/db/schema";
+import { auditLogs, categories, comboItems, kitchenLineStatus, kitchenOrderPack, orderItemModifiers, orderItems, orders, products, tables } from "@/db/schema";
 import type { FulfilmentType } from "@/domain/order-status";
 import {
   type LineStation,
@@ -205,14 +205,26 @@ export async function setLineDone(input: { orgId: string; orderItemId: string; s
   if (!item?.stations.includes(input.station)) return { ok: false, error: "That line belongs to another station." };
 
   if (!input.done) {
-    await database.delete(kitchenLineStatus).where(and(eq(kitchenLineStatus.orgId, input.orgId), eq(kitchenLineStatus.orderItemId, line.id), eq(kitchenLineStatus.station, input.station)));
+    await database.transaction(async (tx) => {
+      const removed = await tx
+        .delete(kitchenLineStatus)
+        .where(and(eq(kitchenLineStatus.orgId, input.orgId), eq(kitchenLineStatus.orderItemId, line.id), eq(kitchenLineStatus.station, input.station)))
+        .returning({ id: kitchenLineStatus.id });
+      // Only a real undo is a fact worth a row: undoing twice is a no-op and writes nothing.
+      if (removed.length > 0) await tx.insert(auditLogs).values({ orgId: input.orgId, actorUserId: input.actorUserId, action: "kitchen_line_undone", entity: "order_items", entityId: line.id, before: { station: input.station, orderId: line.orderId } });
+    });
     return { ok: true };
   }
 
-  await database
-    .insert(kitchenLineStatus)
-    .values({ orgId: input.orgId, orderId: line.orderId, orderItemId: line.id, station: input.station, doneBy: input.actorUserId })
-    .onConflictDoNothing({ target: [kitchenLineStatus.orderItemId, kitchenLineStatus.station] });
+  await database.transaction(async (tx) => {
+    const marked = await tx
+      .insert(kitchenLineStatus)
+      .values({ orgId: input.orgId, orderId: line.orderId, orderItemId: line.id, station: input.station, doneBy: input.actorUserId })
+      .onConflictDoNothing({ target: [kitchenLineStatus.orderItemId, kitchenLineStatus.station] })
+      .returning({ id: kitchenLineStatus.id });
+    // One audit row per real mark, none for a repeat tap.
+    if (marked.length > 0) await tx.insert(auditLogs).values({ orgId: input.orgId, actorUserId: input.actorUserId, action: "kitchen_line_done", entity: "order_items", entityId: line.id, after: { station: input.station, orderId: line.orderId } });
+  });
 
   if (line.status === "ACCEPTED") {
     const started = await advanceOrder({ orderId: line.orderId, to: "PREPARING", actorUserId: input.actorUserId, orgId: input.orgId });
@@ -255,7 +267,8 @@ export async function setOrderPacked(input: { orgId: string; orderId: string; pa
       if (open.packItems.length > 0) {
         await tx.delete(kitchenLineStatus).where(and(eq(kitchenLineStatus.orgId, input.orgId), eq(kitchenLineStatus.station, "PACK"), inArray(kitchenLineStatus.orderItemId, open.packItems)));
       }
-      await tx.delete(kitchenOrderPack).where(and(eq(kitchenOrderPack.orgId, input.orgId), eq(kitchenOrderPack.orderId, input.orderId)));
+      const unpacked = await tx.delete(kitchenOrderPack).where(and(eq(kitchenOrderPack.orgId, input.orgId), eq(kitchenOrderPack.orderId, input.orderId))).returning({ id: kitchenOrderPack.id });
+      if (unpacked.length > 0) await tx.insert(auditLogs).values({ orgId: input.orgId, actorUserId: input.actorUserId, action: "kitchen_order_unpacked", entity: "orders", entityId: input.orderId });
     });
     return { ok: true };
   }
@@ -266,7 +279,8 @@ export async function setOrderPacked(input: { orgId: string; orderId: string; pa
     for (const itemId of open.packItems) {
       await tx.insert(kitchenLineStatus).values({ orgId: input.orgId, orderId: input.orderId, orderItemId: itemId, station: "PACK", doneBy: input.actorUserId }).onConflictDoNothing({ target: [kitchenLineStatus.orderItemId, kitchenLineStatus.station] });
     }
-    await tx.insert(kitchenOrderPack).values({ orgId: input.orgId, orderId: input.orderId, packedBy: input.actorUserId }).onConflictDoNothing({ target: kitchenOrderPack.orderId });
+    const packed = await tx.insert(kitchenOrderPack).values({ orgId: input.orgId, orderId: input.orderId, packedBy: input.actorUserId }).onConflictDoNothing({ target: kitchenOrderPack.orderId }).returning({ id: kitchenOrderPack.id });
+    if (packed.length > 0) await tx.insert(auditLogs).values({ orgId: input.orgId, actorUserId: input.actorUserId, action: "kitchen_order_packed", entity: "orders", entityId: input.orderId });
   });
   return { ok: true };
 }
@@ -297,6 +311,26 @@ export async function listVisibleStations(orgId: string): Promise<readonly LineS
   const menuStations = [...routing.values()].flatMap((r) => resolveTasks(r, "TAKEAWAY").map((task) => task.station));
   const inKitchen = await loadStationOrders(orgId);
   return visibleStations(menuStations, inKitchen.flatMap((order) => order.lines.map((line) => line.station)));
+}
+
+/**
+ * The station gate for the Orders board's "Mark ready" (ready-gate-enforce). Once anyone has marked a line done or
+ * packed at a station, the station screens are the record of the order, so READY from the board is refused while a
+ * task is still open or a required pack is missing (undoing the marks is the way out). An order no station has touched
+ * is left alone: a shop that runs the counter board without the station screens is unchanged. Null means allowed.
+ */
+export async function readyGateRefusal(orgId: string, orderId: string): Promise<string | null> {
+  const database = db();
+  const [order] = await database.select({ id: orders.id, fulfilment: orders.fulfilment }).from(orders).where(and(eq(orders.id, orderId), eq(orders.orgId, orgId))).limit(1);
+  if (!order) return null;
+  const [marked] = await database.select({ id: kitchenLineStatus.id }).from(kitchenLineStatus).where(and(eq(kitchenLineStatus.orgId, orgId), eq(kitchenLineStatus.orderId, orderId))).limit(1);
+  const [pack] = await database.select({ id: kitchenOrderPack.id }).from(kitchenOrderPack).where(and(eq(kitchenOrderPack.orgId, orgId), eq(kitchenOrderPack.orderId, orderId))).limit(1);
+  if (!marked && !pack) return null;
+  const open = await openTasks(orgId, order);
+  if (open === null) return null;
+  if (open.all > 0) return `${open.all} ${open.all === 1 ? "line is" : "lines are"} not done at the stations yet. Finish them on the Kitchen screen, or undo the marks.`;
+  if (packRequired(order.fulfilment) && !pack) return "This order has to be packed first.";
+  return null;
 }
 
 /**

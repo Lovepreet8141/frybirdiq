@@ -9,10 +9,10 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { categories, comboItems, kitchenLineStatus, kitchenOrderPack, orderEvents, orderItems, orders, products } from "@/db/schema";
+import { auditLogs, categories, comboItems, kitchenLineStatus, kitchenOrderPack, orderEvents, orderItems, orders, products } from "@/db/schema";
 import { fromRupees } from "@/lib/money";
 import { createTestOrg, createTestProduct, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
-import { listProductStations, listVisibleStations, loadStationOrders, markOrderReadyFromExpo, setLineDone, setOrderPacked } from "./kitchen-stations";
+import { listProductStations, listVisibleStations, loadStationOrders, markOrderReadyFromExpo, readyGateRefusal, setLineDone, setOrderPacked } from "./kitchen-stations";
 
 let org: TestOrg;
 let other: TestOrg;
@@ -381,5 +381,61 @@ describe("the DRINKS tab", () => {
   it("still routes correctly while hidden", async () => {
     const o = await order(org, [await product(org, "Cold Drinks")]);
     expect((await tasksOf(o.id)).map((t) => t.station)).toEqual(["DRINKS"]);
+  });
+});
+
+describe("station audit rows and the board's READY gate (kitchen lows)", () => {
+  const auditFor = async (action: string, entityId: string) =>
+    (await db().select().from(auditLogs).where(and(eq(auditLogs.orgId, org.orgId), eq(auditLogs.action, action), eq(auditLogs.entityId, entityId)))).length;
+
+  it("one audit row per real mark and per real undo; a repeat tap or a repeat undo writes nothing", async () => {
+    const fry = await product(org, "Fries");
+    const { id, itemIds } = await order(org, [fry]);
+    const item = itemIds[0]!;
+    expect((await setLineDone({ orgId: org.orgId, orderItemId: item, station: "FRY", done: true, actorUserId: actor })).ok).toBe(true);
+    await setLineDone({ orgId: org.orgId, orderItemId: item, station: "FRY", done: true, actorUserId: actor });
+    expect(await auditFor("kitchen_line_done", item)).toBe(1);
+    await setLineDone({ orgId: org.orgId, orderItemId: item, station: "FRY", done: false, actorUserId: actor });
+    await setLineDone({ orgId: org.orgId, orderItemId: item, station: "FRY", done: false, actorUserId: actor });
+    expect(await auditFor("kitchen_line_undone", item)).toBe(1);
+    const [row] = await db().select().from(auditLogs).where(and(eq(auditLogs.orgId, org.orgId), eq(auditLogs.action, "kitchen_line_done"), eq(auditLogs.entityId, item)));
+    expect(row).toMatchObject({ actorUserId: actor, entity: "order_items", after: { station: "FRY", orderId: id } });
+  });
+
+  it("packing and unpacking are audited once each", async () => {
+    const fry = await product(org, "Fries");
+    const { id, itemIds } = await order(org, [fry]);
+    await setLineDone({ orgId: org.orgId, orderItemId: itemIds[0]!, station: "FRY", done: true, actorUserId: actor });
+    const packed = await setOrderPacked({ orgId: org.orgId, orderId: id, packed: true, actorUserId: actor });
+    if (!packed.ok) throw new Error(packed.error);
+    await setOrderPacked({ orgId: org.orgId, orderId: id, packed: true, actorUserId: actor });
+    expect(await auditFor("kitchen_order_packed", id)).toBe(1);
+    await setOrderPacked({ orgId: org.orgId, orderId: id, packed: false, actorUserId: actor });
+    expect(await auditFor("kitchen_order_unpacked", id)).toBe(1);
+  });
+
+  it("the board may mark READY an order no station has touched (a shop without the station screens is unchanged)", async () => {
+    const fry = await product(org, "Fries");
+    const { id } = await order(org, [fry, fry]);
+    expect(await readyGateRefusal(org.orgId, id)).toBeNull();
+  });
+
+  it("once a station has marked a line, READY from the board is refused while a line is open, and allowed when all are done", async () => {
+    const fry = await product(org, "Fries");
+    const { id, itemIds } = await order(org, [fry, fry], "ACCEPTED", "DINE_IN");
+    await setLineDone({ orgId: org.orgId, orderItemId: itemIds[0]!, station: "FRY", done: true, actorUserId: actor });
+    expect(await readyGateRefusal(org.orgId, id)).toMatch(/not done at the stations/);
+    await setLineDone({ orgId: org.orgId, orderItemId: itemIds[1]!, station: "FRY", done: true, actorUserId: actor });
+    expect(await readyGateRefusal(org.orgId, id)).toBeNull();
+  });
+
+  it("a takeaway that is cooked but not packed is refused; packing lets it through; another org's order is not this org's business", async () => {
+    const fry = await product(org, "Fries");
+    const { id, itemIds } = await order(org, [fry], "ACCEPTED", "TAKEAWAY");
+    await setLineDone({ orgId: org.orgId, orderItemId: itemIds[0]!, station: "FRY", done: true, actorUserId: actor });
+    expect(await readyGateRefusal(org.orgId, id)).toBe("This order has to be packed first.");
+    await setOrderPacked({ orgId: org.orgId, orderId: id, packed: true, actorUserId: actor });
+    expect(await readyGateRefusal(org.orgId, id)).toBeNull();
+    expect(await readyGateRefusal(other.orgId, id)).toBeNull();
   });
 });
