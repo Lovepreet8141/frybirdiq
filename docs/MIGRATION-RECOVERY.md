@@ -747,3 +747,11 @@ rollback to any of 0022–0026 would first need down paths for 0033…0027, whic
 **Code-only rollback.** Safe: the previous build never names the column and counts a till's refunds by time window as before. **Undo.** `supabase/rollback/0053_refund_cash_session.down.sql` (drops the index, constraints and column; loses only which till paid each refund).
 
 **Money/till code = gated.** Reviewed by the payments reviewer (veto) and security before a go/no-go.
+
+## 4m. 0054 `rider_limits` (rider-limits-admin, `release/rc-32-rider-limits-admin`)
+
+**What it is.** `organizations.rider_max_active smallint NOT NULL DEFAULT 2` and `rider_max_takes_per_hour smallint NOT NULL DEFAULT 6`, with CHECKs (1-5 and 1-20). The owner edits both in Admin > Restaurant; "Take it" and the rider's at-limit state read them inside the take transaction. Defaults are the accepted figures, so every existing row behaves as before.
+
+**Classification.** Additive: two constant-default columns (no rewrite) and two CHECKs. No RLS or privilege change (same table, same policies). Undo drilled on a real schema built from migrations 0000-0053 with a full fingerprint.
+
+**Code-only rollback.** Safe: the previous build never names the columns and uses the constants 2 and 6. **Undo.** `supabase/rollback/0054_rider_limits.down.sql` (drops the CHECKs and columns; loses only limits the owner set).

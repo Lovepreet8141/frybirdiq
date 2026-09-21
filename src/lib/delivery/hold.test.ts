@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_ACTIVE_DELIVERIES, MAX_TAKES_PER_HOUR, STALE_HOLD_MINUTES, heldMinutes, isStaleHold } from "./hold";
+import { MAX_ACTIVE_DELIVERIES, MAX_TAKES_PER_HOUR, RIDER_LIMIT_BOUNDS, STALE_HOLD_MINUTES, heldMinutes, isStaleHold, riderLimitsError } from "./hold";
 
 const now = new Date("2026-09-21T12:00:00Z");
 const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
@@ -29,5 +29,26 @@ describe("rider hold rules (owner decisions, 2026-09-21)", () => {
   it("heldMinutes is whole minutes, never negative", () => {
     expect(heldMinutes(ago(22), now)).toBe(22);
     expect(heldMinutes(new Date(now.getTime() + 60_000), now)).toBe(0);
+  });
+});
+
+describe("rider limits (editable in Admin)", () => {
+  it("the defaults are inside the bounds", () => {
+    expect(riderLimitsError({ maxActive: MAX_ACTIVE_DELIVERIES, maxTakesPerHour: MAX_TAKES_PER_HOUR })).toBeNull();
+  });
+  it("accepts the edges of the bounds", () => {
+    const b = RIDER_LIMIT_BOUNDS;
+    expect(riderLimitsError({ maxActive: b.activeMin, maxTakesPerHour: b.takesMin })).toBeNull();
+    expect(riderLimitsError({ maxActive: b.activeMax, maxTakesPerHour: b.takesMax })).toBeNull();
+  });
+  it("refuses one past each edge, fractions and NaN, naming the range", () => {
+    const b = RIDER_LIMIT_BOUNDS;
+    expect(riderLimitsError({ maxActive: b.activeMin - 1, maxTakesPerHour: 6 })).toContain("1 to 5");
+    expect(riderLimitsError({ maxActive: b.activeMax + 1, maxTakesPerHour: 6 })).toContain("1 to 5");
+    expect(riderLimitsError({ maxActive: 2, maxTakesPerHour: b.takesMin - 1 })).toContain("1 to 20");
+    expect(riderLimitsError({ maxActive: 2, maxTakesPerHour: b.takesMax + 1 })).toContain("1 to 20");
+    expect(riderLimitsError({ maxActive: 2.5, maxTakesPerHour: 6 })).not.toBeNull();
+    expect(riderLimitsError({ maxActive: Number.NaN, maxTakesPerHour: 6 })).not.toBeNull();
+    expect(riderLimitsError({ maxActive: 2, maxTakesPerHour: Number.POSITIVE_INFINITY })).not.toBeNull();
   });
 });

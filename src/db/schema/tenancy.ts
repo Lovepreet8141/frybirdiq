@@ -145,8 +145,18 @@ export const organizations = pgTable("organizations", {
    * after the shop has reopened. Null when not paused.
    */
   orderingPausedUntil: timestamp("ordering_paused_until", { withTimezone: true }),
+  /**
+   * Rider limits (card `rider-limits-admin`). The most deliveries one rider may hold at once (READY or on the road), and the
+   * most they may take in a rolling hour. Defaults are the owner's accepted figures (2 and 6, 21 Sep). Taking reveals a
+   * customer's name, phone and address, so both are bounded by the CHECKs below even against a hand edit: an owner cannot
+   * switch the take cap off. Read inside the take transaction, so a change applies to the next take.
+   */
+  riderMaxActive: smallint("rider_max_active").notNull().default(sql`2`),
+  riderMaxTakesPerHour: smallint("rider_max_takes_per_hour").notNull().default(sql`6`),
   ...timestamps,
 }, (table) => [
+  check("organizations_rider_max_active_check", sql`${table.riderMaxActive} BETWEEN 1 AND 5`),
+  check("organizations_rider_max_takes_per_hour_check", sql`${table.riderMaxTakesPerHour} BETWEEN 1 AND 20`),
   check(
     "organizations_weekly_closed_days_check",
     sql`${table.weeklyClosedDays} <@ ARRAY[0,1,2,3,4,5,6]::smallint[] AND cardinality(${table.weeklyClosedDays}) <= 6`,

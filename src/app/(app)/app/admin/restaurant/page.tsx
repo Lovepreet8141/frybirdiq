@@ -6,6 +6,7 @@ import { BusinessProfileForm } from "@/components/staff/business-profile-form";
 import { DeliveryPricingForm } from "@/components/staff/delivery-pricing-form";
 import { LocationProfileForm } from "@/components/staff/location-profile-form";
 import { OperationsSettingsForm } from "@/components/staff/operations-settings-form";
+import { RiderLimitsForm } from "@/components/staff/rider-limits-form";
 import { PageHeader } from "@/components/staff/page-header";
 import { PaymentSettingsForm } from "@/components/staff/payment-settings-form";
 import { SettingRow } from "@/components/staff/setting-row";
@@ -120,6 +121,13 @@ export default async function RestaurantSettingsPage() {
             <PanelHeader title="Operations" description="Read by the Overview: kitchen load is open tickets against the capacity; the opening date decides which comparisons can honestly be offered." />
             <PanelBody className="pt-0">
               <OperationsSettingsForm kitchenCapacity={organization.kitchenCapacity} openedOn={organization.openedOn} />
+            </PanelBody>
+          </Panel>
+
+          <Panel>
+            <PanelHeader title="Riders" description="How many deliveries one rider can hold and take. A change applies to the next Take it; deliveries already held are not touched." />
+            <PanelBody className="pt-0">
+              <RiderLimitsForm maxActive={organization.riderMaxActive} maxTakesPerHour={organization.riderMaxTakesPerHour} />
             </PanelBody>
           </Panel>
 

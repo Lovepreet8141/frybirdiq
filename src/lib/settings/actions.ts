@@ -12,11 +12,13 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requirePermission } from "@/lib/auth";
 import { fromRupees } from "@/lib/money";
+import { riderLimitsError } from "@/lib/delivery/hold";
 import {
   updateBusinessProfile,
   updateLocationProfile,
   updateOperationsSettings,
   updatePaymentSettings,
+  updateRiderLimits,
 } from "@/lib/repositories/settings";
 import { parseContactPhone } from "./phone";
 import { type DeliveryBandInput, updateDeliveryPricing } from "@/lib/repositories/delivery";
@@ -55,6 +57,33 @@ export async function updateOperationsSettingsAction(_previous: OperationsSettin
   revalidatePath("/app/admin/restaurant");
   revalidatePath("/app/iq");
   return { status: "success", message: "Saved. The Overview reads these from the next load." };
+}
+
+/**
+ * Rider limits: deliveries one rider may hold at once, and takes per rolling hour. `settings.manage` (OWNER), re-checked
+ * here; values are whole numbers inside the bounds in `src/lib/delivery/hold.ts` (the take cap stops a rider reading every
+ * customer's details, so it cannot be removed). Changes apply to the next "Take it"; nothing already held is touched.
+ */
+export async function updateRiderLimitsAction(_previous: OperationsSettingsState, formData: FormData): Promise<OperationsSettingsState> {
+  let staff;
+  try {
+    staff = await requirePermission("settings.manage");
+  } catch {
+    return { status: "error", message: "You don't have permission to change restaurant settings." };
+  }
+
+  const num = (name: string) => {
+    const raw = String(formData.get(name) ?? "").trim();
+    return /^\d{1,3}$/.test(raw) ? Number(raw) : Number.NaN;
+  };
+  const limits = { maxActive: num("riderMaxActive"), maxTakesPerHour: num("riderMaxTakesPerHour") };
+  const problem = riderLimitsError(limits);
+  if (problem) return { status: "error", message: problem };
+
+  await updateRiderLimits(staff.orgId, staff.userId, limits);
+  revalidatePath("/app/admin/restaurant");
+  revalidatePath("/app/deliveries");
+  return { status: "success", message: "Saved. Riders see the new limits on their next Take it." };
 }
 
 export type SettingsFormState = { status: "idle" } | { status: "error"; message: string } | { status: "success"; message: string };

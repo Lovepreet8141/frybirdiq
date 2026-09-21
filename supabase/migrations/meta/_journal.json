@@ -379,6 +379,13 @@
       "when": 1791800000000,
       "tag": "0053_refund_cash_session",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1791900000000,
+      "tag": "0054_rider_limits",
+      "breakpoints": true
     }
   ]
 }

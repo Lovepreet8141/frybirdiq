@@ -14,10 +14,11 @@ import "server-only";
 
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { locations, organizations, taxRates } from "@/db/schema";
+import { auditLogs, locations, organizations, taxRates } from "@/db/schema";
 import { type Paise, paise } from "@/lib/money";
 import type { PriceBasis } from "@/lib/pricing";
 import { parseContactPhone } from "@/lib/settings/phone";
+import type { RiderLimits } from "@/lib/delivery/hold";
 import { type DeliverySettings, getDeliverySettings } from "./delivery";
 
 export interface RestaurantSettings {
@@ -40,6 +41,9 @@ export interface RestaurantSettings {
     readonly cashEnabled: boolean;
     /** The business's own switch, on top of whether Razorpay is actually configured. */
     readonly onlineEnabled: boolean;
+    /** Rider limits (migration 0054): deliveries one rider may hold at once, and takes per rolling hour. */
+    readonly riderMaxActive: number;
+    readonly riderMaxTakesPerHour: number;
   };
   readonly loyalty: {
     readonly earnBps: number;
@@ -95,6 +99,8 @@ export async function getRestaurantSettings(orgId: string): Promise<RestaurantSe
       codCap: paise(org.codCap),
       cashEnabled: org.cashEnabled,
       onlineEnabled: org.onlineEnabled,
+      riderMaxActive: org.riderMaxActive,
+      riderMaxTakesPerHour: org.riderMaxTakesPerHour,
     },
     loyalty: {
       earnBps: org.loyaltyEarnBps,
@@ -137,6 +143,29 @@ export async function updateOperationsSettings(
     .update(organizations)
     .set({ kitchenCapacity: input.kitchenCapacity, openedOn: input.openedOn, updatedAt: new Date() })
     .where(eq(organizations.id, orgId));
+}
+
+/**
+ * Rider limits (card `rider-limits-admin`): the most deliveries one rider holds at once and takes in a rolling hour.
+ * The values are validated against `RIDER_LIMIT_BOUNDS` by the caller and again by the database CHECKs. Audited with the
+ * old and new values, against the person who changed them, in the same transaction. Permission is the caller's
+ * (`settings.manage`, OWNER-only), the division every repository write here follows. Applies to the next "Take it".
+ */
+export async function updateRiderLimits(orgId: string, actorUserId: string, limits: RiderLimits): Promise<void> {
+  await db().transaction(async (tx) => {
+    const [before] = await tx.select({ maxActive: organizations.riderMaxActive, maxTakesPerHour: organizations.riderMaxTakesPerHour }).from(organizations).where(eq(organizations.id, orgId)).for("update").limit(1);
+    if (!before) throw new Error("settings: organization not found");
+    await tx.update(organizations).set({ riderMaxActive: limits.maxActive, riderMaxTakesPerHour: limits.maxTakesPerHour, updatedAt: new Date() }).where(eq(organizations.id, orgId));
+    await tx.insert(auditLogs).values({
+      orgId,
+      actorUserId,
+      action: "rider_limits_changed",
+      entity: "organizations",
+      entityId: orgId,
+      before: { maxActive: before.maxActive, maxTakesPerHour: before.maxTakesPerHour },
+      after: { maxActive: limits.maxActive, maxTakesPerHour: limits.maxTakesPerHour },
+    });
+  });
 }
 
 /**

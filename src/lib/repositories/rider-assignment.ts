@@ -13,10 +13,10 @@ import "server-only";
 
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLogs, memberships, orders, payments } from "@/db/schema";
+import { auditLogs, memberships, orders, organizations, payments } from "@/db/schema";
 import { isTerminal, type OrderStatus } from "@/domain/order-status";
 import { type Role, seesOnlyOwnDeliveries } from "@/domain/permissions";
-import { MAX_ACTIVE_DELIVERIES, MAX_TAKES_PER_HOUR } from "@/lib/delivery/hold";
+import { MAX_ACTIVE_DELIVERIES, MAX_TAKES_PER_HOUR, type RiderLimits } from "@/lib/delivery/hold";
 import { toOffer, type DeliveryOffer } from "@/lib/delivery/offer";
 import { advanceOrder, listActiveOrders, type StaffOrderView } from "./orders";
 
@@ -149,6 +149,17 @@ export async function failDelivery(input: {
 /** The statuses a delivery is on a rider's list in: ready to go, or already on the road. */
 const OFFERED_STATUSES = ["READY", "OUT_FOR_DELIVERY"] as const;
 
+type Reader = Pick<ReturnType<typeof db>, "select">;
+
+/**
+ * The rider limits in force for this org (`organizations.rider_max_active`, `rider_max_takes_per_hour`, editable in Admin,
+ * bounded by CHECKs). If the org row cannot be read, the accepted defaults apply: never "no limit".
+ */
+export async function getRiderLimits(orgId: string, reader: Reader = db()): Promise<RiderLimits> {
+  const [row] = await reader.select({ maxActive: organizations.riderMaxActive, maxTakesPerHour: organizations.riderMaxTakesPerHour }).from(organizations).where(eq(organizations.id, orgId)).limit(1);
+  return row ?? { maxActive: MAX_ACTIVE_DELIVERIES, maxTakesPerHour: MAX_TAKES_PER_HOUR };
+}
+
 export type TakeDeliveryCode = "NOT_FOUND" | "NOT_A_DELIVERY" | "NOT_A_RIDER" | "NOT_AVAILABLE" | "ALREADY_TAKEN" | "AT_LIMIT" | "TOO_MANY_TAKES";
 export type TakeDeliveryResult = { readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly code: TakeDeliveryCode; readonly error: string };
 
@@ -170,17 +181,18 @@ export async function takeDelivery(input: { readonly orgId: string; readonly ord
     // One rider's takes are serialized, so a burst of taps cannot beat the limit (the count and the claim below are then
     // one atomic step for this rider). Other riders are not affected.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`take:${input.orgId}:${input.riderUserId}`}))`);
+    const limits = await getRiderLimits(input.orgId, tx);
     const [held] = await tx
       .select({ n: sql<number>`count(*)::int` })
       .from(orders)
       .where(and(eq(orders.orgId, input.orgId), eq(orders.riderId, input.riderUserId), inArray(orders.status, [...OFFERED_STATUSES])));
-    const atLimit = (held?.n ?? 0) >= MAX_ACTIVE_DELIVERIES;
+    const atLimit = (held?.n ?? 0) >= limits.maxActive;
     // Taking reveals the customer's details, so takes are bounded per rolling hour whatever is released (audit rows are the count).
     const [recent] = await tx
       .select({ n: sql<number>`count(*)::int` })
       .from(auditLogs)
       .where(and(eq(auditLogs.orgId, input.orgId), eq(auditLogs.actorUserId, input.riderUserId), eq(auditLogs.action, "rider_took_delivery"), sql`${auditLogs.createdAt} > now() - interval '1 hour'`));
-    const tooManyTakes = (recent?.n ?? 0) >= MAX_TAKES_PER_HOUR;
+    const tooManyTakes = (recent?.n ?? 0) >= limits.maxTakesPerHour;
 
     const claimed = atLimit || tooManyTakes ? [] : await tx
       .update(orders)
@@ -225,7 +237,7 @@ export async function takeDelivery(input: { readonly orgId: string; readonly ord
       return { ok: false, code: "TOO_MANY_TAKES", error: "You have taken several deliveries in the last hour. Ask the shop to assign this one." } as const;
     }
     if (atLimit && (OFFERED_STATUSES as readonly string[]).includes(order.status)) {
-      return { ok: false, code: "AT_LIMIT", error: `You already hold ${MAX_ACTIVE_DELIVERIES} deliveries. Finish or release one first.` } as const;
+      return { ok: false, code: "AT_LIMIT", error: `You already hold ${limits.maxActive} ${limits.maxActive === 1 ? "delivery" : "deliveries"}. Finish or release one first.` } as const;
     }
     return { ok: false, code: "NOT_AVAILABLE", error: "That delivery is not ready to be taken." } as const;
   });
@@ -281,8 +293,9 @@ export interface RiderDeliveries {
 export async function listRiderDeliveries(orgId: string, riderUserId: string): Promise<RiderDeliveries> {
   const active = (await listActiveOrders(orgId)).filter((order) => order.fulfilment === "DELIVERY" && (OFFERED_STATUSES as readonly string[]).includes(order.status));
   const mine = active.filter((order) => order.riderUserId === riderUserId);
+  const limits = await getRiderLimits(orgId);
   return {
-    atLimit: mine.length >= MAX_ACTIVE_DELIVERIES,
+    atLimit: mine.length >= limits.maxActive,
     mine,
     offers: active.filter((order) => order.riderUserId === null).map(toOffer),
   };
