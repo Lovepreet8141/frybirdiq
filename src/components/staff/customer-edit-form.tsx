@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Field, errorNoteClass, inputClass, submitClass, successNoteClass } from "@/components/inventory/field";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,10 +8,10 @@ import { type CustomerEditState, updateCustomerAction } from "@/lib/customers/ac
 import { NOTES_MAX } from "@/lib/customers/edit";
 import { newEditKey } from "@/lib/customers/edit-key";
 
-function Submit({ offline, ready }: { offline: boolean; ready: boolean }) {
+function Submit({ offline }: { offline: boolean }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending || offline || !ready} className={submitClass}>
+    <button type="submit" disabled={pending || offline} className={submitClass}>
       {pending ? "Saving…" : "Save customer"}
     </button>
   );
@@ -36,10 +36,18 @@ export function CustomerEditForm({
   notes: string | null;
 }) {
   const [state, action] = useActionState<CustomerEditState, FormData>(updateCustomerAction, { status: "idle" });
-  // One key per submission ATTEMPT (see edit-key.ts): the same for a double-tap or a retry of the same content,
-  // new when the content changes and after every result. Minted after mount so it never differs from the server render.
-  const [key, setKey] = useState("");
-  useEffect(() => setKey(newEditKey()), [state]);
+  // One key per submission ATTEMPT (see edit-key.ts): minted when the form is submitted, kept for a double-tap or a
+  // retry of the same content (they replay), and dropped whenever the content changes or a result comes back, so the next
+  // submit gets a new one. A ref, not state: nothing renders it and it is never read before a submit.
+  const attemptKey = useRef<string | null>(null);
+  useEffect(() => {
+    attemptKey.current = null;
+  }, [state]);
+  const submit = (formData: FormData) => {
+    attemptKey.current ??= newEditKey();
+    formData.set("key", attemptKey.current);
+    action(formData);
+  };
   const [online, setOnline] = useState(true);
 
   useEffect(() => {
@@ -54,9 +62,8 @@ export function CustomerEditForm({
   }, []);
 
   return (
-    <form action={action} onChange={() => setKey(newEditKey())} className="flex flex-col gap-4">
+    <form action={submit} onChange={() => (attemptKey.current = null)} className="flex flex-col gap-4">
       <input type="hidden" name="customerId" value={customerId} />
-      <input type="hidden" name="key" value={key} />
       {!online && (
         <p role="status" className={errorNoteClass}>
           You&apos;re offline. Edits can&apos;t be saved until the connection returns.
@@ -87,7 +94,7 @@ export function CustomerEditForm({
         <Textarea id="customer-notes" name="notes" maxLength={NOTES_MAX} rows={4} defaultValue={notes ?? ""} />
       </Field>
       <div className="flex justify-end">
-        <Submit offline={!online} ready={key !== ""} />
+        <Submit offline={!online} />
       </div>
     </form>
   );
