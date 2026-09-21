@@ -3,7 +3,7 @@ import { KdsViewTabs } from "@/components/kds/kds-view-tabs";
 import { ExpoBoard } from "@/components/kds/stations-boards";
 import { PermissionDenied } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
-import { loadStationOrders } from "@/lib/repositories/kitchen-stations";
+import { listVisibleStations, loadStationOrders } from "@/lib/repositories/kitchen-stations";
 
 export const metadata: Metadata = { title: "Kitchen expo", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -22,7 +22,7 @@ export default async function ExpoPage() {
 
   return (
     <div>
-      <KdsViewTabs active="EXPO" />
+      <KdsViewTabs active="EXPO" stations={await listVisibleStations(staff.orgId)} />
       <ExpoBoard initial={await loadStationOrders(staff.orgId)} canUpdate={canUpdate} orgId={staff.orgId} />
     </div>
   );

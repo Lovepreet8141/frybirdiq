@@ -12,8 +12,10 @@ import {
   parseStation,
   productStationList,
   resolveLineStation,
+  resolveTasks,
   stationBoard,
   stationForCategory,
+  visibleStations,
 } from "./stations";
 
 const line = (over: Partial<StationLine> = {}): StationLine => ({ id: "l1", name: "Item", quantity: 1, modifiers: [], station: "FRY", done: false, ...over });
@@ -34,19 +36,20 @@ const order = (over: Partial<StationOrder> = {}): StationOrder => ({
 });
 
 describe("station names", () => {
-  it("knows the four screens, three of which take lines", () => {
+  it("knows the four screens", () => {
     expect(STATIONS).toEqual(["FRY", "ASSEMBLY", "DRINKS", "PACK"]);
-    expect(LINE_STATIONS).toEqual(["FRY", "ASSEMBLY", "DRINKS"]);
+    expect(LINE_STATIONS).toEqual(STATIONS);
   });
   it("forgives case and padding, nothing else", () => {
     expect(parseStation(" fry ")).toBe("FRY");
     expect(parseStation("grill")).toBeNull();
     expect(parseStation(null)).toBeNull();
   });
-  it("PACK is a station but never a line's station", () => {
+  it("PACK takes lines too (sauces and dips)", () => {
     expect(parseStation("pack")).toBe("PACK");
-    expect(parseLineStation("pack")).toBeNull();
+    expect(parseLineStation("pack")).toBe("PACK");
     expect(parseLineStation("drinks")).toBe("DRINKS");
+    expect(parseLineStation("grill")).toBeNull();
   });
 });
 
@@ -62,14 +65,14 @@ describe("normaliseCategoryName", () => {
 });
 
 describe("category defaults: every real menu category", () => {
-  const expected: readonly [string, "FRY" | "ASSEMBLY" | "DRINKS"][] = [
+  const expected: readonly [string, "FRY" | "ASSEMBLY" | "DRINKS" | "PACK"][] = [
     ["Burgers", "ASSEMBLY"],
     ["Chicken", "FRY"],
     ["Combos & Party Boxes", "ASSEMBLY"],
     ["Fries", "FRY"],
     ["Mac & Cheese", "ASSEMBLY"],
     ["Rice Bowls", "ASSEMBLY"],
-    ["Sauces", "ASSEMBLY"],
+    ["Sauces", "PACK"],
     ["Smash Burgers", "ASSEMBLY"],
     ["Wraps", "ASSEMBLY"],
   ];
@@ -98,7 +101,7 @@ describe("category defaults: every real menu category", () => {
     }
   });
   it("anything unmatched, or no category at all, is ASSEMBLY by default", () => {
-    for (const name of ["Desserts", "Kids Meals", "Brand New Category", "", "Sauces"]) {
+    for (const name of ["Desserts", "Kids Meals", "Brand New Category", ""]) {
       expect(stationForCategory(name).station, name).toBe("ASSEMBLY");
     }
     expect(stationForCategory(null)).toEqual({ station: "ASSEMBLY", source: "default" });
@@ -115,18 +118,19 @@ describe("resolveLineStation", () => {
       { category: "Combos & Party Boxes", product: "Party Box", override: null },
       { category: "Sauces", product: "Peri Peri Sauce", override: null },
     ];
-    const stations = Object.fromEntries(productStationList(rows).map((r) => [r.product, r.station]));
+    const stations = Object.fromEntries(productStationList(rows).map((r) => [r.product, r.stations[0]]));
     for (const name of ["Chilli Cheese Fries", "Frybird Loaded Fries", "Garlic Parmesan Fries", "Nachos Loaded Fries", "OG Salt Fries", "Peri Peri Fries", "Chicken Tenders", "Chicken Wings", "Popcorn Chicken"]) expect(stations[name], name).toBe("FRY");
     expect(stations["Party Box"]).toBe("ASSEMBLY");
-    expect(stations["Peri Peri Sauce"]).toBe("ASSEMBLY");
+    expect(stations["Peri Peri Sauce"]).toBe("PACK");
   });
   it("a product override beats the category default, both ways", () => {
     expect(resolveLineStation({ override: "ASSEMBLY", categoryName: "Fries" })).toEqual({ station: "ASSEMBLY", source: "override" });
     expect(resolveLineStation({ override: "fry", categoryName: "Burgers" })).toEqual({ station: "FRY", source: "override" });
     expect(resolveLineStation({ override: "DRINKS", categoryName: "Sauces" }).station).toBe("DRINKS");
+    expect(resolveLineStation({ override: "PACK", categoryName: "Fries" })).toEqual({ station: "PACK", source: "override" });
+    expect(resolveLineStation({ override: "ASSEMBLY", categoryName: "Sauces" })).toEqual({ station: "ASSEMBLY", source: "override" });
   });
-  it("an override that is not a line station is ignored and the category answers", () => {
-    expect(resolveLineStation({ override: "PACK", categoryName: "Fries" })).toEqual({ station: "FRY", source: "category" });
+  it("an override that is not a station is ignored and the category answers", () => {
     expect(resolveLineStation({ override: "grill", categoryName: "Burgers" }).station).toBe("ASSEMBLY");
     expect(resolveLineStation({ override: "", categoryName: "Fries" }).source).toBe("category");
   });
@@ -141,18 +145,94 @@ describe("productStationList", () => {
     { category: "Cold Drinks", product: "Cola", override: null },
     { category: null, product: "Mystery", override: null },
   ];
-  it("lists every product with its station and why, grouped by station", () => {
-    expect(productStationList(rows).map((r) => [r.station, r.category, r.product, r.source])).toEqual([
+  it("lists every product with its stations and why, grouped by first station", () => {
+    expect(productStationList(rows).map((r) => [r.stations.join("+"), r.category, r.product, r.source])).toEqual([
       ["FRY", "Fries", "Peri Peri Fries", "category"],
       ["ASSEMBLY", null, "Mystery", "default"],
       ["ASSEMBLY", "Burgers", "Zinger", "category"],
       ["ASSEMBLY", "Fries", "OG Salt Fries", "override"],
-      ["ASSEMBLY", "Sauces", "Mayo", "default"],
       ["DRINKS", "Cold Drinks", "Cola", "category"],
+      ["PACK", "Sauces", "Mayo", "category"],
     ]);
   });
   it("has one row per input row", () => expect(productStationList(rows)).toHaveLength(rows.length));
   it("is empty for no products", () => expect(productStationList([])).toEqual([]));
+  it("on a dine-in order sauces are listed at ASSEMBLY, not PACK", () => {
+    expect(productStationList([{ category: "Sauces", product: "Mayo", override: null }], "DINE_IN")[0]?.stations).toEqual(["ASSEMBLY"]);
+  });
+});
+
+describe("sauces and dips go to PACK", () => {
+  it("by category name, whole word, plurals and case forgiven", () => {
+    for (const name of ["Sauces", "Sauce", "Dips", "Dip", "Dipping Sauces", "Mayo", "Condiments", "Mayonnaise", "SAUCES & DIPS", "Extra Dips"]) {
+      expect(stationForCategory(name).station, name).toBe("PACK");
+    }
+  });
+  it("not when the word is only part of another word, and drinks still win", () => {
+    for (const name of ["Saucepan Specials", "Dipika Specials", "Mayonnaisey Things", "Sausage Rolls"]) expect(stationForCategory(name).station, name).toBe("ASSEMBLY");
+    expect(stationForCategory("Tea Dips").station).toBe("DRINKS");
+  });
+  it("a per-product override still wins", () => {
+    expect(resolveTasks({ override: "ASSEMBLY", categoryName: "Sauces", isCombo: false, components: [] }, "TAKEAWAY")).toEqual([{ station: "ASSEMBLY", source: "override" }]);
+    expect(resolveTasks({ override: "FRY", categoryName: "Sauces", isCombo: false, components: [] }, "DELIVERY")).toEqual([{ station: "FRY", source: "override" }]);
+  });
+  it("on takeaway and delivery the sauce line is a PACK task", () => {
+    const sauce = { override: null, categoryName: "Sauces", isCombo: false, components: [] } as const;
+    expect(resolveTasks(sauce, "TAKEAWAY")).toEqual([{ station: "PACK", source: "category" }]);
+    expect(resolveTasks(sauce, "DELIVERY")).toEqual([{ station: "PACK", source: "category" }]);
+  });
+  it("on a dine-in order there is no PACK step, so the sauce line goes to ASSEMBLY (also for a PACK override)", () => {
+    expect(resolveTasks({ override: null, categoryName: "Sauces", isCombo: false, components: [] }, "DINE_IN")).toEqual([{ station: "ASSEMBLY", source: "category" }]);
+    expect(resolveTasks({ override: "PACK", categoryName: "Fries", isCombo: false, components: [] }, "DINE_IN")).toEqual([{ station: "ASSEMBLY", source: "override" }]);
+  });
+});
+
+describe("resolveTasks: combos", () => {
+  const combo = (components: { override: string | null; categoryName: string | null }[], over: { override?: string | null } = {}) => ({ override: over.override ?? null, categoryName: "Combos & Party Boxes", isCombo: true, components });
+  const stationsOf = (routing: ReturnType<typeof combo>, fulfilment: "TAKEAWAY" | "DINE_IN" = "TAKEAWAY") => resolveTasks(routing, fulfilment).map((t) => t.station);
+
+  it("expands into components, each at its own station, without repeats, in kitchen order", () => {
+    expect(stationsOf(combo([{ override: null, categoryName: "Burgers" }, { override: null, categoryName: "Fries" }, { override: null, categoryName: "Fries" }]))).toEqual(["FRY", "ASSEMBLY"]);
+    expect(resolveTasks(combo([{ override: null, categoryName: "Fries" }]), "TAKEAWAY")).toEqual([{ station: "FRY", source: "combo-components" }]);
+  });
+  it("a component that is itself overridden goes where its override says", () => {
+    expect(stationsOf(combo([{ override: "DRINKS", categoryName: "Fries" }, { override: null, categoryName: "Burgers" }]))).toEqual(["ASSEMBLY", "DRINKS"]);
+  });
+  it("a sauce component is a PACK task, or ASSEMBLY on dine-in", () => {
+    const c = combo([{ override: null, categoryName: "Fries" }, { override: null, categoryName: "Sauces" }]);
+    expect(stationsOf(c)).toEqual(["FRY", "PACK"]);
+    expect(stationsOf(c, "DINE_IN")).toEqual(["FRY", "ASSEMBLY"]);
+  });
+  it("a combo with no components shows on both FRY and ASSEMBLY", () => {
+    expect(resolveTasks(combo([]), "TAKEAWAY")).toEqual([
+      { station: "FRY", source: "combo-no-components" },
+      { station: "ASSEMBLY", source: "combo-no-components" },
+    ]);
+  });
+  it("a combo's own override wins over its components", () => {
+    expect(resolveTasks(combo([{ override: null, categoryName: "Fries" }], { override: "ASSEMBLY" }), "TAKEAWAY")).toEqual([{ station: "ASSEMBLY", source: "override" }]);
+  });
+  it("the list reports the combo source", () => {
+    const list = productStationList([
+      { category: "Combos & Party Boxes", product: "With parts", override: null, isCombo: true, components: [{ category: "Fries", product: "Fries", override: null }, { category: "Burgers", product: "Burger", override: null }] },
+      { category: "Combos & Party Boxes", product: "Empty", override: null, isCombo: true },
+    ]);
+    expect(list.map((r) => [r.product, r.stations.join("+"), r.source])).toEqual([
+      ["Empty", "FRY+ASSEMBLY", "combo-no-components"],
+      ["With parts", "FRY+ASSEMBLY", "combo-components"],
+    ]);
+  });
+});
+
+describe("visibleStations", () => {
+  it("hides DRINKS while nothing resolves to it", () => {
+    expect(visibleStations(["FRY", "ASSEMBLY", "PACK"], [])).toEqual(["FRY", "ASSEMBLY", "PACK"]);
+    expect(visibleStations([], [])).toEqual(["FRY", "ASSEMBLY", "PACK"]);
+  });
+  it("shows it once a menu product resolves to it, or an order in the kitchen already has a drinks task", () => {
+    expect(visibleStations(["DRINKS"], [])).toEqual(["FRY", "ASSEMBLY", "DRINKS", "PACK"]);
+    expect(visibleStations([], ["DRINKS"])).toEqual(["FRY", "ASSEMBLY", "DRINKS", "PACK"]);
+  });
 });
 
 describe("packRequired", () => {
@@ -212,6 +292,12 @@ describe("packBoard", () => {
     expect(packBoard(rows).map((o) => o.id)).toEqual(["early", "late"]);
     expect(packBoard(rows)[0]?.lines).toHaveLength(2);
   });
+  it("opens once every non-PACK task is done, and lists the sauce lines to pack", () => {
+    const sauceOrder = order({ lines: [line({ id: "1", station: "FRY", done: true }), line({ id: "2", station: "PACK" })] });
+    expect(packBoard([sauceOrder]).map((o) => o.id)).toEqual(["o1"]);
+    expect(packBoard([sauceOrder])[0]?.lines.filter((l) => l.station === "PACK")).toHaveLength(1);
+    expect(packBoard([order({ lines: [line({ id: "1", station: "FRY" }), line({ id: "2", station: "PACK" })] })])).toEqual([]);
+  });
   it("an order with no lines is never packable", () => {
     expect(packBoard([order({ lines: [] })])).toEqual([]);
   });
@@ -255,6 +341,18 @@ describe("expoView", () => {
   });
 });
 
+describe("expoView with PACK tasks", () => {
+  it("is READY_TO_PACK when only PACK tasks remain, and not ready to bump until they are done and it is packed", () => {
+    const base = [line({ id: "1", station: "FRY", done: true }), line({ id: "2", station: "PACK" })];
+    const toPack = expoView([order({ lines: base })])[0]!;
+    expect(toPack.pack).toBe("READY_TO_PACK");
+    expect(toPack.readyToBump).toBe(false);
+    expect(toPack.stations.map((s) => s.station)).toEqual(["FRY"]);
+    const packed = expoView([order({ packed: true, lines: [base[0]!, line({ id: "2", station: "PACK", done: true })] })])[0]!;
+    expect(packed.readyToBump).toBe(true);
+  });
+});
+
 describe("the real menu, product by product", () => {
   const MENU: Readonly<Record<string, readonly string[]>> = {
     Burgers: ["Aloo Tikki Maharaja", "Cheese Volcano", "Nashville Bomb", "OG Frybird Classic", "Paneer Champ", "Peri Inferno", "The Chipotle Burger", "Thunder Burger"],
@@ -269,16 +367,19 @@ describe("the real menu, product by product", () => {
   };
   const FRY = new Set([...MENU.Chicken!, ...MENU.Fries!]);
 
-  it("resolves all 49 products: fried chicken and every fries item fry, everything else assembles, no drinks yet", () => {
-    const rows = Object.entries(MENU).flatMap(([category, products]) => products.map((product) => ({ category, product, override: null })));
+  it("resolves all 49 products: chicken and fries FRY, sauces PACK, combos (no components in this fixture) FRY+ASSEMBLY, the rest ASSEMBLY", () => {
+    const rows = Object.entries(MENU).flatMap(([category, products]) => products.map((product) => ({ category, product, override: null, isCombo: category === "Combos & Party Boxes" })));
     expect(rows).toHaveLength(49);
     const list = productStationList(rows);
     expect(list).toHaveLength(49);
-    for (const row of list) expect(row.station, `${row.category} / ${row.product}`).toBe(FRY.has(row.product) ? "FRY" : "ASSEMBLY");
-    expect(list.filter((row) => row.station === "FRY")).toHaveLength(9);
-    expect(list.filter((row) => row.station === "ASSEMBLY")).toHaveLength(40);
-    expect(list.filter((row) => row.station === "DRINKS")).toHaveLength(0);
-    // Where each answer came from: explicit category rules, or the ASSEMBLY fallback for Sauces and Combos & Party Boxes.
-    for (const row of list) expect(row.source, row.product).toBe(row.category === "Sauces" || row.category === "Combos & Party Boxes" ? "default" : "category");
+    for (const row of list) {
+      const where = `${row.category} / ${row.product}`;
+      if (row.category === "Sauces") expect([row.stations, row.source], where).toEqual([["PACK"], "category"]);
+      else if (row.category === "Combos & Party Boxes") expect([row.stations, row.source], where).toEqual([["FRY", "ASSEMBLY"], "combo-no-components"]);
+      else if (FRY.has(row.product)) expect([row.stations, row.source], where).toEqual([["FRY"], "category"]);
+      else expect([row.stations, row.source], where).toEqual([["ASSEMBLY"], "category"]);
+    }
+    const count = (stations: string) => list.filter((row) => row.stations.join("+") === stations).length;
+    expect([count("FRY"), count("ASSEMBLY"), count("PACK"), count("FRY+ASSEMBLY"), count("DRINKS")]).toEqual([9, 27, 7, 6, 0]);
   });
 });

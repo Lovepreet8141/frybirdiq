@@ -37,8 +37,8 @@ export async function pollStationOrders(): Promise<{ orders: readonly StationOrd
 const lineSchema = z.object({
   orderItemId: z.uuid(),
   done: z.boolean(),
-  /** Set by a station screen; absent from EXPO. */
-  station: z.enum(LINE_STATIONS).optional(),
+  /** The task's station: a line can be several tasks (a combo), each marked on its own screen. */
+  station: z.enum(LINE_STATIONS),
 });
 
 export async function setLineDoneAction(input: unknown): Promise<StationActionResult> {
@@ -46,7 +46,7 @@ export async function setLineDoneAction(input: unknown): Promise<StationActionRe
   if (!parsed.success) return { ok: false, error: "That change could not be applied." };
   try {
     const staff = await requirePermission("kitchen.update");
-    const result = await setLineDone({ orgId: staff.orgId, orderItemId: parsed.data.orderItemId, done: parsed.data.done, actorUserId: staff.userId, onlyStation: parsed.data.station });
+    const result = await setLineDone({ orgId: staff.orgId, orderItemId: parsed.data.orderItemId, done: parsed.data.done, station: parsed.data.station, actorUserId: staff.userId });
     revalidatePath("/app/orders");
     return result;
   } catch (error) {

@@ -4,6 +4,7 @@ import { KdsBoard } from "@/components/kds/kds-board";
 import { PermissionDenied } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
 import { loadKitchenTickets } from "@/lib/repositories/kitchen-board";
+import { listVisibleStations } from "@/lib/repositories/kitchen-stations";
 
 export const metadata: Metadata = { title: "Kitchen", robots: { index: false, follow: false } };
 
@@ -31,11 +32,11 @@ export default async function KdsPage() {
     );
   }
 
-  const tickets = await loadKitchenTickets(staff.orgId);
+  const [tickets, stations] = await Promise.all([loadKitchenTickets(staff.orgId), listVisibleStations(staff.orgId)]);
 
   return (
     <div>
-      <KdsViewTabs active="ALL" />
+      <KdsViewTabs active="ALL" stations={stations} />
       <div className="lg:h-[calc(100dvh-68px-61px)]">
         <KdsBoard initial={tickets} canUpdate={canUpdate} orgId={staff.orgId} />
       </div>

@@ -5,7 +5,7 @@ import { PackBoard, StationBoard } from "@/components/kds/stations-boards";
 import { PermissionDenied } from "@/components/states";
 import { requireStaff, staffCan } from "@/lib/auth";
 import { parseLineStation, parseStation } from "@/lib/kitchen/stations";
-import { loadStationOrders } from "@/lib/repositories/kitchen-stations";
+import { listVisibleStations, loadStationOrders } from "@/lib/repositories/kitchen-stations";
 
 export const metadata: Metadata = { title: "Kitchen station", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -28,7 +28,7 @@ export default async function StationPage({ params }: { params: Promise<{ statio
 
   return (
     <div>
-      <KdsViewTabs active={station} />
+      <KdsViewTabs active={station} stations={await listVisibleStations(staff.orgId)} />
       {lineStation ? (
         <StationBoard station={lineStation} initial={await loadStationOrders(staff.orgId)} canUpdate={canUpdate} orgId={staff.orgId} />
       ) : (
