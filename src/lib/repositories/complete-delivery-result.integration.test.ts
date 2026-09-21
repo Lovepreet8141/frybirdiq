@@ -19,6 +19,13 @@ import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/f
 
 type Tx = Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
 
+/**
+ * A rider closes only a delivery assigned to them (roadmap 6.3), so every delivery these tests create is assigned
+ * to this one rider, and every rider actor below is this rider. Who may close whose delivery is pinned in
+ * rider-assignment.integration.test.ts; these tests are about what closing does.
+ */
+const TEST_RIDER = "00000000-0000-4000-8000-0000000000a1";
+
 async function createOrder(org: TestOrg, fulfilment: "DELIVERY" | "TAKEAWAY", status: OrderStatus) {
   const [order] = await db()
     .insert(orders)
@@ -31,6 +38,7 @@ async function createOrder(org: TestOrg, fulfilment: "DELIVERY" | "TAKEAWAY", st
       channel: fulfilment === "DELIVERY" ? "ONLINE" : "TAKEAWAY",
       fulfilment,
       grandTotal: fromRupees("340"),
+      ...(fulfilment === "DELIVERY" ? { riderId: TEST_RIDER } : {}),
     })
     .returning({ id: orders.id });
   if (!order) throw new Error("fixture: order insert returned no row");
@@ -92,7 +100,7 @@ describe("completeDelivery result codes", () => {
   });
 
   const close = (orderId: string, orgId: string, cashCollected: boolean, roles: readonly ("RIDER" | "KITCHEN")[] = ["RIDER"]) =>
-    completeDelivery({ orderId, actorUserId: randomUUID(), actorRoles: roles, orgId, cashCollected });
+    completeDelivery({ orderId, actorUserId: TEST_RIDER, actorRoles: roles, orgId, cashCollected });
 
   it("NOT_FOUND for an unknown id and for another org's delivery", async () => {
     expect(await close(randomUUID(), org.orgId, false)).toEqual({ ok: false, code: "NOT_FOUND", error: "That delivery does not exist." });

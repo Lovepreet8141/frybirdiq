@@ -26,6 +26,13 @@ const DELIVERY: Shape = { channel: "ONLINE", fulfilment: "DELIVERY" };
 const TAKEAWAY: Shape = { channel: "TAKEAWAY", fulfilment: "TAKEAWAY" };
 const DINE_IN: Shape = { channel: "DINE_IN", fulfilment: "DINE_IN" };
 
+/**
+ * A rider closes only a delivery assigned to them (roadmap 6.3), so every delivery these tests create is assigned
+ * to this one rider, and every rider actor below is this rider. Who may close whose delivery is pinned in
+ * rider-assignment.integration.test.ts; these tests are about what closing does.
+ */
+const TEST_RIDER = "00000000-0000-4000-8000-0000000000a1";
+
 async function createOrder(org: TestOrg, shape: Shape, status: OrderStatus) {
   const [order] = await db()
     .insert(orders)
@@ -38,6 +45,7 @@ async function createOrder(org: TestOrg, shape: Shape, status: OrderStatus) {
       channel: shape.channel,
       fulfilment: shape.fulfilment,
       grandTotal: fromRupees("340"),
+      ...(shape.fulfilment === "DELIVERY" ? { riderId: TEST_RIDER } : {}),
     })
     .returning({ id: orders.id });
   if (!order) throw new Error("fixture: order insert returned no row");
@@ -116,7 +124,7 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
 
   it("RIDER completes an unpaid DELIVERY order OUT_FOR_DELIVERY with cash: CAPTURED cash payment, rider as actor, order COMPLETED", async () => {
     const orderId = await createOrder(orgA, DELIVERY, "OUT_FOR_DELIVERY");
-    const rider = randomUUID();
+    const rider = TEST_RIDER;
 
     const result = await completeDelivery({ orderId, actorUserId: rider, actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true });
     expect(result).toEqual({ ok: true });
@@ -148,9 +156,9 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
     const dineIn = await createOrder(orgA, DINE_IN, "READY");
 
     for (const orderId of [takeaway, dineIn]) {
-      const direct = await recordCashPayment({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgA.orgId, via: "delivery" });
+      const direct = await recordCashPayment({ orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: orgA.orgId, via: "delivery" });
       expect(direct.ok).toBe(false);
-      const closed = await completeDelivery({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true });
+      const closed = await completeDelivery({ orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true });
       expect(closed.ok).toBe(false);
       expect(await paymentsFor(orderId)).toHaveLength(0);
     }
@@ -161,9 +169,9 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
   it("RIDER cannot use the delivery path for a delivery that is not OUT_FOR_DELIVERY", async () => {
     for (const status of ["PENDING_PAYMENT", "READY"] as const) {
       const orderId = await createOrder(orgA, DELIVERY, status);
-      const direct = await recordCashPayment({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgA.orgId, via: "delivery" });
+      const direct = await recordCashPayment({ orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: orgA.orgId, via: "delivery" });
       expect(direct.ok).toBe(false);
-      const closed = await completeDelivery({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true });
+      const closed = await completeDelivery({ orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true });
       expect(closed.ok).toBe(false);
       expect(await paymentsFor(orderId)).toHaveLength(0);
       expect(await statusOf(orderId)).toBe(status);
@@ -172,7 +180,7 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
 
   it("RIDER taking payment without the delivery flag (the markPaid-style path) is still refused", async () => {
     const orderId = await createOrder(orgA, DELIVERY, "OUT_FOR_DELIVERY");
-    const result = await recordCashPayment({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgA.orgId });
+    const result = await recordCashPayment({ orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: orgA.orgId });
     expect(result).toEqual({ ok: false, code: "NOT_PERMITTED", error: "You don't have permission to take payment." });
     expect(await paymentsFor(orderId)).toHaveLength(0);
     expect(await statusOf(orderId)).toBe("OUT_FOR_DELIVERY");
@@ -180,7 +188,7 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
 
   it("RIDER marking an unpaid delivery delivered without cash still cannot close it", async () => {
     const orderId = await createOrder(orgA, DELIVERY, "OUT_FOR_DELIVERY");
-    const result = await completeDelivery({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: false });
+    const result = await completeDelivery({ orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: false });
     expect(result.ok).toBe(false);
     expect(await paymentsFor(orderId)).toHaveLength(0);
     expect(await statusOf(orderId)).toBe("OUT_FOR_DELIVERY");
@@ -211,7 +219,7 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
       // own gate would let through, so only the delivery guard re-checked
       // under the lock can refuse it.
       const orderId = await createOrder(orgA, DELIVERY, "OUT_FOR_DELIVERY");
-      const rider = randomUUID();
+      const rider = TEST_RIDER;
       const take = () => recordCashPayment({ orderId, actorUserId: rider, actorRoles: ["RIDER"], orgId: orgA.orgId, via: "delivery" });
       const refusal = { ok: false, code: "GUARD_REFUSED", error: "Only a delivery that is out for delivery can take cash at the door." };
 
@@ -236,7 +244,7 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
     expect(recorded.ok).toBe(true);
     expect(await statusOf(orderId)).toBe("OUT_FOR_DELIVERY");
 
-    const closed = await completeDelivery({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true });
+    const closed = await completeDelivery({ orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true });
     expect(closed).toEqual({ ok: true });
     expect((await paymentsFor(orderId)).map((row) => row.status)).toEqual(["CAPTURED"]);
     expect(await statusOf(orderId)).toBe("COMPLETED");
@@ -255,7 +263,7 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
       capturedAt: new Date(),
     });
 
-    const closed = await completeDelivery({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true });
+    const closed = await completeDelivery({ orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true });
     expect(closed).toEqual({ ok: true });
     const rows = await paymentsFor(orderId);
     expect(rows).toHaveLength(1);
@@ -278,7 +286,7 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
     // The other device's close lands while this rider's cash waits on the lock.
     const closed = await withOrderRowHeld(
       orderId,
-      () => completeDelivery({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true }),
+      () => completeDelivery({ orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true }),
       async (tx) => {
         await tx.insert(payments).values({
           orgId: orgA.orgId,
@@ -301,7 +309,7 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
     const failed = await createOrder(orgA, DELIVERY, "OUT_FOR_DELIVERY");
     const refused = await withOrderRowHeld(
       failed,
-      () => completeDelivery({ orderId: failed, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true }),
+      () => completeDelivery({ orderId: failed, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: orgA.orgId, cashCollected: true }),
       async (tx) => {
         await tx.update(orders).set({ status: "FAILED" }).where(eq(orders.id, failed));
       },
@@ -313,10 +321,10 @@ describe("cash at the door — a rider closes an unpaid delivery", () => {
   it("org isolation: a rider of org B cannot take cash for or close org A's delivery", async () => {
     const orderId = await createOrder(orgA, DELIVERY, "OUT_FOR_DELIVERY");
 
-    const direct = await recordCashPayment({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgB.orgId, via: "delivery" });
+    const direct = await recordCashPayment({ orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: orgB.orgId, via: "delivery" });
     expect(direct).toEqual({ ok: false, code: "ORDER_NOT_FOUND", error: "That order does not exist." });
 
-    const closed = await completeDelivery({ orderId, actorUserId: randomUUID(), actorRoles: ["RIDER"], orgId: orgB.orgId, cashCollected: true });
+    const closed = await completeDelivery({ orderId, actorUserId: TEST_RIDER, actorRoles: ["RIDER"], orgId: orgB.orgId, cashCollected: true });
     expect(closed.ok).toBe(false);
 
     expect(await paymentsFor(orderId)).toHaveLength(0);

@@ -15,7 +15,7 @@ import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
 import { cashSessions, memberships, orderEvents, orders, payments } from "@/db/schema";
-import { ALREADY_ROLE_AWARE, MEMBERSHIPS_READABLE_COLUMNS, CHILD_READ_LIMITS, OPEN_TO_MEMBERS_ON_PURPOSE, MEMBERSHIPS_READ, READ_LIMITS, READ_LIMITS_0047, policies0047, readLimitPolicies, rolesHoldingAny } from "@/domain/rls-read-limits";
+import { ALREADY_ROLE_AWARE, MEMBERSHIPS_READABLE_COLUMNS, CHILD_READ_LIMITS, OPEN_TO_MEMBERS_ON_PURPOSE, OWN_ROW_LIMITS_0047, permissionsReadingAll0047, MEMBERSHIPS_READ, READ_LIMITS, READ_LIMITS_0047, policies0047, readLimitPolicies, rolesHoldingAny } from "@/domain/rls-read-limits";
 import { ROLES, type Role } from "@/domain/permissions";
 import { fromRupees } from "@/lib/money";
 import { createTestCustomer, createTestOrg, createTestProduct, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
@@ -100,10 +100,14 @@ sharedStackOnly("0042: staff reads through the database are limited by role", ()
   });
 
   it("the screens Realtime feeds keep working: order_events for the order, kitchen and delivery roles, menu tables for everyone", async () => {
-    for (const role of ["OWNER", "MANAGER", "CASHIER", "KITCHEN", "RIDER"] as const) expect(await visibleRows(role, "order_events"), `${role} order_events`).toBe(1);
+    // 0052 (rider-rls-scope): a rider-only login reads only events of ITS OWN deliveries, so this dine-in order's event is
+    // not visible to a RIDER (rider-rls-scope.integration.test.ts pins the rider side in full); everyone else is unchanged.
+    for (const role of ["OWNER", "MANAGER", "CASHIER", "KITCHEN"] as const) expect(await visibleRows(role, "order_events"), `${role} order_events`).toBe(1);
+    expect(await visibleRows("RIDER", "order_events"), "RIDER order_events (not assigned to it)").toBe(0);
     for (const role of ROLES) {
       expect(await visibleRows(role, "products"), `${role} products`).toBe(1);
-      expect(await visibleRows(role, "order_events")).toBe(rolesHoldingAny(READ_LIMITS.order_events!).includes(role) ? 1 : 0);
+      const expected = role === "RIDER" ? 0 : rolesHoldingAny(READ_LIMITS.order_events!).includes(role) ? 1 : 0;
+      expect(await visibleRows(role, "order_events")).toBe(expected);
     }
   });
 
@@ -128,7 +132,7 @@ sharedStackOnly("0042: staff reads through the database are limited by role", ()
   it("every table a policy names has the org_id column it filters on (a child table goes through its parent)", async () => {
     const rows = (await db().execute(sql`select table_name from information_schema.columns where table_schema = 'public' and column_name = 'org_id'`)) as unknown as { table_name: string }[];
     const withOrg = new Set(rows.map((r) => r.table_name));
-    for (const table of [...Object.keys(READ_LIMITS), ...Object.keys(READ_LIMITS_0047)]) expect(withOrg.has(table), `${table} has org_id`).toBe(true);
+    for (const table of [...Object.keys(READ_LIMITS), ...Object.keys(READ_LIMITS_0047), ...Object.keys(OWN_ROW_LIMITS_0047)]) expect(withOrg.has(table), `${table} has org_id`).toBe(true);
     for (const table of Object.keys(CHILD_READ_LIMITS)) expect(withOrg.has(table), `${table} has no org_id of its own`).toBe(false);
   });
 
@@ -145,7 +149,7 @@ sharedStackOnly("0042: staff reads through the database are limited by role", ()
 
   it("no table is open to every member by accident: each is restricted, already role-aware, open on purpose, or has no client policy at all", async () => {
     const tables = (await db().execute(sql`select c.relname as t, (select count(*) from pg_policies p where p.schemaname = 'public' and p.tablename = c.relname) as policies from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'`)) as unknown as { t: string; policies: string }[];
-    const decided = new Set([...Object.keys(READ_LIMITS), ...Object.keys(READ_LIMITS_0047), ...Object.keys(CHILD_READ_LIMITS), "memberships", ...ALREADY_ROLE_AWARE, ...Object.keys(OPEN_TO_MEMBERS_ON_PURPOSE)]);
+    const decided = new Set([...Object.keys(READ_LIMITS), ...Object.keys(READ_LIMITS_0047), ...Object.keys(OWN_ROW_LIMITS_0047), ...Object.keys(CHILD_READ_LIMITS), "memberships", ...ALREADY_ROLE_AWARE, ...Object.keys(OPEN_TO_MEMBERS_ON_PURPOSE)]);
     const undecided = tables.filter((row) => Number(row.policies) > 0 && !decided.has(row.t)).map((row) => row.t);
     expect(undecided, "add each to READ_LIMITS, or to OPEN_TO_MEMBERS_ON_PURPOSE with a reason").toEqual([]);
   });
@@ -165,7 +169,7 @@ sharedStackOnly("0042: staff reads through the database are limited by role", ()
       const row = byTable.get(table);
       expect(row, `${table} has ${policy}`).toBeDefined();
       expect(row!.permissive).toBe("RESTRICTIVE");
-      for (const role of ROLES) expect(row!.qual.includes(`'${role}'::text`), `${table} ${role}`).toBe(rolesHoldingAny(READ_LIMITS_0047[table]!).includes(role));
+      for (const role of ROLES) expect(row!.qual.includes(`'${role}'::text`), `${table} ${role}`).toBe(rolesHoldingAny(permissionsReadingAll0047(table)).includes(role));
     }
     expect(rows.length).toBe(readLimitPolicies().length + policies0047().length);
     void eq;
