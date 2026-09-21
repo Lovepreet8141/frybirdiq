@@ -10,6 +10,7 @@ import { db } from "@/db";
 import { auditLogs, memberships, orderItems, orders, payments } from "@/db/schema";
 import { fromRupees } from "@/lib/money";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
+import { MAX_TAKES_PER_HOUR } from "@/lib/delivery/hold";
 import { assignRider, listRiderDeliveries, releaseDelivery, takeDelivery } from "./rider-assignment";
 
 let org: TestOrg;
@@ -150,9 +151,47 @@ describe("Release gives a delivery back to Available", () => {
     expect(await audit("rider_released_delivery")).toHaveLength(1);
   });
 
-  it("a delivery already out on the road can be released too (the rider cannot make it), then it is Available", async () => {
+  it("a delivery already out on the road cannot be released (that would dodge 'Couldn't deliver' and its reason): the rider uses Couldn't deliver, or the manager reassigns", async () => {
     const a = await delivery(org, "OUT_FOR_DELIVERY", riderA);
-    expect(await release(a)).toEqual({ ok: true });
-    expect((await listRiderDeliveries(org.orgId, riderB)).offers.map((o) => o.id)).toEqual([a]);
+    expect(await release(a)).toMatchObject({ ok: false, code: "NOT_RELEASABLE" });
+    expect((await row(a)).riderId).toBe(riderA);
+    expect(await audit("rider_released_delivery")).toHaveLength(0);
+    expect(await assignRider({ orgId: org.orgId, orderId: a, riderUserId: riderB, actorUserId: manager })).toMatchObject({ ok: true, changed: true });
+  });
+});
+
+describe("take/release cannot be used to read every customer's details (rate limit)", () => {
+  it(`a rider can take at most ${MAX_TAKES_PER_HOUR} deliveries in a rolling hour, however many they release: the next is refused`, async () => {
+    for (let n = 0; n < MAX_TAKES_PER_HOUR; n++) {
+      const id = await delivery(org);
+      expect(await take(id), `take ${n + 1}`).toMatchObject({ ok: true });
+      expect(await release(id)).toEqual({ ok: true });
+    }
+    const next = await delivery(org);
+    expect(await take(next)).toMatchObject({ ok: false, code: "TOO_MANY_TAKES" });
+    expect((await row(next)).riderId).toBeNull();
+    // another rider is unaffected, and a manager can still assign this rider
+    expect(await take(next, riderB)).toMatchObject({ ok: true });
+  });
+
+  it("takes older than an hour no longer count", async () => {
+    for (let n = 0; n < MAX_TAKES_PER_HOUR; n++) {
+      const id = await delivery(org);
+      await take(id);
+      await release(id);
+    }
+    await db().update(auditLogs).set({ createdAt: new Date(Date.now() - 61 * 60_000) }).where(and(eq(auditLogs.orgId, org.orgId), eq(auditLogs.action, "rider_took_delivery")));
+    expect(await take(await delivery(org))).toMatchObject({ ok: true });
+  });
+
+  it("holding a delivery you already hold stays a no-op even when rate limited", async () => {
+    const mine = await delivery(org);
+    await take(mine);
+    for (let n = 0; n < MAX_TAKES_PER_HOUR; n++) {
+      const id = await delivery(org);
+      await take(id);
+      await release(id);
+    }
+    expect(await take(mine)).toEqual({ ok: true, changed: false });
   });
 });

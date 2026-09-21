@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_ACTIVE_DELIVERIES, STALE_HOLD_MINUTES, heldMinutes, isStaleHold } from "./hold";
+import { MAX_ACTIVE_DELIVERIES, MAX_TAKES_PER_HOUR, STALE_HOLD_MINUTES, heldMinutes, isStaleHold } from "./hold";
 
 const now = new Date("2026-09-21T12:00:00Z");
 const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
@@ -8,6 +8,7 @@ describe("rider hold rules (owner decisions, 2026-09-21)", () => {
   it("a rider may hold at most 2 active deliveries, and a delivery not moving for 15 minutes is flagged", () => {
     expect(MAX_ACTIVE_DELIVERIES).toBe(2);
     expect(STALE_HOLD_MINUTES).toBe(15);
+    expect(MAX_TAKES_PER_HOUR).toBe(6); // a bound on taking-and-releasing to read customers' details (red-team review), not an owner figure
   });
 
   it("flags a taken delivery that has not moved for 15 minutes or more", () => {

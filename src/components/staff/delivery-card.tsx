@@ -191,7 +191,6 @@ export function DeliveryCard({ delivery, riders, canRelease = false, staleMinute
 
           {/* A paid order that failed needs a manager's refund: the server refuses it here. */}
           {!delivery.isPaid && <FailDeliveryControl orderId={delivery.id} />}
-          {canRelease && <ReleaseDeliveryControl orderId={delivery.id} />}
         </div>
       ) : (
         <div className="flex flex-col gap-2">
