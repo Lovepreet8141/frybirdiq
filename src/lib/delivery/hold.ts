@@ -7,6 +7,7 @@ export const MAX_ACTIVE_DELIVERIES = 2;
  * A rider may take at most this many deliveries in any rolling hour, however many they release. Taking reveals a customer's
  * name, phone and address, so without a bound "take, read, release, repeat" would let one login read every customer's details
  * (found in the red-team review). A bound on abuse, not an owner figure: raise it if real shifts hit it. A manager can still assign.
+ * The count is read from `audit_logs` (action `rider_took_delivery`): never prune or archive audit rows younger than an hour.
  */
 export const MAX_TAKES_PER_HOUR = 6;
 
