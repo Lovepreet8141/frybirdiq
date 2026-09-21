@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PERMISSIONS, ROLES } from "./permissions";
-import { CHILD_READ_LIMITS, MEMBERSHIPS_READ, READ_LIMITS, READ_LIMITS_0047, generateReadLimitStatements, generateReadLimitStatements0047, policies0047, readLimitPolicies, rolesHoldingAny } from "./rls-read-limits";
+import { CHILD_READ_LIMITS, MEMBERSHIPS_READ, READ_LIMITS, READ_LIMITS_0047, OWN_ROW_LIMITS_0047, generateReadLimitStatements, generateReadLimitStatements0047, policies0047, readLimitPolicies, rolesHoldingAny } from "./rls-read-limits";
 
 const migration = readFileSync(path.resolve(__dirname, "../../supabase/migrations/0042_rls_role_reads.sql"), "utf8");
 const migration0047 = readFileSync(path.resolve(__dirname, "../../supabase/migrations/0051_rls_read_new_tables.sql"), "utf8");
@@ -48,7 +48,7 @@ describe("rls read limits", () => {
   });
 
   it("the 0047 tables name real permissions and never lock the OWNER out", () => {
-    for (const permissions of Object.values(READ_LIMITS_0047)) {
+    for (const permissions of [...Object.values(READ_LIMITS_0047), ...Object.values(OWN_ROW_LIMITS_0047).map((limit) => limit.permissions)]) {
       expect(permissions.filter((p) => !(PERMISSIONS as readonly string[]).includes(p))).toEqual([]);
       expect(rolesHoldingAny(permissions)).toContain("OWNER");
     }

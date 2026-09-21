@@ -1548,7 +1548,9 @@ export async function advanceOrder(input: {
       const siteUrl = serverEnv().SITE_URL;
       if (siteUrl) await enqueueOrderUpdate({ orgId: input.orgId, orderId: outcome.orderId, toStatus: input.to, siteUrl });
     } catch (error) {
-      console.error("advanceOrder: could not queue the WhatsApp update", error instanceof Error ? error.message : error);
+      // Never the error's message: a database error message carries the failed query's parameters, and here that
+      // includes the customer's phone number and the message text. The name and code are enough to investigate.
+      console.error("advanceOrder: could not queue the WhatsApp update", error instanceof Error ? error.name : "unknown", (error as { code?: string } | null)?.code ?? "");
     }
   }
 

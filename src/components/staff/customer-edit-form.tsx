@@ -1,16 +1,17 @@
 "use client";
 
-import { useActionState, useEffect, useId, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Field, errorNoteClass, inputClass, submitClass, successNoteClass } from "@/components/inventory/field";
 import { Textarea } from "@/components/ui/textarea";
 import { type CustomerEditState, updateCustomerAction } from "@/lib/customers/actions";
 import { NOTES_MAX } from "@/lib/customers/edit";
+import { newEditKey } from "@/lib/customers/edit-key";
 
-function Submit({ offline }: { offline: boolean }) {
+function Submit({ offline, ready }: { offline: boolean; ready: boolean }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending || offline} className={submitClass}>
+    <button type="submit" disabled={pending || offline || !ready} className={submitClass}>
       {pending ? "Saving…" : "Save customer"}
     </button>
   );
@@ -19,7 +20,7 @@ function Submit({ offline }: { offline: boolean }) {
 /**
  * Correct a customer's name, phone or email and keep notes. Gated by
  * `customers.edit` on the page and again in the action. The idempotency key is
- * minted once per successful save so a double-tap or retry replays.
+ * minted once per submission attempt (edit-key.ts) so a double-tap or retry replays and a new edit never collides.
  */
 export function CustomerEditForm({
   customerId,
@@ -35,9 +36,10 @@ export function CustomerEditForm({
   notes: string | null;
 }) {
   const [state, action] = useActionState<CustomerEditState, FormData>(updateCustomerAction, { status: "idle" });
-  const formId = useId();
-  // One key per submission attempt: it changes only after a save lands, so a double-tap or retry replays.
-  const key = `${formId}:${state.status === "success" ? state.savedAt : 0}`;
+  // One key per submission ATTEMPT (see edit-key.ts): the same for a double-tap or a retry of the same content,
+  // new when the content changes and after every result. Minted after mount so it never differs from the server render.
+  const [key, setKey] = useState("");
+  useEffect(() => setKey(newEditKey()), [state]);
   const [online, setOnline] = useState(true);
 
   useEffect(() => {
@@ -52,7 +54,7 @@ export function CustomerEditForm({
   }, []);
 
   return (
-    <form action={action} className="flex flex-col gap-4">
+    <form action={action} onChange={() => setKey(newEditKey())} className="flex flex-col gap-4">
       <input type="hidden" name="customerId" value={customerId} />
       <input type="hidden" name="key" value={key} />
       {!online && (
@@ -85,7 +87,7 @@ export function CustomerEditForm({
         <Textarea id="customer-notes" name="notes" maxLength={NOTES_MAX} rows={4} defaultValue={notes ?? ""} />
       </Field>
       <div className="flex justify-end">
-        <Submit offline={!online} />
+        <Submit offline={!online} ready={key !== ""} />
       </div>
     </form>
   );

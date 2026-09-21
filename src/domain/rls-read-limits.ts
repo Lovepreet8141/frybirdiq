@@ -162,8 +162,6 @@ export const OPEN_TO_MEMBERS_ON_PURPOSE: Readonly<Record<string, string>> = {
   promotions: "discount rules shown at the counter",
   receipt_designs: "how the bill looks",
   tables: "the dining floor",
-  shift_breaks: "part of who is on shift now; hours stay behind staff.manage in the app",
-  shifts: "who is on shift now is shown to every staff member (hours per person stay behind staff.manage in the app)",
   tax_rates: "public GST rates",
   closed_dates: "planned closures, shown on the site",
 };
@@ -180,12 +178,31 @@ export const READ_LIMITS_0047: Readonly<Record<string, readonly Permission[]>> =
   kitchen_order_pack: ["orders.view", "orders.create", "kitchen.view", "delivery.view"],
 };
 
-/** Statements of migration 0051, generated from `READ_LIMITS_0047` and the permissions table. */
+/**
+ * Tables whose rows a login may read when they are its OWN, or when it holds the permission: the roster of hours.
+ * (A rider, kitchen or analyst login reading through the database sees its own shifts and breaks; only `staff.manage`
+ * roles see everyone's clock times, break times and correction reasons. The app already gates hours the same way.)
+ */
+export const OWN_ROW_LIMITS_0047: Readonly<Record<string, { readonly own: string; readonly permissions: readonly Permission[] }>> = {
+  shifts: { own: "user_id = auth.uid()", permissions: ["staff.manage"] },
+  shift_breaks: { own: "EXISTS (SELECT 1 FROM shifts s WHERE s.id = shift_breaks.shift_id AND s.user_id = auth.uid())", permissions: ["staff.manage"] },
+};
+
+/** Every table of migration 0051 with the permissions that read all of its rows. */
+export const permissionsReadingAll0047 = (table: string): readonly Permission[] => READ_LIMITS_0047[table] ?? OWN_ROW_LIMITS_0047[table]?.permissions ?? [];
+
+/** Statements of migration 0051, generated from `READ_LIMITS_0047`, `OWN_ROW_LIMITS_0047` and the permissions table. */
 export function generateReadLimitStatements0047(): readonly string[] {
-  return Object.entries(READ_LIMITS_0047).map(
-    ([table, permissions]) =>
-      `CREATE POLICY ${policyName(table)} ON ${table}\n  AS RESTRICTIVE FOR SELECT TO authenticated\n  USING (auth_has_role(org_id, ${array(rolesHoldingAny(permissions))}));`,
-  );
+  return [
+    ...Object.entries(READ_LIMITS_0047).map(
+      ([table, permissions]) =>
+        `CREATE POLICY ${policyName(table)} ON ${table}\n  AS RESTRICTIVE FOR SELECT TO authenticated\n  USING (auth_has_role(org_id, ${array(rolesHoldingAny(permissions))}));`,
+    ),
+    ...Object.entries(OWN_ROW_LIMITS_0047).map(
+      ([table, limit]) =>
+        `CREATE POLICY ${policyName(table)} ON ${table}\n  AS RESTRICTIVE FOR SELECT TO authenticated\n  USING (auth_has_role(org_id, ${array(rolesHoldingAny(limit.permissions))}) OR ${limit.own});`,
+    ),
+  ];
 }
 
-export const policies0047 = (): readonly { readonly table: string; readonly policy: string }[] => Object.keys(READ_LIMITS_0047).map((table) => ({ table, policy: policyName(table) }));
+export const policies0047 = (): readonly { readonly table: string; readonly policy: string }[] => [...Object.keys(READ_LIMITS_0047), ...Object.keys(OWN_ROW_LIMITS_0047)].map((table) => ({ table, policy: policyName(table) }));

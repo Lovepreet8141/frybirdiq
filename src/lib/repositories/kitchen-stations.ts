@@ -20,7 +20,7 @@ import "server-only";
  * org_id of its own).
  */
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/db";
 import { categories, comboItems, kitchenLineStatus, kitchenOrderPack, orderItemModifiers, orderItems, orders, products, tables } from "@/db/schema";
@@ -125,6 +125,8 @@ export async function loadStationOrders(orgId: string): Promise<readonly Station
     .select()
     .from(orders)
     .where(and(eq(orders.orgId, orgId), inArray(orders.status, [...IN_WORK])))
+    // Oldest first, so if more than 100 are in work the ones shown are the ones waiting longest, not an arbitrary subset.
+    .orderBy(asc(orders.placedAt), asc(orders.createdAt))
     .limit(100);
   if (orderRows.length === 0) return [];
 

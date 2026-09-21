@@ -64,12 +64,17 @@ describe("advanceOrder enqueues a WhatsApp update", () => {
     vi.stubEnv("WHATSAPP_UPDATES", "on");
     vi.stubEnv("SITE_URL", "https://example.test");
     const id = await orderAt("PREPARING");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
     await db().execute(sql`alter table notification_outbox rename to notification_outbox_x`);
     try {
       expect((await advanceOrder({ orderId: id, to: "READY", actorUserId: randomUUID(), orgId: org.orgId })).ok).toBe(true);
     } finally {
       await db().execute(sql`alter table notification_outbox_x rename to notification_outbox`);
     }
+    // The failure is logged, but never with the failed query's parameters: those carry the customer's phone number.
+    expect(logged).toHaveBeenCalled();
+    expect(JSON.stringify(logged.mock.calls)).not.toMatch(/9000000001/);
+    logged.mockRestore();
     expect((await db().select({ status: orders.status }).from(orders).where(eq(orders.id, id)))[0]!.status).toBe("READY");
   });
 });
