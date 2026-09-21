@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   failDelivery: vi.fn(),
   takeDelivery: vi.fn(),
   releaseDelivery: vi.fn(),
+  recordRiderPosition: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -24,6 +25,7 @@ vi.mock("@/lib/repositories/orders", () => ({
   rejectOrder: vi.fn(),
 }));
 vi.mock("@/lib/repositories/kitchen-stations", () => ({ readyGateRefusal: mocks.readyGateRefusal }));
+vi.mock("@/lib/repositories/rider-tracking", () => ({ recordRiderPosition: mocks.recordRiderPosition }));
 vi.mock("@/lib/repositories/payments", () => ({ recordCashPayment: vi.fn() }));
 vi.mock("@/lib/repositories/rider-assignment", () => ({
   FAIL_REASON_MIN: 3,
@@ -35,7 +37,7 @@ vi.mock("@/lib/repositories/rider-assignment", () => ({
 }));
 
 import { NotPermitted, NotSignedIn } from "@/lib/auth";
-import { advanceOrderAction, assignRiderAction, completeDeliveryAction, failDeliveryAction, releaseDeliveryAction, takeDeliveryAction } from "./staff-actions";
+import { advanceOrderAction, assignRiderAction, completeDeliveryAction, failDeliveryAction, postRiderPositionAction, releaseDeliveryAction, takeDeliveryAction } from "./staff-actions";
 
 const orderId = "7d9f2c1e-4b3a-4c5d-8e6f-1a2b3c4d5e6f";
 const staff = { userId: "11111111-1111-4111-8111-111111111111", orgId: "22222222-2222-4222-8222-222222222222", roles: ["CASHIER"] };
@@ -207,5 +209,33 @@ describe("releaseDeliveryAction", () => {
     expect(mocks.requirePermission).not.toHaveBeenCalled();
     mocks.releaseDelivery.mockResolvedValue({ ok: false, code: "NOT_YOUR_DELIVERY", error: "That delivery is not yours." });
     expect(await releaseDeliveryAction({ orderId })).toEqual({ ok: false, error: "That delivery is not yours." });
+  });
+});
+
+describe("postRiderPositionAction", () => {
+  beforeEach(() => {
+    mocks.requirePermission.mockReset().mockResolvedValue({ ...staff, roles: ["RIDER"] });
+    mocks.recordRiderPosition.mockReset().mockResolvedValue({ ok: true, stored: true });
+  });
+
+  it("needs delivery.complete, and the rider is the signed-in person, never the form", async () => {
+    const result = await postRiderPositionAction({ orderId, lat: 30.3782, lng: 76.7767, accuracyMetres: 12, riderUserId: "someone-else" });
+    expect(result).toEqual({ ok: true });
+    expect(mocks.requirePermission).toHaveBeenCalledWith("delivery.complete");
+    expect(mocks.recordRiderPosition).toHaveBeenCalledWith({ orgId: staff.orgId, orderId, riderUserId: staff.userId, position: { lat: 30.3782, lng: 76.7767, accuracyMetres: 12 } });
+  });
+
+  it("refuses a malformed request before any permission check or database call", async () => {
+    expect(await postRiderPositionAction({ orderId: "nope", lat: 1, lng: 1 })).toEqual({ ok: false, error: "That location could not be read." });
+    expect(await postRiderPositionAction({ orderId, lat: "x", lng: 1 })).toEqual({ ok: false, error: "That location could not be read." });
+    expect(mocks.requirePermission).not.toHaveBeenCalled();
+    expect(mocks.recordRiderPosition).not.toHaveBeenCalled();
+  });
+
+  it("passes the repository's refusal on, and turns a missing permission into a message", async () => {
+    mocks.recordRiderPosition.mockResolvedValue({ ok: false, code: "NOT_YOUR_DELIVERY", error: "That delivery is assigned to someone else." });
+    expect(await postRiderPositionAction({ orderId, lat: 30.3, lng: 76.7 })).toEqual({ ok: false, error: "That delivery is assigned to someone else." });
+    mocks.requirePermission.mockRejectedValue(new NotPermitted("delivery.complete"));
+    expect(await postRiderPositionAction({ orderId, lat: 30.3, lng: 76.7 })).toEqual({ ok: false, error: "You don't have permission to do that." });
   });
 });

@@ -7,6 +7,7 @@ import { NotPermitted, NotSignedIn, requirePermission } from "@/lib/auth";
 import { type CompleteDeliveryCode, acceptOrder, advanceOrder, completeDelivery, rejectOrder } from "@/lib/repositories/orders";
 import { readyGateRefusal } from "@/lib/repositories/kitchen-stations";
 import { recordCashPayment } from "@/lib/repositories/payments";
+import { recordRiderPosition } from "@/lib/repositories/rider-tracking";
 import { FAIL_REASON_MAX, FAIL_REASON_MIN, assignRider, failDelivery, releaseDelivery, takeDelivery } from "@/lib/repositories/rider-assignment";
 import { staffMayAdvanceTo } from "@/lib/orders/staff-advance";
 import { ORDER_STATUSES } from "@/domain/order-status";
@@ -204,6 +205,31 @@ export async function releaseDeliveryAction(input: unknown): Promise<StaffAction
     const result = await releaseDelivery({ orgId: staff.orgId, orderId: parsed.data.orderId, riderUserId: staff.userId });
     revalidatePath("/app/deliveries");
     revalidatePath("/app/orders");
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  } catch (error) {
+    return explain(error);
+  }
+}
+
+const riderPositionSchema = z.object({ orderId: z.uuid(), lat: z.number(), lng: z.number(), accuracyMetres: z.number().nullish() });
+
+/**
+ * A rider's browser reports where it is, about every 15 seconds, while a delivery it holds is out. `delivery.complete`; the rider is
+ * the signed-in person, never the form; the repository accepts a fix only for a delivery THIS rider holds that is OUT_FOR_DELIVERY.
+ * A fix that arrives too soon after the last one is dropped without an error. Nothing here touches money or the order.
+ */
+export async function postRiderPositionAction(input: unknown): Promise<StaffActionResult> {
+  const parsed = riderPositionSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "That location could not be read." };
+
+  try {
+    const staff = await requirePermission("delivery.complete");
+    const result = await recordRiderPosition({
+      orgId: staff.orgId,
+      orderId: parsed.data.orderId,
+      riderUserId: staff.userId,
+      position: { lat: parsed.data.lat, lng: parsed.data.lng, accuracyMetres: parsed.data.accuracyMetres },
+    });
     return result.ok ? { ok: true } : { ok: false, error: result.error };
   } catch (error) {
     return explain(error);

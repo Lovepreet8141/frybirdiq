@@ -18,6 +18,7 @@ function fakeContext(options: { fresh: boolean }) {
     checkFactsParity: unused,
     healLostRefundFollowUps: unused,
     countStuckRefundFollowUps: unused,
+    purgeRiderPositions: unused,
     factsReadyFor: unused,
     readDetectDays: unused,
     readFoodCostTarget: unused,

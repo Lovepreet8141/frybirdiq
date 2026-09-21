@@ -548,6 +548,7 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
         "intradayFreshAt",
         "listInsights",
         "listOpenRecommendations",
+        "purgeRiderPositions",
         "readBriefFigures",
         "readDetectDays",
         "readFactFigures",

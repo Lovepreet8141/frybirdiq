@@ -65,6 +65,11 @@ export type JobReadRepos = {
    * only). State, not a per-run delta, so it survives the healer's back-off.
    */
   readonly countStuckRefundFollowUps: () => Promise<number>;
+  /**
+   * Deletes one batch of this org's rider GPS fixes older than 24 hours (Lane B, `purgeRiderPositions`). `more` is true when the batch
+   * was full, so another pass may find more. One short statement per call, outside any chunk.
+   */
+  readonly purgeRiderPositions: () => Promise<{ readonly deleted: number; readonly more: boolean }>;
   /** The first IST business day this org has history for (opened_on, else its first order), or null. */
   readonly factsHistoryStart: () => Promise<string | null>;
   /** Compares Σ daily facts with getProfitAndLoss for [from, to] (IST dates, inclusive). */

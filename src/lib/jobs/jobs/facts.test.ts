@@ -71,6 +71,7 @@ function fakeContext(options: Options) {
     factsHistoryStart: async () => options.historyStart ?? null,
     healLostRefundFollowUps: unused,
     countStuckRefundFollowUps: unused,
+    purgeRiderPositions: unused,
     factsReadyFor: unused,
     readDetectDays: unused,
     readRecon: unused,

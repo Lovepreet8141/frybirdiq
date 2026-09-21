@@ -1,0 +1,22 @@
+# Starts frybird-job@rider-positions-purge.service hourly at :17 (Lane B). It deletes rider GPS fixes older than 24 hours.
+# OnCalendar must stay byte-for-byte the JOB_REGISTRY["rider-positions-purge"].onCalendarUtc string in src/lib/jobs/registry.ts:
+# src/lib/jobs/registry.test.ts reads this file and fails the build the moment the two drift.
+#
+# Ships in the same release as the rider live position (migration 0056). Install once, after the deploy:
+#
+#   cp deploy/frybird-job-rider-positions-purge.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now frybird-job-rider-positions-purge.timer
+#   systemctl list-timers frybird-job-rider-positions-purge.timer
+
+[Unit]
+Description=Delete FRYBIRD rider location fixes older than 24 hours
+
+[Timer]
+# The target is the templated instance, not this timer's own base name.
+Unit=frybird-job@rider-positions-purge.service
+OnCalendar=*-*-* *:17:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

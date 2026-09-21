@@ -9,6 +9,7 @@ import { formatDistance } from "@/lib/delivery";
 import { completeDeliveryAction } from "@/lib/auth/staff-actions";
 import type { OrderStatus } from "@/domain/order-status";
 import { classifyCloseResult, type CloseOutcome } from "./delivery-close";
+import { ShareLocation } from "./share-location";
 import { AssignRiderControl, FailDeliveryControl, ReleaseDeliveryControl, type RiderOption } from "./delivery-rider-controls";
 
 export interface RiderDelivery {
@@ -155,6 +156,8 @@ export function DeliveryCard({ delivery, riders, canRelease = false, staleMinute
 
       {onTheRoad ? (
         <div className="flex flex-col gap-2">
+          {/* Only the rider who holds it shares a position: it starts here when it goes out and stops when the card goes (closed or failed). */}
+          {canRelease && <ShareLocation orderId={delivery.id} />}
           {/*
             Cash and delivery are one event at the door. Splitting them lets a
             rider close the job and forget the money, or book money for an

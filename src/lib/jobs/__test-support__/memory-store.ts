@@ -209,6 +209,7 @@ export class MemoryStore implements JobRunStore<MemoryTx> {
     return {
       healLostRefundFollowUps: unavailable,
       countStuckRefundFollowUps: unavailable,
+      purgeRiderPositions: unavailable,
       factsHistoryStart: unavailable,
       factsReadyFor: unavailable,
       readDetectDays: unavailable,

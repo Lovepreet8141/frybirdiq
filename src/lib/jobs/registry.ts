@@ -34,6 +34,7 @@ import { PULSE_JOB_NAME, runPulse } from "./jobs/pulse";
 import { RECONCILE_JOB_NAME, runReconcile } from "./jobs/reconcile";
 import { runHeartbeat } from "./jobs/heartbeat";
 import { REFUND_HEAL_JOB, runRefundFollowUpHeal } from "./jobs/refund-heal";
+import { RIDER_POSITIONS_PURGE_JOB, runRiderPositionsPurge } from "./jobs/rider-positions-purge";
 import type { PeriodKind, PeriodTarget } from "./period";
 
 export type JobConcurrency = "light" | "heavy";
@@ -211,6 +212,17 @@ export const JOB_REGISTRY = {
     catchUpPeriods: 0,
     concurrency: "light",
     run: runRefundFollowUpHeal,
+  },
+  /** Lane B: rider GPS fixes older than 24 hours are deleted. Hourly at :17 (clear of :00 and :07), light, no catch-up: the next hour continues. */
+  [RIDER_POSITIONS_PURGE_JOB]: {
+    name: RIDER_POSITIONS_PURGE_JOB,
+    periodKind: "hour",
+    target: "current",
+    onCalendarUtc: "*-*-* *:17:00 UTC",
+    ...DEFAULT_TIMING,
+    catchUpPeriods: 0,
+    concurrency: "light",
+    run: runRiderPositionsPurge,
   },
 } as const satisfies Record<string, JobDefinition>;
 

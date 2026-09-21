@@ -21,6 +21,7 @@ function fakeContext(options: { factsReady: boolean }) {
     checkFactsParity: unused,
     healLostRefundFollowUps: unused,
     countStuckRefundFollowUps: unused,
+    purgeRiderPositions: unused,
     factsReadyFor: async (date) => {
       calls.push(`factsReady ${date}`);
       return options.factsReady;

@@ -26,6 +26,7 @@ export function Map({
   centre,
   pin,
   shop,
+  rider,
   onPinChange,
   className,
 }: {
@@ -34,12 +35,16 @@ export function Map({
   pin?: Point | null;
   /** The outlet, shown for context. Never draggable. */
   shop?: Point | null;
+  /** The rider's latest position (the customer's live tracking). Moves as the prop changes; the map fits the pin, shop and rider. */
+  rider?: Point | null;
   onPinChange?: (point: Point) => void;
   className?: string;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<LeafletMap | null>(null);
   const pinMarker = useRef<Marker | null>(null);
+  const riderMarker = useRef<Marker | null>(null);
+  const leaflet = useRef<typeof import("leaflet") | null>(null);
   const [ready, setReady] = useState(false);
 
   // The callback is held in a ref so a re-render with a new closure does not
@@ -58,6 +63,7 @@ export function Map({
     (async () => {
       const L = await import("leaflet");
       if (cancelled || !container.current || map.current) return;
+      leaflet.current = L;
 
       instance = L.map(container.current, {
         center: [centre.lat, centre.lng],
@@ -120,6 +126,7 @@ export function Map({
       instance?.remove();
       map.current = null;
       pinMarker.current = null;
+      riderMarker.current = null;
     };
     // Built once. Position updates are pushed through the effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -137,6 +144,41 @@ export function Map({
     pinMarker.current.setLatLng([pinLat, pinLng]);
     map.current.panTo([pinLat, pinLng]);
   }, [ready, pinLat, pinLng]);
+
+  // The rider's dot: created on the first fix, moved on every later one, removed when there is none. The view then fits everything
+  // shown so the customer sees the rider, the shop and their own pin together.
+  const riderLat = rider?.lat;
+  const riderLng = rider?.lng;
+  useEffect(() => {
+    const L = leaflet.current;
+    if (!ready || !L || !map.current) return;
+    if (riderLat === undefined || riderLng === undefined) {
+      riderMarker.current?.remove();
+      riderMarker.current = null;
+      return;
+    }
+    if (riderMarker.current) riderMarker.current.setLatLng([riderLat, riderLng]);
+    else {
+      riderMarker.current = L.marker([riderLat, riderLng], {
+        icon: L.divIcon({
+          className: "",
+          html: '<span aria-hidden="true" style="display:block;width:22px;height:22px;border-radius:9999px;background:#2563EB;border:3px solid #F5EDD8;box-shadow:0 0 0 4px rgba(37,99,235,.3),0 2px 6px rgba(0,0,0,.5)"></span>',
+          iconSize: [22, 22],
+          iconAnchor: [11, 11],
+        }),
+        interactive: false,
+        keyboard: false,
+      })
+        .addTo(map.current)
+        .bindTooltip("Your rider", { permanent: false });
+    }
+    const points: [number, number][] = [[riderLat, riderLng]];
+    if (pinLat !== undefined && pinLng !== undefined) points.push([pinLat, pinLng]);
+    if (shop) points.push([shop.lat, shop.lng]);
+    map.current.fitBounds(points, { padding: [40, 40], maxZoom: 17 });
+    // `shop` is a fixed point for a given order; the fit only needs to re-run when the rider or pin moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, riderLat, riderLng, pinLat, pinLng]);
 
   return (
     <div

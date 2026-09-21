@@ -58,6 +58,7 @@ import { DayLockBusy, DayTimeout, type FactsParity, type JobReadRepos, type JobW
 import { saleSetWhere } from "./analytics";
 import { getProfitAndLoss } from "./expenses";
 import { countStuckRefundFollowUps, healLostRefundFollowUps } from "./payments";
+import { PURGE_BATCH, purgeRiderPositions } from "./rider-tracking";
 import { DayLockBusyError, DayTimeoutError, assertBusinessDate, purgeIntradayFacts, readDailyFacts, readIntradayFacts, rebuildIntradayDay, recomputeDay } from "./iq-facts";
 import { expireInsights, getInsight, listInsights, readFactFigures, writeInsight, type IqTx } from "./iq-insights";
 import { readRecon } from "./iq-recon";
@@ -315,6 +316,11 @@ export function iqRepos(orgId: string): JobReadRepos {
     // PAYMENT-SAFETY's healer (ref-b7): its own idempotent transaction per refund, outside any chunk.
     healLostRefundFollowUps: (options) => healLostRefundFollowUps({ orgId }, { shouldStop: options.shouldStop }),
     countStuckRefundFollowUps: () => countStuckRefundFollowUps({ orgId }),
+    // Lane B: rider GPS fixes are kept 24 hours. Its own short statement, outside any chunk.
+    purgeRiderPositions: async () => {
+      const deleted = await purgeRiderPositions(orgId, new Date(), PURGE_BATCH);
+      return { deleted, more: deleted >= PURGE_BATCH };
+    },
     factsHistoryStart: () => factsHistoryStart(orgId),
     checkFactsParity: (from, to) => checkFactsParity(orgId, from, to),
     factsReadyFor: (date) => factsReadyFor(orgId, date),

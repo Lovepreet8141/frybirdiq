@@ -19,6 +19,7 @@ import { OrderRating } from "@/components/order/rating";
 import { PayOnline } from "@/components/order/pay-online";
 import { ProgressNote } from "@/components/loyalty/progress-note";
 import { OrderLive } from "@/components/order/order-live";
+import { RiderTracker } from "@/components/order/rider-tracker";
 import { greetingName, viewerOwnsOrder } from "@/components/order/viewer-owns-order";
 import { RAZORPAY_PROVIDER, razorpayConfig } from "@/lib/payments";
 import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
@@ -29,7 +30,7 @@ export const metadata: Metadata = { title: "Your order" };
  * Order tracking. BUILD-PLAN.md §62.
  *
  * The steps a collection order actually passes through. No estimated-minutes
- * countdown and no live map — §62 is explicit: "Do not fake live location if
+ * countdown, and the rider's map appears only when the rider's phone is really reporting a position (Lane B) — §62 is explicit: "Do not fake live location if
  * the system does not actually have reliable data." The shop calls when it is
  * ready, and the page says exactly that.
  *
@@ -200,6 +201,9 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           {readyLabel}
         </p>
       )}
+
+      {/* The rider's live position: the order's owner only, and only while it is out (the API route enforces both again). */}
+      {isOwner && isDelivery && status === "OUT_FOR_DELIVERY" && <RiderTracker orderId={order.id} />}
 
       {cancelled ? (
         <div role="alert" className="mt-8 rounded-lg border border-border bg-surface p-5">
