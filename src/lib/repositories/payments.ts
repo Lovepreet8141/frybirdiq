@@ -27,6 +27,7 @@ import { IdempotencyConflict, withIdempotency } from "./idempotency";
 import { type FactsRefreshSteps, refreshFactsForDays } from "./expenses";
 import { refundFactsDays } from "@/lib/payments/refund-facts-days";
 import { orderPaymentState } from "@/domain/order-payment-state";
+import type { PaymentPosition } from "@/lib/notifications/order-updates";
 import { getOrg } from "./org";
 import { openSessionIdForPayment } from "./cash-sessions";
 import { canTransition, isTerminal } from "@/domain/order-status";
@@ -149,6 +150,17 @@ export function orderAwaitsOnline(rows: readonly PaymentRowForWait[], channel: s
   if (moneyApplied) return false;
   if (rows.some((row) => row.provider === RAZORPAY_PROVIDER && row.status === "PENDING")) return true;
   return rows.length === 0 && channel === "ONLINE";
+}
+
+/**
+ * What a customer message may say about money, from the same rules the kitchen guard and the staff board use
+ * (outbox-paid-position): PAID only when money is applied to the order (a capture recorded for a refund is not),
+ * ONLINE_PENDING exactly when `orderAwaitsOnline` says so (including a website order with no payment row yet),
+ * otherwise COLLECT.
+ */
+export function orderPaymentPosition(rows: readonly PaymentRowForWait[], channel: string): PaymentPosition {
+  if (rows.some((row) => (row.status === "CAPTURED" || row.status === "PARTIALLY_REFUNDED") && !row.unapplied)) return "PAID";
+  return orderAwaitsOnline(rows, channel) ? "ONLINE_PENDING" : "COLLECT";
 }
 
 export async function awaitsOnlinePayment(tx: Tx, input: { orderId: string; orgId: string }): Promise<boolean> {

@@ -23,6 +23,7 @@ import { db } from "@/db";
 import { notificationOutbox, orders, payments } from "@/db/schema";
 import type { OrderStatus } from "@/domain/order-status";
 import { paise } from "@/lib/money";
+import { orderPaymentPosition, UNAPPLIED } from "./payments";
 import { isNotifiableStatus, orderUpdateMessage, type PaymentPosition } from "@/lib/notifications/order-updates";
 import { toWhatsAppNumber } from "@/lib/notifications/provider";
 import type { WhatsappOrderProvider } from "@/lib/notifications/whatsapp-provider";
@@ -54,14 +55,10 @@ export async function enqueueOrderUpdate(input: {
   if (!to) return { enqueued: false, reason: "no_phone" };
 
   const rows = await database
-    .select({ status: payments.status, method: payments.method })
+    .select({ provider: payments.provider, status: payments.status, unapplied: UNAPPLIED })
     .from(payments)
     .where(and(eq(payments.orderId, order.id), eq(payments.orgId, input.orgId)));
-  const payment: PaymentPosition = rows.some((p) => p.status === "CAPTURED" || p.status === "PARTIALLY_REFUNDED")
-    ? "PAID"
-    : rows.some((p) => p.status === "PENDING" && p.method !== "CASH")
-      ? "ONLINE_PENDING"
-      : "COLLECT";
+  const payment: PaymentPosition = orderPaymentPosition(rows, order.channel);
 
   const message = orderUpdateMessage({
     status: input.toStatus,

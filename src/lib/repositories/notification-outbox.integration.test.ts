@@ -125,4 +125,26 @@ describe("notification outbox", () => {
     expect(row?.body).not.toContain("counter");
     expect(row?.body).toContain("online payment");
   });
+
+  // outbox-paid-position: the message reads payment state through the same rules as the kitchen guard and the board.
+  it("a website order with no payment row yet is told it awaits online payment, not to pay at the counter", async () => {
+    const id = await makeOrder(org, "ACCEPTED");
+    await enqueueOrderUpdate({ orgId: org.orgId, orderId: id, toStatus: "ACCEPTED", siteUrl: SITE });
+    const [row] = await outboxOf(org.orgId, id);
+    expect(row?.body).toContain("online payment");
+    expect(row?.body).not.toContain("counter");
+  });
+
+  it("a capture recorded for a refund (unapplied) is not reported as paid", async () => {
+    const paid = await makeOrder(org, "ACCEPTED");
+    await db().insert(payments).values({ orgId: org.orgId, orderId: paid, status: "CAPTURED", method: "UPI", amount: fromRupees("200"), provider: "razorpay" });
+    const unapplied = await makeOrder(org, "ACCEPTED");
+    await db().insert(payments).values({ orgId: org.orgId, orderId: unapplied, status: "CAPTURED", method: "UPI", amount: fromRupees("200"), provider: "razorpay", providerPayload: { unapplied: true } });
+    await enqueueOrderUpdate({ orgId: org.orgId, orderId: paid, toStatus: "ACCEPTED", siteUrl: SITE });
+    await enqueueOrderUpdate({ orgId: org.orgId, orderId: unapplied, toStatus: "ACCEPTED", siteUrl: SITE });
+    const [paidRow] = await outboxOf(org.orgId, paid);
+    const [unappliedRow] = await outboxOf(org.orgId, unapplied);
+    expect(paidRow?.body).not.toContain("Pay at the counter");
+    expect(unappliedRow?.body).toContain("Pay at the counter");
+  });
 });
