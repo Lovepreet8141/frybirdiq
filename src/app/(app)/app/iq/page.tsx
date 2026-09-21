@@ -83,7 +83,10 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     listActiveOrders(staff.orgId),
     listRecentOrderEvents(staff.orgId, 8),
     // A readiness query that throws must not take the Overview down: the panel is replaced by a note and every card that leans on it is marked limited (never silently "trusted").
-    getReadiness(staff.orgId, now).catch(() => null),
+    getReadiness(staff.orgId, now).catch((error: unknown) => {
+      console.error("iq overview: readiness could not be read", error instanceof Error ? error.name : "unknown");
+      return null;
+    }),
   ]);
   const limitedFor = (card: ReadinessCard): readonly string[] => (readiness ? limitedReasons(readiness, card) : ["Readiness could not be read just now"]);
   const excluded = await countExcluded(staff.orgId, comparison.window);
