@@ -1,4 +1,4 @@
--- Hand-run only. Reverses PENDING_station_tasks: back to one done mark per order
+-- Hand-run only. Reverses 0049_station_tasks: back to one done mark per order
 -- item. REFUSES while any item has marks at more than one station (a combo), as
 -- collapsing them would lose which stations finished. Run before
 -- PENDING_stations.down.sql if rolling back both.

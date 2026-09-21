@@ -1,6 +1,6 @@
 {
-  "id": "b12013d0-6480-4a33-8f6f-8080035137b4",
-  "prevId": "31134017-d147-4451-8869-e6bba6cd8399",
+  "id": "f54e9dc6-4d57-4eaf-9610-cb4e1780cc7d",
+  "prevId": "712562c7-a734-4b8f-b91f-95fa58e7514e",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -12707,11 +12707,17 @@
         }
       },
       "indexes": {
-        "kitchen_line_status_item_idx": {
-          "name": "kitchen_line_status_item_idx",
+        "kitchen_line_status_item_station_idx": {
+          "name": "kitchen_line_status_item_station_idx",
           "columns": [
             {
               "expression": "order_item_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "station",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

@@ -169,7 +169,7 @@ export const OPEN_TO_MEMBERS_ON_PURPOSE: Readonly<Record<string, string>> = {
 };
 
 /**
- * Tables added after 0042, restricted in migration 0050 the same way (each new
+ * Tables added after 0042, restricted in migration 0051 the same way (each new
  * table had to be decided about: the schema test fails otherwise).
  */
 export const READ_LIMITS_0047: Readonly<Record<string, readonly Permission[]>> = {
@@ -180,7 +180,7 @@ export const READ_LIMITS_0047: Readonly<Record<string, readonly Permission[]>> =
   kitchen_order_pack: ["orders.view", "orders.create", "kitchen.view", "delivery.view"],
 };
 
-/** Statements of migration 0050, generated from `READ_LIMITS_0047` and the permissions table. */
+/** Statements of migration 0051, generated from `READ_LIMITS_0047` and the permissions table. */
 export function generateReadLimitStatements0047(): readonly string[] {
   return Object.entries(READ_LIMITS_0047).map(
     ([table, permissions]) =>
