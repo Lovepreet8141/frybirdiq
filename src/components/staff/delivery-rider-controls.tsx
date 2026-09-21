@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { assignRiderAction, failDeliveryAction } from "@/lib/auth/staff-actions";
+import { assignRiderAction, failDeliveryAction, releaseDeliveryAction } from "@/lib/auth/staff-actions";
 
 export interface RiderOption {
   readonly userId: string;
@@ -129,6 +129,57 @@ export function FailDeliveryControl({ orderId }: { orderId: string }) {
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">The shop is told. A paid order needs a manager to refund it.</p>
+    </div>
+  );
+}
+
+/**
+ * "Release": a rider gives a delivery they hold back to Available (they cannot make it). Two taps on purpose (open, then
+ * confirm) so it is never released by accident; the server releases only a delivery this rider holds, and audits it.
+ */
+export function ReleaseDeliveryControl({ orderId }: { orderId: string }) {
+  const router = useRouter();
+  const [confirming, setConfirming] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const release = () => {
+    setMessage(null);
+    startTransition(async () => {
+      try {
+        const result = await releaseDeliveryAction({ orderId });
+        if (!result.ok) setMessage(result.error ?? "That did not work. Try again.");
+        else router.refresh();
+      } catch {
+        setMessage("No connection. Try again.");
+      }
+    });
+  };
+
+  if (!confirming) {
+    return (
+      <Button type="button" variant="ghost" size="lg" className="min-h-12 text-base" onClick={() => setConfirming(true)}>
+        Release
+      </Button>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface-muted p-3">
+      <p className="text-sm">Give this delivery back so another rider can take it?</p>
+      {message && (
+        <p role="alert" className="text-sm text-loss">
+          {message}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Button type="button" disabled={pending} aria-busy={pending} onClick={release} className="min-h-12 flex-1 gap-2 text-base">
+          {pending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+          Yes, release it
+        </Button>
+        <Button type="button" variant="ghost" disabled={pending} onClick={() => setConfirming(false)} className="min-h-12">
+          Keep it
+        </Button>
+      </div>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { SectionHeading } from "@/components/iq/ui";
 import { EmptyState, PermissionDenied } from "@/components/states";
 import { getStaff, staffCan } from "@/lib/auth";
 import { seesOnlyOwnDeliveries } from "@/domain/permissions";
+import { heldMinutes, isStaleHold } from "@/lib/delivery/hold";
 import { listDeliveries } from "@/lib/repositories/orders";
 import { listAssignableRiders, listRiderDeliveries } from "@/lib/repositories/rider-assignment";
 
@@ -35,6 +36,7 @@ export default async function DeliveriesPage() {
   const deliveries = riderView ? riderView.mine : await listDeliveries(staff.orgId);
   const offers = riderView?.offers ?? [];
   const riders = canAssign ? await listAssignableRiders(staff.orgId) : undefined;
+  const now = new Date();
   const onTheRoad = deliveries.filter((d) => d.status === "OUT_FOR_DELIVERY");
   const waiting = deliveries.length - onTheRoad.length;
 
@@ -64,7 +66,7 @@ export default async function DeliveriesPage() {
           <SectionHeading id="offers-heading" title="Available" note={`${offers.length} to take`} />
           <ul aria-labelledby="offers-heading" className="flex flex-col gap-3">
             {offers.map((offer) => (
-              <DeliveryOfferCard key={offer.id} offer={offer} />
+              <DeliveryOfferCard key={offer.id} offer={offer} atLimit={riderView?.atLimit ?? false} />
             ))}
           </ul>
         </div>
@@ -98,6 +100,8 @@ export default async function DeliveriesPage() {
                   } satisfies RiderDelivery
                 }
                 riders={riders}
+                canRelease={riderOnly}
+                staleMinutes={!riderOnly && isStaleHold(order, now) ? heldMinutes(order.lastMovedAt, now) : null}
               />
             ))}
           </ul>

@@ -27,6 +27,7 @@ const GATED: Readonly<Record<string, readonly string[]>> = {
   "src/lib/auth/staff-actions.ts#assignRiderAction": ["delivery.assign"],
   "src/lib/auth/staff-actions.ts#completeDeliveryAction": ["delivery.complete"],
   "src/lib/auth/staff-actions.ts#failDeliveryAction": ["delivery.complete"],
+  "src/lib/auth/staff-actions.ts#releaseDeliveryAction": ["delivery.take"],
   "src/lib/auth/staff-actions.ts#takeDeliveryAction": ["delivery.take"],
   "src/lib/auth/staff-actions.ts#markPaidAction": ["orders.update"],
   "src/lib/auth/staff-actions.ts#rejectOrderAction": ["orders.cancel"],

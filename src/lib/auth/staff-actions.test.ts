@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   assignRider: vi.fn(),
   failDelivery: vi.fn(),
   takeDelivery: vi.fn(),
+  releaseDelivery: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -28,10 +29,11 @@ vi.mock("@/lib/repositories/rider-assignment", () => ({
   assignRider: mocks.assignRider,
   failDelivery: mocks.failDelivery,
   takeDelivery: mocks.takeDelivery,
+  releaseDelivery: mocks.releaseDelivery,
 }));
 
 import { NotPermitted, NotSignedIn } from "@/lib/auth";
-import { advanceOrderAction, assignRiderAction, completeDeliveryAction, failDeliveryAction, takeDeliveryAction } from "./staff-actions";
+import { advanceOrderAction, assignRiderAction, completeDeliveryAction, failDeliveryAction, releaseDeliveryAction, takeDeliveryAction } from "./staff-actions";
 
 const orderId = "7d9f2c1e-4b3a-4c5d-8e6f-1a2b3c4d5e6f";
 const staff = { userId: "11111111-1111-4111-8111-111111111111", orgId: "22222222-2222-4222-8222-222222222222", roles: ["CASHIER"] };
@@ -169,5 +171,25 @@ describe("takeDeliveryAction", () => {
   it("tells the rider plainly when someone else got there first", async () => {
     mocks.takeDelivery.mockResolvedValue({ ok: false, code: "ALREADY_TAKEN", error: "Someone else has just taken that delivery." });
     expect(await takeDeliveryAction({ orderId })).toEqual({ ok: false, error: "Someone else has just taken that delivery." });
+  });
+});
+
+describe("releaseDeliveryAction", () => {
+  beforeEach(() => {
+    mocks.requirePermission.mockReset().mockResolvedValue({ ...staff, roles: ["RIDER"] });
+    mocks.releaseDelivery.mockReset().mockResolvedValue({ ok: true });
+  });
+
+  it("checks delivery.take and releases for the signed-in rider in their own org: the client sends only the order", async () => {
+    expect(await releaseDeliveryAction({ orderId, riderUserId: "someone-else", orgId: "another-org" })).toEqual({ ok: true });
+    expect(mocks.requirePermission).toHaveBeenCalledWith("delivery.take");
+    expect(mocks.releaseDelivery).toHaveBeenCalledWith({ orgId: staff.orgId, orderId, riderUserId: staff.userId });
+  });
+
+  it("refuses bad input before any permission check or database call, and shows the refusal when it is not theirs", async () => {
+    expect(await releaseDeliveryAction({ orderId: "nope" })).toMatchObject({ ok: false });
+    expect(mocks.requirePermission).not.toHaveBeenCalled();
+    mocks.releaseDelivery.mockResolvedValue({ ok: false, code: "NOT_YOUR_DELIVERY", error: "That delivery is not yours." });
+    expect(await releaseDeliveryAction({ orderId })).toEqual({ ok: false, error: "That delivery is not yours." });
   });
 });

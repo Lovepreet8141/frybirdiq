@@ -9,7 +9,7 @@ import { formatDistance } from "@/lib/delivery";
 import { completeDeliveryAction } from "@/lib/auth/staff-actions";
 import type { OrderStatus } from "@/domain/order-status";
 import { classifyCloseResult, type CloseOutcome } from "./delivery-close";
-import { AssignRiderControl, FailDeliveryControl, type RiderOption } from "./delivery-rider-controls";
+import { AssignRiderControl, FailDeliveryControl, ReleaseDeliveryControl, type RiderOption } from "./delivery-rider-controls";
 
 export interface RiderDelivery {
   id: string;
@@ -39,7 +39,7 @@ export interface RiderDelivery {
  * Big targets, the address and the money first, and two taps to finish: open
  * the map, then close the job. Nothing on this card can move any other order.
  */
-export function DeliveryCard({ delivery, riders }: { delivery: RiderDelivery; /** Present only for people who may assign (`delivery.assign`): shows the assign control. */ riders?: readonly RiderOption[] }) {
+export function DeliveryCard({ delivery, riders, canRelease = false, staleMinutes = null }: { delivery: RiderDelivery; /** Present only for people who may assign (`delivery.assign`): shows the assign control. */ riders?: readonly RiderOption[]; /** A rider looking at their own delivery: shows Release. */ canRelease?: boolean; /** Held by a rider and not moved for a while (flag only, for the manager). */ staleMinutes?: number | null }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [outcome, setOutcome] = useState<CloseOutcome | null>(null);
@@ -137,6 +137,12 @@ export function DeliveryCard({ delivery, riders }: { delivery: RiderDelivery; /*
 
       {delivery.notes && <p className="rounded-md bg-surface-muted px-3 py-2 text-sm">{delivery.notes}</p>}
 
+      {staleMinutes !== null && (
+        <p role="status" className="rounded-md border-l-2 border-flag bg-flag-soft/60 px-3 py-2 text-sm font-semibold">
+          Held for {staleMinutes} min without moving. Check with the rider.
+        </p>
+      )}
+
       {riders && <AssignRiderControl orderId={delivery.id} riderUserId={delivery.riderUserId ?? null} riders={riders} />}
 
       {outcome && outcome.kind !== "ok" && (
@@ -185,9 +191,13 @@ export function DeliveryCard({ delivery, riders }: { delivery: RiderDelivery; /*
 
           {/* A paid order that failed needs a manager's refund: the server refuses it here. */}
           {!delivery.isPaid && <FailDeliveryControl orderId={delivery.id} />}
+          {canRelease && <ReleaseDeliveryControl orderId={delivery.id} />}
         </div>
       ) : (
-        <p className="text-sm text-muted-foreground">Waiting for the kitchen to send this out.</p>
+        <div className="flex flex-col gap-2">
+          <p className="text-sm text-muted-foreground">Waiting for the kitchen to send this out.</p>
+          {canRelease && <ReleaseDeliveryControl orderId={delivery.id} />}
+        </div>
       )}
     </li>
   );
