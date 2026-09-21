@@ -135,6 +135,7 @@ const GATED: Readonly<Record<string, readonly string[]>> = {
   "src/lib/settings/actions.ts#updateLocationProfileAction": ["settings.manage"],
   "src/lib/settings/actions.ts#updateOperationsSettingsAction": ["settings.manage"],
   "src/lib/settings/actions.ts#updatePaymentSettingsAction": ["settings.manage"],
+  "src/lib/settings/actions.ts#updateRiderLimitsAction": ["settings.manage"],
   "src/lib/staff/actions.ts#changeStaffRoleAction": ["staff.manage"],
   "src/lib/staff/actions.ts#deactivateStaffAction": ["staff.manage"],
   "src/lib/staff/actions.ts#inviteStaffAction": ["staff.manage"],

@@ -1,6 +1,9 @@
 import type { OrderStatus } from "@/domain/order-status";
 
-/** A rider may hold at most this many active deliveries (READY or on the road) at once (owner decision, 2026-09-21). */
+/**
+ * DEFAULT: a rider may hold at most this many active deliveries (READY or on the road) at once (owner decision, 2026-09-21).
+ * The value in force is `organizations.rider_max_active` (editable in Admin, bounded by `RIDER_LIMIT_BOUNDS`); this is what a new org starts with.
+ */
 export const MAX_ACTIVE_DELIVERIES = 2;
 
 /**
@@ -10,6 +13,26 @@ export const MAX_ACTIVE_DELIVERIES = 2;
  * The count is read from `audit_logs` (action `rider_took_delivery`): never prune or archive audit rows younger than an hour.
  */
 export const MAX_TAKES_PER_HOUR = 6;
+
+/**
+ * What an owner may set in Admin. The upper bounds keep the take cap meaningful (it stops "take, read, release, repeat"
+ * from reading every customer's details), the lower bound of 1 keeps riders able to work at all. The database CHECKs
+ * (migration 0054) say the same, so a hand edit cannot go outside them either.
+ */
+export const RIDER_LIMIT_BOUNDS = { activeMin: 1, activeMax: 5, takesMin: 1, takesMax: 20 } as const;
+
+export interface RiderLimits {
+  readonly maxActive: number;
+  readonly maxTakesPerHour: number;
+}
+
+/** Validates a pair of limits against the bounds; whole numbers only. Returns the first problem in plain words, or null. */
+export function riderLimitsError(limits: RiderLimits): string | null {
+  const b = RIDER_LIMIT_BOUNDS;
+  if (!Number.isInteger(limits.maxActive) || limits.maxActive < b.activeMin || limits.maxActive > b.activeMax) return `Active deliveries per rider must be a whole number from ${b.activeMin} to ${b.activeMax}.`;
+  if (!Number.isInteger(limits.maxTakesPerHour) || limits.maxTakesPerHour < b.takesMin || limits.maxTakesPerHour > b.takesMax) return `Takes per hour must be a whole number from ${b.takesMin} to ${b.takesMax}.`;
+  return null;
+}
 
 /** A delivery a rider holds that has not moved for this long is flagged to the manager (flag only, never an automatic reassignment). */
 export const STALE_HOLD_MINUTES = 15;
