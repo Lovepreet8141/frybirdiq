@@ -100,10 +100,14 @@ sharedStackOnly("0042: staff reads through the database are limited by role", ()
   });
 
   it("the screens Realtime feeds keep working: order_events for the order, kitchen and delivery roles, menu tables for everyone", async () => {
-    for (const role of ["OWNER", "MANAGER", "CASHIER", "KITCHEN", "RIDER"] as const) expect(await visibleRows(role, "order_events"), `${role} order_events`).toBe(1);
+    // 0052 (rider-rls-scope): a rider-only login reads only events of ITS OWN deliveries, so this dine-in order's event is
+    // not visible to a RIDER (rider-rls-scope.integration.test.ts pins the rider side in full); everyone else is unchanged.
+    for (const role of ["OWNER", "MANAGER", "CASHIER", "KITCHEN"] as const) expect(await visibleRows(role, "order_events"), `${role} order_events`).toBe(1);
+    expect(await visibleRows("RIDER", "order_events"), "RIDER order_events (not assigned to it)").toBe(0);
     for (const role of ROLES) {
       expect(await visibleRows(role, "products"), `${role} products`).toBe(1);
-      expect(await visibleRows(role, "order_events")).toBe(rolesHoldingAny(READ_LIMITS.order_events!).includes(role) ? 1 : 0);
+      const expected = role === "RIDER" ? 0 : rolesHoldingAny(READ_LIMITS.order_events!).includes(role) ? 1 : 0;
+      expect(await visibleRows(role, "order_events")).toBe(expected);
     }
   });
 
