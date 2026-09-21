@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   requirePermission: vi.fn(),
   advanceOrder: vi.fn(),
+  readyGateRefusal: vi.fn(),
   completeDelivery: vi.fn(),
   assignRider: vi.fn(),
   failDelivery: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock("@/lib/repositories/orders", () => ({
   completeDelivery: mocks.completeDelivery,
   rejectOrder: vi.fn(),
 }));
+vi.mock("@/lib/repositories/kitchen-stations", () => ({ readyGateRefusal: mocks.readyGateRefusal }));
 vi.mock("@/lib/repositories/payments", () => ({ recordCashPayment: vi.fn() }));
 vi.mock("@/lib/repositories/rider-assignment", () => ({
   FAIL_REASON_MIN: 3,
@@ -42,6 +44,7 @@ describe("advanceOrderAction", () => {
   beforeEach(() => {
     mocks.requirePermission.mockReset().mockResolvedValue(staff);
     mocks.advanceOrder.mockReset().mockResolvedValue({ ok: true });
+    mocks.readyGateRefusal.mockReset().mockResolvedValue(null);
   });
 
   it.each(["CANCELLED", "REFUNDED", "PAID", "DRAFT", "PENDING_PAYMENT", "FAILED"] as const)(
@@ -59,6 +62,19 @@ describe("advanceOrderAction", () => {
     expect(result).toEqual({ ok: true });
     expect(mocks.requirePermission).toHaveBeenCalledWith("kitchen.update");
     expect(mocks.advanceOrder).toHaveBeenCalledWith({ orderId, to: "READY", actorUserId: staff.userId, orgId: staff.orgId });
+  });
+
+  it("READY is refused with the station gate's reason, and nothing advances (ready-gate-enforce)", async () => {
+    mocks.readyGateRefusal.mockResolvedValue("1 line is not done at the stations yet.");
+    const result = await advanceOrderAction({ orderId, to: "READY" });
+    expect(result).toEqual({ ok: false, error: "1 line is not done at the stations yet." });
+    expect(mocks.readyGateRefusal).toHaveBeenCalledWith(staff.orgId, orderId);
+    expect(mocks.advanceOrder).not.toHaveBeenCalled();
+  });
+
+  it("other moves never consult the station gate", async () => {
+    await advanceOrderAction({ orderId, to: "PREPARING" });
+    expect(mocks.readyGateRefusal).not.toHaveBeenCalled();
   });
 });
 
