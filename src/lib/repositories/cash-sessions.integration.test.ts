@@ -309,6 +309,7 @@ describe("the reconciliation view", () => {
       cashWithRiders: fromRupees("250"),
       onlineCaptured: fromRupees("600"),
       cashRefunded: fromRupees("30"),
+      cashRefundedNoTill: paise(0), // the refund was paid while the till was open (attributed to it)
       onlineRefunded: paise(0),
       net: fromRupees("1320"), // 400 + 100 + 250 + 600 - 30
       sessionsClosed: 1,

@@ -12,7 +12,7 @@ import { db } from "@/db";
 import { auditLogs, cashHandovers, cashSessions, orders, payments, refunds } from "@/db/schema";
 import { fromRupees, paise } from "@/lib/money";
 import { createTestOrg, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
-import { closeCashSession, openCashSession } from "./cash-sessions";
+import { closeCashSession, getReconciliation, openCashSession } from "./cash-sessions";
 import { recordCashPayment, refundPayment } from "./payments";
 
 let org: TestOrg;
@@ -129,5 +129,23 @@ describe("a cash refund is attributed to the till that paid it", () => {
     expect((await refundRow(paymentId)).cashSessionId).toBeNull(); // the till was closed when it got the lock: it is in no till
     const [closed] = await db().select().from(cashSessions).where(and(eq(cashSessions.id, till)));
     expect(closed!.expectedCash).toBe(fromRupees("1500")); // the closed till's figures are untouched
+  });
+
+  it("the daily reconciliation shows cash refunded with no till open, so it is never invisible", async () => {
+    const { paymentId } = await counterCash("500");
+    await cashRefund(paymentId, "120"); // no till open: in no till's count
+    const till = await openTill("1000");
+    const other = await counterCash("300");
+    await cashRefund(other.paymentId, "50"); // paid while a till is open
+    await close(till, "1250");
+    const today = new Date().toISOString().slice(0, 10);
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const { days } = await getReconciliation(org.orgId, { from: yesterday, to: tomorrow });
+    const day = days.find((d) => d.cashRefunded > 0n)!;
+    expect(day).toBeDefined();
+    expect(day.cashRefunded).toBe(fromRupees("170")); // 120 + 50
+    expect(day.cashRefundedNoTill).toBe(fromRupees("120")); // only the one no till counted
+    void today;
   });
 });

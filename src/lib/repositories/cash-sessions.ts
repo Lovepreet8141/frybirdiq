@@ -336,6 +336,8 @@ export interface ReconciliationDay {
   /** Door cash taken that day that a rider still carries. */
   readonly cashWithRiders: Paise;
   readonly cashRefunded: Paise;
+  /** Part of `cashRefunded` that was paid while NO till was open: in no till's count, so nothing else will show it. */
+  readonly cashRefundedNoTill: Paise;
   /** Provider (online) money captured that day. */
   readonly onlineCaptured: Paise;
   readonly onlineRefunded: Paise;
@@ -373,6 +375,7 @@ export async function getReconciliation(orgId: string, range: { readonly from: s
     .select({
       date: day(refunds.finalizedAt),
       cashRefunded: sql<string>`coalesce(sum(${refunds.amount}) filter (where ${refunds.provider} = 'cash'), 0)::text`,
+      cashRefundedNoTill: sql<string>`coalesce(sum(${refunds.amount}) filter (where ${refunds.provider} = 'cash' and ${refunds.cashSessionId} is null), 0)::text`,
       onlineRefunded: sql<string>`coalesce(sum(${refunds.amount}) filter (where ${refunds.provider} <> 'cash'), 0)::text`,
     })
     .from(refunds)
@@ -407,6 +410,7 @@ export async function getReconciliation(orgId: string, range: { readonly from: s
       cashUnassigned: p(pay, "cashUnassigned"),
       cashWithRiders: p(pay, "cashWithRiders"),
       cashRefunded: p(ref, "cashRefunded"),
+      cashRefundedNoTill: p(ref, "cashRefundedNoTill"),
       onlineCaptured: p(pay, "onlineCaptured"),
       onlineRefunded: p(ref, "onlineRefunded"),
       net: subtract(captured, refunded),

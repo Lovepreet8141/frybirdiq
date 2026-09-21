@@ -56,9 +56,15 @@ describe("TillPanel", () => {
 
 describe("ReconciliationTable", () => {
   const day: ReconciliationDay = {
-    date: "2026-09-20", cashInTill: fromRupees("400"), cashUnassigned: fromRupees("100"), cashWithRiders: fromRupees("250"), cashRefunded: fromRupees("30"),
+    date: "2026-09-20", cashInTill: fromRupees("400"), cashUnassigned: fromRupees("100"), cashWithRiders: fromRupees("250"), cashRefunded: fromRupees("30"), cashRefundedNoTill: paise(0),
     onlineCaptured: fromRupees("600"), onlineRefunded: paise(0), net: fromRupees("1320"), sessionsClosed: 1, counted: fromRupees("1390"), expected: fromRupees("1370"), variance: fromRupees("20"),
   };
+  it("shows cash refunded with no till open only when there is some", () => {
+    const shown = renderToStaticMarkup(<ReconciliationTable days={[{ ...day, cashRefundedNoTill: fromRupees("30") }]} openSession={false} periodLabel="Today" />);
+    expect(shown).toContain("paid with no till open");
+    expect(renderToStaticMarkup(<ReconciliationTable days={[day]} openSession={false} periodLabel="Today" />)).not.toContain("paid with no till open");
+  });
+
   it("one card per day with every pile named, the net, and the tills' variance in words", () => {
     const html = renderToStaticMarkup(<ReconciliationTable days={[day]} openSession={false} periodLabel="Today" />);
     for (const text of ["Net ₹1,320", "Cash in a till", "Cash not in any till", "Cash a rider still carries", "Online (provider)", "Refunded in cash", "counted ₹1,390, expected ₹1,370: ₹20 over"]) expect(html).toContain(text);

@@ -50,6 +50,12 @@ export function ReconciliationTable({ days, openSession, periodLabel }: { readon
                 <dt className="text-muted-foreground">Refunded in cash</dt>
                 <dd className="tabular">{formatINR(day.cashRefunded)}</dd>
               </div>
+              {day.cashRefundedNoTill > 0n && (
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">…of it paid with no till open</dt>
+                  <dd className="tabular font-semibold text-flag">{formatINR(day.cashRefundedNoTill)}</dd>
+                </div>
+              )}
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Refunded online</dt>
                 <dd className="tabular">{formatINR(day.onlineRefunded)}</dd>
