@@ -206,3 +206,30 @@ export function generateReadLimitStatements0047(): readonly string[] {
 }
 
 export const policies0047 = (): readonly { readonly table: string; readonly policy: string }[] => [...Object.keys(READ_LIMITS_0047), ...Object.keys(OWN_ROW_LIMITS_0047)].map((table) => ({ table, policy: policyName(table) }));
+
+
+/**
+ * rider-rls-scope (migration 0052): a rider-only login reads only the deliveries assigned to it, at the database
+ * level. "Rider-only" = holds RIDER and no role that reads orders for its work (any of these permissions), so
+ * a person who is a rider AND works the counter or the kitchen is not narrowed. Generated from the permissions
+ * table, like 0042, so a permission change cannot leave a stale role list.
+ */
+export const ORDER_READER_PERMISSIONS: readonly Permission[] = ["orders.view", "orders.create", "kitchen.view"];
+
+/** Tables that hold an order_id and are scoped through it (order_item_modifiers goes through order_items). */
+export const RIDER_SCOPED_BY_ORDER = ["order_items", "order_events", "kitchen_line_status", "kitchen_order_pack"] as const;
+
+export function generateRiderScopeStatements(): readonly string[] {
+  const readers = array(rolesHoldingAny(ORDER_READER_PERMISSIONS));
+  const own = (orderIdExpr: string) => `EXISTS (SELECT 1 FROM orders o WHERE o.id = ${orderIdExpr} AND o.rider_id = auth.uid())`;
+  const policy = (table: string, using: string) => `CREATE POLICY ${table}_rider_scope ON ${table}\n  AS RESTRICTIVE FOR SELECT TO authenticated\n  USING (NOT auth_is_rider_scoped(org_id) OR ${using});`;
+  return [
+    `CREATE OR REPLACE FUNCTION auth_is_rider_scoped(target_org uuid)\nRETURNS boolean\nLANGUAGE sql\nSTABLE\nSECURITY DEFINER\nSET search_path = public\nAS $$\n  SELECT EXISTS (\n    SELECT 1 FROM memberships\n    WHERE user_id = auth.uid() AND org_id = target_org AND is_active AND role = 'RIDER'\n  )\n  AND NOT auth_has_role(target_org, ${readers})\n$$;`,
+    policy("orders", "rider_id = auth.uid()"),
+    ...RIDER_SCOPED_BY_ORDER.map((table) => policy(table, own(`${table}.order_id`))),
+    policy("order_item_modifiers", `EXISTS (SELECT 1 FROM order_items i JOIN orders o ON o.id = i.order_id WHERE i.id = order_item_modifiers.order_item_id AND o.rider_id = auth.uid())`),
+  ];
+}
+
+export const riderScopePolicies = (): readonly { readonly table: string; readonly policy: string }[] =>
+  ["orders", ...RIDER_SCOPED_BY_ORDER, "order_item_modifiers"].map((table) => ({ table, policy: `${table}_rider_scope` }));

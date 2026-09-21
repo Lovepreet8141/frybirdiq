@@ -39,6 +39,12 @@ export const PERMISSIONS = [
    * still close any delivery at the counter, `delivery.complete`).
    */
   "delivery.assign",
+  /**
+   * A rider taking an unassigned delivery for themselves ("Take it", rider-offer).
+   * RIDER; OWNER and ADMIN hold it by the rules above but the take itself also
+   * requires an active RIDER membership, so they assign instead. Not MANAGER or CASHIER.
+   */
+  "delivery.take",
   "menu.view",
   "menu.edit",
   "menu.price",
@@ -213,7 +219,7 @@ const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
    * only acts on an order that is already out for delivery — the narrowest
    * permission that lets someone finish the job they are actually doing.
    */
-  RIDER: ["delivery.view", "delivery.complete"],
+  RIDER: ["delivery.view", "delivery.complete", "delivery.take"],
 
   INVENTORY: [
     "inventory.view",

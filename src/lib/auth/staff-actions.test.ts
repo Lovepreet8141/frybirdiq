@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   completeDelivery: vi.fn(),
   assignRider: vi.fn(),
   failDelivery: vi.fn(),
+  takeDelivery: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -26,10 +27,11 @@ vi.mock("@/lib/repositories/rider-assignment", () => ({
   FAIL_REASON_MAX: 200,
   assignRider: mocks.assignRider,
   failDelivery: mocks.failDelivery,
+  takeDelivery: mocks.takeDelivery,
 }));
 
 import { NotPermitted, NotSignedIn } from "@/lib/auth";
-import { advanceOrderAction, assignRiderAction, completeDeliveryAction, failDeliveryAction } from "./staff-actions";
+import { advanceOrderAction, assignRiderAction, completeDeliveryAction, failDeliveryAction, takeDeliveryAction } from "./staff-actions";
 
 const orderId = "7d9f2c1e-4b3a-4c5d-8e6f-1a2b3c4d5e6f";
 const staff = { userId: "11111111-1111-4111-8111-111111111111", orgId: "22222222-2222-4222-8222-222222222222", roles: ["CASHIER"] };
@@ -143,5 +145,29 @@ describe("failDeliveryAction", () => {
   it("a blank or missing reason never reaches the repository", async () => {
     expect(await failDeliveryAction({ orderId, reason: "  " })).toMatchObject({ ok: false });
     expect(mocks.failDelivery).not.toHaveBeenCalled();
+  });
+});
+
+describe("takeDeliveryAction", () => {
+  beforeEach(() => {
+    mocks.requirePermission.mockReset().mockResolvedValue({ ...staff, roles: ["RIDER"] });
+    mocks.takeDelivery.mockReset().mockResolvedValue({ ok: true, changed: true });
+  });
+
+  it("checks delivery.take and takes it for the signed-in rider in their own org: the client sends only the order", async () => {
+    expect(await takeDeliveryAction({ orderId, riderUserId: "someone-else", orgId: "another-org" })).toEqual({ ok: true });
+    expect(mocks.requirePermission).toHaveBeenCalledWith("delivery.take");
+    expect(mocks.takeDelivery).toHaveBeenCalledWith({ orgId: staff.orgId, orderId, riderUserId: staff.userId });
+  });
+
+  it("refuses bad input before any permission check or database call", async () => {
+    expect(await takeDeliveryAction({ orderId: "nope" })).toMatchObject({ ok: false });
+    expect(mocks.requirePermission).not.toHaveBeenCalled();
+    expect(mocks.takeDelivery).not.toHaveBeenCalled();
+  });
+
+  it("tells the rider plainly when someone else got there first", async () => {
+    mocks.takeDelivery.mockResolvedValue({ ok: false, code: "ALREADY_TAKEN", error: "Someone else has just taken that delivery." });
+    expect(await takeDeliveryAction({ orderId })).toEqual({ ok: false, error: "Someone else has just taken that delivery." });
   });
 });

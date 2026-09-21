@@ -447,4 +447,9 @@ describe("rider assignment (roadmap 6.3)", () => {
     for (const role of ["RIDER", "INVENTORY"] as const) expect(mayOpenOrdersBoard([role]), role).toBe(false);
     expect(mayOpenOrdersBoard(["RIDER", "CASHIER"])).toBe(true);
   });
+
+  it("only a rider (and the all-permission owner/admin tier) holds delivery.take; the counter and the kitchen do not", () => {
+    expect(can(["RIDER"], "delivery.take")).toBe(true);
+    for (const role of ["MANAGER", "CASHIER", "KITCHEN", "INVENTORY", "ANALYST"] as const) expect(can([role], "delivery.take"), role).toBe(false);
+  });
 });

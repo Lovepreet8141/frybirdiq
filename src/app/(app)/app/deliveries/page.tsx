@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { DeliveryCard, type RiderDelivery } from "@/components/staff/delivery-card";
+import { DeliveryOfferCard } from "@/components/staff/delivery-offer-card";
 import { LiveRefresh } from "@/components/staff/live-refresh";
 import { PageHeader } from "@/components/staff/page-header";
 import { SectionHeading } from "@/components/iq/ui";
@@ -8,7 +9,7 @@ import { EmptyState, PermissionDenied } from "@/components/states";
 import { getStaff, staffCan } from "@/lib/auth";
 import { seesOnlyOwnDeliveries } from "@/domain/permissions";
 import { listDeliveries } from "@/lib/repositories/orders";
-import { listAssignableRiders } from "@/lib/repositories/rider-assignment";
+import { listAssignableRiders, listRiderDeliveries } from "@/lib/repositories/rider-assignment";
 
 export const metadata: Metadata = { title: "Deliveries", robots: { index: false, follow: false } };
 export const dynamic = "force-dynamic";
@@ -26,16 +27,22 @@ export default async function DeliveriesPage() {
     );
   }
 
-  // A rider sees only the deliveries assigned to them; the counter and managers see all, and can assign (roadmap 6.3).
+  // A rider sees their own deliveries in full and the unassigned ones as "Available" offers (pickup-level facts only);
+  // the counter and managers see all deliveries and can assign (roadmap 6.3, rider-offer).
+  const riderOnly = seesOnlyOwnDeliveries(staff.roles);
   const canAssign = await staffCan("delivery.assign");
-  const deliveries = await listDeliveries(staff.orgId, seesOnlyOwnDeliveries(staff.roles) ? { onlyRiderUserId: staff.userId } : {});
+  const riderView = riderOnly ? await listRiderDeliveries(staff.orgId, staff.userId) : null;
+  const deliveries = riderView ? riderView.mine : await listDeliveries(staff.orgId);
+  const offers = riderView?.offers ?? [];
   const riders = canAssign ? await listAssignableRiders(staff.orgId) : undefined;
   const onTheRoad = deliveries.filter((d) => d.status === "OUT_FOR_DELIVERY");
   const waiting = deliveries.length - onTheRoad.length;
 
   const headline =
-    deliveries.length === 0
+    deliveries.length === 0 && offers.length === 0
       ? "Nothing to deliver right now."
+      : deliveries.length === 0
+        ? `${offers.length} ${offers.length === 1 ? "delivery is" : "deliveries are"} available to take.`
       : onTheRoad.length === 0
         ? `${deliveries.length} ${deliveries.length === 1 ? "delivery is" : "deliveries are"} waiting for the kitchen.`
         : `${onTheRoad.length} ${onTheRoad.length === 1 ? "delivery is" : "deliveries are"} on the road.`;
@@ -47,18 +54,30 @@ export default async function DeliveriesPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-[var(--gutter)] py-6 md:py-8">
-      <LiveRefresh orgId={staff.orgId} />
+      {/* A rider-only login no longer receives events for unassigned orders (rider-rls-scope), so a new "Available" delivery is found by polling: every 10 s instead of the 60 s fallback. */}
+      <LiveRefresh orgId={staff.orgId} fallbackMs={riderOnly ? 10_000 : undefined} />
 
       <PageHeader title="Deliveries" description={<span aria-live="polite">{headline}</span>} />
 
-      {deliveries.length === 0 ? (
+      {offers.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <SectionHeading id="offers-heading" title="Available" note={`${offers.length} to take`} />
+          <ul aria-labelledby="offers-heading" className="flex flex-col gap-3">
+            {offers.map((offer) => (
+              <DeliveryOfferCard key={offer.id} offer={offer} />
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {deliveries.length === 0 && offers.length > 0 ? null : deliveries.length === 0 ? (
         <EmptyState
           title="Nothing to deliver."
-          detail={seesOnlyOwnDeliveries(staff.roles) ? "Deliveries assigned to you appear here once the kitchen marks them ready. Nothing assigned yet? Ask the shop." : "Delivery orders appear here once the kitchen marks them ready. Collection orders never do — they are handed over at the counter."}
+          detail={seesOnlyOwnDeliveries(staff.roles) ? "Deliveries appear here as Available once the kitchen marks them ready, and stay under Yours once you take one." : "Delivery orders appear here once the kitchen marks them ready. Collection orders never do — they are handed over at the counter."}
         />
       ) : (
         <div className="flex flex-col gap-3">
-          <SectionHeading id="deliveries-heading" title="Today's deliveries" note={meta} />
+          <SectionHeading id="deliveries-heading" title={riderOnly ? "Yours" : "Today's deliveries"} note={meta} />
           <ul aria-labelledby="deliveries-heading" className="flex flex-col gap-3">
             {deliveries.map((order) => (
               <DeliveryCard
