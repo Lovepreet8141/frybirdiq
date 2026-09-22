@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 import { CommandCenterNav } from "@/components/iq/command-center-nav";
+import { OrderHealthStrip } from "@/components/iq/order-health-strip";
 import { OverviewControls } from "@/components/iq/overview-controls";
 import { ActivityCard } from "@/components/iq/overview/activity-card";
 import { AttentionCard } from "@/components/iq/overview/attention-card";
@@ -24,12 +25,14 @@ import { businessDate, resolveRange } from "@/lib/dates";
 import { attentionInput, urgentCount } from "@/lib/iq/alerts";
 import { type ReadinessCard, limitedReasons } from "@/lib/iq/readiness/scores";
 import { type OverviewRange, OVERVIEW_RANGES, attentionCards, compareOptions, deltaBps, excludedNote, isMultiDay, isOverviewRange, resolveCompare } from "@/lib/iq/overview";
+import { healthCounts, toKitchenTickets } from "@/lib/kitchen/tickets";
 import { type Paise, formatINR } from "@/lib/money";
 import { listRecentOrderEvents } from "@/lib/repositories/activity";
 import { getChannelBreakdown, getDashboard, notSelling } from "@/lib/repositories/analytics";
 import { foodCostWeeklySeries, getProfitAndLoss } from "@/lib/repositories/expenses";
 import { getPaymentsLedger } from "@/lib/repositories/finance";
 import { getReadiness } from "@/lib/repositories/iq-readiness";
+import { getPrepTargets } from "@/lib/repositories/kitchen-targets";
 import { listActiveOrders } from "@/lib/repositories/orders";
 import { countExcluded, getOverviewSettings, getRangeComparison, getRightNow, productLastSales } from "@/lib/repositories/overview";
 import { METHOD_LABELS } from "@/lib/finance/ledger-view";
@@ -90,6 +93,11 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
   ]);
   const limitedFor = (card: ReadinessCard): readonly string[] => (readiness ? limitedReasons(readiness, card) : ["Readiness could not be read just now"]);
   const excluded = await countExcluded(staff.orgId, comparison.window);
+
+  // Order health (roadmap 4.3): the same prep-target rule as the kitchen display and Live operations, over the
+  // active orders already read above — no second query for the order list, just the prep targets to judge them by.
+  const prepTargets = await getPrepTargets(staff.orgId, activeOrders.map((order) => order.id));
+  const orderHealth = healthCounts(toKitchenTickets(activeOrders, prepTargets), now.getTime());
 
   const directTotal = pnl.direct.reduce((sum, row) => sum + row.amount, 0n) as Paise;
   const fixedTotal = pnl.fixed.reduce((sum, row) => sum + row.amount, 0n) as Paise;
@@ -222,7 +230,8 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
                 </Button>
               </CardAction>
             </CardHeader>
-            <CardContent>
+            <CardContent className="flex flex-col gap-4">
+              <OrderHealthStrip counts={orderHealth} />
               <RightNow tiles={rightNow.tiles} />
             </CardContent>
           </Card>

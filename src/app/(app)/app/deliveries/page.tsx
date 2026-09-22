@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { DeliveryCard, type RiderDelivery } from "@/components/staff/delivery-card";
 import { DeliveryOfferCard } from "@/components/staff/delivery-offer-card";
+import { InstallAppPrompt } from "@/components/staff/install-app-prompt";
 import { LiveRefresh } from "@/components/staff/live-refresh";
 import { PageHeader } from "@/components/staff/page-header";
 import { SectionHeading } from "@/components/iq/ui";
@@ -60,6 +61,8 @@ export default async function DeliveriesPage() {
       <LiveRefresh orgId={staff.orgId} fallbackMs={riderOnly ? 10_000 : undefined} />
 
       <PageHeader title="Deliveries" description={<span aria-live="polite">{headline}</span>} />
+
+      {riderOnly && <InstallAppPrompt />}
 
       {offers.length > 0 && (
         <div className="flex flex-col gap-3">
