@@ -636,4 +636,13 @@ If both are clear, deploy now. If not, wait (re-check; at the latest the shop cl
 - **Gates:** typecheck clean, lint 0 errors, unit 3177, integration 833, all green. No follow-up card.
 - **Rollback:** code-only, redeploy `bd82f13`; safe at any time (no migration, no auth/permission change, no data write).
 - **Next:** rc-36-cookie-secret-dependency remains separately pending the owner's go/no-go (unrelated, still waiting).
-- **Owner follow-up card, next release:** `cookie-secret-dependency` — remove the legacy unsigned remembered-contact cookie fallback entirely. If `COOKIE_SECRET` is unset (or the value fails to validate), fail closed (treat the cookie as absent) and log an alert, never authorise by phone number alone. Not urgent today (`COOKIE_SECRET` has been set since Release 19a), but the owner asked for it to be removed rather than left dormant.
+- **Owner follow-up card, next release:** `cookie-secret-dependency` — **DONE (Release 25, `5782220`, 2026-09-22 23:24 UTC).** Removed the legacy unsigned remembered-contact cookie fallback entirely. If `COOKIE_SECRET` is unset or the value fails to validate, the cookie is now treated as absent and an alert is logged, never falling back to trusting a bare phone number.
+
+## 41. Release 25 live: gated auth release (23 Sep 2026)
+
+- **Live:** `5782220` (merged onto `kit-radix-nova`'s tip, which carried Release 24; BUILD_ID `e2260caa445edaf4`, migration 57 of 57 unchanged). Fingerprint `2e1c2fd91279` unchanged.
+- **Contents:** removes the unsigned remembered-contact cookie fallback entirely. If `COOKIE_SECRET` is unset or invalid, the `frybird_contact` cookie is treated as entirely absent (no read, no write) and an alert is logged, instead of falling back to a bare phone number. Closes the follow-up card `cookie-secret-dependency`.
+- **Review history:** `65bfab7` approved 2026-09-21 (security APPROVE, red-team AGREE). Branch rc-36 was built before rc-37 existed on the same base commit, so deployed by merging onto the live code to preserve Release 24.
+- **Gates on merge commit `5782220`:** typecheck clean, lint 0 errors (19 pre-existing unrelated warnings), unit 192 files / 3180 tests all green, integration 82 files / 833 tests all green. Quiet-shop check passed, fresh dump taken, smoke test 200 (all routes), zero journal errors, owner membership fingerprint unchanged, sign-in confirmed.
+- **Rollback:** code-only, redeploy `715308e` (Release 24 BUILD_ID `1d1147b27c8b6e19`); no schema change.
+- **What is next:** none specified by owner. This is a standalone security release closing a dormant-fallback hazard that is now safe to remove because `COOKIE_SECRET` has been set in production since Release 19a.
