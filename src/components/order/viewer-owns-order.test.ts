@@ -12,10 +12,6 @@ describe("viewerOwnsOrder", () => {
     expect(viewerOwnsOrder(order, { phone: null, email: "real@customer.test" }, null)).toBe(true);
   });
 
-  it("owns the order when the remembered checkout cookie's phone matches", () => {
-    expect(viewerOwnsOrder(order, null, { phone: "9876543210" })).toBe(true);
-  });
-
   it("refuses a stranger with no matching customer or cookie", () => {
     expect(viewerOwnsOrder(order, null, null)).toBe(false);
   });
@@ -24,16 +20,8 @@ describe("viewerOwnsOrder", () => {
     expect(viewerOwnsOrder(order, { phone: "1111111111", email: "someone@else.test" }, null)).toBe(false);
   });
 
-  it("refuses a cookie holding a different phone", () => {
-    expect(viewerOwnsOrder(order, null, { phone: "1111111111" })).toBe(false);
-  });
-
   it("never matches on two nulls — an order with no phone on file is not owned by a customer with no phone on file", () => {
     expect(viewerOwnsOrder({ customerPhone: null, customerEmail: null }, { phone: null, email: null }, null)).toBe(false);
-  });
-
-  it("never matches on an empty-string cookie phone against an order with no phone on file", () => {
-    expect(viewerOwnsOrder({ customerPhone: null, customerEmail: null }, null, { phone: "" })).toBe(false);
   });
 });
 
@@ -63,39 +51,38 @@ describe("redactReceiptCustomerForViewer", () => {
   });
 });
 
-describe("a SIGNED remembered-contact cookie proves the orders this browser placed, not a phone number (cookie-sign-1)", () => {
+describe("a remembered-contact cookie proves the orders this browser placed, never a bare phone number (cookie-sign-1, cookie-secret-dependency)", () => {
   const victimOrder = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", customerPhone: "9876543210", customerEmail: null };
   const mine = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
   it("an attacker who typed the victim's phone into their own checkout (and so holds a validly signed cookie for it) does NOT own the victim's order", () => {
-    expect(viewerOwnsOrder(victimOrder, null, { phone: "9876543210", trusted: true, orderIds: [mine] })).toBe(false);
+    expect(viewerOwnsOrder(victimOrder, null, { phone: "9876543210", orderIds: [mine] })).toBe(false);
   });
 
   it("the browser that placed the order owns it, by order id", () => {
-    expect(viewerOwnsOrder(victimOrder, null, { phone: "9876543210", trusted: true, orderIds: [victimOrder.id, mine] })).toBe(true);
+    expect(viewerOwnsOrder(victimOrder, null, { phone: "9876543210", orderIds: [victimOrder.id, mine] })).toBe(true);
   });
 
-  it("a signed cookie with no orders owns nothing", () => {
-    expect(viewerOwnsOrder(victimOrder, null, { phone: "9876543210", trusted: true, orderIds: [] })).toBe(false);
+  it("a cookie with no remembered orders owns nothing, even with the matching phone", () => {
+    expect(viewerOwnsOrder(victimOrder, null, { phone: "9876543210", orderIds: [] })).toBe(false);
   });
 
-  it("an order without an id can never be owned through a signed cookie", () => {
-    expect(viewerOwnsOrder({ customerPhone: "9876543210", customerEmail: null }, null, { phone: "9876543210", trusted: true, orderIds: [victimOrder.id] })).toBe(false);
+  it("an order without an id can never be owned through a remembered cookie", () => {
+    expect(viewerOwnsOrder({ customerPhone: "9876543210", customerEmail: null }, null, { phone: "9876543210", orderIds: [victimOrder.id] })).toBe(false);
   });
 
-  it("an unsigned (legacy) cookie behaves exactly as before while no secret is configured", () => {
-    expect(viewerOwnsOrder(victimOrder, null, { phone: "9876543210" })).toBe(true);
-    expect(viewerOwnsOrder(victimOrder, null, { phone: "9876543210", trusted: false, orderIds: [] })).toBe(true);
+  it("there is no unsigned fallback: a bare matching phone with no order id recorded owns nothing (cookie-secret-dependency closed this)", () => {
+    expect(viewerOwnsOrder(victimOrder, null, { phone: "9876543210", orderIds: [] })).toBe(false);
   });
 
   it("a signed-in customer's own phone or email still owns their orders whatever the cookie says", () => {
-    expect(viewerOwnsOrder(victimOrder, { phone: "9876543210", email: null }, { phone: "1", trusted: true, orderIds: [] })).toBe(true);
+    expect(viewerOwnsOrder(victimOrder, { phone: "9876543210", email: null }, { phone: "1", orderIds: [] })).toBe(true);
   });
 
-  it("rememberedPhoneFor: a signed cookie vouches for its phone only on an order it placed; an unsigned one as before", () => {
-    expect(rememberedPhoneFor(victimOrder.id, { phone: "9876543210", trusted: true, orderIds: [victimOrder.id] })).toBe("9876543210");
-    expect(rememberedPhoneFor(victimOrder.id, { phone: "9876543210", trusted: true, orderIds: [mine] })).toBeNull();
-    expect(rememberedPhoneFor(victimOrder.id, { phone: "9876543210" })).toBe("9876543210");
+  it("rememberedPhoneFor vouches for its phone only on an order this browser is recorded as having placed", () => {
+    expect(rememberedPhoneFor(victimOrder.id, { phone: "9876543210", orderIds: [victimOrder.id] })).toBe("9876543210");
+    expect(rememberedPhoneFor(victimOrder.id, { phone: "9876543210", orderIds: [mine] })).toBeNull();
+    expect(rememberedPhoneFor(victimOrder.id, { phone: "9876543210", orderIds: [] })).toBeNull();
     expect(rememberedPhoneFor(victimOrder.id, null)).toBeNull();
   });
 });

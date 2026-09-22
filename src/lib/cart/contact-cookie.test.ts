@@ -5,13 +5,8 @@ const contact = { name: "Asha Verma", phone: "9000000001", email: "asha@example.
 const secret = "s".repeat(40);
 const other = "t".repeat(40);
 
-describe("the remembered-contact cookie (cookie-sign-1)", () => {
-  it("with no secret it is the plain JSON it always was: nothing changes until a secret is set", () => {
-    expect(encodeContactCookie(contact)).toBe(JSON.stringify(contact));
-    expect(decodeContactCookie(JSON.stringify(contact))).toEqual(contact);
-  });
-
-  it("with a secret it round-trips as a signed cookie", () => {
+describe("the remembered-contact cookie (cookie-sign-1, cookie-secret-dependency)", () => {
+  it("it round-trips as a signed cookie", () => {
     const raw = encodeContactCookie(contact, secret);
     expect(raw.startsWith("v1.")).toBe(true);
     expect(decodeContactCookie(raw, secret)).toEqual(contact);
@@ -33,16 +28,11 @@ describe("the remembered-contact cookie (cookie-sign-1)", () => {
     expect(decodeContactCookie("", secret)).toBeNull();
   });
 
-  it("a signed cookie with no secret configured fails closed (it cannot be verified)", () => {
-    expect(decodeContactCookie(encodeContactCookie(contact, secret))).toBeNull();
-  });
-
   it("garbage never throws", () => {
     for (const raw of ["not json", "{", "v1.", "v1..", "v1.%%%.%%%", "null", "[]"]) {
       expect(() => decodeContactCookie(raw, secret)).not.toThrow();
       expect(decodeContactCookie(raw, secret)).toBeNull();
     }
-    expect(decodeContactCookie("not json")).toBeNull();
   });
 
   it("the signature covers the whole body: flipping any single character of the body invalidates it", () => {

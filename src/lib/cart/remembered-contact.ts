@@ -10,9 +10,16 @@ import "server-only";
  * knows their number.
  *
  * httpOnly, so a script on the page cannot read it either. Validated on read
- * and re-validated on submit. With `COOKIE_SECRET` set it is also SIGNED
- * (contact-cookie.ts): before, a tampered cookie could carry someone else's
- * phone number and `/order/[id]` would believe it.
+ * and re-validated on submit. SIGNED with `COOKIE_SECRET` (contact-cookie.ts):
+ * before, a tampered cookie could carry someone else's phone number and
+ * `/order/[id]` would believe it.
+ *
+ * `COOKIE_SECRET` is required, with no unsigned fallback (`cookie-secret-dependency`,
+ * post-launch card): if it is unset or malformed, every cookie read here is
+ * treated as absent and nothing is remembered — a customer types their details
+ * again, which is safe — rather than trusting a bare phone number, which is
+ * not. Each read/write while the secret is missing logs an alert so the
+ * misconfiguration is visible in the journal, not silent.
  */
 
 import { cookies } from "next/headers";
@@ -30,42 +37,55 @@ const contactSchema = z.object({
 const payloadSchema = contactSchema.extend({ orders: z.array(z.string().uuid()).max(MAX_REMEMBERED_ORDERS).optional() });
 
 export type RememberedContact = z.infer<typeof contactSchema> & {
-  /** The orders this browser placed, newest first. Empty for an unsigned cookie. */
+  /** The orders this browser placed, newest first. A signed cookie proves this list, never a bare phone number. */
   readonly orderIds: readonly string[];
-  /** True only for a cookie verified against COOKIE_SECRET. A trusted cookie proves orders, not a phone number. */
-  readonly trusted: boolean;
 };
 
-async function readPayload(): Promise<{ contact: z.infer<typeof payloadSchema>; trusted: boolean } | null> {
+/** Logs once per call site per request — loud on purpose: this is a permanent misconfiguration, not a transient blip. */
+function alertMissingSecret(secret: Exclude<ReturnType<typeof cookieSecret>, { kind: "ok" }>, where: string): void {
+  console.error(
+    secret.kind === "none"
+      ? `remembered-contact: COOKIE_SECRET is unset — ${where}, treating the frybird_contact cookie as absent`
+      : `remembered-contact: COOKIE_SECRET is invalid — ${where}, treating the frybird_contact cookie as absent`,
+  );
+}
+
+async function readPayload(): Promise<{ contact: z.infer<typeof payloadSchema> } | null> {
   const raw = (await cookies()).get(COOKIE)?.value;
   if (!raw) return null;
   const secret = cookieSecret();
-  if (secret.kind === "invalid") return null; // a malformed secret fails closed: no remembered contact, never a broken page
-  const parsed = payloadSchema.safeParse(decodeContactCookie(raw, secret.kind === "ok" ? secret.secret : undefined));
-  return parsed.success ? { contact: parsed.data, trusted: secret.kind === "ok" } : null;
+  if (secret.kind !== "ok") {
+    alertMissingSecret(secret, "cannot verify a remembered-contact cookie");
+    return null; // no unsigned fallback: an unverifiable cookie is exactly as good as no cookie
+  }
+  const parsed = payloadSchema.safeParse(decodeContactCookie(raw, secret.secret));
+  return parsed.success ? { contact: parsed.data } : null;
 }
 
 export async function readRememberedContact(): Promise<RememberedContact | null> {
   const read = await readPayload();
   if (!read) return null;
   const { orders, ...contact } = read.contact;
-  return { ...contact, orderIds: read.trusted ? (orders ?? []) : [], trusted: read.trusted };
+  return { ...contact, orderIds: orders ?? [] };
 }
 
 /**
- * Remembers who ordered (to pre-fill the next checkout) and, with COOKIE_SECRET set, which order this browser just placed.
- * The signed cookie proves the orders it was issued for; ownership of an order is decided by that list, never by a phone
- * number someone typed (see viewer-owns-order.ts).
+ * Remembers who ordered (to pre-fill the next checkout) and which order this browser just placed. The signed cookie
+ * proves the orders it was issued for; ownership of an order is decided by that list, never by a phone number someone
+ * typed (see viewer-owns-order.ts). Writes nothing at all when there is no secret to sign with.
  */
 export async function rememberContact(contact: unknown, orderId?: string): Promise<void> {
   const parsed = contactSchema.safeParse(contact);
   if (!parsed.success) return;
   const secret = cookieSecret();
-  if (secret.kind === "invalid") return;
+  if (secret.kind !== "ok") {
+    alertMissingSecret(secret, "not writing a remembered-contact cookie");
+    return;
+  }
 
-  const previous = secret.kind === "ok" ? ((await readPayload())?.contact.orders ?? []) : [];
-  const payload = secret.kind === "ok" ? { ...parsed.data, orders: withOrder(previous, orderId ?? "").filter(Boolean) } : parsed.data;
-  (await cookies()).set(COOKIE, encodeContactCookie(payload, secret.kind === "ok" ? secret.secret : undefined), {
+  const previous = (await readPayload())?.contact.orders ?? [];
+  const payload = { ...parsed.data, orders: withOrder(previous, orderId ?? "").filter(Boolean) };
+  (await cookies()).set(COOKIE, encodeContactCookie(payload, secret.secret), {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
