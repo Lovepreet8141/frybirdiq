@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type KitchenSource, type KitchenTicket, NEARLY_LATE_RATIO, isLate, prepHealth, ticketPrepTarget, nextKitchenStatus, toKitchenTickets, waitingMinutes } from "./tickets";
+import { type KitchenSource, type KitchenTicket, NEARLY_LATE_RATIO, healthCounts, isLate, prepHealth, ticketPrepTarget, nextKitchenStatus, toKitchenTickets, waitingMinutes } from "./tickets";
 
 const at = (iso: string) => new Date(iso);
 
@@ -127,5 +127,37 @@ describe("prepHealth", () => {
   });
   it("an ACCEPTED ticket is judged the same as a PREPARING one", () => {
     expect(prepHealth(ticket({ status: "ACCEPTED" }), at10(9))).toBe("AMBER");
+  });
+});
+
+describe("healthCounts (roadmap 4.3)", () => {
+  const placedAt = "2026-09-12T10:00:00Z";
+  const ticket = (over: Partial<Pick<KitchenTicket, "status" | "placedAt" | "promisedAt" | "prepTargetMinutes">> = {}) => ({
+    status: "PREPARING" as const,
+    placedAt,
+    promisedAt: null,
+    prepTargetMinutes: 10,
+    ...over,
+  });
+  const at10 = (minutes: number) => Date.parse(placedAt) + minutes * 60_000;
+
+  it("is all zero for no tickets", () => {
+    expect(healthCounts([], Date.now())).toEqual({ green: 0, amber: 0, red: 0 });
+  });
+
+  it("counts each ticket into exactly one bucket", () => {
+    const tickets = [ticket(), ticket({ prepTargetMinutes: 5 }), ticket({ prepTargetMinutes: 3 }), ticket({ status: "READY" })];
+    // at 6 minutes elapsed: the 10-min target is green (60%), the 5-min target is red (120%), the 3-min is red too, READY is always green
+    expect(healthCounts(tickets, at10(6))).toEqual({ green: 2, amber: 0, red: 2 });
+  });
+
+  it("matches prepHealth ticket-by-ticket, including the amber band", () => {
+    const tickets = [ticket({ prepTargetMinutes: 10 }), ticket({ prepTargetMinutes: 5 })];
+    // at 8 minutes: 10-min target is at 80% (amber), 5-min target is well past 100% (red)
+    expect(healthCounts(tickets, at10(8))).toEqual({ green: 0, amber: 1, red: 1 });
+  });
+
+  it("a ticket with no target and no promise never counts as amber or red, however long it waits", () => {
+    expect(healthCounts([ticket({ prepTargetMinutes: null })], at10(600))).toEqual({ green: 1, amber: 0, red: 0 });
   });
 });

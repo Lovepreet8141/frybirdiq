@@ -124,6 +124,32 @@ export function prepHealth(
   return "GREEN";
 }
 
+export interface HealthCounts {
+  readonly green: number;
+  readonly amber: number;
+  readonly red: number;
+}
+
+/**
+ * GREEN / AMBER / RED counts across a set of tickets, from `prepHealth` (roadmap 4.3). Pass the tickets still live in
+ * the kitchen (`toKitchenTickets` already filters to that); a READY ticket among them counts GREEN, same as `prepHealth`.
+ */
+export function healthCounts(
+  tickets: readonly (Pick<KitchenTicket, "placedAt" | "promisedAt" | "prepTargetMinutes"> & { readonly status: string })[],
+  now: number,
+): HealthCounts {
+  let green = 0;
+  let amber = 0;
+  let red = 0;
+  for (const ticket of tickets) {
+    const health = prepHealth(ticket, now);
+    if (health === "GREEN") green++;
+    else if (health === "AMBER") amber++;
+    else red++;
+  }
+  return { green, amber, red };
+}
+
 /** The one move the kitchen makes from each column; READY is handed over by the counter, not here. */
 export function nextKitchenStatus(status: KitchenStatus): { to: "PREPARING" | "READY"; label: string } | null {
   if (status === "ACCEPTED") return { to: "PREPARING", label: "Start cooking" };

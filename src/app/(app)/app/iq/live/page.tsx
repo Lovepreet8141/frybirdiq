@@ -5,14 +5,16 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { LiveRefresh } from "@/components/staff/live-refresh";
 import { CommandCenterNav } from "@/components/iq/command-center-nav";
+import { OrderHealthStrip } from "@/components/iq/order-health-strip";
 import { DataTrust, KpiTile, Panel, PanelBody, PanelHeader } from "@/components/iq/ui";
 import { PageHeader } from "@/components/staff/page-header";
 import { PermissionDenied } from "@/components/states";
 import type { FulfilmentType } from "@/domain/order-status";
 import { requireStaff, staffCan } from "@/lib/auth";
-import { type KitchenStatus, isLate, toKitchenTickets, waitingMinutes } from "@/lib/kitchen/tickets";
+import { type KitchenStatus, healthCounts, isLate, prepHealth, toKitchenTickets, waitingMinutes } from "@/lib/kitchen/tickets";
 import { formatINR, paise } from "@/lib/money";
 import { ordersAwaitingDecision, ordersRunningLate } from "@/lib/repositories/analytics";
+import { getPrepTargets } from "@/lib/repositories/kitchen-targets";
 import { listActiveOrders } from "@/lib/repositories/orders";
 import { cn } from "@/lib/utils";
 
@@ -41,10 +43,11 @@ function minutesSince(date: Date, now: number): number {
   return Math.max(0, Math.floor((now - date.getTime()) / 60_000));
 }
 
-/** The three live queries plus the instant they were read — `now` belongs to the snapshot, not to the render. */
+/** The live queries plus the instant they were read — `now` belongs to the snapshot, not to the render. */
 async function snapshot(orgId: string) {
   const [active, awaiting, late] = await Promise.all([listActiveOrders(orgId), ordersAwaitingDecision(orgId), ordersRunningLate(orgId)]);
-  return { active, awaiting, late, now: Date.now() };
+  const prepTargets = await getPrepTargets(orgId, active.map((order) => order.id));
+  return { active, awaiting, late, prepTargets, now: Date.now() };
 }
 
 /**
@@ -54,9 +57,12 @@ async function snapshot(orgId: string) {
  * no columns to work, just what is in the kitchen, what is waiting on the
  * counter, and what is late — every figure a fact from an existing query
  * (`listActiveOrders`, `ordersAwaitingDecision`, `ordersRunningLate`). No
- * score, no forecast, no threshold: "late" means past the time the counter
- * promised, "longest wait" is the oldest ticket's age, and the headline is
- * only ever a count restated in words.
+ * forecast: "late" means past the time the counter promised, "longest wait"
+ * is the oldest ticket's age, and the headline is only ever a count restated
+ * in words. The one rule applied is the roadmap 4.1 prep-target rule already
+ * used on the kitchen display (`prepHealth`) — amber at 80% of a ticket's
+ * target, red at 100% or past the promise — surfaced here as the "Order
+ * health" strip (roadmap 4.3), never a second, invented threshold.
  *
  * Read-only under `analytics.view`. The only actions are links to where the
  * real ones already live (Orders, the kitchen display).
@@ -73,10 +79,11 @@ export default async function LiveOperationsPage() {
     );
   }
 
-  const { active, awaiting, late, now } = await snapshot(staff.orgId);
-  const tickets = toKitchenTickets(active);
+  const { active, awaiting, late, prepTargets, now } = await snapshot(staff.orgId);
+  const tickets = toKitchenTickets(active, prepTargets);
   const count = (status: KitchenStatus) => tickets.filter((ticket) => ticket.status === status).length;
   const longest = tickets.reduce((max, ticket) => Math.max(max, waitingMinutes(ticket, now)), 0);
+  const health = healthCounts(tickets, now);
 
   const headline =
     late.length > 0
@@ -118,6 +125,13 @@ export default async function LiveOperationsPage() {
         <KpiTile label="Late" value={String(late.length)} note="Past the promised time" className={cn("min-h-[124px]", late.length > 0 && "[&_.font-money]:text-loss")} />
         <KpiTile label="Longest wait" value={tickets.length === 0 ? "—" : `${longest} min`} note="Oldest ticket in the kitchen, since placed" className="min-h-[124px]" />
       </div>
+
+      <Panel aria-labelledby="order-health-heading">
+        <PanelHeader id="order-health-heading" title="Order health" meta="from each ticket's prep target (roadmap 4.1) — amber at 80%, red at 100% or past the promised time" />
+        <PanelBody>
+          <OrderHealthStrip counts={health} />
+        </PanelBody>
+      </Panel>
 
       <Panel aria-labelledby="late-heading">
         <PanelHeader
@@ -232,6 +246,7 @@ export default async function LiveOperationsPage() {
               <TableBody>
                 {tickets.map((ticket) => {
                   const ticketLate = isLate(ticket, now);
+                  const health = prepHealth(ticket, now);
                   const stage = STAGE[ticket.status];
                   return (
                     <TableRow key={ticket.id}>
@@ -245,7 +260,7 @@ export default async function LiveOperationsPage() {
                       </TableCell>
                       <TableCell>
                         <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-border px-2.5 py-1 text-xs font-semibold">
-                          <span className={cn("size-2 rounded-full", stage.dot)} aria-hidden="true" />
+                          <span className={cn("size-2 rounded-full", health === "RED" ? "bg-loss" : health === "AMBER" ? "bg-flag" : stage.dot)} aria-hidden="true" />
                           {stage.label}
                         </span>
                       </TableCell>
@@ -256,8 +271,8 @@ export default async function LiveOperationsPage() {
                       </TableCell>
                       <TableCell className="tabular hidden text-muted-foreground sm:table-cell">{ticket.promisedAt ? clock(new Date(ticket.promisedAt)) : "—"}</TableCell>
                       <TableCell className="text-right">
-                        <span className={cn("tabular font-semibold", ticketLate && "text-loss")}>
-                          {waitingMinutes(ticket, now)} min{ticketLate ? " · late" : ""}
+                        <span className={cn("tabular font-semibold", health === "RED" && "text-loss", health === "AMBER" && "text-flag")}>
+                          {waitingMinutes(ticket, now)} min{ticketLate ? " · late" : health === "AMBER" ? " · nearly late" : ""}
                         </span>
                       </TableCell>
                     </TableRow>
