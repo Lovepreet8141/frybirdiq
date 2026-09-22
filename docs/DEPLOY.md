@@ -738,17 +738,21 @@ None of these block a first deploy. All of them matter before this is the only
 way FRYBIRD takes orders.
 
 
-## 12. Cookie signing secret (cookie-sign-1) - owner-approved step, run only when asked
+## 12. Cookie signing secret (cookie-sign-1, cookie-secret-dependency) - owner-approved step, run only when asked
 
 `COOKIE_SECRET` signs the `frybird_contact` cookie AND makes it carry the ids of the orders this browser placed. With it set,
 `/order/[id]`, the invoice page, the payment-failure report and the WhatsApp link decide ownership by "this order id is in my signed
-cookie", never by a phone number in the cookie: before, anyone could type a victim's phone number (into their own cookie, or into their
-own checkout) and read that customer's order page. The code ships with the secret UNSET: nothing changes until it is set.
+cookie", never by a phone number in the cookie. **It has been set in production since Release 19a, and since `cookie-secret-dependency`
+there is no unsigned fallback left in the code at all**: if it were ever unset or malformed, `src/lib/cart/remembered-contact.ts` treats
+every `frybird_contact` cookie as entirely absent (nothing is remembered, no order is recognised by cookie) and logs a `console.error`
+alert naming which case it is — it does NOT fall back to a plain-JSON cookie or a phone-number match. That old fallback, and the forgery
+it allowed (anyone could type a victim's phone number into their own cookie or checkout and read that customer's order page), is gone,
+not just unreachable while the secret happens to be set.
 
 The secret is read on its own, not through the strict server environment: a malformed value (under 32 characters, a space, non-ASCII)
-FAILS CLOSED (no remembered contact, cookie treated as absent) and can never break checkout or an order page.
+FAILS CLOSED the same way as unset, and can never break checkout or an order page.
 
-Setting it (root on the VPS, after the owner's yes; the value is generated on the server and never printed, logged, committed or pasted):
+Setting it for the first time (root on the VPS, after the owner's yes; the value is generated on the server and never printed, logged, committed or pasted):
 
 ```bash
 set -euo pipefail
@@ -760,13 +764,18 @@ curl -s -o /dev/null -w 'checkout %{http_code}\n' https://frybirdiq.tech/checkou
 curl -s -o /dev/null -w 'menu %{http_code}\n' https://frybirdiq.tech/menu           # expect 200
 ```
 
-Effect: existing plain cookies are treated as absent once (the customer types their details on the next order and gets a signed cookie
-that also remembers that order). An order placed BEFORE the secret was set can no longer be opened by the phone-in-cookie rule: its
-customer signs in, or uses the link they were sent, or places a new order; the order page for a stranger shows nothing personal, as
-before. Rollback: remove the `COOKIE_SECRET` line and restart: signed cookies then fail closed and new cookies are plain JSON again
-(the phone rule returns, so the forgery returns). Rotating the secret signs everyone out of their remembered contact once. Verify with a
-real order placed by the owner from a phone: `/order/<id>` shows their own details right after checkout; a browser that never placed
-it shows nothing personal.
+Effect the first time it is set: existing plain cookies are treated as absent once (the customer types their details on the next order
+and gets a signed cookie that also remembers that order). An order placed before the secret was set can no longer be opened by the
+phone-in-cookie rule: its customer signs in, or uses the link they were sent, or places a new order; the order page for a stranger shows
+nothing personal, as before.
+
+**Removing or losing the secret now (accidental unset, a bad env edit) is NOT a rollback of this feature — it fails the whole
+remembered-contact mechanism closed:** no cookie is read, no cookie is written, every returning customer has to retype their details,
+and every unset/write attempt against a real cookie logs an alert in the journal. It does **not** bring back plain-JSON cookies or the
+phone-matching rule — that code no longer exists. If `journalctl -u frybird` shows repeated `remembered-contact: COOKIE_SECRET is
+unset/invalid` lines, the fix is to set (or restore) `COOKIE_SECRET`, not to "roll back" anything. Rotating the secret to a new value
+signs everyone out of their remembered contact once, same as before. Verify with a real order placed by the owner from a phone:
+`/order/<id>` shows their own details right after checkout; a browser that never placed it shows nothing personal.
 
 ## 13. Till runbook: refunding cash a rider is still carrying
 

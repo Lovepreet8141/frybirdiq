@@ -17,7 +17,7 @@ const ORDER = {
 const state = {
   order: ORDER as typeof ORDER | null,
   customer: null as { phone: string | null; email: string | null } | null,
-  remembered: null as { phone: string } | null,
+  remembered: null as { phone: string; orderIds: readonly string[] } | null,
 };
 
 vi.mock("server-only", () => ({}));
@@ -57,7 +57,7 @@ describe("whatsappOrderLink authorization", () => {
   });
 
   it("returns the link to the owner (remembered-contact cookie)", async () => {
-    state.remembered = { phone: PHONE };
+    state.remembered = { phone: PHONE, orderIds: [ORDER.id] };
     const result = await whatsappOrderLink({ orderId: "order-1" });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.url).toContain(`https://wa.me/91${PHONE}`);
@@ -74,16 +74,16 @@ describe("whatsappOrderLink authorization", () => {
     expectDenied(await whatsappOrderLink({ orderId: "order-1" }));
 
     state.customer = null;
-    state.remembered = { phone: OTHER_PHONE };
+    state.remembered = { phone: OTHER_PHONE, orderIds: [] }; // this browser never placed order-1
     expectDenied(await whatsappOrderLink({ orderId: "order-1" }));
   });
 
   it("answers a missing order exactly as it answers someone else's order", async () => {
     state.order = null;
-    state.remembered = { phone: PHONE };
+    state.remembered = { phone: PHONE, orderIds: ["nope"] };
     const missing = await whatsappOrderLink({ orderId: "nope" });
     state.order = ORDER;
-    state.remembered = { phone: OTHER_PHONE };
+    state.remembered = { phone: OTHER_PHONE, orderIds: [] }; // this browser never placed order-1
     const foreign = await whatsappOrderLink({ orderId: "order-1" });
     expect(missing).toEqual(foreign);
   });

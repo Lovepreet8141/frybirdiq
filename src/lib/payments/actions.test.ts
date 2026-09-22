@@ -19,11 +19,10 @@ vi.mock("@/lib/repositories/payments", () => ({
 }));
 vi.mock("next/cache", () => ({ revalidatePath: (path: string) => revalidatePath(path) }));
 vi.mock("@/lib/customer", () => ({ getCustomer: async () => null }));
-vi.mock("@/lib/cart/remembered-contact", () => ({ readRememberedContact: async () => ({ phone: "9876543210" }) }));
+const ORDER = "4b3a2c1d-0e0f-4a1b-8c2d-3e4f5a6b7c8d";
+vi.mock("@/lib/cart/remembered-contact", () => ({ readRememberedContact: async () => ({ phone: "9876543210", orderIds: [ORDER] }) }));
 
 const { confirmOnlinePaymentAction, reportOnlinePaymentFailureAction } = await import("./actions");
-
-const ORDER = "4b3a2c1d-0e0f-4a1b-8c2d-3e4f5a6b7c8d";
 const VALID = { orderId: ORDER, razorpayOrderId: "order_Abc123", razorpayPaymentId: "pay_Xyz789", razorpaySignature: "a".repeat(64) };
 
 describe("confirmOnlinePaymentAction", () => {

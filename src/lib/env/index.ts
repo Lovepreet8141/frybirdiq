@@ -184,9 +184,10 @@ export type CookieSecret = { readonly kind: "none" } | { readonly kind: "invalid
 /**
  * The secret that signs the `frybird_contact` cookie (cookie-sign-1). Read on its own, NOT through `serverEnv()`, on purpose:
  * checkout and every order page read the cookie, and a malformed secret must never be able to take them down. Unset or blank
- * means `none` (the cookie stays plain JSON, as before). A secret that is too short or contains whitespace or non-ASCII
- * is `invalid` and FAILS CLOSED: the cookie is treated as absent and no contact is remembered, so a typo in the server
- * environment can never re-open the forgery it was meant to close, and never breaks a page.
+ * means `none`; a secret that is too short or contains whitespace or non-ASCII is `invalid`. Both FAIL CLOSED the same
+ * way (`cookie-secret-dependency`): `src/lib/cart/remembered-contact.ts` treats the cookie as entirely absent and logs an
+ * alert — there is no unsigned-JSON fallback any more, so a typo in the server environment can never re-open the phone-number
+ * forgery this was built to close, and never breaks a page.
  */
 export function cookieSecret(): CookieSecret {
   const raw = process.env.COOKIE_SECRET;

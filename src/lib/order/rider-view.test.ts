@@ -28,7 +28,7 @@ describe("riderViewForViewer", () => {
     mocks.getOrg.mockResolvedValue({ id: "org-1" });
     mocks.getOrder.mockResolvedValue(order);
     mocks.getCustomer.mockResolvedValue(null);
-    mocks.readRememberedContact.mockResolvedValue({ phone: "9000000001", name: "A", email: "a@b.co", orderIds: [id], trusted: true });
+    mocks.readRememberedContact.mockResolvedValue({ phone: "9000000001", name: "A", email: "a@b.co", orderIds: [id] });
     mocks.getRiderTrackingView.mockResolvedValue(view);
   });
 
@@ -50,7 +50,7 @@ describe("riderViewForViewer", () => {
   });
 
   it("a cookie that vouches for other orders does not vouch for this one", async () => {
-    mocks.readRememberedContact.mockResolvedValue({ phone: "9000000001", name: "A", email: "a@b.co", orderIds: ["00000000-0000-4000-8000-000000000001"], trusted: true });
+    mocks.readRememberedContact.mockResolvedValue({ phone: "9000000001", name: "A", email: "a@b.co", orderIds: ["00000000-0000-4000-8000-000000000001"] });
     expect(await call()).toBeNull();
     expect(mocks.getRiderTrackingView).not.toHaveBeenCalled();
   });
