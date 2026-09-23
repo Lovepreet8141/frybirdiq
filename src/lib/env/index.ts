@@ -105,6 +105,20 @@ const serverSchema = z.object({
    */
   JOB_SECRET: optionalBearerSecret(32),
   JOB_SECRET_PREVIOUS: optionalBearerSecret(32),
+  /**
+   * Where `src/lib/auth/owner-membership-alert.ts` POSTs a short plain-text
+   * line when an OWNER membership is created or reactivated
+   * (alert-owner-created). A credential (an ntfy topic URL can read and
+   * post, same as `deploy/notify.sh`'s `ALERT_URL`), so it is never logged —
+   * only the fixed alert message is. This is a *separate* copy of the same
+   * kind of value from the one in `/etc/frybird/alert.env` (DEPLOY.md §11.2):
+   * that file is read only by systemd's OnFailure units, never by this
+   * process, so this app-level alert needs its own line in the app's own env
+   * file to POST directly from the request that created the membership.
+   * Unset means the alert is written to the journal only (`console.error`),
+   * loud, never silent — same shape as `cookieSecret()`'s missing-secret path.
+   */
+  ALERT_URL: optionalSecret,
 });
 
 /**

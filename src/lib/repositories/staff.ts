@@ -20,8 +20,15 @@ import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, memberships } from "@/db/schema";
 import { type Role, canGrantRole } from "@/domain/permissions";
+import { type OwnerMembershipEvent, sendOwnerMembershipAlert } from "@/lib/auth/owner-membership-alert";
 import { serverEnv } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/server";
+
+/** `owner_membership_created` / `owner_membership_reactivated` — see `owner-membership-alert.ts`. */
+const OWNER_ALERT_ACTION: Record<OwnerMembershipEvent, string> = {
+  created: "owner_membership_created",
+  reactivated: "owner_membership_reactivated",
+};
 
 export interface StaffMember {
   readonly userId: string;
@@ -103,12 +110,19 @@ export async function inviteStaff(orgId: string, actorUserId: string, actorRoles
 
   const userId = data.user.id;
 
-  return db().transaction(async (tx) => {
+  // alert-owner-created: set inside the transaction below, read after it commits.
+  let ownerEvent: OwnerMembershipEvent | null = null;
+
+  const result = await db().transaction(async (tx): Promise<InviteStaffResult> => {
     // Insert first and let the unique (org, user, role) index arbitrate: two identical invites in flight
     // used to both see "no row" and the loser died on a unique violation (a 500). The loser now takes the resend path (invite-race-1).
     const [inserted] = await tx.insert(memberships).values({ orgId, userId, role, displayName: email.split("@")[0] }).onConflictDoNothing().returning();
     if (inserted) {
       await tx.insert(auditLogs).values({ orgId, actorUserId, action: "staff_invited", entity: "memberships", entityId: inserted.id, after: { email, role } });
+      if (role === "OWNER") {
+        ownerEvent = "created";
+        await tx.insert(auditLogs).values({ orgId, actorUserId, action: OWNER_ALERT_ACTION.created, entity: "memberships", entityId: inserted.id, after: { email, role } });
+      }
       return { ok: true, resent: false };
     }
 
@@ -123,13 +137,21 @@ export async function inviteStaff(orgId: string, actorUserId: string, actorRoles
       // likely: this is the second time someone clicked "Invite" before the
       // first email was accepted) — reactivating rather than erroring keeps
       // a double-tap idempotent instead of stuck.
-      if (!existing.isActive) await tx.update(memberships).set({ isActive: true }).where(eq(memberships.id, existing.id));
+      const wasInactive = !existing.isActive;
+      if (wasInactive) await tx.update(memberships).set({ isActive: true }).where(eq(memberships.id, existing.id));
       await tx.insert(auditLogs).values({ orgId, actorUserId, action: "staff_invited", entity: "memberships", entityId: existing.id, after: { email, role } });
+      if (role === "OWNER" && wasInactive) {
+        ownerEvent = "reactivated";
+        await tx.insert(auditLogs).values({ orgId, actorUserId, action: OWNER_ALERT_ACTION.reactivated, entity: "memberships", entityId: existing.id, after: { email, role } });
+      }
       return { ok: true, resent: true };
     }
 
     return { ok: false, error: "The invite could not be recorded. Try again." };
   });
+
+  if (ownerEvent) await sendOwnerMembershipAlert(ownerEvent, orgId, userId);
+  return result;
 }
 
 export type StaffWriteResult = { ok: true } | { ok: false; error: string };
@@ -182,7 +204,10 @@ export async function changeStaffRole(orgId: string, actorUserId: string, actorR
     return { ok: false, error: `Your account can't grant the ${newRole} role — it can do more than yours can.` };
   }
 
-  return db().transaction(async (tx) => {
+  // alert-owner-created: set inside the transaction below, read after it commits.
+  let ownerEvent: OwnerMembershipEvent | null = null;
+
+  const result = await db().transaction(async (tx): Promise<StaffWriteResult> => {
     // FOR UPDATE: the role ceiling below is decided from these rows, so a simultaneous role change on the same person must finish first (staff-lock-1).
     const rows = await tx.select().from(memberships).where(and(eq(memberships.orgId, orgId), eq(memberships.userId, targetUserId))).orderBy(memberships.id).for("update");
     if (rows.length === 0) return { ok: false, error: "That person is not on the roster." };
@@ -198,11 +223,14 @@ export async function changeStaffRole(orgId: string, actorUserId: string, actorR
     const targetRow = rows.find((row) => row.role === newRole);
 
     if (targetRow) {
+      const wasInactive = !targetRow.isActive;
       await tx.update(memberships).set({ isActive: true }).where(eq(memberships.id, targetRow.id));
+      if (newRole === "OWNER" && wasInactive) ownerEvent = "reactivated";
     } else {
       const template = active[0];
       if (!template) return { ok: false, error: "That person is not on the roster." };
       await tx.insert(memberships).values({ orgId, userId: targetUserId, role: newRole, displayName: template.displayName, isActive: true });
+      if (newRole === "OWNER") ownerEvent = "created";
     }
 
     // Everything else this person actively held is superseded by the new role.
@@ -211,6 +239,12 @@ export async function changeStaffRole(orgId: string, actorUserId: string, actorR
     }
 
     await tx.insert(auditLogs).values({ orgId, actorUserId, action: "staff_role_changed", entity: "memberships", entityId: targetUserId, before: { roles: beforeRoles }, after: { roles: [newRole] } });
+    if (ownerEvent) {
+      await tx.insert(auditLogs).values({ orgId, actorUserId, action: OWNER_ALERT_ACTION[ownerEvent], entity: "memberships", entityId: targetUserId, before: { roles: beforeRoles }, after: { roles: [newRole] } });
+    }
     return { ok: true };
   });
+
+  if (ownerEvent) await sendOwnerMembershipAlert(ownerEvent, orgId, targetUserId);
+  return result;
 }
