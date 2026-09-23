@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto";
 
 import { PULSE_JOB_NAME, runServicePulse } from "@/lib/iq/detect/pulse-job";
+import { preLaunchDates } from "@/lib/iq/launch-window";
 
 import type { JobContext, JobRunResult } from "../context";
 import { requireCodeVersion } from "./code-version";
@@ -34,6 +35,9 @@ export const INTRADAY_WRITER_JOB = "iq-facts-intraday";
 export async function runPulse(ctx: JobContext): Promise<JobRunResult> {
   // Fail before reading anything, with a code that says why, rather than at the write.
   requireCodeVersion(ctx.codeVersion);
+  // Owner-supplied closure dates are gated owner input (IQ-2 R2.9), still none. Days before the org's Opening
+  // date are excluded the same way, unconditionally — no toggle here, there is no viewer to ask (`analytics-start-date`).
+  const openedOn = await ctx.repos.readOpenedOn();
   return runServicePulse({
     orgId: ctx.orgId,
     runId: ctx.runId,
@@ -44,8 +48,7 @@ export async function runPulse(ctx: JobContext): Promise<JobRunResult> {
     intradayFreshAt: (bucketEnd) => ctx.repos.intradayFreshAt(bucketEnd),
     readPulseDays: (dates) => ctx.repos.readPulseDays(dates),
     countPaidOrders: (from, to) => ctx.repos.countPaidOrders(from, to),
-    // Owner-supplied closure dates are gated owner input (IQ-2 R2.9); none yet.
-    excludedDates: [],
+    excludedDates: preLaunchDates(openedOn),
     newId: randomUUID,
     commit: (write) =>
       ctx.commit((repos) =>

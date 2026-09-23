@@ -17,6 +17,7 @@ import { awaitsCounterDecision } from "@/domain/order-alert";
 import type { OrderChannel } from "@/domain/order-channel";
 import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
 import { type DateRange, addDays, businessDate, endOfBusinessDay, previousPeriod, resolveRange, startOfBusinessDay } from "@/lib/dates";
+import { clampRangeToLaunch } from "@/lib/iq/launch-window";
 import { type CompareKey, type CostInputs, type OpeningDate, type OverviewRange, averageOrder, isMultiDay } from "@/lib/iq/overview";
 import { type Paise, ZERO, add, formatINR, paise } from "@/lib/money";
 import { type DayTotal, PAID_PAYMENT_STATUSES, hasPaidPayment, periodTotals } from "./analytics";
@@ -385,9 +386,15 @@ async function averageOf(orgId: string, windows: readonly DateRange[]): Promise<
  * The range's totals and the comparison's, measured the same way. "To the
  * same hour" for today, whole days for anything already finished — so a
  * morning is never measured against a full day and read as a collapse.
+ *
+ * `analytics-start-date`: the CURRENT window is clamped to the org's Opening date by default (`openedOn`,
+ * unless `includePreLaunch`) — "Last 30 days" three days after a real go-live shows three real days, not
+ * thirty days of test data. The comparison baseline needs no separate clamp: `compareOptions` (`src/lib/iq/
+ * overview.ts`) already refuses to offer a comparison that needs more history than the shop has had since
+ * opening, so `compare` here is never a key whose baseline would reach before the Opening date.
  */
-export async function getRangeComparison(orgId: string, range: OverviewRange, compare: CompareKey | null, now: Date): Promise<RangeComparison> {
-  const window = windowFor(range, now);
+export async function getRangeComparison(orgId: string, range: OverviewRange, compare: CompareKey | null, now: Date, openedOn: string | null = null, includePreLaunch = false): Promise<RangeComparison> {
+  const window = clampRangeToLaunch(windowFor(range, now), openedOn, includePreLaunch);
   const today = businessDate(now);
   const current = await periodTotals(orgId, window);
 

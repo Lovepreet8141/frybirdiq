@@ -125,6 +125,7 @@ async function seedBriefFacts(date: string, lease: IqWriteLease): Promise<void> 
     attempt: lease.attempt,
     codeVersion: "6ad2606",
     date,
+    openedOn: null,
     factsReady: async () => true,
     readFigures: async () => figuresRead(),
     newId: randomUUID,

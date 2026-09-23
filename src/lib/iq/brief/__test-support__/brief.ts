@@ -84,7 +84,7 @@ export function stored(insight: Insight, extra: { status?: Insight["status"]; st
 }
 
 /** The FACTs `runBriefDaily` writes for `date`. */
-export async function briefFacts(date: string, seed: SeedFigures = {}): Promise<BriefInsight[]> {
+export async function briefFacts(date: string, seed: SeedFigures = {}, openedOn: string | null = null): Promise<BriefInsight[]> {
   const written: InsightOf<"FACT">[] = [];
   await runBriefDaily({
     orgId: ORG,
@@ -92,6 +92,7 @@ export async function briefFacts(date: string, seed: SeedFigures = {}): Promise<
     attempt: 1,
     codeVersion: "93fd9c5",
     date,
+    openedOn,
     factsReady: async () => true,
     readFigures: async () => figuresRead(seed),
     newId: nextId,

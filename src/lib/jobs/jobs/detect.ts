@@ -14,6 +14,7 @@
 import { randomUUID } from "node:crypto";
 
 import { UpstreamNotReady, runDetectDaily } from "@/lib/iq/detect/detect-job";
+import { preLaunchDates } from "@/lib/iq/launch-window";
 
 import type { JobContext, JobRunResult } from "../context";
 import { dateOfPeriodKey } from "../facts-plan";
@@ -32,15 +33,17 @@ export async function runDetect(ctx: JobContext): Promise<JobRunResult> {
   }
 }
 
-function evaluate(ctx: JobContext): Promise<JobRunResult> {
+async function evaluate(ctx: JobContext): Promise<JobRunResult> {
+  // Owner-supplied closure dates are gated owner input (IQ-2 R2.9), still none. Days before the org's Opening
+  // date are excluded the same way, unconditionally — no toggle here, there is no viewer to ask (`analytics-start-date`).
+  const openedOn = await ctx.repos.readOpenedOn();
   return runDetectDaily({
     orgId: ctx.orgId,
     runId: ctx.runId,
     attempt: ctx.attempt,
     codeVersion: ctx.codeVersion,
     date: dateOfPeriodKey(ctx.periodKey),
-    // Owner-supplied closure dates are gated owner input (IQ-2 R2.9); none yet.
-    excludedDates: [],
+    excludedDates: preLaunchDates(openedOn),
     factsReady: (date) => ctx.repos.factsReadyFor(date),
     readDays: (dates) => ctx.repos.readDetectDays(dates),
     readFoodCostTarget: (date) => ctx.repos.readFoodCostTarget(date),

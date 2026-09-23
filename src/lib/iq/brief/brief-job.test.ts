@@ -17,6 +17,7 @@ function fakePorts(read: BriefFiguresRead, options: { factsReady?: boolean; outc
     attempt: 2,
     codeVersion: "93fd9c5",
     date: DATE,
+    openedOn: null,
     factsReady: async () => options.factsReady ?? true,
     readFigures: async () => read,
     newId: nextId,
@@ -50,6 +51,25 @@ describe("briefPeriods", () => {
     expect(briefPeriods("2026-05-31").sameDaysLastMonth).toEqual({ from: "2026-04-01", to: "2026-04-30", clamped: true });
     expect(briefPeriods("2026-01-15")).toMatchObject({ monthToDate: { from: "2026-01-01" }, sameDaysLastMonth: { from: "2025-12-01", to: "2025-12-15", clamped: false } });
     expect(briefPeriods("2026-09-01").monthToDate).toEqual({ from: "2026-09-01", to: "2026-09-01" });
+  });
+
+  describe("analytics-start-date: openedOn clamps out pre-launch days", () => {
+    it("with no Opening date, behaves exactly as before", () => {
+      expect(briefPeriods("2026-09-11", null)).toEqual(briefPeriods("2026-09-11"));
+    });
+
+    it("moves monthToDate's start up to the Opening date when the month started before it", () => {
+      expect(briefPeriods("2026-09-11", "2026-09-05").monthToDate).toEqual({ from: "2026-09-05", to: "2026-09-11" });
+    });
+
+    it("drops sameDaysLastMonth entirely (zero days) when that whole span predates the Opening date", () => {
+      const { sameDaysLastMonth } = briefPeriods("2026-09-11", "2026-09-01");
+      expect(sameDaysLastMonth.from > sameDaysLastMonth.to).toBe(true);
+    });
+
+    it("does not clamp a period that is already entirely after the Opening date", () => {
+      expect(briefPeriods("2026-09-11", "2026-01-01").monthToDate).toEqual({ from: "2026-09-01", to: "2026-09-11" });
+    });
   });
 });
 

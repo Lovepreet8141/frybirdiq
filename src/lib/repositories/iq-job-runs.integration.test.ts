@@ -553,6 +553,7 @@ describe("a job reaches the database only through org-bound ctx (SECURITY condit
         "readDetectDays",
         "readFactFigures",
         "readFoodCostTarget",
+        "readOpenedOn",
         "readOpeningHours",
         "readPulseDays",
         "readRecon",

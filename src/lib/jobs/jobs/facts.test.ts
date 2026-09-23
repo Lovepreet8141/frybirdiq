@@ -69,6 +69,7 @@ function fakeContext(options: Options) {
   };
   const readers: JobReadRepos = {
     factsHistoryStart: async () => options.historyStart ?? null,
+    readOpenedOn: unused,
     healLostRefundFollowUps: unused,
     countStuckRefundFollowUps: unused,
     purgeRiderPositions: unused,

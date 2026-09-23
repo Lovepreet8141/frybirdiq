@@ -23,6 +23,7 @@
 import { addDays } from "@/lib/dates";
 import { UpstreamNotReady, istDayStart, istTimestamp } from "@/lib/iq/detect/detect-job";
 import { computeContentHash, trustRefFor, type FigureTrust, type InsightOf, type Observed, type Unit } from "@/lib/iq/engine";
+import { clampSpanToLaunch } from "@/lib/iq/launch-window";
 import type { JobRunResult } from "@/lib/jobs/context";
 
 import { BRIEF_JOB_NAME, BRIEF_PRODUCER, BRIEF_SOURCE_QUERY, briefFactKey, briefFactTemplateId, type BriefWindow } from "./keys";
@@ -43,8 +44,15 @@ export type BriefPeriods = {
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** R2.10: "Month to date net sales and the same days last month (1..d, clamped to that month's length)". */
-export function briefPeriods(date: string): BriefPeriods {
+/**
+ * R2.10: "Month to date net sales and the same days last month (1..d, clamped to that month's length)".
+ *
+ * `openedOn` (`analytics-start-date`) clamps `monthToDate` and `sameDaysLastMonth` so neither ever starts
+ * before the org's Opening date — a month that opened mid-way through, or a "same days last month" span
+ * that falls entirely before launch, never has pre-launch test data folded into month-to-date net sales.
+ * `null` (the default) applies no clamp, unchanged from before this existed.
+ */
+export function briefPeriods(date: string, openedOn: string | null = null): BriefPeriods {
   const [year, month, day] = date.split("-").map(Number) as [number, number, number];
   const prevYear = month === 1 ? year - 1 : year;
   const prevMonth = month === 1 ? 12 : month - 1;
@@ -52,8 +60,8 @@ export function briefPeriods(date: string): BriefPeriods {
   const prevDay = Math.min(day, prevLength);
   return {
     day: { from: date, to: date },
-    monthToDate: { from: `${year}-${pad(month)}-01`, to: date },
-    sameDaysLastMonth: { from: `${prevYear}-${pad(prevMonth)}-01`, to: `${prevYear}-${pad(prevMonth)}-${pad(prevDay)}`, clamped: prevDay < day },
+    monthToDate: clampSpanToLaunch({ from: `${year}-${pad(month)}-01`, to: date }, openedOn, false),
+    sameDaysLastMonth: clampSpanToLaunch({ from: `${prevYear}-${pad(prevMonth)}-01`, to: `${prevYear}-${pad(prevMonth)}-${pad(prevDay)}`, clamped: prevDay < day }, openedOn, false),
   };
 }
 
@@ -88,6 +96,8 @@ export type BriefJobPorts = {
   readonly codeVersion: string;
   /** The IST business day the brief covers (the run's D-1). */
   readonly date: string;
+  /** The org's Opening date, or null if not set (`analytics-start-date`) — clamps monthToDate/sameDaysLastMonth so the brief never cites pre-launch net sales as if they were real trading days. */
+  readonly openedOn: string | null;
   /** True when daily facts for `date` are final (RELIABILITY C4). */
   readonly factsReady: (date: string) => Promise<boolean>;
   readonly readFigures: (periods: BriefPeriods) => Promise<BriefFiguresRead>;
@@ -140,7 +150,7 @@ function checkUnit(metricId: string, figure: BriefFigure, unit: Unit): void {
 export async function runBriefDaily(ports: BriefJobPorts): Promise<JobRunResult> {
   if (!(await ports.factsReady(ports.date))) throw new UpstreamNotReady(ports.date);
 
-  const periods = briefPeriods(ports.date);
+  const periods = briefPeriods(ports.date, ports.openedOn);
   const read = await ports.readFigures(periods);
   const createdAt = istTimestamp(ports.now());
   const meta = { ...ports, createdAt };
