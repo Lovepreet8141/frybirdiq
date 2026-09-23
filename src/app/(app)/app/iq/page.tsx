@@ -74,17 +74,23 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
   const settings = await getOverviewSettings(staff.orgId);
   const options = compareOptions(range, settings.opening, today);
   const compare = resolveCompare(options, vs);
+  // analytics-start-date: every card built from the selected range — not only the KPI tiles — reads this
+  // clamped window, so Channel performance/Payment methods/top-selling products/not-selling never disagree
+  // with the Revenue tile beside them. The fixed "last 7 days" trend context (`week`, shown only for
+  // Today/Yesterday) and `foodCostWeeklySeries`'s rolling 8-week chart are deliberately left unclamped, same
+  // reasoning as the P&L page's weekly chart: a fixed lookback window, not the user's selected range.
+  const clampedWindow = clampRangeToLaunch(window, settings.opening.date, includePreLaunch);
 
   const [rightNow, comparison, week, dashboard, channels, ledger, pnl, foodCost, gaps, lastSales, activeOrders, events, readiness] = await Promise.all([
     getRightNow(staff.orgId, settings.kitchenCapacity, now.getTime()),
     getRangeComparison(staff.orgId, range, compare?.key ?? null, now, settings.opening.date, includePreLaunch),
     getDashboard(staff.orgId, resolveRange("7d")),
-    getDashboard(staff.orgId, window),
-    getChannelBreakdown(staff.orgId, window),
-    getPaymentsLedger(staff.orgId, window),
+    getDashboard(staff.orgId, clampedWindow),
+    getChannelBreakdown(staff.orgId, clampedWindow),
+    getPaymentsLedger(staff.orgId, clampedWindow),
     getProfitAndLoss(staff.orgId, clampRangeToLaunch(resolveRange("mtd"), settings.opening.date, includePreLaunch)),
     foodCostWeeklySeries(staff.orgId),
-    notSelling(staff.orgId, window),
+    notSelling(staff.orgId, clampedWindow),
     productLastSales(staff.orgId, now),
     listActiveOrders(staff.orgId),
     listRecentOrderEvents(staff.orgId, 8),

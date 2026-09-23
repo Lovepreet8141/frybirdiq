@@ -7,7 +7,7 @@ import { DATE, ORG, RUN, figuresRead, nextId, trust } from "./__test-support__/b
 import { BRIEF_FIGURE_UNITS, UpstreamNotReady, briefPeriods, runBriefDaily, type BriefFiguresRead, type BriefJobPorts } from "./brief-job";
 import { BRIEF_JOB_NAME, BRIEF_PRODUCER } from "./keys";
 
-function fakePorts(read: BriefFiguresRead, options: { factsReady?: boolean; outcome?: string } = {}) {
+function fakePorts(read: BriefFiguresRead, options: { factsReady?: boolean; outcome?: string; openedOn?: string | null } = {}) {
   const written: InsightOf<"FACT">[] = [];
   const asOfs: string[] = [];
   let commits = 0;
@@ -17,7 +17,7 @@ function fakePorts(read: BriefFiguresRead, options: { factsReady?: boolean; outc
     attempt: 2,
     codeVersion: "93fd9c5",
     date: DATE,
-    openedOn: null,
+    openedOn: options.openedOn ?? null,
     factsReady: async () => options.factsReady ?? true,
     readFigures: async () => read,
     newId: nextId,
@@ -134,5 +134,21 @@ describe("runBriefDaily", () => {
     const wrong: BriefFiguresRead = { ...read, day: { ...read.day, orders_paid: { value: observed({ unit: "paise", value: "40" }), trust: trust() } } };
     await expect(runBriefDaily(fakePorts(wrong).ports)).rejects.toThrow(/orders_paid must be count/);
     expect(BRIEF_FIGURE_UNITS.orders_paid).toBe("count");
+  });
+
+  describe("analytics-start-date: a pre-launch day plans no day-window facts", () => {
+    it("skips all five day-window metrics when the day is before the Opening date, but still plans the month spans", async () => {
+      const fake = fakePorts(figuresRead(), { openedOn: "2026-09-12" }); // DATE (2026-09-11) is the day before opening
+      const result = await runBriefDaily(fake.ports);
+      expect(fake.commits()).toBe(1);
+      expect(result).toMatchObject({ status: "COMPLETE", rowsWritten: 2, summary: { facts_planned: 2, figures_missing: 0, pre_launch_day: 1 } });
+      expect(fake.written.map((i) => i.dedupeKey)).toEqual(["brief:fact:revenue_net:month_to_date:2026-09-11", "brief:fact:revenue_net:same_days_last_month:2026-09-11"]);
+    });
+
+    it("plans every fact as normal with no Opening date, or once the day is on or after it", async () => {
+      expect((await runBriefDaily(fakePorts(figuresRead()).ports)).rowsWritten).toBe(7);
+      expect((await runBriefDaily(fakePorts(figuresRead(), { openedOn: DATE }).ports)).rowsWritten).toBe(7);
+      expect((await runBriefDaily(fakePorts(figuresRead(), { openedOn: "2026-09-01" }).ports)).rowsWritten).toBe(7);
+    });
   });
 });

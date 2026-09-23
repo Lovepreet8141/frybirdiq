@@ -23,7 +23,7 @@
 import { addDays } from "@/lib/dates";
 import { UpstreamNotReady, istDayStart, istTimestamp } from "@/lib/iq/detect/detect-job";
 import { computeContentHash, trustRefFor, type FigureTrust, type InsightOf, type Observed, type Unit } from "@/lib/iq/engine";
-import { clampSpanToLaunch } from "@/lib/iq/launch-window";
+import { clampSpanToLaunch, isPreLaunch } from "@/lib/iq/launch-window";
 import type { JobRunResult } from "@/lib/jobs/context";
 
 import { BRIEF_JOB_NAME, BRIEF_PRODUCER, BRIEF_SOURCE_QUERY, briefFactKey, briefFactTemplateId, type BriefWindow } from "./keys";
@@ -156,8 +156,16 @@ export async function runBriefDaily(ports: BriefJobPorts): Promise<JobRunResult>
   const meta = { ...ports, createdAt };
   const summary: Record<string, number> = { facts_planned: 0, figures_missing: 0 };
 
+  // `analytics-start-date`: the day itself, unlike monthToDate/sameDaysLastMonth, is never clamped by
+  // briefPeriods (its span is always exactly `date`, so clamping it would invert `from`/`to` rather than
+  // shrink them — a shape the read side does not expect). Guarded here instead: a pre-launch day plans no
+  // day-window facts at all, so the brief never stores "Yesterday: net sales / orders / …" for a test day
+  // as if it were a real one (found in review — the day window was the one span this card missed).
+  const dayIsPreLaunch = isPreLaunch(ports.date, ports.openedOn);
+  if (dayIsPreLaunch) summary.pre_launch_day = 1;
+
   const planned: { metricId: string; window: BriefWindow; span: DateSpan; figure: BriefFigure | null | undefined; unit: Unit }[] = [
-    ...BRIEF_DAY_METRICS.map((metricId) => ({ metricId, window: "day" as const, span: periods.day, figure: read.day[metricId], unit: BRIEF_FIGURE_UNITS[metricId] })),
+    ...(dayIsPreLaunch ? [] : BRIEF_DAY_METRICS.map((metricId) => ({ metricId, window: "day" as const, span: periods.day, figure: read.day[metricId], unit: BRIEF_FIGURE_UNITS[metricId] }))),
     { metricId: "revenue_net", window: "month_to_date", span: periods.monthToDate, figure: read.monthToDate, unit: "paise" },
     { metricId: "revenue_net", window: "same_days_last_month", span: periods.sameDaysLastMonth, figure: read.sameDaysLastMonth, unit: "paise" },
   ];
