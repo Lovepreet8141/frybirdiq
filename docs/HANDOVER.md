@@ -691,3 +691,13 @@ Owner's own instruction on gaps 9/10 (do not delete any orders; real customer or
 - **Card `analytics-start-date`:** DONE.
 
 **Nothing else queued.** Per the owner's own words: nothing further until they send the 7 decisions and the go-live date.
+
+## 44. Fingerprint anomaly from §43 resolved: new baseline adopted (23 Sep 2026)
+
+Owner confirmed: the new OWNER membership was them, inviting a second owner. Verified read-only against production before adopting anything:
+
+- `select count(*) from memberships where role='OWNER' and is_active` → **2**. `role='RIDER' and is_active` → **1**. Total active → **3**.
+- The two active OWNER rows: `deeacdd4-9cf8-43e3-8afd-5dcfa0050876` (membership id `668f9376-d660-482b-81f5-6eccfa03264f`, created 2026-09-10, the pre-existing owner) and `c47df963-aadb-4555-bf87-2ee9d98448c7` (membership id `d505c3be-7199-4382-aa6e-0dec0c8b72de`, created 2026-09-23 10:13:36 UTC, the new one). Active RIDER: `87430666-021f-4c8c-ab4a-2a3666d6ed3a`.
+- `audit_logs` row for the new membership: `action='staff_invited'`, `entity_id` = the new membership's own id (`d505c3be...`), `actor_user_id = deeacdd4-9cf8-43e3-8afd-5dcfa0050876` (the pre-existing owner's account), `after = {"role":"OWNER","email":"yuvrajsinghfrybird@gmail.com"}`, timestamped identically to the membership row. The inviter is the owner's own account, as they said.
+
+**New standing baseline for every post-deploy fingerprint check from here on: `4a3d000a67a52b7e857e320f2d79df2b`** (2 OWNER + 1 RIDER active). `2e1c2fd91279` is retired — do not compare against it again; a mismatch against it now would be expected, not a signal. Whoever runs the next deploy's post-check compares against `4a3d000a67a52b7e857e320f2d79df2b` instead.
