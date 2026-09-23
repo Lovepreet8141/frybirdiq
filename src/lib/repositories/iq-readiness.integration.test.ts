@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { inventoryItems, inventoryMovements, orderEvents, orderItems, orders, payments, recipes } from "@/db/schema";
+import { inventoryItems, inventoryMovements, orderEvents, orderItems, orders, organizations, payments, recipes } from "@/db/schema";
 import { fromRupees } from "@/lib/money";
 import { createTestCustomer, createTestIngredient, createTestOrg, createTestProduct, createTestRecipe, createTestTaxRate, deleteTestOrg, type TestOrg } from "./__test-support__/fixtures";
 import { getReadiness, getReadinessRaw, readinessWindows } from "./iq-readiness";
@@ -166,5 +166,56 @@ describe("scoping and shape", () => {
     expect(r.scores.map((s) => s.id)).toEqual(["closedSameDay", "cashRecorded", "recipeCoverage", "stockCount", "customerAttached"]);
     expect(r.overallPercent).not.toBeNull();
     expect(r.action).not.toBeNull();
+  });
+});
+
+describe("analytics-start-date: pre-launch exclusion", () => {
+  // Opening date 2026-09-16, inside the current window (09-14..09-20); the previous window (09-07..09-13) is entirely pre-launch.
+  let launched: TestOrg;
+
+  beforeAll(async () => {
+    launched = await createTestOrg();
+    await db().update(organizations).set({ openedOn: "2026-09-16" }).where(eq(organizations.id, launched.orgId));
+    await order(launched, "2026-09-10", "COMPLETED", { events: [{ to: "COMPLETED", at: ist("2026-09-10", "20:00") }] }); // previous window, pre-launch
+    await order(launched, "2026-09-14", "COMPLETED", { events: [{ to: "COMPLETED", at: ist("2026-09-14", "20:00") }] }); // current window, pre-launch
+    await order(launched, "2026-09-17", "COMPLETED", { events: [{ to: "COMPLETED", at: ist("2026-09-17", "20:00") }] }); // current window, post-launch
+  });
+  afterAll(async () => {
+    await deleteTestOrg(launched.orgId);
+  });
+
+  it("by default, excludes days before the Opening date from both windows", async () => {
+    const raw = await getReadinessRaw(launched.orgId, NOW);
+    expect(raw.closedSameDay).toMatchObject({ numerator: 1, denominator: 1, previousNumerator: 0, previousDenominator: 0 });
+  });
+
+  it("includePreLaunch: true counts every day, pre-launch included", async () => {
+    const raw = await getReadinessRaw(launched.orgId, NOW, true);
+    expect(raw.closedSameDay).toMatchObject({ numerator: 2, denominator: 2, previousNumerator: 1, previousDenominator: 1 });
+  });
+
+  it("getReadiness (the built score, not just the raw counts) also excludes pre-launch by default", async () => {
+    const excluded = await getReadiness(launched.orgId, NOW);
+    const included = await getReadiness(launched.orgId, NOW, true);
+    const score = (r: Awaited<ReturnType<typeof getReadiness>>) => r.scores.find((s) => s.id === "closedSameDay")!;
+    expect(score(excluded).denominator).toBe(1);
+    expect(score(included).denominator).toBe(2);
+  });
+
+  it("an org with no Opening date set is never clamped — includePreLaunch has nothing to do", async () => {
+    const raw = await getReadinessRaw(org.orgId, NOW);
+    const rawIncluded = await getReadinessRaw(org.orgId, NOW, true);
+    expect(raw.closedSameDay).toEqual(rawIncluded.closedSameDay);
+  });
+
+  it("stockCount is never clamped by the Opening date — it measures inventory hygiene, not an order trend", async () => {
+    const ing = await createTestIngredient(launched.orgId);
+    await db().insert(inventoryItems).values({ orgId: launched.orgId, ingredientId: ing.id, locationId: launched.locationId, quantityOnHand: 100 });
+    // A physical count recorded before the Opening date.
+    await db().insert(inventoryMovements).values({ orgId: launched.orgId, ingredientId: ing.id, locationId: launched.locationId, type: "ADJUSTMENT", quantity: -1, notes: "Physical count: 99 g counted, 100 g on hand.", occurredAt: ist("2026-09-15", "09:00") });
+    const excluded = await getReadinessRaw(launched.orgId, ist("2026-09-16", "10:00"));
+    const included = await getReadinessRaw(launched.orgId, ist("2026-09-16", "10:00"), true);
+    expect(excluded.stockCount).toEqual(included.stockCount);
+    expect(excluded.stockCount.numerator).toBe(1);
   });
 });

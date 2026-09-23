@@ -11,10 +11,14 @@ const unused = async (): Promise<never> => {
   throw new Error("not used");
 };
 
-function fakeContext(options: { fresh: boolean }) {
+function fakeContext(options: { fresh: boolean; openedOn?: string | null }) {
   const calls: string[] = [];
   const readers: JobReadRepos = {
     factsHistoryStart: unused,
+    readOpenedOn: async () => {
+      calls.push("readOpenedOn");
+      return options.openedOn ?? null;
+    },
     checkFactsParity: unused,
     healLostRefundFollowUps: unused,
     countStuckRefundFollowUps: unused,
@@ -81,22 +85,23 @@ describe("iq-service-pulse adapter (IQ-2 R2.1, S9)", () => {
     vi.useRealTimers();
   });
 
-  it("reads the hours, then checks the bucket's input is fresh before reading any day", async () => {
+  it("reads the org's Opening date, then the hours, then checks the bucket's input is fresh before reading any day", async () => {
     const f = fakeContext({ fresh: true });
     const result = await runPulse(f.ctx);
     expect(result.status).toBe("COMPLETE");
-    expect(f.calls[0]).toBe("hours");
-    expect(f.calls[1]).toMatch(/^fresh \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00\+05:30$/);
+    expect(f.calls[0]).toBe("readOpenedOn");
+    expect(f.calls[1]).toBe("hours");
+    expect(f.calls[2]).toMatch(/^fresh \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00\+05:30$/);
     // Today plus the same weekday's 8 previous weeks.
-    expect(f.calls[2]).toBe("days 9");
+    expect(f.calls[3]).toBe("days 9");
     // 19:45 IST is the bucket end the frozen clock names.
-    expect(f.calls[1]).toBe("fresh 2026-09-11T19:45:00+05:30");
+    expect(f.calls[2]).toBe("fresh 2026-09-11T19:45:00+05:30");
   });
 
   it("writes nothing and reads no day when the intraday writer has not covered the bucket yet (C8/U3)", async () => {
     const f = fakeContext({ fresh: false });
     expect(await runPulse(f.ctx)).toEqual({ status: "COMPLETE", rowsWritten: 0, summary: { stale_input: 1 } });
-    expect(f.calls).toHaveLength(2);
+    expect(f.calls).toHaveLength(3);
     expect(f.commits()).toBe(0);
   });
 
@@ -104,5 +109,12 @@ describe("iq-service-pulse adapter (IQ-2 R2.1, S9)", () => {
     const f = fakeContext({ fresh: true });
     await expect(runPulse({ ...f.ctx, codeVersion: "unversioned" })).rejects.toMatchObject({ code: "CODE_VERSION_UNKNOWN" });
     expect(f.calls).toEqual([]);
+  });
+
+  it("reads the org's Opening date and excludes days before it from evaluation (analytics-start-date)", async () => {
+    const f = fakeContext({ fresh: true, openedOn: "2026-09-11" });
+    const result = await runPulse(f.ctx);
+    expect(result.status).toBe("COMPLETE");
+    expect(f.calls[0]).toBe("readOpenedOn");
   });
 });

@@ -72,6 +72,8 @@ export type JobReadRepos = {
   readonly purgeRiderPositions: () => Promise<{ readonly deleted: number; readonly more: boolean }>;
   /** The first IST business day this org has history for (opened_on, else its first order), or null. */
   readonly factsHistoryStart: () => Promise<string | null>;
+  /** The org's Opening date (`organizations.opened_on`), or null if not set. Unlike `factsHistoryStart`, this never falls back to the first order: `analytics-start-date` only excludes pre-launch data once the owner has actually set a real go-live date. */
+  readonly readOpenedOn: () => Promise<string | null>;
   /** Compares Σ daily facts with getProfitAndLoss for [from, to] (IST dates, inclusive). */
   readonly checkFactsParity: (from: string, to: string) => Promise<FactsParity>;
   /**

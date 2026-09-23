@@ -76,6 +76,12 @@ async function factsHistoryStart(orgId: string): Promise<string | null> {
   return first?.day ?? null;
 }
 
+/** The org's Opening date, or null if not set — never falls back to the first order (`analytics-start-date`). */
+async function readOpenedOn(orgId: string): Promise<string | null> {
+  const [org] = await db().select({ openedOn: organizations.openedOn }).from(organizations).where(eq(organizations.id, orgId));
+  return org?.openedOn ?? null;
+}
+
 type ParityRead = FactsParity & { readonly fingerprint: string };
 
 /** One comparison of Σ daily facts with getProfitAndLoss for [from, to]. */
@@ -322,6 +328,7 @@ export function iqRepos(orgId: string): JobReadRepos {
       return { deleted, more: deleted >= PURGE_BATCH };
     },
     factsHistoryStart: () => factsHistoryStart(orgId),
+    readOpenedOn: () => readOpenedOn(orgId),
     checkFactsParity: (from, to) => checkFactsParity(orgId, from, to),
     factsReadyFor: (date) => factsReadyFor(orgId, date),
     readDetectDays: (dates) => readDetectDays(orgId, dates),

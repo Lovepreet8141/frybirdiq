@@ -13,11 +13,22 @@ import "server-only";
  * Reads live tables, not `iq_daily_trust`: no fact job is scheduled in
  * production, so that table is empty, and a readiness screen that waited for a
  * job would say nothing.
+ *
+ * `analytics-start-date`: every window here is clamped to the org's Opening
+ * date by default (`clampSpanToLaunch`) — data recorded before a real go-live
+ * is not a real trading day and would otherwise pollute the very first
+ * readiness scores a shop sees. `includePreLaunch: true` turns the clamp off,
+ * for the owner who wants to look at the full history anyway. `stockCount` is
+ * deliberately NOT clamped: it measures whether an ingredient was physically
+ * counted recently, a fact about inventory hygiene that a pre-launch order
+ * has no bearing on.
  */
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { organizations } from "@/db/schema";
 import { addDays, businessDate } from "@/lib/dates";
+import { clampSpanToLaunch } from "@/lib/iq/launch-window";
 import { type Readiness, type ReadinessRaw, buildReadiness } from "@/lib/iq/readiness/scores";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -91,8 +102,7 @@ async function customerAttached(orgId: string, w: Window): Promise<{ numerator: 
  * nothing). The trend counts the SAME 20 items against the recipes that existed
  * a week ago, so it moves only when someone adds a recipe.
  */
-async function recipeCoverage(orgId: string, now: Date): Promise<ReadinessRaw["recipeCoverage"]> {
-  const today = businessDate(now);
+async function recipeCoverage(orgId: string, now: Date, top: Window): Promise<ReadinessRaw["recipeCoverage"]> {
   const weekAgo = new Date(now.getTime() - COUNT_WINDOW_DAYS * DAY_MS).toISOString();
   const rows = await db().execute<{ name: string; has_recipe: boolean; had_recipe: boolean }>(sql`
     WITH top AS (
@@ -100,7 +110,7 @@ async function recipeCoverage(orgId: string, now: Date): Promise<ReadinessRaw["r
       FROM order_items oi
       JOIN orders o ON o.id = oi.order_id AND o.org_id = ${orgId}
       WHERE oi.org_id = ${orgId} AND oi.product_id IS NOT NULL
-        AND o.business_date BETWEEN ${addDays(today, -TOP_ITEMS_DAYS)} AND ${addDays(today, -1)}
+        AND o.business_date BETWEEN ${top.from} AND ${top.to}
         AND o.status NOT IN ('DRAFT', 'CANCELLED', 'FAILED')
       GROUP BY oi.product_id
       ORDER BY units DESC, name ASC
@@ -154,17 +164,32 @@ async function stockCount(orgId: string, now: Date): Promise<ReadinessRaw["stock
   };
 }
 
-/** The five counts, this week and last, for one org. */
-export async function getReadinessRaw(orgId: string, now: Date = new Date()): Promise<ReadinessRaw> {
+/** The org's Opening date (`analytics-start-date`), or null if not set. A one-column read, kept local rather than pulled in from `getOverviewSettings` (a different module's, larger read). */
+async function getOpenedOn(orgId: string): Promise<string | null> {
+  const [org] = await db().select({ openedOn: organizations.openedOn }).from(organizations).where(eq(organizations.id, orgId));
+  return org?.openedOn ?? null;
+}
+
+/**
+ * The five counts, this week and last, for one org. `includePreLaunch: true`
+ * (`analytics-start-date`) turns off the Opening-date clamp so the owner can
+ * see the full history, pre-launch data and all.
+ */
+export async function getReadinessRaw(orgId: string, now: Date = new Date(), includePreLaunch = false): Promise<ReadinessRaw> {
+  const openedOn = await getOpenedOn(orgId);
+  const clamp = <T extends { readonly from: string; readonly to: string }>(w: T) => clampSpanToLaunch(w, openedOn, includePreLaunch);
   const { current, previous } = readinessWindows(now);
+  const today = businessDate(now);
+  const top = clamp({ from: addDays(today, -TOP_ITEMS_DAYS), to: addDays(today, -1) });
   const [closed, closedBefore, cash, cashBefore, customers, customersBefore, recipes, stock] = await Promise.all([
-    closedSameDay(orgId, current),
-    closedSameDay(orgId, previous),
-    cashRecorded(orgId, current),
-    cashRecorded(orgId, previous),
-    customerAttached(orgId, current),
-    customerAttached(orgId, previous),
-    recipeCoverage(orgId, now),
+    closedSameDay(orgId, clamp(current)),
+    closedSameDay(orgId, clamp(previous)),
+    cashRecorded(orgId, clamp(current)),
+    cashRecorded(orgId, clamp(previous)),
+    customerAttached(orgId, clamp(current)),
+    customerAttached(orgId, clamp(previous)),
+    recipeCoverage(orgId, now, top),
+    // Not clamped: a physical stock count is a fact about inventory hygiene, not an order trend.
     stockCount(orgId, now),
   ]);
   const pair = (a: { numerator: number; denominator: number }, b: { numerator: number; denominator: number }) => ({
@@ -182,6 +207,6 @@ export async function getReadinessRaw(orgId: string, now: Date = new Date()): Pr
   };
 }
 
-export async function getReadiness(orgId: string, now: Date = new Date()): Promise<Readiness> {
-  return buildReadiness(await getReadinessRaw(orgId, now));
+export async function getReadiness(orgId: string, now: Date = new Date(), includePreLaunch = false): Promise<Readiness> {
+  return buildReadiness(await getReadinessRaw(orgId, now, includePreLaunch));
 }

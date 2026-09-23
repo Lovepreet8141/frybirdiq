@@ -39,6 +39,9 @@ export default async function DailyBriefPage() {
   const date = addDays(businessDate(now), -1);
   const viewer = viewerFor(staff.roles);
   const [readiness, stored, runState] = await Promise.all([
+    // analytics-start-date: no pre-launch toggle on this page, unlike the Command Center's — the brief is
+    // always about one specific past day (`date`), not a range the owner might deliberately want to audit
+    // including its test-data history, so the safe default (excluded) is the only one offered here.
     getReadiness(staff.orgId, now),
     loadBriefInsightsFor(staff.orgId, viewer, date),
     readBriefRunState(staff.orgId, date),

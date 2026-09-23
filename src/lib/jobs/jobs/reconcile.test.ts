@@ -17,6 +17,7 @@ function fakeContext(options: { factsReady: boolean }) {
   const calls: string[] = [];
   const readers: JobReadRepos = {
     factsHistoryStart: unused,
+    readOpenedOn: unused,
     checkFactsParity: unused,
     healLostRefundFollowUps: unused,
     countStuckRefundFollowUps: unused,

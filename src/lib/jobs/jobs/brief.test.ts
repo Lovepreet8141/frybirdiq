@@ -18,6 +18,8 @@ function fakeContext(options: { factsReady: boolean }) {
   let periods: BriefPeriods | null = null;
   const readers: JobReadRepos = {
     factsHistoryStart: unused,
+    // No Opening date in this test's org: analytics-start-date clamps nothing, matching the old unclamped briefPeriods.
+    readOpenedOn: async () => null,
     checkFactsParity: unused,
     healLostRefundFollowUps: unused,
     countStuckRefundFollowUps: unused,

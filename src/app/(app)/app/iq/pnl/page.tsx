@@ -13,8 +13,10 @@ import { getStaff, staffCan } from "@/lib/auth";
 import { type RangeKey, resolveRange } from "@/lib/dates";
 import { trustBadge } from "@/lib/finance/trust-badge";
 import { metricLabel } from "@/lib/iq/metrics";
+import { clampRangeToLaunch } from "@/lib/iq/launch-window";
 import { type Paise, formatBps, formatINR, ratioBps } from "@/lib/money";
 import { type CategoryTotal, foodCostWeeklySeries, getProfitAndLossReport } from "@/lib/repositories/expenses";
+import { getOverviewSettings } from "@/lib/repositories/overview";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Profit and loss — FRYBIRD IQ", robots: { index: false, follow: false } };
@@ -68,14 +70,17 @@ const FOOD_COST_RECORDED = metricLabel("food_cost_pct_recorded_purchases");
  * facts — reads live, with no trust line. The weekly chart is a rolling eight
  * weeks and always reads live.
  */
-export default async function PnlPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
+export default async function PnlPage({ searchParams }: { searchParams: Promise<{ range?: string; includePreLaunch?: string }> }) {
   const staff = await getStaff();
   if (!staff) redirect("/sign-in");
   if (!(await staffCan("analytics.view"))) redirect("/app/orders");
 
-  const { range: requested } = await searchParams;
+  const { range: requested, includePreLaunch: includePreLaunchParam } = await searchParams;
   const key = (RANGES.find((option) => option.key === requested)?.key ?? "mtd") as RangeKey;
-  const range = resolveRange(key);
+  // analytics-start-date: excludes pre-launch data by default; the owner can look at the full history via this toggle.
+  const includePreLaunch = includePreLaunchParam === "1";
+  const settings = await getOverviewSettings(staff.orgId);
+  const range = clampRangeToLaunch(resolveRange(key), settings.opening.date, includePreLaunch);
   const [report, foodCost, canRecord, canSeeCustomers] = await Promise.all([
     getProfitAndLossReport(staff.orgId, range),
     foodCostWeeklySeries(staff.orgId),
@@ -104,7 +109,7 @@ export default async function PnlPage({ searchParams }: { searchParams: Promise<
         description={`${range.label} · paid orders as revenue, recorded expenses as cost · INR`}
         actions={
           <>
-            <PeriodSwitch basePath="/app/iq/pnl" options={RANGES} current={key} />
+            <PeriodSwitch basePath="/app/iq/pnl" options={RANGES} current={key} params={{ includePreLaunch: includePreLaunch ? "1" : undefined }} />
             {canRecord && (
               <Button variant="inverse" asChild>
                 <Link href="/app/iq/expenses/new">Record an expense</Link>
@@ -114,6 +119,15 @@ export default async function PnlPage({ searchParams }: { searchParams: Promise<
         }
       />
       <AnalyticsSectionNav current="food-cost" canSeeCustomers={canSeeCustomers} />
+
+      {settings.opening.date && (
+        <p className="text-[13px] text-muted-foreground">
+          {includePreLaunch ? "Including data from before the Opening date. " : "Excludes data from before the Opening date. "}
+          <Link href={`/app/iq/pnl?range=${key}${includePreLaunch ? "" : "&includePreLaunch=1"}`} className="underline underline-offset-2">
+            {includePreLaunch ? "Exclude it" : "Include pre-launch data"}
+          </Link>
+        </p>
+      )}
 
       <DataTrust
         items={[

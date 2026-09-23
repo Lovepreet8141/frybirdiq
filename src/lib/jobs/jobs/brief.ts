@@ -33,13 +33,16 @@ export async function runBrief(ctx: JobContext): Promise<JobRunResult> {
   }
 }
 
-function evaluate(ctx: JobContext): Promise<JobRunResult> {
+async function evaluate(ctx: JobContext): Promise<JobRunResult> {
+  // analytics-start-date: the brief has no viewer to ask, so pre-launch is excluded unconditionally, same as detect/pulse.
+  const openedOn = await ctx.repos.readOpenedOn();
   return runBriefDaily({
     orgId: ctx.orgId,
     runId: ctx.runId,
     attempt: ctx.attempt,
     codeVersion: ctx.codeVersion,
     date: dateOfPeriodKey(ctx.periodKey),
+    openedOn,
     factsReady: (date) => ctx.repos.factsReadyFor(date),
     readFigures: (periods) => ctx.repos.readBriefFigures(periods),
     newId: randomUUID,

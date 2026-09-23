@@ -17,6 +17,7 @@ import { awaitsCounterDecision } from "@/domain/order-alert";
 import type { OrderChannel } from "@/domain/order-channel";
 import type { FulfilmentType, OrderStatus } from "@/domain/order-status";
 import { type DateRange, addDays, businessDate, endOfBusinessDay, previousPeriod, resolveRange, startOfBusinessDay } from "@/lib/dates";
+import { clampRangeToLaunch } from "@/lib/iq/launch-window";
 import { type CompareKey, type CostInputs, type OpeningDate, type OverviewRange, averageOrder, isMultiDay } from "@/lib/iq/overview";
 import { type Paise, ZERO, add, formatINR, paise } from "@/lib/money";
 import { type DayTotal, PAID_PAYMENT_STATUSES, hasPaidPayment, periodTotals } from "./analytics";
@@ -385,28 +386,59 @@ async function averageOf(orgId: string, windows: readonly DateRange[]): Promise<
  * The range's totals and the comparison's, measured the same way. "To the
  * same hour" for today, whole days for anything already finished — so a
  * morning is never measured against a full day and read as a collapse.
+ *
+ * `analytics-start-date`: the CURRENT window is clamped to the org's Opening date by default (`openedOn`,
+ * unless `includePreLaunch`) — "Last 30 days" three days after a real go-live shows three real days, not
+ * thirty days of test data. The comparison baseline is checked directly with `withinLaunch` below, rather
+ * than trusted to `compareOptions`'s (`src/lib/iq/overview.ts`) own day-count gate: that gate gauges whether
+ * a comparison is worth OFFERING by counting history from `today`, but for `range !== "today"` the actual
+ * reference day here is one day earlier (`addDays(today, -1)`), so its count is one short — a comparison it
+ * marked "available" could still reach one day before the Opening date (found in review). `withinLaunch`
+ * checks the real, constructed baseline range, which is the only thing that can't be off by a day.
  */
-export async function getRangeComparison(orgId: string, range: OverviewRange, compare: CompareKey | null, now: Date): Promise<RangeComparison> {
-  const window = windowFor(range, now);
+export async function getRangeComparison(orgId: string, range: OverviewRange, compare: CompareKey | null, now: Date, openedOn: string | null = null, includePreLaunch = false): Promise<RangeComparison> {
+  const window = clampRangeToLaunch(windowFor(range, now), openedOn, includePreLaunch);
   const today = businessDate(now);
   const current = await periodTotals(orgId, window);
+
+  /** True when every day of `r` is on or after the Opening date (or there's nothing to exclude). A comparison whose baseline fails this is left unavailable (null), never shown truncated or mixed with pre-launch days. */
+  const withinLaunch = (r: DateRange): boolean => includePreLaunch || openedOn === null || r.from >= startOfBusinessDay(openedOn);
 
   let comparison: DayTotal | null = null;
   if (compare) {
     if (isMultiDay(range)) {
-      if (compare === "prev") comparison = await periodTotals(orgId, previousPeriod(window));
-      else if (compare === "avg4") comparison = await averageOf(orgId, [7, 14, 21, 28].map((days) => shifted(window, days)));
+      if (compare === "prev") {
+        const baseline = previousPeriod(window);
+        if (withinLaunch(baseline)) comparison = await periodTotals(orgId, baseline);
+      } else if (compare === "avg4") {
+        const baselines = [7, 14, 21, 28].map((days) => shifted(window, days));
+        if (baselines.every(withinLaunch)) comparison = await averageOf(orgId, baselines);
+      }
     } else if (range === "today") {
       const elapsed = now.getTime() - window.from.getTime();
-      if (compare === "lw") comparison = await periodTotals(orgId, sameSliceOf(addDays(today, -7), elapsed));
-      else if (compare === "yd") comparison = await periodTotals(orgId, sameSliceOf(addDays(today, -1), elapsed));
-      else if (compare === "avg4") comparison = await averageOf(orgId, [7, 14, 21, 28].map((days) => sameSliceOf(addDays(today, -days), elapsed)));
+      if (compare === "lw") {
+        const baseline = sameSliceOf(addDays(today, -7), elapsed);
+        if (withinLaunch(baseline)) comparison = await periodTotals(orgId, baseline);
+      } else if (compare === "yd") {
+        const baseline = sameSliceOf(addDays(today, -1), elapsed);
+        if (withinLaunch(baseline)) comparison = await periodTotals(orgId, baseline);
+      } else if (compare === "avg4") {
+        const baselines = [7, 14, 21, 28].map((days) => sameSliceOf(addDays(today, -days), elapsed));
+        if (baselines.every(withinLaunch)) comparison = await averageOf(orgId, baselines);
+      }
     } else {
       const day = addDays(today, -1);
       const whole = (date: string): DateRange => ({ from: startOfBusinessDay(date), to: endOfBusinessDay(date), label: date });
-      if (compare === "lw") comparison = await periodTotals(orgId, whole(addDays(day, -7)));
-      else if (compare === "yd") comparison = await periodTotals(orgId, whole(addDays(day, -1)));
-      else if (compare === "avg4") comparison = await averageOf(orgId, [7, 14, 21, 28].map((days) => whole(addDays(day, -days))));
+      if (compare === "lw") {
+        const baseline = whole(addDays(day, -7));
+        if (withinLaunch(baseline)) comparison = await periodTotals(orgId, baseline);
+      } else if (compare === "yd") {
+        const baseline = whole(addDays(day, -1));
+        if (withinLaunch(baseline)) comparison = await periodTotals(orgId, baseline);
+      } else if (compare === "avg4") {
+        const baselines = [7, 14, 21, 28].map((days) => whole(addDays(day, -days)));
+        if (baselines.every(withinLaunch)) comparison = await averageOf(orgId, baselines);
+      }
     }
   }
 

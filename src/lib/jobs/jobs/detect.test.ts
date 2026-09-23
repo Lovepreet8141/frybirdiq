@@ -10,10 +10,14 @@ const unused = async (): Promise<never> => {
   throw new Error("not used");
 };
 
-function fakeContext(options: { factsReady: boolean }) {
+function fakeContext(options: { factsReady: boolean; openedOn?: string | null }) {
   const calls: string[] = [];
   const readers: JobReadRepos = {
     factsHistoryStart: unused,
+    readOpenedOn: async () => {
+      calls.push("readOpenedOn");
+      return options.openedOn ?? null;
+    },
     checkFactsParity: unused,
     healLostRefundFollowUps: unused,
     countStuckRefundFollowUps: unused,
@@ -74,9 +78,10 @@ describe("iq-detect-daily adapter (IQ-2 R2.1, R2.8)", () => {
     const f = fakeContext({ factsReady: true });
     const result = await runDetect(f.ctx);
     expect(result.status).toBe("COMPLETE");
-    expect(f.calls[0]).toBe("factsReady 2026-09-11");
-    expect(f.calls[1]).toBe("readDays 10 from 2026-09-11");
-    expect(f.calls[2]).toBe("target 2026-09-11");
+    expect(f.calls[0]).toBe("readOpenedOn");
+    expect(f.calls[1]).toBe("factsReady 2026-09-11");
+    expect(f.calls[2]).toBe("readDays 10 from 2026-09-11");
+    expect(f.calls[3]).toBe("target 2026-09-11");
     expect(f.commits()).toBe(1);
   });
 
@@ -89,7 +94,15 @@ describe("iq-detect-daily adapter (IQ-2 R2.1, R2.8)", () => {
   it("stops PARTIAL UPSTREAM_NOT_READY before reading or writing anything when facts are not final (C4, iq2-s7 blocker)", async () => {
     const f = fakeContext({ factsReady: false });
     expect(await runDetect(f.ctx)).toEqual({ status: "PARTIAL", reason: "UPSTREAM_NOT_READY", rowsWritten: 0, summary: { upstream_not_ready: 1 } });
-    expect(f.calls).toEqual(["factsReady 2026-09-11"]);
+    expect(f.calls).toEqual(["readOpenedOn", "factsReady 2026-09-11"]);
     expect(f.commits()).toBe(0);
+  });
+
+  it("reads the org's Opening date and excludes days before it from evaluation (analytics-start-date)", async () => {
+    // The whole 8-week baseline window before "today" (2026-09-11) is pre-launch — every history day is excluded, so no baseline can form.
+    const f = fakeContext({ factsReady: true, openedOn: "2026-09-11" });
+    const result = await runDetect(f.ctx);
+    expect(result.status).toBe("COMPLETE");
+    expect(f.calls[0]).toBe("readOpenedOn");
   });
 });

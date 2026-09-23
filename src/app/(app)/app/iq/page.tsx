@@ -25,6 +25,7 @@ import { businessDate, resolveRange } from "@/lib/dates";
 import { attentionInput, urgentCount } from "@/lib/iq/alerts";
 import { type ReadinessCard, limitedReasons } from "@/lib/iq/readiness/scores";
 import { type OverviewRange, OVERVIEW_RANGES, attentionCards, compareOptions, deltaBps, excludedNote, isMultiDay, isOverviewRange, resolveCompare } from "@/lib/iq/overview";
+import { clampRangeToLaunch } from "@/lib/iq/launch-window";
 import { healthCounts, toKitchenTickets } from "@/lib/kitchen/tickets";
 import { type Paise, formatINR } from "@/lib/money";
 import { listRecentOrderEvents } from "@/lib/repositories/activity";
@@ -50,7 +51,7 @@ const RANGE_LABEL: Record<OverviewRange, string> = { today: "Today", yesterday: 
  * computed a second way, and every card is a door to the screen that
  * explains it.
  */
-export default async function IqPage({ searchParams }: { searchParams: Promise<{ range?: string; vs?: string }> }) {
+export default async function IqPage({ searchParams }: { searchParams: Promise<{ range?: string; vs?: string; includePreLaunch?: string }> }) {
   const staff = await getStaff();
   if (!staff) redirect("/sign-in");
   if (!(await staffCan("analytics.view"))) {
@@ -61,32 +62,40 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
     );
   }
 
-  const [{ range: requestedRange, vs }, canSeeFinance] = await Promise.all([searchParams, staffCan("finance.view")]);
+  const [{ range: requestedRange, vs, includePreLaunch: includePreLaunchParam }, canSeeFinance] = await Promise.all([searchParams, staffCan("finance.view")]);
   const now = new Date();
   const range: OverviewRange = isOverviewRange(requestedRange) ? requestedRange : "today";
   const rangeLabel = RANGE_LABEL[range];
   const today = businessDate(now);
   const window = resolveRange(range);
+  // analytics-start-date: excludes pre-launch data by default; the owner can look at the full history via this toggle.
+  const includePreLaunch = includePreLaunchParam === "1";
 
   const settings = await getOverviewSettings(staff.orgId);
   const options = compareOptions(range, settings.opening, today);
   const compare = resolveCompare(options, vs);
+  // analytics-start-date: every card built from the selected range — not only the KPI tiles — reads this
+  // clamped window, so Channel performance/Payment methods/top-selling products/not-selling never disagree
+  // with the Revenue tile beside them. The fixed "last 7 days" trend context (`week`, shown only for
+  // Today/Yesterday) and `foodCostWeeklySeries`'s rolling 8-week chart are deliberately left unclamped, same
+  // reasoning as the P&L page's weekly chart: a fixed lookback window, not the user's selected range.
+  const clampedWindow = clampRangeToLaunch(window, settings.opening.date, includePreLaunch);
 
   const [rightNow, comparison, week, dashboard, channels, ledger, pnl, foodCost, gaps, lastSales, activeOrders, events, readiness] = await Promise.all([
     getRightNow(staff.orgId, settings.kitchenCapacity, now.getTime()),
-    getRangeComparison(staff.orgId, range, compare?.key ?? null, now),
+    getRangeComparison(staff.orgId, range, compare?.key ?? null, now, settings.opening.date, includePreLaunch),
     getDashboard(staff.orgId, resolveRange("7d")),
-    getDashboard(staff.orgId, window),
-    getChannelBreakdown(staff.orgId, window),
-    getPaymentsLedger(staff.orgId, window),
-    getProfitAndLoss(staff.orgId, resolveRange("mtd")),
+    getDashboard(staff.orgId, clampedWindow),
+    getChannelBreakdown(staff.orgId, clampedWindow),
+    getPaymentsLedger(staff.orgId, clampedWindow),
+    getProfitAndLoss(staff.orgId, clampRangeToLaunch(resolveRange("mtd"), settings.opening.date, includePreLaunch)),
     foodCostWeeklySeries(staff.orgId),
-    notSelling(staff.orgId, window),
+    notSelling(staff.orgId, clampedWindow),
     productLastSales(staff.orgId, now),
     listActiveOrders(staff.orgId),
     listRecentOrderEvents(staff.orgId, 8),
     // A readiness query that throws must not take the Overview down: the panel is replaced by a note and every card that leans on it is marked limited (never silently "trusted").
-    getReadiness(staff.orgId, now).catch((error: unknown) => {
+    getReadiness(staff.orgId, now, includePreLaunch).catch((error: unknown) => {
       console.error("iq overview: readiness could not be read", error instanceof Error ? error.name : "unknown");
       return null;
     }),
@@ -151,7 +160,7 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
               <span>{gst}</span>
             </p>
           </div>
-          <OverviewControls range={range} compare={compare} options={options} />
+          <OverviewControls range={range} compare={compare} options={options} includePreLaunch={includePreLaunch} showPreLaunchToggle={settings.opening.date !== null} />
         </div>
         <CommandCenterNav current="overview" alertCount={urgentCount(cards)} />
       </div>
@@ -269,6 +278,9 @@ export default async function IqPage({ searchParams }: { searchParams: Promise<{
           { tone: "gain", text: `Rendered ${clock} IST · captured payments only` },
           { tone: "neutral", text: `Comparison ${compare ? compare.label.toLowerCase() : "unavailable"} · ${excludedNote(excluded)}` },
           { tone: "neutral", text: `Opening date ${settings.opening.date ? `${settings.opening.date}${settings.opening.source === "first-order" ? " (from the first order)" : ""}` : "not set"}` },
+          ...(settings.opening.date
+            ? [includePreLaunch ? { tone: "flag" as const, text: "Including data from before the Opening date" } : { tone: "gain" as const, text: "Excludes data from before the Opening date" }]
+            : []),
           { tone: "neutral", text: `Ranges: ${OVERVIEW_RANGES.map((option) => option.label).join(" · ")}` },
         ]}
       />
