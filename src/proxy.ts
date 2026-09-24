@@ -75,6 +75,11 @@ export const config = {
     // Supabase round trip or have cookies written onto its response. The
     // route authenticates itself (src/app/api/jobs). `api/jobs(?:/|$)` stops
     // at the segment, so /api/jobsx still goes through the proxy.
-    "/((?!_next/static|_next/image|favicon.ico|api/jobs(?:/|$)|api/health(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif)$).*)",
+    //
+    // /api/whatsapp/webhook is called only by Meta: no browser session, no
+    // cookies to refresh, and it must answer fast (whatsapp-direct part 1)
+    // without paying for — or depending on — a Supabase round trip. The
+    // route authenticates itself (verify token / X-Hub-Signature-256).
+    "/((?!_next/static|_next/image|favicon.ico|api/jobs(?:/|$)|api/health(?:/|$)|api/whatsapp/webhook(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif)$).*)",
   ],
 };

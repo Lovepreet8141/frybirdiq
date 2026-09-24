@@ -30,10 +30,17 @@ describe("proxy matcher", () => {
     expect(matches("/api/jobs/heartbeat.rsc")).toBe(false);
   });
 
+  it("skips the WhatsApp webhook (Meta calls it, no session to refresh)", () => {
+    expect(matches("/api/whatsapp/webhook")).toBe(false);
+    expect(matches("/api/whatsapp/webhook/")).toBe(false);
+  });
+
   it("still runs on paths that only start with the same letters", () => {
     expect(matches("/api/jobsx")).toBe(true);
     expect(matches("/api/jobsx/heartbeat")).toBe(true);
     expect(matches("/api/job")).toBe(true);
+    expect(matches("/api/whatsapp/webhookx")).toBe(true);
+    expect(matches("/api/whatsapp")).toBe(true);
   });
 
   it("still runs on staff, account and other API routes", () => {
