@@ -36,6 +36,8 @@ const state = {
   /** The customers row already sitting under the phone number about to be submitted, if any (guest history). */
   phoneRow: null as CustomerRow | null,
   inserted: null as CustomerRow | null,
+  /** Simulates losing the customers_org_user_unique (0057) race: the insert's .returning() resolves empty. */
+  customersInsertLosesConflict: false,
 };
 let selectCallCount = 0;
 
@@ -59,16 +61,22 @@ vi.mock("@/db", () => ({
       }),
     }),
     insert: (table: { __table?: string }) => ({
-      values: (row: Record<string, unknown>) => ({
-        returning: async () => {
+      values: (row: Record<string, unknown>) => {
+        const doReturning = async () => {
           if (table.__table === "customers") {
+            if (state.customersInsertLosesConflict) return [];
             state.inserted = { id: "cust-new", userId: row.userId as string, phone: row.phone as string | null };
             return [state.inserted];
           }
           return [{}];
-        },
-        onConflictDoNothing: async () => [{}],
-      }),
+        };
+        // The real chain is .values().onConflictDoNothing({target}).returning() for customers, and
+        // .values().onConflictDoNothing() alone (no .returning()) for loyaltyAccounts — support both.
+        return {
+          returning: doReturning,
+          onConflictDoNothing: (_opts?: unknown) => Object.assign(Promise.resolve([{}]), { returning: doReturning }),
+        };
+      },
     }),
   }),
 }));
@@ -95,6 +103,7 @@ beforeEach(() => {
   state.ownRow = null;
   state.phoneRow = null;
   state.inserted = null;
+  state.customersInsertLosesConflict = false;
   getUser.mockReset().mockResolvedValue({ data: { user: { id: "user-1", email: "new@example.test" } } });
   requireOrg.mockClear();
   revalidatePath.mockReset();
@@ -148,5 +157,16 @@ describe("completeProfileAction", () => {
   it("redirects to /account on success", async () => {
     const { redirectedTo } = await run({ name: "Asha", phone: "9000000001" });
     expect(redirectedTo).toBe("/account");
+  });
+
+  it("a concurrent double-submit that loses the customers_org_user_unique race (0057) still redirects to /account, not an error — onConflictDoNothing absorbs it", async () => {
+    // Simulates the exact race the security review flagged: both requests pass the pre-check (state.ownRow
+    // still null when each one's SELECT runs), but only one insert can actually win against the DB
+    // constraint. .returning() on the loser resolves to [] — customer is undefined — and the action must
+    // still complete successfully rather than throw or error.
+    state.customersInsertLosesConflict = true;
+    const { redirectedTo } = await run({ name: "Asha", phone: "9000000001" });
+    expect(redirectedTo).toBe("/account");
+    expect(state.inserted).toBeNull();
   });
 });

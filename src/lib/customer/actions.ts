@@ -190,6 +190,11 @@ export async function completeProfileAction(_previous: CompleteProfileState, for
     return { status: "error", message: "That mobile number already has an account. Sign in instead." };
   }
 
+  // onConflictDoNothing targets customers_org_user_unique (0057): the pre-check above is a real check, not
+  // the actual guarantee — two concurrent submits of this same form (a double-tap before the first response
+  // returns) can both pass it and both reach this insert. Without a DB-level guard, that would either throw
+  // a raw unique-violation or, before 0057, silently create two rows for the same account. With it, the
+  // loser's insert returns nothing and falls through to the same "already completed" success path.
   const [customer] = await database
     .insert(customers)
     .values({
@@ -199,6 +204,7 @@ export async function completeProfileAction(_previous: CompleteProfileState, for
       phone: existingPhone ? null : parsed.data.phone,
       email: user.email ?? null,
     })
+    .onConflictDoNothing({ target: [customers.orgId, customers.userId] })
     .returning();
 
   if (customer) {
