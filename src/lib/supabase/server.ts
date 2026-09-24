@@ -17,6 +17,7 @@ import {
   decodeRememberChoice,
   encodeRememberChoice,
   rememberCookieOptions,
+  rememberSecretOk,
   withRememberMaxAge,
 } from "@/lib/auth/remember-me";
 
@@ -31,9 +32,12 @@ export async function createServerClient() {
         try {
           // No cheap way to know customer vs. staff/owner at this layer (both share the one
           // createServerClient factory, sometimes before identity is even resolved) — see
-          // remember-me.ts's own doc comment. `true` matches the middleware's default: an
-          // existing session that predates this mechanism entirely is never cut short by it.
-          const remember = decodeRememberChoice(cookieStore.get(REMEMBER_COOKIE_NAME)?.value) ?? true;
+          // remember-me.ts's own doc comment. Defaults to remembered — matching the
+          // middleware's default, an existing session that predates this mechanism entirely
+          // is never cut short by it — but only when COOKIE_SECRET is actually working; if
+          // it's broken, an absent marker means no choice was ever recorded, and the
+          // fail-safe direction is session-only, not remembered (red-team finding).
+          const remember = decodeRememberChoice(cookieStore.get(REMEMBER_COOKIE_NAME)?.value) ?? rememberSecretOk();
           let wroteSession = false;
           for (const { name, value, options } of list) {
             cookieStore.set(name, value, withRememberMaxAge(options, remember));

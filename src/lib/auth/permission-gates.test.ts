@@ -148,13 +148,13 @@ const STAFF_ONLY: Readonly<Record<string, string>> = {
   "src/lib/shifts/actions.ts#startBreakAction": "a person starts their own break; the person comes from the session, never the form",
   "src/lib/shifts/actions.ts#endBreakAction": "a person ends their own break; the person comes from the session, never the form",
   "src/lib/shifts/actions.ts#clockOutAction": "a person clocks themselves out; the person comes from the session, never the form",
+  "src/lib/auth/actions.ts#setNewPasswordAction": "any signed-in staff/owner sets only their own password; getUser() decides whose, getStaff() (red-team finding) refuses a non-staff account reaching it at all",
 };
 
 const PUBLIC: Readonly<Record<string, string>> = {
   "src/lib/auth/actions.ts#signIn": "staff sign-in itself: it is how a session is obtained",
   "src/lib/auth/actions.ts#requestPasswordResetAction": "the staff/owner password-reset flow; never reveals whether the address has an account",
   "src/lib/auth/actions.ts#verifyResetCodeAction": "the staff/owner password-reset flow; Supabase's own verifyOtp is the authority",
-  "src/lib/auth/actions.ts#setNewPasswordAction": "acts only on the caller's own session, from getUser() — the recovery code already gated reaching it",
   "src/lib/cart/actions.ts#addToCart": "the customer's own cart, held in their cookie",
   "src/lib/cart/actions.ts#applyPromoCode": "the customer's own cart, held in their cookie",
   "src/lib/cart/actions.ts#clearCart": "the customer's own cart, held in their cookie",

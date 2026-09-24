@@ -57,6 +57,22 @@ export function decodeRememberChoice(raw: string | undefined): boolean | undefin
 }
 
 /**
+ * Whether `COOKIE_SECRET` is currently usable for this mechanism at all —
+ * the caller's default for a genuinely ABSENT marker cookie (red-team
+ * finding: an absent cookie is ambiguous between two different cases, and
+ * they must not share one default). If the secret is fine, an absent
+ * cookie really is just a session that predates this mechanism (customers
+ * default to remembered, matching what they already had). If the secret is
+ * broken, `setRememberChoice` never wrote a marker at all regardless of
+ * what was actually chosen — the fail-safe direction is the same one
+ * `decodeRememberChoice` already uses for a present-but-unverifiable
+ * cookie: session-only, not remembered.
+ */
+export function rememberSecretOk(): boolean {
+  return cookieSecret().kind === "ok";
+}
+
+/**
  * The signed value to write for a given choice, or `null` if `COOKIE_SECRET`
  * isn't configured (the caller logs and skips the write in that case — same
  * fail-closed posture as `frybird_contact`, never an unsigned cookie).

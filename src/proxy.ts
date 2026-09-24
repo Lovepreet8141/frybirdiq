@@ -4,6 +4,7 @@ import { clientEnv, isSupabaseConfigured } from "@/lib/env";
 import {
   REMEMBER_COOKIE_NAME,
   decodeRememberChoice,
+  rememberSecretOk,
   encodeRememberChoice,
   rememberCookieOptions,
   withRememberMaxAge,
@@ -33,7 +34,11 @@ export async function proxy(request: NextRequest) {
   // Same "no cheap way to know customer vs. staff/owner here" reasoning as
   // src/lib/supabase/server.ts — defaults an existing, pre-migration session to
   // remembered so nobody already signed in gets cut short by this mechanism.
-  const remember = decodeRememberChoice(request.cookies.get(REMEMBER_COOKIE_NAME)?.value) ?? true;
+  // But only when COOKIE_SECRET is actually working (red-team finding): if it's
+  // broken, an absent marker means the choice was never recorded at all, and the
+  // fail-safe direction is session-only, not remembered — see rememberSecretOk's
+  // own doc comment.
+  const remember = decodeRememberChoice(request.cookies.get(REMEMBER_COOKIE_NAME)?.value) ?? rememberSecretOk();
 
   const supabase = createServerClient(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, {
     cookies: {

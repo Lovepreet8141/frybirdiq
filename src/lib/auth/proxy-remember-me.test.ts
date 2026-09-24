@@ -107,4 +107,28 @@ describe("proxy — remember-me survives a real middleware refresh", () => {
     const session = response.cookies.get("sb-project-auth-token");
     expect(session?.maxAge).toBeUndefined();
   });
+
+  // Red-team finding: an absent marker is ambiguous between "pre-migration session, secret is fine" (should
+  // default remembered) and "the choice was never recorded because COOKIE_SECRET is broken" (should default
+  // session-only, the safe direction — matching decodeRememberChoice's own posture for an unverifiable
+  // cookie). These two cases must not share one default.
+  it("no marker AND COOKIE_SECRET unset: defaults to session-only, not remembered — the choice was never recorded, not merely pre-existing", async () => {
+    mocks.cookieSecret.mockReturnValue({ kind: "none" });
+    const request = requestWithCookie(null);
+
+    const response = await proxy(request);
+
+    const session = response.cookies.get("sb-project-auth-token");
+    expect(session?.maxAge).toBeUndefined();
+  });
+
+  it("no marker AND COOKIE_SECRET invalid: same fail-safe default, session-only", async () => {
+    mocks.cookieSecret.mockReturnValue({ kind: "invalid" });
+    const request = requestWithCookie(null);
+
+    const response = await proxy(request);
+
+    const session = response.cookies.get("sb-project-auth-token");
+    expect(session?.maxAge).toBeUndefined();
+  });
 });

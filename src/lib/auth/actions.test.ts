@@ -18,6 +18,7 @@ const updateUser = vi.fn();
 const signOut = vi.fn();
 const getUser = vi.fn();
 const resolveHome = vi.fn();
+const getStaff = vi.fn();
 const clientIp = vi.fn<() => Promise<string | null>>(async () => "203.0.113.9");
 const revalidatePath = vi.fn();
 const requireOrg = vi.fn(async () => ({ id: "org-1" }));
@@ -60,6 +61,7 @@ vi.mock("@/lib/supabase/server", () => ({
   }),
 }));
 vi.mock("@/lib/auth/route-home", () => ({ resolveHome: () => resolveHome() }));
+vi.mock("./index", () => ({ getStaff: () => getStaff() }));
 vi.mock("./client-ip", () => ({ clientIp: () => clientIp() }));
 vi.mock("@/lib/repositories/org", () => ({ requireOrg: () => requireOrg() }));
 vi.mock("./password-changed-alert", () => ({ recordPasswordChangedAndAlert: (event: unknown) => recordPasswordChangedAndAlert(event) }));
@@ -108,6 +110,7 @@ beforeEach(() => {
   signOut.mockReset().mockResolvedValue({ error: null });
   getUser.mockReset().mockResolvedValue({ data: { user: { id: "user-1", email: "owner@example.test" } } });
   resolveHome.mockReset().mockResolvedValue({ kind: "staff", path: "/app/orders" });
+  getStaff.mockReset().mockResolvedValue({ userId: "user-1", email: "owner@example.test", displayName: "Owner", orgId: "org-1", roles: ["OWNER"] });
   requireOrg.mockClear();
   recordPasswordChangedAndAlert.mockReset().mockResolvedValue(undefined);
   revalidatePath.mockReset();
@@ -228,6 +231,15 @@ describe("setNewPasswordAction — item 4: other sessions revoked, never the cur
     const { state } = await run(setNewPasswordAction, { status: "idle" }, { password: "a-real-password", confirmPassword: "a-real-password" });
     expect(state).toMatchObject({ status: "error" });
     expect(updateUser).not.toHaveBeenCalled();
+  });
+
+  it("staff/owner accounts only (red-team finding): a non-staff account (e.g. a customer) is refused before the password is ever touched", async () => {
+    getStaff.mockResolvedValue(null);
+    const { state } = await run(setNewPasswordAction, { status: "idle" }, { password: "a-real-password", confirmPassword: "a-real-password" });
+    expect(state).toMatchObject({ status: "error" });
+    expect(updateUser).not.toHaveBeenCalled();
+    expect(signOut).not.toHaveBeenCalled();
+    expect(recordPasswordChangedAndAlert).not.toHaveBeenCalled();
   });
 
   it("rejects a password under 10 characters before calling Supabase", async () => {

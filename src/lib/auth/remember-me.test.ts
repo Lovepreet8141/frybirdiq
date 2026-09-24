@@ -17,6 +17,7 @@ import {
   decodeRememberChoice,
   encodeRememberChoice,
   rememberCookieOptions,
+  rememberSecretOk,
   withRememberMaxAge,
 } from "./remember-me";
 
@@ -107,5 +108,22 @@ describe("rememberCookieOptions", () => {
 
   it("has no maxAge at all (a true session cookie) when not remembered", () => {
     expect(rememberCookieOptions(false).maxAge).toBeUndefined();
+  });
+});
+
+describe("rememberSecretOk", () => {
+  it("is true when COOKIE_SECRET is configured", () => {
+    mocks.cookieSecret.mockReturnValue({ kind: "ok", secret });
+    expect(rememberSecretOk()).toBe(true);
+  });
+
+  it("is false when COOKIE_SECRET is unset — the caller's signal to default an absent marker to session-only, not remembered", () => {
+    mocks.cookieSecret.mockReturnValue({ kind: "none" });
+    expect(rememberSecretOk()).toBe(false);
+  });
+
+  it("is false when COOKIE_SECRET is invalid", () => {
+    mocks.cookieSecret.mockReturnValue({ kind: "invalid" });
+    expect(rememberSecretOk()).toBe(false);
   });
 });

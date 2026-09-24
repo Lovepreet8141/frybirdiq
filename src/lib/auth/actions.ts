@@ -6,6 +6,7 @@ import { z } from "zod";
 import { createServerClient } from "@/lib/supabase/server";
 import { isSupabaseConfigured } from "@/lib/env";
 import { requireOrg } from "@/lib/repositories/org";
+import { getStaff } from "./index";
 import { resolveHome } from "./route-home";
 import { clientIp } from "./client-ip";
 import { setRememberChoice } from "./remember-me-cookies";
@@ -181,6 +182,18 @@ export type SetPasswordState = { status: "idle" } | { status: "error"; message: 
  * anything the form supplies, so there is nothing to authorize beyond
  * "does this browser hold a real session right now."
  *
+ * Staff/owner accounts only (red-team finding): this whole flow is reached
+ * by email alone, with no restriction on whose email — without this check
+ * a customer (or anyone with access to a customer's inbox) could set a
+ * password on that customer's account through what's meant to be the staff
+ * reset flow. No privilege escalation resulted (`signIn` still routes a
+ * customer session to `/account`, never `/app/*`), but it mislabelled the
+ * audit trail and owner alert as a staff/owner event when it might not be
+ * one, and quietly contradicted the "no customer passwords" design this
+ * card is built on. Checked here, not earlier: a wrong `getStaff()` refusal
+ * for someone already looking at their own account (proven by a real code)
+ * reveals nothing to a third party.
+ *
  * After a successful change: every OTHER session of this user is revoked
  * (`signOut({ scope: 'others' })` — this one, the one that just proved both
  * inbox access and a new password, is deliberately left signed in), then
@@ -201,6 +214,9 @@ export async function setNewPasswordAction(_previous: SetPasswordState, formData
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { status: "error", message: "That reset code expired. Start over and request a new one." };
+
+  const staff = await getStaff();
+  if (!staff) return { status: "error", message: "This password reset is for staff and owner accounts only." };
 
   const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
   if (error) return { status: "error", message: "That password could not be set. Try a different one." };
