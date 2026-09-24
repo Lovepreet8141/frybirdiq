@@ -79,10 +79,16 @@ const nextConfig: NextConfig = {
    */
   async headers() {
     const media = "public, max-age=86400, stale-while-revalidate=604800";
-    return ["/home/:path*", "/hero/:path*", "/products/:path*"].map((source) => ({
-      source,
-      headers: [{ key: "Cache-Control", value: media }],
-    }));
+    // Assets embedded in an outbound email (the login-code email's logo,
+    // docs/email-templates/login.html): fetched once per email client, often
+    // long after the email was sent, so a much longer cache pays off — still
+    // not `immutable`, since the filename is not content-hashed and could be
+    // replaced without changing the URL.
+    const email = "public, max-age=2592000, stale-while-revalidate=2592000";
+    return [
+      ...["/home/:path*", "/hero/:path*", "/products/:path*"].map((source) => ({ source, headers: [{ key: "Cache-Control", value: media }] })),
+      { source: "/email/:path*", headers: [{ key: "Cache-Control", value: email }] },
+    ];
   },
 };
 

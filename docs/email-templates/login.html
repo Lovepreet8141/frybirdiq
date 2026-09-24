@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<meta name="color-scheme" content="light" />
+<meta name="supported-color-schemes" content="light" />
+<!--[if mso]>
+<noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+<![endif]-->
+<title>Your FRYBIRD login code</title>
+<style>
+  /* Progressive enhancement only — every rule that matters is also inline, since Outlook and most webmail
+     clients strip <style> blocks entirely. This is here for the clients that DO keep it (Apple Mail, most
+     mobile clients), for hover states and the dark-mode override below. */
+  body, table, td { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+  img { border: 0; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic; }
+  a.fb-btn:hover { opacity: 0.92; }
+  /* This template is deliberately light-only (a code is easiest to read at full contrast, and email dark-mode
+     re-coloring is inconsistent across clients) — this override exists only to stop a client's own automatic
+     dark-mode re-tinting from inverting the brand colors into something unreadable. */
+  @media (prefers-color-scheme: dark) {
+    .fb-bg { background-color: #FBF8F1 !important; }
+    .fb-card { background-color: #FBF8F1 !important; }
+  }
+</style>
+</head>
+<body class="fb-bg" style="margin:0; padding:0; background-color:#FBF8F1; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<!-- Preheader: shown in the inbox list/preview, never the code itself. -->
+<div style="display:none; max-height:0; overflow:hidden; opacity:0; mso-hide:all;">
+  Your one-time code is inside this email — it is not in this preview.
+</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#FBF8F1;">
+  <tr>
+    <td align="center" style="padding: 32px 16px;">
+
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" class="fb-card" style="width:600px; max-width:600px; background-color:#FBF8F1; border-radius:16px; overflow:hidden; box-shadow:0 14px 40px rgba(31,7,5,0.16);">
+
+        <!-- 1 · BRAND HEADER — same red band + logo treatment as the printed receipt (src/components/receipt/frybird-receipt.tsx), so this reads as the same FRYBIRD a customer already knows. -->
+        <tr>
+          <td align="center" style="background-color:#B81C1D; padding: 28px 24px;">
+            <img src="https://frybirdiq.tech/email/frybird-logo.png" width="240" height="59" alt="FRYBIRD — Born crispy. Built bold." style="display:block; width:240px; height:59px; max-width:100%;" />
+          </td>
+        </tr>
+
+        <!-- 2 · THE CODE -->
+        <tr>
+          <td align="center" style="padding: 40px 32px 8px 32px;">
+            <p style="margin:0 0 6px 0; font-size:20px; line-height:1.3; font-weight:700; color:#1F0705;">
+              Your FRYBIRD login code
+            </p>
+            <p style="margin:0; font-size:15px; line-height:1.5; color:#6B5A50;">
+              Enter this in the app to sign in. It expires in 10 minutes.
+            </p>
+          </td>
+        </tr>
+
+        <tr>
+          <td align="center" style="padding: 24px 32px 8px 32px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="background-color:#F5EDD8; border: 1px solid #E4D8BE; border-radius:12px; padding: 20px 32px;">
+                  <span style="font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace; font-size:36px; line-height:1; font-weight:700; letter-spacing:10px; color:#1F0705;">
+                    {{ .Token }}
+                  </span>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- 3 · THE LINK — fallback, per the owner's own instruction to keep it working. Secondary in size and order, never removed. -->
+        <tr>
+          <td align="center" style="padding: 28px 32px 4px 32px;">
+            <p style="margin:0 0 16px 0; font-size:14px; line-height:1.5; color:#6B5A50;">
+              Or tap this on the device you want to sign in on:
+            </p>
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td align="center" style="border-radius:8px; background-color:#F2A324;">
+                  <a href="{{ .ConfirmationURL }}" class="fb-btn" target="_blank" style="display:inline-block; padding:14px 32px; font-size:15px; font-weight:700; color:#1F0705; text-decoration:none; border-radius:8px;">
+                    Sign in to FRYBIRD
+                  </a>
+                </td>
+              </tr>
+            </table>
+            <p style="margin:14px 0 0 0; font-size:12px; line-height:1.5; color:#8B7D71;">
+              The link only works in the browser that asked for it — if it doesn't work, use the code above instead.
+            </p>
+          </td>
+        </tr>
+
+        <!-- 4 · FOOTER -->
+        <tr>
+          <td style="padding: 28px 32px 32px 32px; border-top: 1px solid #E4D8BE;">
+            <p style="margin:0 0 8px 0; font-size:12px; line-height:1.6; color:#8B7D71;">
+              Didn't ask for this code? You can ignore this email — nobody can sign in to your account without it.
+            </p>
+            <p style="margin:0; font-size:12px; line-height:1.6; color:#8B7D71;">
+              FRYBIRD · Sector 9, Ambala City, Haryana
+            </p>
+          </td>
+        </tr>
+
+      </table>
+
+    </td>
+  </tr>
+</table>
+</body>
+</html>
