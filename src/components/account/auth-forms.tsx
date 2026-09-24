@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { KeyRound, Loader2, MailCheck } from "lucide-react";
+import { CodeBoxes } from "@/components/account/code-boxes";
 import {
   type CustomerAuthState,
   type OtpRequestState,
@@ -181,7 +182,9 @@ export function OtpSignInForm() {
   // even with the button disabled client-side) must not drop the user back to "enter your email" and lose the
   // step they already reached — only a *successful* send ever sets this, and nothing ever clears it back to null.
   const [email, setEmail] = useState<string | null>(null);
-  const codeInputRef = useRef<HTMLInputElement>(null);
+  // Bumped on every NEW verify error, never on a fresh code request — CodeBoxes remounts on it (see its own
+  // comment): a wrong or expired code is never left sitting in the boxes ready to be resubmitted unchanged.
+  const [verifyErrorToken, setVerifyErrorToken] = useState(0);
 
   // Adjusts state during render rather than in an effect (React's own pattern for "derive state from a prop
   // that changed"): detects a NEW successful send by comparing against the last requestState seen, and starts
@@ -195,15 +198,17 @@ export function OtpSignInForm() {
     }
   }
 
+  const [seenVerifyState, setSeenVerifyState] = useState(verifyState);
+  if (verifyState !== seenVerifyState) {
+    setSeenVerifyState(verifyState);
+    if (verifyState.status === "error") setVerifyErrorToken((n) => n + 1);
+  }
+
   useEffect(() => {
     if (secondsLeft <= 0) return;
     const id = setInterval(() => setSecondsLeft((value) => Math.max(0, value - 1)), 1000);
     return () => clearInterval(id);
   }, [secondsLeft]);
-
-  useEffect(() => {
-    if (email) codeInputRef.current?.focus();
-  }, [email]);
 
   if (!email) {
     return (
@@ -251,20 +256,9 @@ export function OtpSignInForm() {
 
         <input type="hidden" name="email" value={email} />
 
-        <div className="flex flex-col gap-2">
-          <label htmlFor="otp-token" className="text-sm font-semibold">6-digit code</label>
-          <input
-            id="otp-token"
-            ref={codeInputRef}
-            name="token"
-            required
-            type="text"
-            inputMode="numeric"
-            pattern="\d{6}"
-            maxLength={6}
-            autoComplete="one-time-code"
-            className={`${field} text-center text-2xl tracking-[0.4em] tabular`}
-          />
+        <div className="flex flex-col items-center gap-2">
+          <span className="text-sm font-semibold">6-digit code</span>
+          <CodeBoxes name="token" resetToken={verifyErrorToken} invalid={verifyState.status === "error"} />
         </div>
 
         <Submit label="Sign in" busy="Checking" />
