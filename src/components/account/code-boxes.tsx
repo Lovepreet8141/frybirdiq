@@ -47,13 +47,17 @@ function CodeBoxesInner({ name, length, invalid }: { name: string; length: numbe
     boxRefs.current[0]?.focus();
   }, []);
 
-  function maybeSubmit(next: string[]) {
+  // Fires from an effect, not inline in the change/paste handler: `requestSubmit()` reads the hidden input's
+  // value straight off the live DOM, and a plain event handler hasn't committed the just-typed digit to that
+  // DOM node yet at the point `setDigits` is called — calling it inline would submit the PREVIOUS render's
+  // value, one digit short. An effect runs after React commits, so the hidden input is already correct.
+  useEffect(() => {
     if (submittedRef.current) return;
-    if (next.every((d) => d !== "")) {
+    if (digits.every((d) => d !== "")) {
       submittedRef.current = true;
       boxRefs.current[length - 1]?.form?.requestSubmit();
     }
-  }
+  }, [digits, length]);
 
   function handleChange(index: number, raw: string) {
     if (pending) return;
@@ -62,7 +66,6 @@ function CodeBoxesInner({ name, length, invalid }: { name: string; length: numbe
     next[index] = digit;
     setDigits(next);
     if (digit && index < length - 1) boxRefs.current[index + 1]?.focus();
-    maybeSubmit(next);
   }
 
   function handleKeyDown(index: number, e: React.KeyboardEvent<HTMLInputElement>) {
@@ -88,13 +91,20 @@ function CodeBoxesInner({ name, length, invalid }: { name: string; length: numbe
     setDigits(next);
     const lastFilled = next.reduce((acc, d, i) => (d ? i : acc), -1);
     boxRefs.current[Math.min(lastFilled + 1, length - 1)]?.focus();
-    maybeSubmit(next);
   }
 
   const joined = digits.join("");
 
+  // `invalid` is constant for this component's whole mounted lifetime (the parent only ever remounts this
+  // group — bumping `resetToken` — in the same render that flips it true), so a finite, non-infinite animation
+  // gated on it plays exactly once, right when a wrong code arrives, and never replays on a later re-render
+  // (typing a fresh digit) because the className string doesn't change.
   return (
-    <div role="group" aria-label={`${length}-digit code`} className="flex justify-center gap-2 sm:gap-3">
+    <div
+      role="group"
+      aria-label={`${length}-digit code`}
+      className={`flex justify-center gap-2 sm:gap-3 ${invalid ? "otp-shake" : ""}`}
+    >
       <input type="hidden" name={name} value={joined} />
       {digits.map((digit, index) => (
         <input
@@ -114,7 +124,7 @@ function CodeBoxesInner({ name, length, invalid }: { name: string; length: numbe
           aria-label={`Digit ${index + 1} of ${length}`}
           aria-invalid={invalid || undefined}
           className={`h-14 w-11 rounded-md border bg-surface text-center text-xl font-semibold tabular outline-none transition-colors focus-visible:border-border-strong disabled:opacity-50 sm:h-[52px] sm:w-12 ${
-            invalid ? "border-destructive" : "border-border"
+            invalid ? "border-destructive otp-box-flash" : "border-border"
           }`}
         />
       ))}

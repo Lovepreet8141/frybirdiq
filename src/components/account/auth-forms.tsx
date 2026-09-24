@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
-import { KeyRound, Loader2, MailCheck } from "lucide-react";
+import { CheckCircle2, Loader2, Mail, MailCheck } from "lucide-react";
 import { CodeBoxes } from "@/components/account/code-boxes";
 import {
   type CustomerAuthState,
@@ -167,6 +167,31 @@ function ResendCodeButton({ secondsLeft }: { secondsLeft: number }) {
 }
 
 /**
+ * The one icon in the verify step, reading only the pending/error states the
+ * form already has (`useFormStatus` — this must render inside the `<form>`
+ * it reports on) — no new state added anywhere. `verifyOtpAction` has no
+ * "success" status at all: a real success calls `redirect()` server-side and
+ * the browser navigates away, so success here is inferred purely from
+ * timing — a submission that was pending and comes back not pending, not in
+ * error — for the moment before that navigation actually lands.
+ */
+function VerifyStatusIcon({ invalid }: { invalid: boolean }) {
+  const { pending } = useFormStatus();
+  const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [seenPending, setSeenPending] = useState(pending);
+  if (pending !== seenPending) {
+    setSeenPending(pending);
+    if (pending) setHasSubmitted(true);
+  }
+
+  if (pending) return <Loader2 className="size-5 shrink-0 animate-spin text-primary" aria-hidden="true" />;
+  if (hasSubmitted && !invalid) {
+    return <CheckCircle2 className="size-5 shrink-0 text-success otp-tick-pop" aria-hidden="true" />;
+  }
+  return <Mail className="size-5 shrink-0 text-primary" aria-hidden="true" />;
+}
+
+/**
  * Email OTP sign-in — the customer login page's primary flow (email-otp
  * card). Two steps in one component so the email typed in step one carries
  * straight into step two without a page transition: enter an email, get a
@@ -231,18 +256,17 @@ export function OtpSignInForm() {
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-col items-center gap-3 rounded-md border border-border bg-surface px-6 py-8 text-center">
-        <KeyRound className="size-8 text-primary" aria-hidden="true" />
-        <div className="flex flex-col gap-1.5">
-          <p className="font-heading text-lg font-semibold">Check your email</p>
+      <form action={verifyAction} className="flex flex-col gap-5">
+        {/* Compact by default (not just hidden past a breakpoint): a short phone with the keyboard open must
+            still show the boxes and the submit button without scrolling. The otp-status-row rule in
+            globals.css drops this row entirely below a 500px viewport height as a second line of defense. */}
+        <div className="otp-status-row flex items-center gap-3 rounded-md border border-border bg-surface px-4 py-3 text-left">
+          <VerifyStatusIcon invalid={verifyState.status === "error"} />
           <p className="text-sm text-muted-foreground">
-            We sent a 6-digit code, and a sign-in link, to <strong className="text-foreground">{email}</strong>.
-            Type the code below, or tap the link in the email.
+            Code sent to <strong className="text-foreground">{email}</strong>. A sign-in link is in that email too.
           </p>
         </div>
-      </div>
 
-      <form action={verifyAction} className="flex flex-col gap-5">
         {verifyState.status === "error" && (
           <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
             {verifyState.message}

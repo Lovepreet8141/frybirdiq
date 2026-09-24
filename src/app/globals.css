@@ -579,6 +579,54 @@
 }
 
 /*
+ * OTP code entry (email-otp / otp-animation cards): the three purposeful
+ * moments — a wrong code shakes and flashes once, a successful check
+ * pops in once. Both are one-shot (no `infinite`), fired by the box group
+ * or the status icon actually mounting into that state, so nothing here
+ * replays while the customer is just typing. See src/components/account/
+ * code-boxes.tsx and auth-forms.tsx's VerifyStatusIcon.
+ */
+.otp-shake {
+  animation: otp-shake 0.4s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+@keyframes otp-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
+  100% { transform: translateX(0); }
+}
+
+/* The red flash itself — a decaying glow ring on each box, not the group wrapper (which has no fill of its own
+   between the boxes' gaps to visibly flash). Paired with .otp-shake on the group, one-shot together. */
+.otp-box-flash {
+  animation: otp-box-flash 0.5s ease-out both;
+}
+@keyframes otp-box-flash {
+  0% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--destructive) 35%, transparent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+.otp-tick-pop {
+  animation: otp-tick-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes otp-tick-pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .otp-shake, .otp-box-flash, .otp-tick-pop { animation: none; }
+}
+
+/* Keeps the code boxes and the submit button on screen without scrolling
+   on a short viewport (a small phone with the keyboard open) by dropping
+   the purely explanatory status row rather than shrinking the inputs. */
+@media (max-height: 500px) {
+  .otp-status-row { display: none; }
+}
+
+/*
  * Menu density, set by the toggle on the menu page and remembered per person.
  * Only applies below the sm breakpoint — above it the grid is already two or
  * three across and the control is hidden.
