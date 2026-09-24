@@ -1,9 +1,20 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
-import { Loader2, MailCheck } from "lucide-react";
-import { type CustomerAuthState, type ResendState, createAccount, resendConfirmation, signInCustomer } from "@/lib/customer/actions";
+import { KeyRound, Loader2, MailCheck } from "lucide-react";
+import { CodeBoxes } from "@/components/account/code-boxes";
+import {
+  type CustomerAuthState,
+  type OtpRequestState,
+  type OtpVerifyState,
+  type ResendState,
+  createAccount,
+  requestOtpAction,
+  resendConfirmation,
+  verifyOtpAction,
+} from "@/lib/customer/actions";
 
 function Submit({ label, busy }: { label: string; busy: string }) {
   const { pending } = useFormStatus();
@@ -137,26 +148,126 @@ export function JoinForm() {
   );
 }
 
-export function CustomerSignInForm() {
-  const [state, action] = useActionState<CustomerAuthState, FormData>(signInCustomer, { status: "idle" });
+const RESEND_WAIT_SECONDS = 60;
 
-  if (state.status === "check-email") return <CheckEmail email={state.email} />;
+/** The resend button: disabled with a live countdown for this long after a code is sent — a client-side clock only, the server enforces the same 60 seconds on its own (checkOtpRequestLimit). */
+function ResendCodeButton({ secondsLeft }: { secondsLeft: number }) {
+  const { pending } = useFormStatus();
+  const waiting = secondsLeft > 0;
+  return (
+    <button
+      type="submit"
+      disabled={pending || waiting}
+      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition-colors hover:bg-surface disabled:opacity-50"
+    >
+      {pending ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+      {waiting ? `Resend code (${secondsLeft}s)` : "Resend code"}
+    </button>
+  );
+}
+
+/**
+ * Email OTP sign-in — the customer login page's primary flow (email-otp
+ * card). Two steps in one component so the email typed in step one carries
+ * straight into step two without a page transition: enter an email, get a
+ * six-digit code by email (the same email also carries a magic link, kept
+ * working as a fallback for whoever would rather tap than type — nothing
+ * here disables it), type the code, in.
+ */
+export function OtpSignInForm() {
+  const [requestState, requestAction] = useActionState<OtpRequestState, FormData>(requestOtpAction, { status: "idle" });
+  const [verifyState, verifyAction] = useActionState<OtpVerifyState, FormData>(verifyOtpAction, { status: "idle" });
+  const [secondsLeft, setSecondsLeft] = useState(0);
+  // Separate from requestState on purpose: a resend that fails (a network blip, a server-side rate-limit race
+  // even with the button disabled client-side) must not drop the user back to "enter your email" and lose the
+  // step they already reached — only a *successful* send ever sets this, and nothing ever clears it back to null.
+  const [email, setEmail] = useState<string | null>(null);
+  // Bumped on every NEW verify error, never on a fresh code request — CodeBoxes remounts on it (see its own
+  // comment): a wrong or expired code is never left sitting in the boxes ready to be resubmitted unchanged.
+  const [verifyErrorToken, setVerifyErrorToken] = useState(0);
+
+  // Adjusts state during render rather than in an effect (React's own pattern for "derive state from a prop
+  // that changed"): detects a NEW successful send by comparing against the last requestState seen, and starts
+  // (or restarts, on a resend) the 60-second countdown the moment a code is actually sent.
+  const [seenRequestState, setSeenRequestState] = useState(requestState);
+  if (requestState !== seenRequestState) {
+    setSeenRequestState(requestState);
+    if (requestState.status === "sent") {
+      setEmail(requestState.email);
+      setSecondsLeft(RESEND_WAIT_SECONDS);
+    }
+  }
+
+  const [seenVerifyState, setSeenVerifyState] = useState(verifyState);
+  if (verifyState !== seenVerifyState) {
+    setSeenVerifyState(verifyState);
+    if (verifyState.status === "error") setVerifyErrorToken((n) => n + 1);
+  }
+
+  useEffect(() => {
+    if (secondsLeft <= 0) return;
+    const id = setInterval(() => setSecondsLeft((value) => Math.max(0, value - 1)), 1000);
+    return () => clearInterval(id);
+  }, [secondsLeft]);
+
+  if (!email) {
+    return (
+      <form action={requestAction} className="flex flex-col gap-5">
+        {requestState.status === "error" && (
+          <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
+            {requestState.message}
+          </p>
+        )}
+
+        <div className="flex flex-col gap-2">
+          <label htmlFor="otp-email" className="text-sm font-semibold">Email</label>
+          <input id="otp-email" name="email" required type="email" autoComplete="username" autoCapitalize="none" className={field} />
+        </div>
+
+        <Submit label="Send me a code" busy="Sending" />
+      </form>
+    );
+  }
 
   return (
-    <form action={action} className="flex flex-col gap-5">
-      <Message state={state} />
-
-      <div className="flex flex-col gap-2">
-        <label htmlFor="email" className="text-sm font-semibold">Email</label>
-        <input id="email" name="email" required type="email" autoComplete="username" autoCapitalize="none" className={field} />
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col items-center gap-3 rounded-md border border-border bg-surface px-6 py-8 text-center">
+        <KeyRound className="size-8 text-primary" aria-hidden="true" />
+        <div className="flex flex-col gap-1.5">
+          <p className="font-heading text-lg font-semibold">Check your email</p>
+          <p className="text-sm text-muted-foreground">
+            We sent a 6-digit code, and a sign-in link, to <strong className="text-foreground">{email}</strong>.
+            Type the code below, or tap the link in the email.
+          </p>
+        </div>
       </div>
 
-      <div className="flex flex-col gap-2">
-        <label htmlFor="password" className="text-sm font-semibold">Password</label>
-        <input id="password" name="password" required type="password" autoComplete="current-password" className={field} />
-      </div>
+      <form action={verifyAction} className="flex flex-col gap-5">
+        {verifyState.status === "error" && (
+          <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
+            {verifyState.message}
+          </p>
+        )}
+        {requestState.status === "error" && (
+          <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
+            {requestState.message}
+          </p>
+        )}
 
-      <Submit label="Sign in" busy="Signing in" />
-    </form>
+        <input type="hidden" name="email" value={email} />
+
+        <div className="flex flex-col items-center gap-2">
+          <span className="text-sm font-semibold">6-digit code</span>
+          <CodeBoxes name="token" resetToken={verifyErrorToken} invalid={verifyState.status === "error"} />
+        </div>
+
+        <Submit label="Sign in" busy="Checking" />
+      </form>
+
+      <form action={requestAction}>
+        <input type="hidden" name="email" value={email} />
+        <ResendCodeButton secondsLeft={secondsLeft} />
+      </form>
+    </div>
   );
 }

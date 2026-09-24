@@ -10,6 +10,8 @@ import { isSupabaseConfigured, serverEnv } from "@/lib/env";
 import { createServerClient } from "@/lib/supabase/server";
 import { requireOrg } from "@/lib/repositories/org";
 import { resolveHome } from "@/lib/auth/route-home";
+import { clientIp } from "@/lib/auth/client-ip";
+import { checkOtpRequestLimit, checkOtpVerifyLimit } from "@/lib/auth/otp-rate-limit";
 
 export type CustomerAuthState =
   | { status: "idle" }
@@ -170,41 +172,94 @@ export async function resendConfirmation(_previous: ResendState, formData: FormD
   return { status: "sent", message: "Email sent. Check your inbox." };
 }
 
-export async function signInCustomer(
-  _previous: CustomerAuthState,
-  formData: FormData,
-): Promise<CustomerAuthState> {
+/*
+ * Email OTP sign-in. The customer login page's primary flow: enter an
+ * email, get a six-digit code (and, in the same email, a magic link —
+ * Supabase's own Magic Link template, which now shows `{{ .Token }}` too),
+ * type the code, in. No password.
+ *
+ * `signInWithOtp` and `verifyOtp` both run server-side, through the same
+ * `createServerClient()` every other customer auth action uses, so a
+ * successful verify sets the session cookies the normal way — no separate
+ * client-side Supabase client or session-storage mechanism to keep in step.
+ */
+
+const otpEmailSchema = z.object({ email: z.email("Enter a valid email address.").max(160) });
+
+export type OtpRequestState = { status: "idle" } | { status: "error"; message: string } | { status: "sent"; email: string };
+
+/**
+ * Sends the code (and the magic link). `shouldCreateUser: false`: this can
+ * never silently mint a Supabase Auth user with no `customers` row —
+ * creating an account is `createAccount`'s job, with the name/phone/customer
+ * row work that needs. Always answers the same way whether or not the
+ * address has an account: an unknown email and a real send must look
+ * identical to the caller, so nothing here reveals which addresses exist.
+ */
+export async function requestOtpAction(_previous: OtpRequestState, formData: FormData): Promise<OtpRequestState> {
   if (!isSupabaseConfigured()) return { status: "error", message: "Accounts aren't connected yet." };
 
-  const email = String(formData.get("email") ?? "").trim();
-  const password = String(formData.get("password") ?? "");
-  if (!email || !password) return { status: "error", message: "Enter your email and password." };
+  const parsed = otpEmailSchema.safeParse({ email: String(formData.get("email") ?? "").trim() });
+  if (!parsed.success) return { status: "error", message: parsed.error.issues[0]?.message ?? "Enter a valid email address." };
+  const email = parsed.data.email;
+
+  const limit = checkOtpRequestLimit(email, await clientIp());
+  if (!limit.allowed) return { status: "error", message: `Too many requests. Wait ${limit.retryAfterSeconds} seconds and try again.` };
 
   const supabase = await createServerClient();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  // The result is deliberately unused — see the doc comment above: every outcome (an unknown email Supabase
+  // refused, a real send, Supabase's own rate limit) reaches the customer as the same "check your email" state.
+  await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: confirmRedirectUrl() } });
+
+  return { status: "sent", email };
+}
+
+const otpVerifySchema = z.object({
+  email: z.email().max(160),
+  token: z
+    .string()
+    .trim()
+    .regex(/^\d{6}$/, "Enter the 6-digit code."),
+});
+
+export type OtpVerifyState = { status: "idle" } | { status: "error"; message: string };
+
+/**
+ * Checks the code. A six-digit code is only as safe as the guesses allowed
+ * against it — `checkOtpVerifyLimit` is checked on every attempt, right or
+ * wrong, before Supabase is ever asked. The code itself never reaches a log
+ * line anywhere in this function, on success or failure.
+ */
+export async function verifyOtpAction(_previous: OtpVerifyState, formData: FormData): Promise<OtpVerifyState> {
+  if (!isSupabaseConfigured()) return { status: "error", message: "Accounts aren't connected yet." };
+
+  const parsed = otpVerifySchema.safeParse({
+    email: String(formData.get("email") ?? "").trim(),
+    token: String(formData.get("token") ?? "").trim(),
+  });
+  if (!parsed.success) return { status: "error", message: parsed.error.issues[0]?.message ?? "Enter the 6-digit code." };
+  const { email, token } = parsed.data;
+
+  const limit = checkOtpVerifyLimit(email, await clientIp());
+  if (!limit.allowed) return { status: "error", message: `Too many attempts. Wait ${limit.retryAfterSeconds} seconds and try again.` };
+
+  const supabase = await createServerClient();
+  const { error } = await supabase.auth.verifyOtp({ email, token, type: "email" });
 
   if (error) {
-    // Supabase refuses this sign-in outright until the email is confirmed —
-    // there is no session to gate here, the account can't get in at all. That
-    // is a different fact from a wrong password, so it gets the same
-    // check-email panel a fresh sign-up sees, not a generic "didn't match".
-    if (error.code === "email_not_confirmed") return { status: "check-email", email };
-    // Otherwise deliberately does not say which was wrong — that tells an
-    // attacker which addresses have accounts.
-    return { status: "error", message: "That email and password don't match." };
+    // Never the gateway's own words: one plain message for a wrong code, an expired one, or too many earlier
+    // tries, so nothing here can hint at which. The code is never included, or logged, anywhere in this branch.
+    return { status: "error", message: "That code didn't work. It may be wrong or expired — check it, or request a new one." };
   }
 
   revalidatePath("/", "layout");
 
-  // Staff signing in here are sent to the counter rather than to /account,
-  // which they have no customer record for and would be bounced out of.
+  // Staff signing in here go to the counter, and a confirmed account with no customer row yet is told so
+  // rather than bounced into a page it cannot see.
   const home = await resolveHome();
   if (home.kind === "staff") redirect("/app/orders");
   if (home.kind === "neither") {
-    return {
-      status: "error",
-      message: "That account has no customer profile yet. Create one, or order once as a guest.",
-    };
+    return { status: "error", message: "That account has no customer profile yet. Create one, or order once as a guest." };
   }
 
   redirect("/account");

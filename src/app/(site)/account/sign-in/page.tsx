@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { CustomerSignInForm } from "@/components/account/auth-forms";
+import { OtpSignInForm } from "@/components/account/auth-forms";
 import { resolveHome } from "@/lib/auth/route-home";
 
 export const metadata: Metadata = { title: "Sign in" };
@@ -31,7 +31,7 @@ export default async function CustomerSignInPage({
       )}
 
       <div className="mt-8">
-        <CustomerSignInForm />
+        <OtpSignInForm />
       </div>
       <p className="mt-6 text-sm text-muted-foreground">
         New here?{" "}
