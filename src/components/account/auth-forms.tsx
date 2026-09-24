@@ -3,16 +3,14 @@
 import { useEffect, useState } from "react";
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
-import { KeyRound, Loader2, MailCheck } from "lucide-react";
+import { Loader2, Mail, UserPlus } from "lucide-react";
 import { CodeBoxes } from "@/components/account/code-boxes";
 import {
-  type CustomerAuthState,
+  type CompleteProfileState,
   type OtpRequestState,
   type OtpVerifyState,
-  type ResendState,
-  createAccount,
+  completeProfileAction,
   requestOtpAction,
-  resendConfirmation,
   verifyOtpAction,
 } from "@/lib/customer/actions";
 
@@ -36,117 +34,7 @@ function Submit({ label, busy }: { label: string; busy: string }) {
   );
 }
 
-function Message({ state }: { state: CustomerAuthState }) {
-  if (state.status !== "error") return null;
-  return (
-    <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
-      {state.message}
-    </p>
-  );
-}
-
-function ResendButton() {
-  const { pending } = useFormStatus();
-  return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition-colors hover:bg-surface disabled:opacity-50"
-    >
-      {pending ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
-      Resend the email
-    </button>
-  );
-}
-
-/**
- * The state a sign-up lands in when Supabase requires email confirmation.
- * Its own panel, not a message above the form the person just filled in —
- * the form is done, this is what happens next.
- */
-function CheckEmail({ email }: { email: string }) {
-  const [state, action] = useActionState<ResendState, FormData>(resendConfirmation, { status: "idle" });
-
-  return (
-    <div className="flex flex-col items-center gap-4 rounded-md border border-border bg-surface px-6 py-8 text-center">
-      <MailCheck className="size-8 text-primary" aria-hidden="true" />
-      <div className="flex flex-col gap-1.5">
-        <p className="font-heading text-lg font-semibold">Check your email</p>
-        <p className="text-sm text-muted-foreground">
-          We sent a confirmation link to <strong className="text-foreground">{email}</strong>. Click it, then sign
-          in.
-        </p>
-      </div>
-
-      <form action={action}>
-        <input type="hidden" name="email" value={email} />
-        <ResendButton />
-      </form>
-
-      {state.status !== "idle" && (
-        <p role={state.status === "error" ? "alert" : "status"} className="text-sm text-muted-foreground">
-          {state.message}
-        </p>
-      )}
-    </div>
-  );
-}
-
-const field =
-  "h-[52px] rounded-md border border-border bg-surface px-4 text-base focus-visible:border-border-strong";
-
-export function JoinForm() {
-  const [state, action] = useActionState<CustomerAuthState, FormData>(createAccount, { status: "idle" });
-
-  if (state.status === "check-email") return <CheckEmail email={state.email} />;
-
-  return (
-    <form action={action} className="flex flex-col gap-5">
-      <Message state={state} />
-
-      <div className="flex flex-col gap-2">
-        <label htmlFor="name" className="text-sm font-semibold">Name</label>
-        <input id="name" name="name" required autoComplete="name" className={field} />
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <label htmlFor="phone" className="text-sm font-semibold">Mobile number</label>
-        <input
-          id="phone"
-          name="phone"
-          required
-          type="tel"
-          inputMode="numeric"
-          maxLength={10}
-          autoComplete="tel-national"
-          className={`${field} tabular`}
-        />
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <label htmlFor="email" className="text-sm font-semibold">Email</label>
-        <input id="email" name="email" required type="email" autoComplete="email" autoCapitalize="none" className={field} />
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <label htmlFor="password" className="text-sm font-semibold">Password</label>
-        <input
-          id="password"
-          name="password"
-          required
-          type="password"
-          minLength={8}
-          autoComplete="new-password"
-          aria-describedby="password-hint"
-          className={field}
-        />
-        <p id="password-hint" className="text-sm text-muted-foreground">At least 8 characters.</p>
-      </div>
-
-      <Submit label="Create account" busy="Creating your account" />
-    </form>
-  );
-}
+const field = "h-[52px] rounded-md border border-border bg-surface px-4 text-base focus-visible:border-border-strong";
 
 const RESEND_WAIT_SECONDS = 60;
 
@@ -166,15 +54,86 @@ function ResendCodeButton({ secondsLeft }: { secondsLeft: number }) {
   );
 }
 
+function RememberMeCheckbox({ defaultChecked }: { defaultChecked: boolean }) {
+  return (
+    <label className="flex items-center gap-2 text-sm text-muted-foreground">
+      <input
+        type="checkbox"
+        name="remember"
+        defaultChecked={defaultChecked}
+        className="size-4 rounded border-border accent-primary"
+      />
+      Stay signed in on this device for 30 days
+    </label>
+  );
+}
+
 /**
- * Email OTP sign-in — the customer login page's primary flow (email-otp
- * card). Two steps in one component so the email typed in step one carries
- * straight into step two without a page transition: enter an email, get a
- * six-digit code by email (the same email also carries a magic link, kept
- * working as a fallback for whoever would rather tap than type — nothing
- * here disables it), type the code, in.
+ * The account-completion step for a brand-new sign-up: the Supabase Auth
+ * user and its session already exist (`verifyOtpAction` only reaches this
+ * state after a real code verified) — this just asks for the name and phone
+ * an order or the account page needs.
  */
-export function OtpSignInForm() {
+function CompleteProfileForm({ email }: { email: string }) {
+  const [state, action] = useActionState<CompleteProfileState, FormData>(completeProfileAction, { status: "idle" });
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center gap-3 rounded-md border border-border bg-surface px-4 py-3 text-left">
+        <UserPlus className="size-5 shrink-0 text-primary" aria-hidden="true" />
+        <p className="text-sm text-muted-foreground">
+          <strong className="text-foreground">{email}</strong> is confirmed. A couple more details to finish setting
+          up your account.
+        </p>
+      </div>
+
+      <form action={action} className="flex flex-col gap-5">
+        {state.status === "error" && (
+          <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
+            {state.message}
+          </p>
+        )}
+
+        <div className="flex flex-col gap-2">
+          <label htmlFor="profile-name" className="text-sm font-semibold">Name</label>
+          <input id="profile-name" name="name" required autoComplete="name" className={field} />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <label htmlFor="profile-phone" className="text-sm font-semibold">Mobile number</label>
+          <input
+            id="profile-phone"
+            name="phone"
+            required
+            type="tel"
+            inputMode="numeric"
+            maxLength={10}
+            autoComplete="tel-national"
+            className={`${field} tabular`}
+          />
+        </div>
+
+        <Submit label="Finish creating your account" busy="Saving" />
+      </form>
+    </div>
+  );
+}
+
+/**
+ * Customer auth (auth-v2) — one screen, code only, for both sign-in and
+ * sign-up: enter an email, get a six-digit code (`shouldCreateUser: true` —
+ * an unknown address becomes a new account the moment its code verifies),
+ * type the code, in. No password, no link. A brand-new account's first
+ * successful verify continues into `CompleteProfileForm` instead of
+ * redirecting straight in — see `verifyOtpAction`'s own doc comment.
+ */
+export function OtpSignInForm({
+  noticeLinksRetired = false,
+  rememberDefault,
+}: {
+  noticeLinksRetired?: boolean;
+  rememberDefault: boolean;
+}) {
   const [requestState, requestAction] = useActionState<OtpRequestState, FormData>(requestOtpAction, { status: "idle" });
   const [verifyState, verifyAction] = useActionState<OtpVerifyState, FormData>(verifyOtpAction, { status: "idle" });
   const [secondsLeft, setSecondsLeft] = useState(0);
@@ -210,9 +169,16 @@ export function OtpSignInForm() {
     return () => clearInterval(id);
   }, [secondsLeft]);
 
+  if (verifyState.status === "need-profile") return <CompleteProfileForm email={verifyState.email} />;
+
   if (!email) {
     return (
       <form action={requestAction} className="flex flex-col gap-5">
+        {noticeLinksRetired && (
+          <p role="status" className="rounded-md border border-border bg-surface px-4 py-3 text-sm text-muted-foreground">
+            Links are no longer used — sign in with a code instead.
+          </p>
+        )}
         {requestState.status === "error" && (
           <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
             {requestState.message}
@@ -224,25 +190,21 @@ export function OtpSignInForm() {
           <input id="otp-email" name="email" required type="email" autoComplete="username" autoCapitalize="none" className={field} />
         </div>
 
-        <Submit label="Send me a code" busy="Sending" />
+        <Submit label="Continue" busy="Sending" />
       </form>
     );
   }
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-col items-center gap-3 rounded-md border border-border bg-surface px-6 py-8 text-center">
-        <KeyRound className="size-8 text-primary" aria-hidden="true" />
-        <div className="flex flex-col gap-1.5">
-          <p className="font-heading text-lg font-semibold">Check your email</p>
+      <form action={verifyAction} className="flex flex-col gap-5">
+        <div className="flex items-center gap-3 rounded-md border border-border bg-surface px-4 py-3 text-left">
+          <Mail className="size-5 shrink-0 text-primary" aria-hidden="true" />
           <p className="text-sm text-muted-foreground">
-            We sent a 6-digit code, and a sign-in link, to <strong className="text-foreground">{email}</strong>.
-            Type the code below, or tap the link in the email.
+            Code sent to <strong className="text-foreground">{email}</strong>.
           </p>
         </div>
-      </div>
 
-      <form action={verifyAction} className="flex flex-col gap-5">
         {verifyState.status === "error" && (
           <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
             {verifyState.message}
@@ -260,6 +222,8 @@ export function OtpSignInForm() {
           <span className="text-sm font-semibold">6-digit code</span>
           <CodeBoxes name="token" resetToken={verifyErrorToken} invalid={verifyState.status === "error"} />
         </div>
+
+        <RememberMeCheckbox defaultChecked={rememberDefault} />
 
         <Submit label="Sign in" busy="Checking" />
       </form>

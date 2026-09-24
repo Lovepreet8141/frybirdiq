@@ -152,6 +152,9 @@ const STAFF_ONLY: Readonly<Record<string, string>> = {
 
 const PUBLIC: Readonly<Record<string, string>> = {
   "src/lib/auth/actions.ts#signIn": "staff sign-in itself: it is how a session is obtained",
+  "src/lib/auth/actions.ts#requestPasswordResetAction": "the staff/owner password-reset flow; never reveals whether the address has an account",
+  "src/lib/auth/actions.ts#verifyResetCodeAction": "the staff/owner password-reset flow; Supabase's own verifyOtp is the authority",
+  "src/lib/auth/actions.ts#setNewPasswordAction": "acts only on the caller's own session, from getUser() — the recovery code already gated reaching it",
   "src/lib/cart/actions.ts#addToCart": "the customer's own cart, held in their cookie",
   "src/lib/cart/actions.ts#applyPromoCode": "the customer's own cart, held in their cookie",
   "src/lib/cart/actions.ts#clearCart": "the customer's own cart, held in their cookie",
@@ -162,10 +165,9 @@ const PUBLIC: Readonly<Record<string, string>> = {
   "src/lib/cart/actions.ts#setRedeemReward": "the customer's own cart, held in their cookie",
   "src/lib/cart/checkout-action.ts#submitCheckout": "the customer's checkout; the server prices the cart and gates hours",
   "src/lib/cart/delivery-action.ts#quoteDeliveryAction": "the customer's delivery quote, computed from the pin on the server",
-  "src/lib/customer/actions.ts#createAccount": "customer account sign-up and sign-in",
-  "src/lib/customer/actions.ts#requestOtpAction": "the customer email-OTP login flow; never reveals whether the address has an account",
-  "src/lib/customer/actions.ts#resendConfirmation": "customer account sign-up and sign-in",
-  "src/lib/customer/actions.ts#verifyOtpAction": "the customer email-OTP login flow; Supabase's own verifyOtp is the authority",
+  "src/lib/customer/actions.ts#requestOtpAction": "the customer email-code sign-in/sign-up flow; never reveals whether the address has an account",
+  "src/lib/customer/actions.ts#verifyOtpAction": "the customer email-code sign-in/sign-up flow; Supabase's own verifyOtp is the authority",
+  "src/lib/customer/actions.ts#completeProfileAction": "acts only on the caller's own session, from getUser() — a real code already gated reaching it",
   "src/lib/hardware/actions.ts#checkPrinterAddressAction": "pure validation of a host and port: no database, no network",
   "src/lib/home/franchise-actions.ts#submitFranchiseInquiry": "the public franchise enquiry form",
   "src/lib/notifications/actions.ts#whatsappOrderLink": "the customer's own order, bound to the signed-in customer or this device's phone",

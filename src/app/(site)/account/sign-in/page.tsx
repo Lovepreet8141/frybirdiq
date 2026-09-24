@@ -3,40 +3,48 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { OtpSignInForm } from "@/components/account/auth-forms";
 import { resolveHome } from "@/lib/auth/route-home";
+import { readRememberChoice } from "@/lib/auth/remember-me-cookies";
+import { getLoyaltyConfig } from "@/lib/loyalty/config";
+import { isLoyaltyEnabled } from "@/lib/loyalty";
+import { formatBps } from "@/lib/money";
 
 export const metadata: Metadata = { title: "Sign in" };
 
+/**
+ * One screen for both sign-in and sign-up (auth-v2) — the email address
+ * decides which it is server-side, never a separate page or link. See
+ * `OtpSignInForm`'s own doc comment.
+ */
 export default async function CustomerSignInPage({
   searchParams,
 }: {
-  searchParams: Promise<{ confirm?: string }>;
+  searchParams: Promise<{ notice?: string }>;
 }) {
   const home = await resolveHome();
   if (home.path) redirect(home.path);
 
-  const { confirm } = await searchParams;
+  const { notice } = await searchParams;
+  const loyalty = await getLoyaltyConfig();
+  const rememberDefault = await readRememberChoice(true);
 
   return (
     <div className="mx-auto w-full max-w-sm px-[var(--gutter)] py-14">
       <h1 className="font-heading text-3xl font-bold tracking-tight">Sign in</h1>
 
-      {/* A used or expired confirmation link lands back here — a plain
-          state, not a crash, per content.md: say what happened, then what
-          to do. */}
-      {confirm === "error" && (
-        <p role="alert" className="mt-6 rounded-md border border-border bg-surface px-4 py-3 text-sm">
-          That confirmation link didn&rsquo;t work. It may have expired or already been used. If your account is
-          already confirmed, sign in below.
+      {isLoyaltyEnabled(loyalty) && (
+        <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+          Earn {formatBps(loyalty.earnBps, 0)} back as points on everything you order, and keep your order history in
+          one place.
         </p>
       )}
 
       <div className="mt-8">
-        <OtpSignInForm />
+        <OtpSignInForm noticeLinksRetired={notice === "links-retired"} rememberDefault={rememberDefault} />
       </div>
       <p className="mt-6 text-sm text-muted-foreground">
-        New here?{" "}
-        <Link href="/account/join" className="font-semibold text-primary">
-          Create an account
+        You don&rsquo;t need an account to order.{" "}
+        <Link href="/menu" className="font-semibold text-primary">
+          Just order
         </Link>
       </p>
       <p className="mt-2 text-sm text-muted-foreground">

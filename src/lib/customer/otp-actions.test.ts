@@ -30,6 +30,8 @@ const redirect = vi.fn((to: string) => {
 vi.mock("@/lib/env", () => ({
   isSupabaseConfigured: () => true,
   serverEnv: () => ({ SITE_URL: "https://frybirdiq.tech" }),
+  // auth-v2: verifyOtpAction now sets the remember-me cookie before verifying — see remember-me.ts.
+  cookieSecret: () => ({ kind: "ok", secret: "s".repeat(40) }),
 }));
 vi.mock("@/lib/supabase/server", () => ({
   createServerClient: async () => ({ auth: { signInWithOtp: (input: unknown) => signInWithOtp(input), verifyOtp: (input: unknown) => verifyOtp(input) } }),
@@ -38,6 +40,17 @@ vi.mock("@/lib/auth/route-home", () => ({ resolveHome: () => resolveHome() }));
 vi.mock("@/lib/auth/client-ip", () => ({ clientIp: () => clientIp() }));
 vi.mock("next/cache", () => ({ revalidatePath: (...args: unknown[]) => revalidatePath(...args) }));
 vi.mock("next/navigation", () => ({ redirect: (to: string) => redirect(to) }));
+// verifyOtpAction now writes the remember-me cookie (auth-v2) via next/headers's cookies() — a minimal
+// in-memory store is enough here, since these tests care about the auth flow, not remember-me itself
+// (covered separately in remember-me.test.ts and proxy-remember-me.test.ts).
+const cookieStore = new Map<string, string>();
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: (name: string) => (cookieStore.has(name) ? { value: cookieStore.get(name)! } : undefined),
+    set: (name: string, value: string) => cookieStore.set(name, value),
+    delete: (name: string) => cookieStore.delete(name),
+  }),
+}));
 
 const { requestOtpAction, verifyOtpAction } = await import("./actions");
 
@@ -69,12 +82,12 @@ describe("requestOtpAction", () => {
     expect(signInWithOtp).not.toHaveBeenCalled();
   });
 
-  it("calls signInWithOtp with shouldCreateUser false and a runtime-read redirect URL — never inlined at build time", async () => {
+  it("calls signInWithOtp with shouldCreateUser true and no link (auth-v2: one code, for sign-in and sign-up)", async () => {
     signInWithOtp.mockResolvedValue({ data: {}, error: null });
     await requestOtpAction({ status: "idle" }, form({ email: "asha@example.test" }));
     expect(signInWithOtp).toHaveBeenCalledWith({
       email: "asha@example.test",
-      options: { shouldCreateUser: false, emailRedirectTo: "https://frybirdiq.tech/auth/confirm" },
+      options: { shouldCreateUser: true },
     });
   });
 
@@ -188,11 +201,12 @@ describe("verifyOtpAction", () => {
     expect(redirectedTo).toBe("/app/orders");
   });
 
-  it("tells a confirmed account with no customer row, rather than redirecting into a page it cannot see", async () => {
+  it("a confirmed account with no customer row continues into profile completion, not an error (auth-v2: a brand-new account's first verify, or an old orphaned one — same remedy either way)", async () => {
     verifyOtp.mockResolvedValue({ data: {}, error: null });
     resolveHome.mockResolvedValue({ kind: "neither", path: null });
-    const { state } = await runVerify({ email: "orphan@example.test", token: "123456" });
-    expect(state).toMatchObject({ status: "error" });
+    const { state, redirectedTo } = await runVerify({ email: "orphan@example.test", token: "123456" });
+    expect(redirectedTo).toBeNull();
+    expect(state).toMatchObject({ status: "need-profile", email: "orphan@example.test" });
   });
 
   it("rate limits verify attempts per email, cutting attempts off before Supabase is asked 15 times — a code cannot be brute-forced", async () => {

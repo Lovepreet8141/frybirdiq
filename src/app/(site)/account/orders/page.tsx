@@ -4,7 +4,6 @@ import { redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { EmptyState } from "@/components/states";
 import { OrderHistoryList } from "@/components/account/order-history";
-import { UnverifiedNotice } from "@/components/account/unverified-notice";
 import { getCustomer } from "@/lib/customer";
 import { resolveHome } from "@/lib/auth/route-home";
 import { listCustomerOrders } from "@/lib/repositories/orders";
@@ -34,11 +33,7 @@ export default async function CustomerOrdersPage() {
 
       <h1 className="mt-4 font-heading text-4xl font-bold tracking-tight">Your orders</h1>
 
-      {!customer.emailVerified ? (
-        <UnverifiedNotice email={customer.email} className="mt-8" />
-      ) : (
-        <OrdersList customerId={customer.id} orgId={org.id} />
-      )}
+      <OrdersList customerId={customer.id} orgId={org.id} />
     </div>
   );
 }
