@@ -16,7 +16,10 @@ export default defineConfig({
     // would otherwise pick them up. They need a real Postgres and the
     // "react-server" resolve condition (vitest.integration.config.mts),
     // neither of which this fast, DB-free suite has; run them with
-    // `pnpm test:integration` instead.
-    exclude: ["**/node_modules/**", "**/*.integration.test.ts"],
+    // `pnpm test:integration` instead. Same reasoning for *.dom.test.tsx —
+    // it needs jsdom (vitest.dom.config.mts, `pnpm test:dom`), which this
+    // node-environment suite doesn't have; it would otherwise "pass" the
+    // include glob and fail every time for having no DOM, not for a real bug.
+    exclude: ["**/node_modules/**", "**/*.integration.test.ts", "**/*.dom.test.tsx"],
   },
 });

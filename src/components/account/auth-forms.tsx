@@ -141,9 +141,13 @@ export function OtpSignInForm({
   // even with the button disabled client-side) must not drop the user back to "enter your email" and lose the
   // step they already reached — only a *successful* send ever sets this, and nothing ever clears it back to null.
   const [email, setEmail] = useState<string | null>(null);
-  // Bumped on every NEW verify error, never on a fresh code request — CodeBoxes remounts on it (see its own
-  // comment): a wrong or expired code is never left sitting in the boxes ready to be resubmitted unchanged.
+  // Bumped on every NEW verify error OR every successful resend, never on the first send — CodeBoxes remounts
+  // on it (see its own comment): a wrong/expired code, or a code superseded by a newer email, is never left
+  // sitting in the boxes ready to be resubmitted. This is the live-incident fix (25 Sep 2026): a customer who
+  // requested a second code while the first was still showing had no signal the first one was now stale, and
+  // the still-visible boxes (never cleared on resend) invited entering the wrong one.
   const [verifyErrorToken, setVerifyErrorToken] = useState(0);
+  const [resendNotice, setResendNotice] = useState(false);
 
   // Adjusts state during render rather than in an effect (React's own pattern for "derive state from a prop
   // that changed"): detects a NEW successful send by comparing against the last requestState seen, and starts
@@ -152,8 +156,13 @@ export function OtpSignInForm({
   if (requestState !== seenRequestState) {
     setSeenRequestState(requestState);
     if (requestState.status === "sent") {
+      const isResend = email !== null; // email is already set only once the first send has already landed
       setEmail(requestState.email);
       setSecondsLeft(RESEND_WAIT_SECONDS);
+      if (isResend) {
+        setVerifyErrorToken((n) => n + 1);
+        setResendNotice(true);
+      }
     }
   }
 
@@ -205,6 +214,11 @@ export function OtpSignInForm({
           </p>
         </div>
 
+        {resendNotice && verifyState.status !== "error" && (
+          <p role="status" className="rounded-md border border-border bg-surface px-4 py-3 text-sm text-muted-foreground">
+            New code sent. Use the newest email.
+          </p>
+        )}
         {verifyState.status === "error" && (
           <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
             {verifyState.message}

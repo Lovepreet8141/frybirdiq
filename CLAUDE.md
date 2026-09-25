@@ -182,6 +182,7 @@ pnpm typecheck        # tsc --noEmit
 pnpm lint             # eslint
 pnpm test             # vitest — pure src/lib and src/domain, no database
 pnpm test:integration # vitest — the repository layer against a real, local database
+pnpm test:dom         # vitest — real DOM commit timing (jsdom), for the rare bug pure logic can't see
 pnpm db:generate      # drizzle-kit generate, after a schema change
 pnpm db:migrate       # apply migrations
 python3 scripts/check-contrast.py   # after any colour change
@@ -201,6 +202,21 @@ pointed at anything else. Fixtures live in `src/lib/repositories/
 __test-support__/fixtures.ts`; each test file creates its own org and
 deletes it (cascades) when done, so files never interfere with each
 other even though they run sequentially against one shared local database.
+
+`pnpm test:dom` (`vitest.dom.config.mts`, jsdom) runs only `src/components/
+**/*.dom.test.tsx` — deliberately excluded from the main `pnpm test` glob
+(node environment, no DOM). This is the exception, not a default to reach
+for: almost everything belongs in a plain logic test. Use it only for a bug
+that exists purely in real DOM commit timing — code that reads a DOM node's
+value synchronously in the same event handler that just scheduled a React
+state update to it, before React has actually written the new value to that
+node. A plain logic test cannot see this class of bug at all, because
+nothing about it is wrong in isolation — it only breaks against a real DOM.
+(First and, so far, only case: `code-boxes.dom.test.tsx` — the 25 Sep 2026
+incident where every OTP auto-submit sent a stale, one-digit-short code,
+because `requestSubmit()` was called synchronously instead of from a
+`useEffect`. Live customer sign-in was broken for hours before this was
+caught, precisely because the only verification anyone had done was manual.)
 
 Run `pnpm typecheck && pnpm lint && pnpm test` before considering work done. A
 change to a calculation without a change to its test is incomplete.

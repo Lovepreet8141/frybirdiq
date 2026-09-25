@@ -103,14 +103,22 @@ export function ForgotPasswordForm() {
   const [verifyState, verifyAction] = useActionState<ResetVerifyState, FormData>(verifyResetCodeAction, { status: "idle" });
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [email, setEmail] = useState<string | null>(null);
+  // Bumped on every NEW verify error OR every successful resend, never the first send — CodeBoxes remounts on
+  // it, clearing a code that a newer email has since superseded. Same live-incident fix as the customer flow.
   const [verifyErrorToken, setVerifyErrorToken] = useState(0);
+  const [resendNotice, setResendNotice] = useState(false);
 
   const [seenRequestState, setSeenRequestState] = useState(requestState);
   if (requestState !== seenRequestState) {
     setSeenRequestState(requestState);
     if (requestState.status === "sent") {
+      const isResend = email !== null;
       setEmail(requestState.email);
       setSecondsLeft(RESEND_WAIT_SECONDS);
+      if (isResend) {
+        setVerifyErrorToken((n) => n + 1);
+        setResendNotice(true);
+      }
     }
   }
 
@@ -157,6 +165,11 @@ export function ForgotPasswordForm() {
           </p>
         </div>
 
+        {resendNotice && verifyState.status !== "error" && (
+          <p role="status" className="rounded-md border border-border bg-surface px-4 py-3 text-sm text-muted-foreground">
+            New code sent. Use the newest email.
+          </p>
+        )}
         {verifyState.status === "error" && (
           <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
             {verifyState.message}
