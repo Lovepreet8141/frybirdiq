@@ -7,18 +7,27 @@ interface PasswordChangedEvent {
   readonly orgId: string;
   readonly userId: string;
   readonly email: string | null;
+  /** auth-v3, item C: which kind of account this is — decides the audit action name and whether the owner alert fires at all. */
+  readonly kind: "staff" | "customer";
 }
 
 /**
- * Records a staff/owner password change and alerts the owners (auth-v2,
- * item B.1 / item 3). Two independent, best-effort steps, in this order:
+ * Records a password change, for staff/owner AND customer accounts alike
+ * (auth-v3, item C — the reset flow itself is now shared between them; see
+ * `src/lib/auth/actions.ts`'s doc comment). Two independent, best-effort
+ * steps, in this order:
  *
- * 1. The audit row — written unconditionally. This is the durable record,
- *    and it must exist whether or not `ALERT_URL` is ever configured; a
- *    push notification is a convenience on top of it, never a substitute.
- * 2. The alert itself — POSTs to `ALERT_URL` if set; if it's unset (or the
- *    POST fails), falls back to a loud `console.error` line so the event is
- *    still visible in the journal, never silently dropped.
+ * 1. The audit row — written unconditionally for EVERY account, staff or
+ *    customer. This is the durable record, and it must exist whether or not
+ *    `ALERT_URL` is ever configured; a push notification is a convenience
+ *    on top of it, never a substitute. `kind` picks the action name
+ *    (`password_changed` for staff/owner, `customer_password_changed` for a
+ *    customer) so the two are never confused when read back later.
+ * 2. The owner alert — ONLY for `kind: "staff"`. A staff/owner password
+ *    change is the security-relevant event this alert exists for; a
+ *    customer resetting their own account's password on the public site is
+ *    routine and would just be noise (or, at volume, a reason to ignore the
+ *    channel entirely) — it is still fully audited, just not pushed.
  *
  * Neither step can throw back into the caller: this always runs AFTER
  * `updateUser({ password })` has already succeeded, so a failure here — a
@@ -36,7 +45,7 @@ export async function recordPasswordChangedAndAlert(event: PasswordChangedEvent)
       .values({
         orgId: event.orgId,
         actorUserId: event.userId,
-        action: "password_changed",
+        action: event.kind === "staff" ? "password_changed" : "customer_password_changed",
         entity: "auth_users",
         entityId: event.userId,
         after: { email: event.email, at },
@@ -44,6 +53,8 @@ export async function recordPasswordChangedAndAlert(event: PasswordChangedEvent)
   } catch (err) {
     console.error("password-changed-alert: failed to write the audit row", err);
   }
+
+  if (event.kind !== "staff") return;
 
   const message = `A staff/owner password was changed.\nAccount: ${event.email ?? event.userId}\nAt: ${at}`;
   const alertUrl = process.env.ALERT_URL;

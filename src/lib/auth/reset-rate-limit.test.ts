@@ -102,12 +102,12 @@ describe("checkResetVerifyLimit — a 6-digit reset code cannot be brute forced"
   });
 });
 
-describe("reset-rate-limit is isolated from otp-rate-limit", () => {
-  it("shares no bucket with the customer OTP limiter — a different module, a different Map", async () => {
-    const { checkOtpVerifyLimit, resetOtpRateLimitsForTests } = await import("./otp-rate-limit");
-    resetOtpRateLimitsForTests();
-    for (let i = 0; i < 10; i += 1) checkOtpVerifyLimit("shared@example.test", null);
-    expect(checkOtpVerifyLimit("shared@example.test", null).allowed).toBe(false);
+describe("reset-rate-limit is isolated from customer/auth-rate-limit", () => {
+  it("shares no bucket with the customer signup/sign-in limiter — a different module, a different Map", async () => {
+    const { checkSignupVerifyLimit, resetCustomerAuthRateLimitsForTests } = await import("@/lib/customer/auth-rate-limit");
+    resetCustomerAuthRateLimitsForTests();
+    for (let i = 0; i < 10; i += 1) checkSignupVerifyLimit("shared@example.test", null);
+    expect(checkSignupVerifyLimit("shared@example.test", null).allowed).toBe(false);
     // The reset flow's own limiter for the exact same email must be unaffected.
     expect(checkResetVerifyLimit("shared@example.test", null).allowed).toBe(true);
   });

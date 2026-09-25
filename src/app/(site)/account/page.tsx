@@ -28,9 +28,10 @@ export default async function AccountPage() {
 
   const org = await requireOrg();
 
-  // Under auth-v2 there is no signed-in-but-unconfirmed state to withhold these behind any more: the only
-  // way to hold a customer session at all is to have verified an email code, which confirms the address as
-  // a side effect — see verifyOtpAction's own doc comment.
+  // There is no signed-in-but-unconfirmed state to withhold these behind: signInWithPassword() itself refuses
+  // an unconfirmed account (Confirm email is on), and verifySignupCodeAction's verifyOtp(type: 'signup') both
+  // confirms the address and establishes the session in the same step — so a customer session always implies
+  // a confirmed email, under auth-v3 exactly as it did under auth-v2, just via a different mechanism.
   const [orders, loyalty, stampConfig, stampState] = await Promise.all([
     listCustomerOrders({ customerId: customer.id, orgId: org.id, limit: 5 }),
     getLoyaltyConfig(),

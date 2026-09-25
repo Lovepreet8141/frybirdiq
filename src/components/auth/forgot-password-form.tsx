@@ -78,13 +78,13 @@ function SetNewPasswordForm() {
 
         <div className="flex flex-col gap-2">
           <label htmlFor="new-password" className="text-sm font-semibold">New password</label>
-          <input id="new-password" name="password" required type="password" minLength={10} autoComplete="new-password" className={field} aria-describedby="new-password-hint" />
-          <p id="new-password-hint" className="text-sm text-muted-foreground">At least 10 characters.</p>
+          <input id="new-password" name="password" required type="password" minLength={8} autoComplete="new-password" className={field} aria-describedby="new-password-hint" />
+          <p id="new-password-hint" className="text-sm text-muted-foreground">At least 8 characters.</p>
         </div>
 
         <div className="flex flex-col gap-2">
           <label htmlFor="confirm-password" className="text-sm font-semibold">Confirm new password</label>
-          <input id="confirm-password" name="confirmPassword" required type="password" minLength={10} autoComplete="new-password" className={field} />
+          <input id="confirm-password" name="confirmPassword" required type="password" minLength={8} autoComplete="new-password" className={field} />
         </div>
 
         <Submit label="Set new password" busy="Saving" />
@@ -94,9 +94,12 @@ function SetNewPasswordForm() {
 }
 
 /**
- * The staff/owner "forgot password" flow (auth-v2, item B.1): a 6-digit
- * code, not a link. Same three-step shape as the customer OTP form — email,
- * then code, then (here, uniquely to this flow) a new password.
+ * The "forgot password" flow: a 6-digit code, not a link. Three steps —
+ * email, then code, then a new password. Shared by staff and customers
+ * (auth-v3, item C): rendered from both `/forgot-password` (staff) and
+ * `/account/forgot-password` (customer), same component, same actions —
+ * see `src/lib/auth/actions.ts`'s doc comment for why one implementation is
+ * correct here rather than two.
  */
 export function ForgotPasswordForm() {
   const [requestState, requestAction] = useActionState<ResetRequestState, FormData>(requestPasswordResetAction, { status: "idle" });

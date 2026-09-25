@@ -233,16 +233,14 @@ describe("setNewPasswordAction — item 4: other sessions revoked, never the cur
     expect(updateUser).not.toHaveBeenCalled();
   });
 
-  it("staff/owner accounts only (red-team finding): a non-staff account (e.g. a customer) is refused before the password is ever touched", async () => {
-    getStaff.mockResolvedValue(null);
-    const { state } = await run(setNewPasswordAction, { status: "idle" }, { password: "a-real-password", confirmPassword: "a-real-password" });
-    expect(state).toMatchObject({ status: "error" });
-    expect(updateUser).not.toHaveBeenCalled();
-    expect(signOut).not.toHaveBeenCalled();
-    expect(recordPasswordChangedAndAlert).not.toHaveBeenCalled();
+  it("auth-v3 (item C, reverses the earlier red-team-driven gate): a non-staff account (e.g. a customer) is NOT refused — the flow is now shared, deliberately", async () => {
+    resolveHome.mockResolvedValue({ kind: "customer", path: "/account" });
+    const { redirectedTo } = await run(setNewPasswordAction, { status: "idle" }, { password: "a-real-password", confirmPassword: "a-real-password" });
+    expect(redirectedTo).not.toBeNull();
+    expect(updateUser).toHaveBeenCalled();
   });
 
-  it("rejects a password under 10 characters before calling Supabase", async () => {
+  it("rejects a password under 8 characters before calling Supabase", async () => {
     const { state } = await run(setNewPasswordAction, { status: "idle" }, { password: "short1", confirmPassword: "short1" });
     expect(state).toMatchObject({ status: "error" });
     expect(updateUser).not.toHaveBeenCalled();
@@ -254,9 +252,29 @@ describe("setNewPasswordAction — item 4: other sessions revoked, never the cur
     expect(updateUser).not.toHaveBeenCalled();
   });
 
-  it("records the audit row and owner alert with the actual user id and email, after the password change succeeds", async () => {
+  it("records the audit row with kind 'staff' and the actual user id and email, when resolveHome says staff", async () => {
+    resolveHome.mockResolvedValue({ kind: "staff", path: "/app/orders" });
     await run(setNewPasswordAction, { status: "idle" }, { password: "a-real-password", confirmPassword: "a-real-password" });
-    expect(recordPasswordChangedAndAlert).toHaveBeenCalledWith({ orgId: "org-1", userId: "user-1", email: "owner@example.test" });
+    expect(recordPasswordChangedAndAlert).toHaveBeenCalledWith({ orgId: "org-1", userId: "user-1", email: "owner@example.test", kind: "staff" });
+  });
+
+  it("records the audit row with kind 'customer' — never 'staff' — when resolveHome says customer (auth-v3, item C: the owner alert must not fire for a customer's own reset)", async () => {
+    resolveHome.mockResolvedValue({ kind: "customer", path: "/account" });
+    await run(setNewPasswordAction, { status: "idle" }, { password: "a-real-password", confirmPassword: "a-real-password" });
+    expect(recordPasswordChangedAndAlert).toHaveBeenCalledWith({ orgId: "org-1", userId: "user-1", email: "owner@example.test", kind: "customer" });
+  });
+
+  it("works identically for a customer account that has no password yet (auth-v2 code-only signup, before auth-v3) — this is how it sets its first one, item C", async () => {
+    // Nothing in setNewPasswordAction reads, requires, or compares against an existing password anywhere —
+    // it only ever calls updateUser with the NEW one, on whatever session verifyResetCodeAction already
+    // established. There is no separate "does a password already exist" branch to test, because there is no
+    // such branch in the code: this test pins that fact by asserting the call shape carries nothing but the
+    // new password, for a customer-kind account, and completes exactly like any other reset.
+    resolveHome.mockResolvedValue({ kind: "customer", path: "/account" });
+    const { redirectedTo } = await run(setNewPasswordAction, { status: "idle" }, { password: "a-real-password", confirmPassword: "a-real-password" });
+    expect(updateUser).toHaveBeenCalledWith({ password: "a-real-password" });
+    expect(updateUser).not.toHaveBeenCalledWith(expect.objectContaining({ oldPassword: expect.anything() }));
+    expect(redirectedTo).toBe("/account");
   });
 
   it("a failure to revoke other sessions is logged but does not block the redirect — the password change already succeeded", async () => {
@@ -271,5 +289,11 @@ describe("setNewPasswordAction — item 4: other sessions revoked, never the cur
     resolveHome.mockResolvedValue({ kind: "staff", path: "/app/deliveries" });
     const { redirectedTo } = await run(setNewPasswordAction, { status: "idle" }, { password: "a-real-password", confirmPassword: "a-real-password" });
     expect(redirectedTo).toBe("/app/deliveries");
+  });
+
+  it("falls back to /account/sign-in, not /app/orders, when resolveHome finds neither (auth-v3: this flow is no longer staff-only, so a bare staff destination is the wrong default)", async () => {
+    resolveHome.mockResolvedValue({ kind: "neither", path: null });
+    const { redirectedTo } = await run(setNewPasswordAction, { status: "idle" }, { password: "a-real-password", confirmPassword: "a-real-password" });
+    expect(redirectedTo).toBe("/account/sign-in");
   });
 });

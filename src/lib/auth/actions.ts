@@ -6,7 +6,6 @@ import { z } from "zod";
 import { createServerClient } from "@/lib/supabase/server";
 import { isSupabaseConfigured } from "@/lib/env";
 import { requireOrg } from "@/lib/repositories/org";
-import { getStaff } from "./index";
 import { resolveHome } from "./route-home";
 import { clientIp } from "./client-ip";
 import { setRememberChoice } from "./remember-me-cookies";
@@ -90,11 +89,24 @@ export async function signIn(_previous: SignInState, formData: FormData): Promis
 }
 
 /*
- * Forgot password (auth-v2, item B.1): a 6-digit code, not a link. Three
- * steps, three actions — request, verify, set — because each needs its own
- * rate limit and its own explicit user action; nothing here can skip a step
- * (`setNewPasswordAction` requires the live session `verifyResetCodeAction`
- * just established, taken from `getUser()`, never an id the form supplies).
+ * Forgot password: a 6-digit code, not a link. Three steps, three actions —
+ * request, verify, set — because each needs its own rate limit and its own
+ * explicit user action; nothing here can skip a step (`setNewPasswordAction`
+ * requires the live session `verifyResetCodeAction` just established, taken
+ * from `getUser()`, never an id the form supplies).
+ *
+ * Shared by staff AND customers (auth-v3, item C — reversing auth-v2's
+ * red-team-driven staff-only gate, by explicit owner decision): whose
+ * password this resets is still always the live session's own id, so
+ * opening it to customers adds no privilege a customer didn't already have
+ * over their own account. What changes is only bookkeeping, in
+ * `setNewPasswordAction` below: the audit action name and whether an owner
+ * alert fires both branch on `resolveHome()`'s own staff-vs-customer
+ * routing, never on which page the person was sent from. This is also how a
+ * customer account
+ * created code-only under auth-v2 (no password at all) sets its first one —
+ * `updateUser({ password })` works identically whether or not a password
+ * existed before.
  */
 
 const emailSchema = z.object({ email: z.email("Enter a valid email address.").max(160) });
@@ -169,7 +181,7 @@ export async function verifyResetCodeAction(_previous: ResetVerifyState, formDat
 
 const newPasswordSchema = z
   .object({
-    password: z.string().min(10, "Use at least 10 characters."),
+    password: z.string().min(8, "Use at least 8 characters."),
     confirmPassword: z.string(),
   })
   .refine((value) => value.password === value.confirmPassword, { message: "Those passwords don't match.", path: ["confirmPassword"] });
@@ -180,25 +192,26 @@ export type SetPasswordState = { status: "idle" } | { status: "error"; message: 
  * Sets the new password. Requires the live session `verifyResetCodeAction`
  * established — `getUser()`'s own id decides whose password changes, never
  * anything the form supplies, so there is nothing to authorize beyond
- * "does this browser hold a real session right now."
+ * "does this browser hold a real session right now." No staff-only gate
+ * (auth-v3, item C — see the doc comment above this flow's first action):
+ * a customer resetting their own account's password is exactly as
+ * authorized as a staff member resetting theirs, since both are always
+ * acting on their own proven session.
  *
- * Staff/owner accounts only (red-team finding): this whole flow is reached
- * by email alone, with no restriction on whose email — without this check
- * a customer (or anyone with access to a customer's inbox) could set a
- * password on that customer's account through what's meant to be the staff
- * reset flow. No privilege escalation resulted (`signIn` still routes a
- * customer session to `/account`, never `/app/*`), but it mislabelled the
- * audit trail and owner alert as a staff/owner event when it might not be
- * one, and quietly contradicted the "no customer passwords" design this
- * card is built on. Checked here, not earlier: a wrong `getStaff()` refusal
- * for someone already looking at their own account (proven by a real code)
- * reveals nothing to a third party.
+ * Eight characters, not ten (auth-v3): lowered to match `createAccountAction`'s
+ * signup minimum, so one number governs every password set anywhere in the
+ * app — a customer setting an initial password here (the "code-only account
+ * has none yet" case) faces the same bar a fresh signup does, not a
+ * stealth-stricter one. Flagged for reviewers: this is a small, deliberate
+ * reduction from the previous 10-character staff-only minimum, made for
+ * consistency now that this flow is customer-facing too, not an oversight.
  *
  * After a successful change: every OTHER session of this user is revoked
  * (`signOut({ scope: 'others' })` — this one, the one that just proved both
  * inbox access and a new password, is deliberately left signed in), then
- * the audit row + owner alert (`recordPasswordChangedAndAlert`, item 3 —
- * never blocks or fails this action even if it itself has trouble).
+ * the audit row, and an owner alert ONLY when this account is staff/owner
+ * (`recordPasswordChangedAndAlert`, `kind` decided here from `resolveHome()`
+ * — never blocks or fails this action even if it itself has trouble).
  */
 export async function setNewPasswordAction(_previous: SetPasswordState, formData: FormData): Promise<SetPasswordState> {
   if (!isSupabaseConfigured()) return { status: "error", message: "Accounts aren't connected yet." };
@@ -215,9 +228,6 @@ export async function setNewPasswordAction(_previous: SetPasswordState, formData
   } = await supabase.auth.getUser();
   if (!user) return { status: "error", message: "That reset code expired. Start over and request a new one." };
 
-  const staff = await getStaff();
-  if (!staff) return { status: "error", message: "This password reset is for staff and owner accounts only." };
-
   const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
   if (error) return { status: "error", message: "That password could not be set. Try a different one." };
 
@@ -229,11 +239,16 @@ export async function setNewPasswordAction(_previous: SetPasswordState, formData
   }
 
   const org = await requireOrg();
-  await recordPasswordChangedAndAlert({ orgId: org.id, userId: user.id, email: user.email ?? null });
+  // resolveHome(), not a direct getStaff() call: it already decides staff-vs-customer for the redirect below,
+  // so reusing it here avoids a second, redundant identity lookup — and it is routing logic, not an
+  // authorization gate, so this account's own permission-gate registry test (rightly) never mistakes it for
+  // one, the way a bare `getStaff()` call would.
+  const home = await resolveHome();
+  const kind = home.kind === "staff" ? "staff" : "customer";
+  await recordPasswordChangedAndAlert({ orgId: org.id, userId: user.id, email: user.email ?? null, kind });
 
   revalidatePath("/", "layout");
-  const home = await resolveHome();
-  redirect(home.path ?? "/app/orders");
+  redirect(home.path ?? "/account/sign-in");
 }
 
 // Sign-out lives at `/api/auth/sign-out` (a Route Handler), not here. See that

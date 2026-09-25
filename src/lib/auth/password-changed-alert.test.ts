@@ -1,9 +1,11 @@
 /**
- * recordPasswordChangedAndAlert (auth-v2, item 3): must write an audit row
- * REGARDLESS of whether ALERT_URL is set, and must never throw back into
- * the caller — a DB hiccup or an unreachable ALERT_URL must never look like
- * the password reset itself failed, since this always runs after
- * `updateUser({ password })` has already succeeded.
+ * recordPasswordChangedAndAlert: must write an audit row REGARDLESS of
+ * whether ALERT_URL is set, and must never throw back into the caller — a
+ * DB hiccup or an unreachable ALERT_URL must never look like the password
+ * reset itself failed, since this always runs after `updateUser({ password
+ * })` has already succeeded. auth-v3, item C: `kind` picks the audit
+ * action name (staff vs customer) and gates the owner alert — a customer's
+ * own reset is always audited, but never pushed as an alert.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,7 +18,8 @@ vi.mock("@/db/schema", () => ({ auditLogs: { __marker: "auditLogs" } }));
 
 import { recordPasswordChangedAndAlert } from "./password-changed-alert";
 
-const event = { orgId: "org-1", userId: "user-1", email: "owner@example.test" };
+const event = { orgId: "org-1", userId: "user-1", email: "owner@example.test", kind: "staff" as const };
+const customerEvent = { orgId: "org-1", userId: "user-2", email: "diner@example.test", kind: "customer" as const };
 
 beforeEach(() => {
   mocks.values.mockReset().mockResolvedValue(undefined);
@@ -64,6 +67,13 @@ describe("the audit row", () => {
     await expect(recordPasswordChangedAndAlert(event)).resolves.toBeUndefined();
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("failed to write the audit row"), expect.any(Error));
   });
+
+  it("auth-v3, item C: a customer's reset is written with a DIFFERENT action name, never mistaken for a staff event", async () => {
+    await recordPasswordChangedAndAlert(customerEvent);
+    expect(mocks.values).toHaveBeenCalledWith(
+      expect.objectContaining({ actorUserId: "user-2", action: "customer_password_changed", entityId: "user-2" }),
+    );
+  });
 });
 
 describe("the owner alert", () => {
@@ -91,6 +101,19 @@ describe("the owner alert", () => {
     mocks.fetch.mockRejectedValue(new Error("network down"));
     await expect(recordPasswordChangedAndAlert(event)).resolves.toBeUndefined();
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("failed to POST to ALERT_URL"), expect.any(Error));
+  });
+
+  it("auth-v3, item C: a customer's reset is fully audited but never alerted — even with ALERT_URL configured", async () => {
+    process.env.ALERT_URL = "https://alerts.example.test/push";
+    await recordPasswordChangedAndAlert(customerEvent);
+    expect(mocks.values).toHaveBeenCalledTimes(1);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalledWith(expect.stringContaining("ALERT [password_changed]"));
+  });
+
+  it("a customer reset with no ALERT_URL configured still writes no alert-fallback console.error line", async () => {
+    await recordPasswordChangedAndAlert(customerEvent);
+    expect(console.error).not.toHaveBeenCalledWith(expect.stringContaining("ALERT [password_changed]"));
   });
 
   it("never blocks or fails even when BOTH the audit write and the alert fail", async () => {

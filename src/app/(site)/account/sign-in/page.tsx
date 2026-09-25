@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { OtpSignInForm } from "@/components/account/auth-forms";
+import { CustomerSignInForm } from "@/components/account/auth-forms";
 import { resolveHome } from "@/lib/auth/route-home";
 import { readRememberChoice } from "@/lib/auth/remember-me-cookies";
 import { getLoyaltyConfig } from "@/lib/loyalty/config";
@@ -11,9 +11,11 @@ import { formatBps } from "@/lib/money";
 export const metadata: Metadata = { title: "Sign in" };
 
 /**
- * One screen for both sign-in and sign-up (auth-v2) — the email address
- * decides which it is server-side, never a separate page or link. See
- * `OtpSignInForm`'s own doc comment.
+ * Customer sign-in (auth-v3): email and password again — see
+ * `CustomerSignInForm`'s own doc comment for the unconfirmed-account
+ * escape hatch. `notice=links-retired` still applies: `/auth/confirm`
+ * redirects here for any old emailed link, code-only or password-linked,
+ * that still shows up in an inbox.
  */
 export default async function CustomerSignInPage({
   searchParams,
@@ -38,13 +40,25 @@ export default async function CustomerSignInPage({
         </p>
       )}
 
+      {notice === "links-retired" && (
+        <p role="status" className="mt-4 rounded-md border border-border bg-surface px-4 py-3 text-sm text-muted-foreground">
+          Links are no longer used — sign in with your password instead.
+        </p>
+      )}
+
       <div className="mt-8">
-        <OtpSignInForm noticeLinksRetired={notice === "links-retired"} rememberDefault={rememberDefault} />
+        <CustomerSignInForm rememberDefault={rememberDefault} />
       </div>
       <p className="mt-6 text-sm text-muted-foreground">
         You don&rsquo;t need an account to order.{" "}
         <Link href="/menu" className="font-semibold text-primary">
           Just order
+        </Link>
+      </p>
+      <p className="mt-2 text-sm text-muted-foreground">
+        New here?{" "}
+        <Link href="/account/join" className="font-semibold text-primary">
+          Create an account
         </Link>
       </p>
       <p className="mt-2 text-sm text-muted-foreground">

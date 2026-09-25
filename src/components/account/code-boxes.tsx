@@ -11,10 +11,10 @@ function digitsFrom(raw: string, length: number): string[] {
 }
 
 /**
- * A one-digit-per-box code entry, all wired to one hidden field so the
- * server action (`verifyOtpAction`) never sees anything but the same
- * `token` string it always has — this is a display and input-ergonomics
- * change only, no server contract change.
+ * A one-digit-per-box code entry, all wired to one hidden field so whichever
+ * server action consumes it (signup confirmation, password reset — auth-v3)
+ * never sees anything but the same `token` string it always has — this is a
+ * display and input-ergonomics change only, no server contract change.
  *
  * Submits itself the moment the last box fills (typed or pasted) — once,
  * guarded against the pending state re-firing it and against a state

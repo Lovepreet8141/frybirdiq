@@ -3,15 +3,18 @@
 import { useEffect, useState } from "react";
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
-import { Loader2, Mail, UserPlus } from "lucide-react";
+import Link from "next/link";
+import { Eye, EyeOff, KeyRound, Loader2, Mail } from "lucide-react";
 import { CodeBoxes } from "@/components/account/code-boxes";
 import {
-  type CompleteProfileState,
-  type OtpRequestState,
-  type OtpVerifyState,
-  completeProfileAction,
-  requestOtpAction,
-  verifyOtpAction,
+  type CreateAccountState,
+  type ResendSignupCodeState,
+  type SignInCustomerState,
+  type SignupVerifyState,
+  createAccountAction,
+  resendSignupCodeAction,
+  signInCustomerAction,
+  verifySignupCodeAction,
 } from "@/lib/customer/actions";
 
 function Submit({ label, busy }: { label: string; busy: string }) {
@@ -38,7 +41,7 @@ const field = "h-[52px] rounded-md border border-border bg-surface px-4 text-bas
 
 const RESEND_WAIT_SECONDS = 60;
 
-/** The resend button: disabled with a live countdown for this long after a code is sent — a client-side clock only, the server enforces the same 60 seconds on its own (checkOtpRequestLimit). */
+/** The resend button: disabled with a live countdown for this long after a code is sent — a client-side clock only, the server enforces the same 60 seconds on its own (checkSignupLimit). */
 function ResendCodeButton({ secondsLeft }: { secondsLeft: number }) {
   const { pending } = useFormStatus();
   const waiting = secondsLeft > 0;
@@ -68,101 +71,70 @@ function RememberMeCheckbox({ defaultChecked }: { defaultChecked: boolean }) {
   );
 }
 
-/**
- * The account-completion step for a brand-new sign-up: the Supabase Auth
- * user and its session already exist (`verifyOtpAction` only reaches this
- * state after a real code verified) — this just asks for the name and phone
- * an order or the account page needs.
- */
-function CompleteProfileForm({ email }: { email: string }) {
-  const [state, action] = useActionState<CompleteProfileState, FormData>(completeProfileAction, { status: "idle" });
-
+/** A password input with a show/hide toggle — used for both the signup password fields and the reset-password form. */
+function PasswordField({ id, name, label, autoComplete, hint }: { id: string; name: string; label: string; autoComplete: string; hint?: string }) {
+  const [visible, setVisible] = useState(false);
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex items-center gap-3 rounded-md border border-border bg-surface px-4 py-3 text-left">
-        <UserPlus className="size-5 shrink-0 text-primary" aria-hidden="true" />
-        <p className="text-sm text-muted-foreground">
-          <strong className="text-foreground">{email}</strong> is confirmed. A couple more details to finish setting
-          up your account.
-        </p>
+    <div className="flex flex-col gap-2">
+      <label htmlFor={id} className="text-sm font-semibold">{label}</label>
+      <div className="relative">
+        <input
+          id={id}
+          name={name}
+          required
+          type={visible ? "text" : "password"}
+          minLength={8}
+          autoComplete={autoComplete}
+          className={`${field} w-full pr-12`}
+          aria-describedby={hint ? `${id}-hint` : undefined}
+        />
+        <button
+          type="button"
+          onClick={() => setVisible((v) => !v)}
+          aria-label={visible ? "Hide password" : "Show password"}
+          aria-pressed={visible}
+          className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-muted-foreground hover:text-foreground"
+        >
+          {visible ? <EyeOff className="size-5" aria-hidden="true" /> : <Eye className="size-5" aria-hidden="true" />}
+        </button>
       </div>
-
-      <form action={action} className="flex flex-col gap-5">
-        {state.status === "error" && (
-          <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
-            {state.message}
-          </p>
-        )}
-
-        <div className="flex flex-col gap-2">
-          <label htmlFor="profile-name" className="text-sm font-semibold">Name</label>
-          <input id="profile-name" name="name" required autoComplete="name" className={field} />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <label htmlFor="profile-phone" className="text-sm font-semibold">Mobile number</label>
-          <input
-            id="profile-phone"
-            name="phone"
-            required
-            type="tel"
-            inputMode="numeric"
-            maxLength={10}
-            autoComplete="tel-national"
-            className={`${field} tabular`}
-          />
-        </div>
-
-        <Submit label="Finish creating your account" busy="Saving" />
-      </form>
+      {hint && <p id={`${id}-hint`} className="text-sm text-muted-foreground">{hint}</p>}
     </div>
   );
 }
 
 /**
- * Customer auth (auth-v2) — one screen, code only, for both sign-in and
- * sign-up: enter an email, get a six-digit code (`shouldCreateUser: true` —
- * an unknown address becomes a new account the moment its code verifies),
- * type the code, in. No password, no link. A brand-new account's first
- * successful verify continues into `CompleteProfileForm` instead of
- * redirecting straight in — see `verifyOtpAction`'s own doc comment.
+ * The 6-digit signup-confirmation code step, shared by two entry points
+ * (auth-v3): straight after `JoinForm`'s signup, and from
+ * `CustomerSignInForm`'s "Send me a code" escape hatch for an account that
+ * exists but never confirmed its email. A successful verify both confirms
+ * the email and signs in — the actual `customers`/`loyaltyAccounts` row is
+ * only created once that happens (see `verifySignupCodeAction`'s own doc
+ * comment for why). `profileToken` — the SIGNED `{email, name, phone}` blob
+ * `createAccountAction` returned, not raw values — rides along as the one
+ * hidden field that carries them, when there is one (the `JoinForm` path);
+ * it's simply omitted from the sign-in escape-hatch path, which never had
+ * one to carry. Deliberately not plain `name`/`phone` hidden fields — see
+ * the module doc comment in `src/lib/customer/actions.ts` for why an
+ * editable, unsigned pair of fields here was itself a real hole.
  */
-export function OtpSignInForm({
-  noticeLinksRetired = false,
-  rememberDefault,
-}: {
-  noticeLinksRetired?: boolean;
-  rememberDefault: boolean;
-}) {
-  const [requestState, requestAction] = useActionState<OtpRequestState, FormData>(requestOtpAction, { status: "idle" });
-  const [verifyState, verifyAction] = useActionState<OtpVerifyState, FormData>(verifyOtpAction, { status: "idle" });
-  const [secondsLeft, setSecondsLeft] = useState(0);
-  // Separate from requestState on purpose: a resend that fails (a network blip, a server-side rate-limit race
-  // even with the button disabled client-side) must not drop the user back to "enter your email" and lose the
-  // step they already reached — only a *successful* send ever sets this, and nothing ever clears it back to null.
-  const [email, setEmail] = useState<string | null>(null);
-  // Bumped on every NEW verify error OR every successful resend, never on the first send — CodeBoxes remounts
-  // on it (see its own comment): a wrong/expired code, or a code superseded by a newer email, is never left
-  // sitting in the boxes ready to be resubmitted. This is the live-incident fix (25 Sep 2026): a customer who
-  // requested a second code while the first was still showing had no signal the first one was now stale, and
-  // the still-visible boxes (never cleared on resend) invited entering the wrong one.
+function SignupCodeForm({ email, profileToken }: { email: string; profileToken?: string | null }) {
+  const [verifyState, verifyAction] = useActionState<SignupVerifyState, FormData>(verifySignupCodeAction, { status: "idle" });
+  const [resendState, resendAction] = useActionState<ResendSignupCodeState, FormData>(resendSignupCodeAction, { status: "idle" });
+  const [secondsLeft, setSecondsLeft] = useState(RESEND_WAIT_SECONDS);
+  // Same live-incident fix as the reset and (former) sign-in code flows: bumped on every NEW verify error OR
+  // every successful resend, never the first send — CodeBoxes remounts on it, so a code superseded by a
+  // newer email is never left sitting in the boxes ready to be resubmitted.
   const [verifyErrorToken, setVerifyErrorToken] = useState(0);
   const [resendNotice, setResendNotice] = useState(false);
 
-  // Adjusts state during render rather than in an effect (React's own pattern for "derive state from a prop
-  // that changed"): detects a NEW successful send by comparing against the last requestState seen, and starts
-  // (or restarts, on a resend) the 60-second countdown the moment a code is actually sent.
-  const [seenRequestState, setSeenRequestState] = useState(requestState);
-  if (requestState !== seenRequestState) {
-    setSeenRequestState(requestState);
-    if (requestState.status === "sent") {
-      const isResend = email !== null; // email is already set only once the first send has already landed
-      setEmail(requestState.email);
+  const [seenResendState, setSeenResendState] = useState(resendState);
+  if (resendState !== seenResendState) {
+    setSeenResendState(resendState);
+    if (resendState.status === "sent") {
       setSecondsLeft(RESEND_WAIT_SECONDS);
-      if (isResend) {
-        setVerifyErrorToken((n) => n + 1);
-        setResendNotice(true);
-      }
+      setVerifyErrorToken((n) => n + 1);
+      setResendNotice(true);
     }
   }
 
@@ -177,32 +149,6 @@ export function OtpSignInForm({
     const id = setInterval(() => setSecondsLeft((value) => Math.max(0, value - 1)), 1000);
     return () => clearInterval(id);
   }, [secondsLeft]);
-
-  if (verifyState.status === "need-profile") return <CompleteProfileForm email={verifyState.email} />;
-
-  if (!email) {
-    return (
-      <form action={requestAction} className="flex flex-col gap-5">
-        {noticeLinksRetired && (
-          <p role="status" className="rounded-md border border-border bg-surface px-4 py-3 text-sm text-muted-foreground">
-            Links are no longer used — sign in with a code instead.
-          </p>
-        )}
-        {requestState.status === "error" && (
-          <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
-            {requestState.message}
-          </p>
-        )}
-
-        <div className="flex flex-col gap-2">
-          <label htmlFor="otp-email" className="text-sm font-semibold">Email</label>
-          <input id="otp-email" name="email" required type="email" autoComplete="username" autoCapitalize="none" className={field} />
-        </div>
-
-        <Submit label="Continue" busy="Sending" />
-      </form>
-    );
-  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -224,28 +170,144 @@ export function OtpSignInForm({
             {verifyState.message}
           </p>
         )}
-        {requestState.status === "error" && (
+        {resendState.status === "error" && (
           <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
-            {requestState.message}
+            {resendState.message}
           </p>
         )}
 
         <input type="hidden" name="email" value={email} />
+        {profileToken != null && <input type="hidden" name="profileToken" value={profileToken} />}
 
         <div className="flex flex-col items-center gap-2">
           <span className="text-sm font-semibold">6-digit code</span>
           <CodeBoxes name="token" resetToken={verifyErrorToken} invalid={verifyState.status === "error"} />
         </div>
 
-        <RememberMeCheckbox defaultChecked={rememberDefault} />
-
-        <Submit label="Sign in" busy="Checking" />
+        <Submit label="Confirm" busy="Checking" />
       </form>
 
-      <form action={requestAction}>
+      <form action={resendAction}>
         <input type="hidden" name="email" value={email} />
         <ResendCodeButton secondsLeft={secondsLeft} />
       </form>
     </div>
+  );
+}
+
+/**
+ * Sign up (auth-v3, item A): name, phone, email, password — all up front,
+ * unlike auth-v2's deferred profile step. Submitting sends a 6-digit
+ * confirmation code and moves straight into `SignupCodeForm`; there is no
+ * separate "create account" vs "confirm" page.
+ */
+export function JoinForm() {
+  const [createState, createAction] = useActionState<CreateAccountState, FormData>(createAccountAction, { status: "idle" });
+
+  if (createState.status === "sent") return <SignupCodeForm email={createState.email} profileToken={createState.profileToken} />;
+
+  return (
+    <form action={createAction} className="flex flex-col gap-5">
+      {createState.status === "error" && (
+        <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
+          {createState.message}
+        </p>
+      )}
+
+      <div className="flex flex-col gap-2">
+        <label htmlFor="join-name" className="text-sm font-semibold">Name</label>
+        <input id="join-name" name="name" required autoComplete="name" className={field} />
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <label htmlFor="join-phone" className="text-sm font-semibold">Mobile number</label>
+        <input
+          id="join-phone"
+          name="phone"
+          required
+          type="tel"
+          inputMode="numeric"
+          maxLength={10}
+          autoComplete="tel-national"
+          className={`${field} tabular`}
+        />
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <label htmlFor="join-email" className="text-sm font-semibold">Email</label>
+        <input id="join-email" name="email" required type="email" autoComplete="username" autoCapitalize="none" className={field} />
+      </div>
+
+      <PasswordField id="join-password" name="password" label="Password" autoComplete="new-password" hint="At least 8 characters." />
+      <PasswordField id="join-confirm-password" name="confirmPassword" label="Confirm password" autoComplete="new-password" />
+
+      <Submit label="Create account" busy="Sending code" />
+    </form>
+  );
+}
+
+/**
+ * Sign in with a password (auth-v3, item B). A neutral error on any
+ * mismatch — except an account that exists but never confirmed its email,
+ * which gets its own state so the form can offer "Send me a code" and
+ * finish through the exact same `SignupCodeForm` a fresh signup uses. See
+ * `signInCustomerAction`'s own doc comment for why that one distinction is
+ * deliberate.
+ */
+export function CustomerSignInForm({ rememberDefault }: { rememberDefault: boolean }) {
+  const [state, action] = useActionState<SignInCustomerState, FormData>(signInCustomerAction, { status: "idle" });
+  const [resendState, resendAction] = useActionState<ResendSignupCodeState, FormData>(resendSignupCodeAction, { status: "idle" });
+
+  if (resendState.status === "sent") return <SignupCodeForm email={resendState.email} />;
+
+  if (state.status === "unconfirmed") {
+    return (
+      <div className="flex flex-col gap-5">
+        <div className="flex items-center gap-3 rounded-md border border-border bg-surface px-4 py-3 text-left">
+          <KeyRound className="size-5 shrink-0 text-primary" aria-hidden="true" />
+          <p className="text-sm text-muted-foreground">
+            <strong className="text-foreground">{state.email}</strong> hasn&rsquo;t been confirmed yet. Send a fresh
+            code to finish.
+          </p>
+        </div>
+
+        {resendState.status === "error" && (
+          <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
+            {resendState.message}
+          </p>
+        )}
+
+        <form action={resendAction}>
+          <input type="hidden" name="email" value={state.email} />
+          <Submit label="Send me a code" busy="Sending" />
+        </form>
+      </div>
+    );
+  }
+
+  return (
+    <form action={action} className="flex flex-col gap-5">
+      {state.status === "error" && (
+        <p role="alert" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
+          {state.message}
+        </p>
+      )}
+
+      <div className="flex flex-col gap-2">
+        <label htmlFor="signin-email" className="text-sm font-semibold">Email</label>
+        <input id="signin-email" name="email" required type="email" autoComplete="username" autoCapitalize="none" className={field} />
+      </div>
+
+      <PasswordField id="signin-password" name="password" label="Password" autoComplete="current-password" />
+
+      <div className="flex items-center justify-between gap-4">
+        <RememberMeCheckbox defaultChecked={rememberDefault} />
+        <Link href="/account/forgot-password" className="shrink-0 text-sm font-semibold text-primary">
+          Forgot password?
+        </Link>
+      </div>
+
+      <Submit label="Sign in" busy="Checking" />
+    </form>
   );
 }

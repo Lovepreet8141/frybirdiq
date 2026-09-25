@@ -4,15 +4,15 @@ import "server-only";
  * Rate limiting for the staff/owner password-reset flow — per email and per
  * IP, for both requesting a reset code and checking one.
  *
- * Deliberately its own module with its own `Map`s, not a shared import from
- * `otp-rate-limit.ts` — that module is already live in production behind a
- * real security review; this keeps the reset flow's limits independently
- * auditable and means a change here can never regress the customer login
- * flow's own tested behavior. The generic shape (rolling window + minimum
- * gap, in-process, swept lazily) is intentionally the same, for the same
- * reason `otp-rate-limit.ts` gives: one Node process on one VPS, no second
- * instance to keep a shared store in sync with, and Supabase's own
- * server-side limit is the backstop that survives a restart regardless.
+ * Deliberately its own module with its own `Map`s, not shared with
+ * `src/lib/customer/auth-rate-limit.ts` (customer signup/sign-in) — each
+ * flow's limits stay independently auditable, and a change here can never
+ * regress another flow's own tested behavior. The generic shape (rolling
+ * window + minimum gap, in-process, swept lazily) is intentionally the
+ * same, for the same reason that module gives: one Node process on one
+ * VPS, no second instance to keep a shared store in sync with, and
+ * Supabase's own server-side limit is the backstop that survives a restart
+ * regardless.
  *
  * Never logs the email or the IP by value — callers log only the fact of a
  * refusal, never these keys.
