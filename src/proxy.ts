@@ -1,6 +1,14 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { clientEnv, isSupabaseConfigured } from "@/lib/env";
+import {
+  REMEMBER_COOKIE_NAME,
+  decodeRememberChoice,
+  rememberSecretOk,
+  encodeRememberChoice,
+  rememberCookieOptions,
+  withRememberMaxAge,
+} from "@/lib/auth/remember-me";
 
 /**
  * Refreshes the Supabase session on every request.
@@ -23,13 +31,32 @@ export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
   const env = clientEnv();
 
+  // Same "no cheap way to know customer vs. staff/owner here" reasoning as
+  // src/lib/supabase/server.ts — defaults an existing, pre-migration session to
+  // remembered so nobody already signed in gets cut short by this mechanism.
+  // But only when COOKIE_SECRET is actually working (red-team finding): if it's
+  // broken, an absent marker means the choice was never recorded at all, and the
+  // fail-safe direction is session-only, not remembered — see rememberSecretOk's
+  // own doc comment.
+  const remember = decodeRememberChoice(request.cookies.get(REMEMBER_COOKIE_NAME)?.value) ?? rememberSecretOk();
+
   const supabase = createServerClient(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, {
     cookies: {
       getAll: () => request.cookies.getAll(),
       setAll: (list) => {
         for (const { name, value } of list) request.cookies.set(name, value);
         response = NextResponse.next({ request });
-        for (const { name, value, options } of list) response.cookies.set(name, value, options);
+        let wroteSession = false;
+        for (const { name, value, options } of list) {
+          response.cookies.set(name, value, withRememberMaxAge(options, remember));
+          if (options.maxAge !== 0) wroteSession = true;
+        }
+        // Rolling: a background refresh of a remembered session resets the marker's own
+        // 30 days too, same as the equivalent branch in src/lib/supabase/server.ts.
+        if (wroteSession && remember) {
+          const marker = encodeRememberChoice(true);
+          if (marker) response.cookies.set(REMEMBER_COOKIE_NAME, marker, rememberCookieOptions(true));
+        }
       },
     },
   });

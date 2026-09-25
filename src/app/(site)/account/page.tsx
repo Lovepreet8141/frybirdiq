@@ -4,7 +4,6 @@ import { redirect } from "next/navigation";
 import { ArrowRight, Gift, LogOut } from "lucide-react";
 import { EmptyState } from "@/components/states";
 import { OrderHistoryList } from "@/components/account/order-history";
-import { UnverifiedNotice } from "@/components/account/unverified-notice";
 import { getCustomer } from "@/lib/customer";
 import { resolveHome } from "@/lib/auth/route-home";
 import { isLoyaltyEnabled, pointsValue } from "@/lib/loyalty";
@@ -29,18 +28,15 @@ export default async function AccountPage() {
 
   const org = await requireOrg();
 
-  // Order history, points and stamps are withheld until the email is
-  // confirmed — an unconfirmed address is not yet proven to belong to this
-  // person, and those three are exactly what a wrong address would expose.
-  // Skip the queries entirely rather than fetch real data and hide it.
-  const [orders, loyalty, stampConfig, stampState] = customer.emailVerified
-    ? await Promise.all([
-        listCustomerOrders({ customerId: customer.id, orgId: org.id, limit: 5 }),
-        getLoyaltyConfig(),
-        getStampConfig(),
-        getStampAccountState(customer.id, org.id),
-      ])
-    : [[], await getLoyaltyConfig(), await getStampConfig(), null];
+  // Under auth-v2 there is no signed-in-but-unconfirmed state to withhold these behind any more: the only
+  // way to hold a customer session at all is to have verified an email code, which confirms the address as
+  // a side effect — see verifyOtpAction's own doc comment.
+  const [orders, loyalty, stampConfig, stampState] = await Promise.all([
+    listCustomerOrders({ customerId: customer.id, orgId: org.id, limit: 5 }),
+    getLoyaltyConfig(),
+    getStampConfig(),
+    getStampAccountState(customer.id, org.id),
+  ]);
 
   const stampCount = stampState?.stampCount ?? 0;
   const availableRewards = stampState?.availableRewards.length ?? 0;
@@ -65,11 +61,7 @@ export default async function AccountPage() {
         </form>
       </div>
 
-      {!customer.emailVerified && (
-        <UnverifiedNotice email={customer.email} className="mt-8" />
-      )}
-
-      {customer.emailVerified && isLoyaltyEnabled(loyalty) && (
+      {isLoyaltyEnabled(loyalty) && (
         <section aria-labelledby="rewards" className="mt-8 rounded-lg border border-border bg-surface p-6">
           <h2 id="rewards" className="flex items-center gap-2 font-heading text-lg font-semibold">
             <Gift className="size-4 text-primary" aria-hidden="true" />
@@ -91,7 +83,7 @@ export default async function AccountPage() {
         </section>
       )}
 
-      {customer.emailVerified && isStampProgramEnabled(stampConfig) && (
+      {isStampProgramEnabled(stampConfig) && (
         <section aria-labelledby="stamps" className="mt-6 rounded-lg border border-border bg-surface p-6">
           <h2 id="stamps" className="font-heading text-lg font-semibold">
             FRYBIRD REWARDS
@@ -120,40 +112,38 @@ export default async function AccountPage() {
         </section>
       )}
 
-      {customer.emailVerified && (
-        <section aria-labelledby="orders" className="mt-10">
-          <div className="flex items-baseline justify-between gap-4">
-            <h2 id="orders" className="font-heading text-2xl font-bold tracking-tight">
-              Recent orders
-            </h2>
-            {orders.length > 0 && (
-              <Link href="/account/orders" className="inline-flex items-center gap-1 text-sm font-semibold text-primary">
-                See all
+      <section aria-labelledby="orders" className="mt-10">
+        <div className="flex items-baseline justify-between gap-4">
+          <h2 id="orders" className="font-heading text-2xl font-bold tracking-tight">
+            Recent orders
+          </h2>
+          {orders.length > 0 && (
+            <Link href="/account/orders" className="inline-flex items-center gap-1 text-sm font-semibold text-primary">
+              See all
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </Link>
+          )}
+        </div>
+
+        {orders.length === 0 ? (
+          <EmptyState
+            className="mt-6"
+            title="No orders yet."
+            detail="When you order, it'll show up here."
+            action={
+              <Link
+                href="/menu"
+                className="mt-2 inline-flex min-h-[48px] items-center gap-2 rounded-md bg-primary px-5 font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+              >
+                See the menu
                 <ArrowRight className="size-4" aria-hidden="true" />
               </Link>
-            )}
-          </div>
-
-          {orders.length === 0 ? (
-            <EmptyState
-              className="mt-6"
-              title="No orders yet."
-              detail="When you order, it'll show up here."
-              action={
-                <Link
-                  href="/menu"
-                  className="mt-2 inline-flex min-h-[48px] items-center gap-2 rounded-md bg-primary px-5 font-semibold text-primary-foreground transition-opacity hover:opacity-90"
-                >
-                  See the menu
-                  <ArrowRight className="size-4" aria-hidden="true" />
-                </Link>
-              }
-            />
-          ) : (
-            <OrderHistoryList orders={orders.map((order) => ({ ...order, placedAt: order.placedAt?.toISOString() ?? null }))} />
-          )}
-        </section>
-      )}
+            }
+          />
+        ) : (
+          <OrderHistoryList orders={orders.map((order) => ({ ...order, placedAt: order.placedAt?.toISOString() ?? null }))} />
+        )}
+      </section>
     </div>
   );
 }

@@ -47,13 +47,21 @@ function CodeBoxesInner({ name, length, invalid }: { name: string; length: numbe
     boxRefs.current[0]?.focus();
   }, []);
 
-  function maybeSubmit(next: string[]) {
+  // Fires from an effect, not inline in the change/paste handler: `requestSubmit()` reads the hidden input's
+  // value straight off the live DOM, and a plain event handler hasn't committed the just-typed digit to that
+  // DOM node yet at the point `setDigits` is called — calling it inline submits the PREVIOUS render's value,
+  // one digit short, which always fails the server's 6-digit check before Supabase is ever asked. This was
+  // found and fixed once already (otp-animation card review) but never made it back onto this branch before
+  // rc-41 shipped — live customer sign-in incident, 25 Sep 2026: every auto-submit failed, deterministically,
+  // not occasionally. An effect runs after React commits, so the hidden input is already correct by then.
+  useEffect(() => {
+    if (pending) return;
     if (submittedRef.current) return;
-    if (next.every((d) => d !== "")) {
+    if (digits.every((d) => d !== "")) {
       submittedRef.current = true;
       boxRefs.current[length - 1]?.form?.requestSubmit();
     }
-  }
+  }, [digits, length, pending]);
 
   function handleChange(index: number, raw: string) {
     if (pending) return;
@@ -62,7 +70,6 @@ function CodeBoxesInner({ name, length, invalid }: { name: string; length: numbe
     next[index] = digit;
     setDigits(next);
     if (digit && index < length - 1) boxRefs.current[index + 1]?.focus();
-    maybeSubmit(next);
   }
 
   function handleKeyDown(index: number, e: React.KeyboardEvent<HTMLInputElement>) {
@@ -88,7 +95,6 @@ function CodeBoxesInner({ name, length, invalid }: { name: string; length: numbe
     setDigits(next);
     const lastFilled = next.reduce((acc, d, i) => (d ? i : acc), -1);
     boxRefs.current[Math.min(lastFilled + 1, length - 1)]?.focus();
-    maybeSubmit(next);
   }
 
   const joined = digits.join("");

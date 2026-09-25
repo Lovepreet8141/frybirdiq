@@ -3,6 +3,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { clientEnv, isSupabaseConfigured } from "@/lib/env";
+import { REMEMBER_COOKIE_NAME } from "@/lib/auth/remember-me";
 
 /**
  * Staff sign-out.
@@ -44,6 +45,7 @@ export async function POST() {
   });
 
   await supabase.auth.signOut();
+  response.cookies.delete(REMEMBER_COOKIE_NAME);
   revalidatePath("/", "layout");
   return response;
 }

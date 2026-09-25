@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { SignInForm } from "@/components/auth/sign-in-form";
 import { resolveHome } from "@/lib/auth/route-home";
+import { readRememberChoice } from "@/lib/auth/remember-me-cookies";
 
 export const metadata: Metadata = { title: "FRYBIRD IQ", robots: { index: false, follow: false } };
 
@@ -10,6 +11,8 @@ export default async function SignInPage() {
   // Already signed in — go wherever that account actually belongs.
   const home = await resolveHome();
   if (home.path) redirect(home.path);
+
+  const rememberDefault = await readRememberChoice(false);
 
   return (
     <div className="flex min-h-full flex-col items-center justify-center px-[var(--gutter)] py-16">
@@ -30,7 +33,7 @@ export default async function SignInPage() {
           </p>
         </div>
 
-        <SignInForm />
+        <SignInForm rememberDefault={rememberDefault} />
 
         <p className="text-sm text-muted-foreground">
           Accounts are set up by an owner or admin, from Staff. If you can&rsquo;t get in, ask them rather than trying again.

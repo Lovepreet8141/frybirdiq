@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as staticInfo from "next/dist/build/analysis/get-page-static-info";
 import type { ProxyMatcher } from "next/dist/build/analysis/get-page-static-info";
 import { getMiddlewareRouteMatcher } from "next/dist/shared/lib/router/utils/middleware-route-matcher";
 import type { NextConfig } from "next";
+
+// src/proxy.ts now imports src/lib/auth/remember-me.ts (auth-v2), which is "server-only" — this test only
+// needs the static `config.matcher` export, so the module's runtime auth logic is irrelevant here.
+vi.mock("server-only", () => ({}));
+
 import { config } from "@/proxy";
 
 // Exported at runtime but left out of Next's type declarations.

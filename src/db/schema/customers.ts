@@ -32,6 +32,9 @@ export const customers = pgTable(
   (table) => [
     check("customers_notes_length_check", sql`${table.notes} IS NULL OR char_length(${table.notes}) <= 1000`),
     unique("customers_org_phone_unique").on(table.orgId, table.phone),
+    // auth-v2, 0057: closes a check-then-insert race in completeProfileAction. NULL user_id (guest rows)
+    // never conflicts with itself — Postgres treats every NULL as distinct.
+    unique("customers_org_user_unique").on(table.orgId, table.userId),
     index("customers_org_idx").on(table.orgId),
   ],
 );
